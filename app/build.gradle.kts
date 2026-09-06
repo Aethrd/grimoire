@@ -23,6 +23,69 @@ fun secret(envName: String, propName: String): String? =
 val storeFilePath = secret("KEYSTORE_FILE", "storeFile")
 val hasReleaseSigning = storeFilePath != null && file(storeFilePath).exists()
 
+/* ── pdf.js ───────────────────────────────────────────────────────────────
+ *
+ * pdf.js and its character maps are 4.3MB of unmodified library code, and the
+ * cmaps alone are 169 files. Committing that to git is a poor trade for a
+ * personal project, so the build fetches it instead -- the same way it already
+ * fetches every other dependency, just from a different registry.
+ *
+ * The result is git-ignored and lands in the assets directory, so the APK
+ * still ships it and the app still makes no network calls at runtime.
+ */
+val pdfJsVersion = "4.10.38"
+val vendorDir = file("src/main/assets/www/vendor")
+
+val vendorPdfJs by tasks.registering {
+    description = "Fetches pdf.js into the bundled assets."
+    group = "build setup"
+
+    val marker = File(vendorDir, "pdf.min.mjs")
+    // Skipped entirely once present, so an ordinary rebuild costs nothing and
+    // an offline rebuild works.
+    outputs.file(marker)
+    outputs.upToDateWhen { marker.exists() }
+
+    doLast {
+        val archive = File(layout.buildDirectory.get().asFile, "pdfjs-$pdfJsVersion.tgz")
+        if (!archive.exists()) {
+            archive.parentFile.mkdirs()
+            val url = "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-$pdfJsVersion.tgz"
+            logger.lifecycle("Fetching pdf.js $pdfJsVersion…")
+            uri(url).toURL().openStream().use { input ->
+                archive.outputStream().use { output -> input.copyTo(output) }
+            }
+        }
+
+        // The legacy build, because minSdk is 26 and the modern one assumes a
+        // newer JS baseline than an old WebView provides.
+        copy {
+            from(tarTree(resources.gzip(archive))) {
+                include("package/legacy/build/pdf.min.mjs")
+                include("package/legacy/build/pdf.worker.min.mjs")
+                eachFile { path = name }
+            }
+            into(vendorDir)
+            includeEmptyDirs = false
+        }
+        // Character maps, without which most Korean and Japanese PDFs extract
+        // as nothing, and the base fourteen fonts.
+        for (dir in listOf("cmaps", "standard_fonts")) {
+            copy {
+                from(tarTree(resources.gzip(archive))) {
+                    include("package/$dir/**")
+                    eachFile { path = path.removePrefix("package/") }
+                }
+                into(vendorDir)
+                includeEmptyDirs = false
+            }
+        }
+        logger.lifecycle("pdf.js vendored into ${vendorDir.relativeTo(rootDir)}")
+    }
+}
+
+tasks.named("preBuild") { dependsOn(vendorPdfJs) }
+
 android {
     namespace = "com.grimoire.ereader"
     compileSdk = 36
@@ -144,5 +207,6 @@ dependencies {
     implementation(libs.androidx.splashscreen)
     implementation(libs.androidx.webkit)
     implementation(libs.mlkit.translate)
+    implementation(libs.mlkit.language.id)
 
 }
