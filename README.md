@@ -61,7 +61,32 @@ python3 tools/audit_assets.py    # fails if anything would hit the network
 | Stats | Heat grid, streaks with freezes, script-aware word counts, JSON export |
 | Vault | Passphrase-gated shelf, filtered out of search, reel and stats |
 
-Formats read in full: **EPUB 2/3, CBZ, TXT, Markdown, HTML, FB2**.
+Formats read in full: **EPUB 2/3, PDF, CBZ, TXT, Markdown, HTML, FB2**.
+
+PDFs have their **text extracted** rather than being drawn as pictures, so
+search, the layout override, translation and copy all work on them like any
+other book. A PDF laid out in columns, or one that is really a scan, extracts
+poorly — there is no fixing that from this side, and a scan is refused with an
+explanation rather than imported empty. Chapters come from the document
+outline where it has one, and from even runs of pages where it does not.
+
+pdf.js is bundled along with its CJK character maps and the base fourteen
+fonts, because most Korean and Japanese PDFs reference their fonts rather than
+embedding them. It adds about 2.3MB to the APK, and is imported on demand so a
+library with no PDFs in it never loads any of it.
+
+Those 4.3MB of unmodified library code are **fetched by the build, not
+committed** — 169 of the files are character maps. The `vendorPdfJs` Gradle
+task pulls them on the first build and skips thereafter, so an ordinary
+rebuild costs nothing and an offline rebuild works. To run the reader tests
+without touching Gradle:
+
+```bash
+node tools/vendor_pdfjs.mjs
+```
+
+The PDF suite skips its document tests with a note if it has not been run,
+rather than failing.
 
 **Zip archives are unpacked on import, and the folders inside become folders
 here.** A zip organised into directories is someone's existing filing, and
@@ -81,7 +106,7 @@ labelled action grid replaces the tab bar — Open, Folder, Status, Details,
 Vault, Delete. Moving offers the folders already in use, so the common case is
 one tap and no typing. Group by **Folder** in the
 sort sheet, and nest another level under it if you want.
-Refused with a stated reason: PDF, DOCX, MOBI, AZW3, RTF, CBR — see
+Refused with a stated reason: DOCX, MOBI, AZW3, RTF, CBR — see
 `UNSUPPORTED_REASON` in `js/parse.js`.
 
 ## How it fits together
