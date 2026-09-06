@@ -127,7 +127,7 @@ export async function importFiles(files, { onProgress, onDone } = {}) {
   const queue = [];
   for (const file of files) {
     if (formatOf(file.name) !== 'ZIP') {
-      queue.push({ file, folder: '' });
+      queue.push({ file, name: file.name, folder: '' });
       continue;
     }
     try {
@@ -137,12 +137,16 @@ export async function importFiles(files, { onProgress, onDone } = {}) {
 
       if (archive.comic) {
         // A zip of images is a comic, not a container.
-        queue.push({ file, folder: '' });
+        queue.push({ file, name: file.name, folder: '' });
         continue;
       }
       for (const book of archive.books) {
         queue.push({
-          file: new File([book.blob], book.name),
+          // read() rather than a File: the entry is extracted when its turn
+          // comes and released straight after, so a big archive never has more
+          // than one book unpacked at a time.
+          read: book.read,
+          name: book.name,
           folder: book.folder,
           // The entry's own size, so re-importing the same archive is a no-op
           // rather than a second copy of everything.
@@ -156,22 +160,27 @@ export async function importFiles(files, { onProgress, onDone } = {}) {
   }
 
   for (let i = 0; i < queue.length; i++) {
-    const { file, folder } = queue[i];
-    onProgress?.(`Reading ${file.name}`, i / queue.length);
+    const entry = queue[i];
+    const folder = entry.folder;
+    const name = entry.name || entry.file?.name || 'book';
+    onProgress?.(`Reading ${name}`, i / queue.length, i, queue.length);
 
-    const format = formatOf(file.name);
+    const format = formatOf(name);
     if (UNSUPPORTED_REASON[format]) {
-      results.failed.push({ name: file.name, reason: UNSUPPORTED_REASON[format] });
+      results.failed.push({ name, reason: UNSUPPORTED_REASON[format] });
       continue;
     }
 
     try {
       // A file the user picked twice is the same book, not a second copy.
-      const fingerprint = queue[i].fingerprint || `${file.name}:${file.size}`;
+      const fingerprint = entry.fingerprint || `${name}:${entry.file.size}`;
       const existing = (await store.byIndex('books', 'fingerprint', fingerprint))[0];
       if (existing) continue;
 
-      const parsed = await parse(file, (p) => onProgress?.(`Parsing ${file.name}`, (i + p) / queue.length));
+      // Extracted only now, and only this one.
+      const file = entry.file || new File([await entry.read()], name);
+      const parsed = await parse(file, (p) =>
+        onProgress?.(`Parsing ${name}`, (i + p) / queue.length, i, queue.length));
 
       const bookId = await store.add('books', {
         title: parsed.title,
@@ -203,7 +212,7 @@ export async function importFiles(files, { onProgress, onDone } = {}) {
       }
       results.added += 1;
     } catch (error) {
-      results.failed.push({ name: file.name, reason: error.message || 'Could not be parsed' });
+      results.failed.push({ name, reason: error.message || 'Could not be parsed' });
     }
   }
 
@@ -228,7 +237,7 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
     <span class="tile-cover">
       ${coverUrl
         ? `<img src="${coverUrl}" alt="${escape(book.title)}">`
-        : `<span class="tile-title">${escape(book.title)}</span>`}
+        : `<span class="tile-title">${escape(displayTitle(book))}</span>`}
       <span class="tile-badge">${escape(book.format || '?')}</span>
       <span class="tile-bar"><span style="width:${Math.round((book.percent || 0) * 100)}%"></span></span>
       ${selecting ? '<span class="tile-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7"/></svg></span>' : ''}
@@ -262,6 +271,12 @@ let lastHandlers = {};
 /* URLs for the covers currently on screen. Released and re-minted on every
    render: holding them forever would leak one per cover per refresh. */
 const covers = pool();
+
+/* Translated titles, keyed by book id. Held here rather than written into the
+   DOM after the fact: the shelf tile has no title element when a book has
+   cover art, so patching it silently did nothing. */
+const titles = new Map();
+export const displayTitle = (book) => titles.get(book.id) || book.title;
 
 export async function renderShelf(handlers) {
   lastHandlers = handlers;
@@ -325,71 +340,15 @@ export async function renderShelf(handlers) {
   applyTitleTranslations(sorted, settings);
 }
 
-/**
- * Translated titles are patched in after the shelf has drawn, not awaited
- * before it. Cached ones land in the same frame; uncached ones cost a network
- * round trip, and blocking the shelf on that would mean staring at nothing.
- */
-async function applyTitleTranslations(books, settings) {
-  if (!settings.translateTitles || !translate.status().configured) return;
-  const lang = settings.translateTarget;
-
-  for (const book of books) {
-    try {
-      const { results } = await translate.translateBatch(
-        book.id, [{ field: 'title', text: book.title }], lang, book.lang);
-      const value = results.get('title');
-      if (!value || value === book.title) continue;
-      const node = el('shelf').querySelector(`[data-book="${book.id}"] .tile-title`);
-      if (node) {
-        node.textContent = value;
-        // The original is kept, not discarded: the toggle changes which is
-        // primary, and long-pressing still shows the real filename's book.
-        node.title = book.title;
-      }
-    } catch {
-      return;   // one failure means the key or the network is out; stop asking
-    }
-  }
-}
-
-/** Saved views are filter + sort + group snapshots, kept as chips above the
- *  control strip. Renaming one never re-runs the query. */
-async function renderViewChips() {
-  const host = el('view-chips');
-  const views = await store.all('views');
-  host.innerHTML = '';
-  host.hidden = views.length === 0;
-  for (const view of views) {
-    const chip = document.createElement('button');
-    chip.className = 'chip';
-    chip.textContent = view.name;
-    chip.onclick = async () => {
-      await store.saveSettings({ sort: view.rules });
-      renderShelf(lastHandlers);
-    };
-    // Long-press edits or deletes the rule behind the chip.
-    let timer = null;
-    chip.addEventListener('touchstart', () => {
-      timer = setTimeout(async () => {
-        timer = null;
-        if (confirm(`Delete the view “${view.name}”?`)) {
-          await store.del('views', view.id);
-          renderViewChips();
-        }
-      }, 550);
-    }, { passive: true });
-    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
-    chip.addEventListener('touchend', cancel);
-    chip.addEventListener('touchmove', cancel, { passive: true });
-    host.appendChild(chip);
-  }
-}
-
 async function renderContinueCard(books, onOpen) {
   const card = el('continue-card');
+
+  // Anything opened and not finished, most recent first. The old rule also
+  // demanded progress above zero, which meant the book you opened a minute
+  // ago was not the one offered until you had turned a page -- so "last
+  // opened" and "continue reading" disagreed.
   const candidates = books
-    .filter((b) => b.lastReadAt && !b.finishedAt && (b.percent || 0) > 0)
+    .filter((b) => b.lastReadAt && !b.finishedAt)
     .sort((a, b) => b.lastReadAt - a.lastReadAt);
 
   // Hidden entirely when nothing is in progress. It is never shown empty.
@@ -397,15 +356,47 @@ async function renderContinueCard(books, onOpen) {
 
   const book = candidates[0];
   const position = await store.get('positions', book.id);
-  card.hidden = false;
-  el('continue-title').textContent = book.title;
   const coverUrl = covers.url(book.coverBlob);
+
+  card.hidden = false;
+  el('continue-title').textContent = displayTitle(book);
   el('continue-cover').style.backgroundImage = coverUrl ? `url("${coverUrl}")` : '';
   el('continue-meta').textContent = position
     ? `Ch. ${position.chapterIndex + 1} · p. ${position.pageInBook} of ${position.totalPages} · ${Math.round(position.percent * 100)}%`
     : 'Not started';
   el('continue-bar').style.width = `${Math.round((book.percent || 0) * 100)}%`;
   card.onclick = () => onOpen(book);
+}
+
+/**
+ * Translated titles land after the shelf has drawn, not before it. A cached
+ * one arrives in the same frame; an uncached one costs a round trip, and
+ * blocking the shelf on that would mean staring at nothing.
+ */
+async function applyTitleTranslations(books, settings) {
+  if (!settings.translateTitles || !translate.status().configured) {
+    if (!titles.size) return;
+    titles.clear();
+    return renderShelf(lastHandlers);
+  }
+  const lang = settings.translateTarget;
+  let changed = false;
+
+  for (const book of books) {
+    if (titles.has(book.id)) continue;
+    try {
+      const { results } = await translate.translateBatch(
+        book.id, [{ field: 'title', text: book.title }], lang, book.lang);
+      const value = results.get('title');
+      if (value && value !== book.title) { titles.set(book.id, value); changed = true; }
+    } catch {
+      break;   // no key, no quota or no pack; stop asking rather than retry 40 times
+    }
+  }
+
+  // One re-render at the end rather than forty DOM pokes, and it puts the
+  // translated title in the continue card too.
+  if (changed) await renderShelf(lastHandlers);
 }
 
 /** Every folder currently in use, with how many books are in each. */

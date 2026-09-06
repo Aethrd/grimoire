@@ -528,25 +528,30 @@ export async function expandArchive(file, onProgress) {
   // Folders come from the paths as they already are, minus any wrapper.
   const folders = stripCommonRoot(books.map((e) => e.name));
 
-  const out = [];
-  for (let i = 0; i < books.length; i++) {
-    onProgress?.((i + 1) / books.length, books[i].name.split('/').pop());
-    const entry = books[i];
+  // Deliberately NOT extracted here. Unpacking forty EPUBs up front holds all
+  // of them in memory at once -- a few hundred megabytes for an ordinary
+  // library archive, which is enough to have the WebView killed mid-import.
+  // Each book is handed back with a read() that extracts it on demand, so the
+  // importer can take one, store it, and let it go before touching the next.
+  const out = books.map((entry, i) => {
     const uncompressed = entry._data?.uncompressedSize ?? 0;
-    if (uncompressed > MAX_ENTRY_BYTES) {
-      throw new Error(`${entry.name.split('/').pop()} unpacks to something implausibly large; refusing.`);
-    }
     const relative = folders[i];
     const parts = relative.split('/');
     const name = parts.pop();
-    out.push({
+    return {
       name,
       folder: parts.join('/'),          // "" when the book sat at the root
-      blob: await entry.async('blob'),
       size: uncompressed,
-    });
-  }
+      async read() {
+        if (uncompressed > MAX_ENTRY_BYTES) {
+          throw new Error(`${name} unpacks to something implausibly large; refusing.`);
+        }
+        return entry.async('blob');
+      },
+    };
+  });
 
+  onProgress?.(1, `${out.length} books found`);
   return { comic: false, books: out };
 }
 

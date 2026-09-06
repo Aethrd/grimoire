@@ -368,6 +368,33 @@ export async function openLanguage() {
         Korean in English needs Korean and English and nothing else. Only the
         languages your library is actually in are listed.</p>`;
 
+    const missing = needed.filter((t) => !installed.includes(t));
+    if (missing.length > 1) {
+      const all = document.createElement('button');
+      all.className = 'btn primary block';
+      all.style.marginBottom = '12px';
+      all.textContent = `Download all ${missing.length} (about ${missing.length * 30}MB)`;
+      all.onclick = async () => {
+        all.disabled = true;
+        let done = 0;
+        for (const tag of missing) {
+          all.textContent = `${translate.languageName(tag)}… (${done + 1} of ${missing.length})`;
+          try {
+            await translate.downloadModel(tag);
+            done += 1;
+          } catch (error) {
+            // One failure should not abandon the rest.
+            toast(`${translate.languageName(tag)}: ${error.message}`, 5000);
+          }
+        }
+        toast(done === missing.length
+          ? `${done} language packs ready offline`
+          : `${done} of ${missing.length} installed`);
+        openLanguage();
+      };
+      packs.appendChild(all);
+    }
+
     if (!needed.length) {
       const note = document.createElement('p');
       note.className = 'muted';

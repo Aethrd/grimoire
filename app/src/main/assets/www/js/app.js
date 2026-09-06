@@ -77,7 +77,16 @@ function emptyReel() {
 }
 
 function back() {
-  if (stack.length <= 1) return false;
+  if (stack.length <= 1) {
+    // Tab screens replace rather than stack, so there is nothing to pop from
+    // one. Back should still return to the shelf rather than leave the app --
+    // only the shelf itself is a place you exit from.
+    if (TABS.includes(current) && current !== 'library') {
+      show('library', { replace: true });
+      return true;
+    }
+    return false;
+  }
   stack.pop();
   const target = stack[stack.length - 1];
   screenNode(current)?.removeAttribute('data-active');
@@ -100,6 +109,11 @@ async function refreshShelf() {
 async function openBook(book, opts) {
   await show('reader');
   try {
+    // Opening is itself an event worth recording: otherwise a book you opened
+    // but did not turn a page in never becomes the one Continue offers, and
+    // "last opened" and "continue reading" disagree.
+    book.lastReadAt = Date.now();
+    await store.put('books', book);
     await reader.open(book.id, opts);
     const settings = await store.settings();
     el('translate-chapter').hidden =
@@ -422,10 +436,21 @@ function pickFiles() {
 
 async function handleFiles(files) {
   if (!files.length) return;
-  toast(`Importing ${files.length} file${files.length === 1 ? '' : 's'}…`, 60000);
+
+  const panel = el('import-progress');
+  panel.hidden = false;
+  el('import-label').textContent = 'Opening…';
+  el('import-count').textContent = '';
+  el('import-bar').style.width = '0%';
+
   const results = await library.importFiles(files, {
-    onProgress: (message) => toast(message, 60000),
+    onProgress: (message, fraction, done, total) => {
+      el('import-label').textContent = message;
+      el('import-bar').style.width = `${Math.round((fraction || 0) * 100)}%`;
+      el('import-count').textContent = total ? `${done + 1} of ${total}` : '';
+    },
   });
+  panel.hidden = true;
   await refreshShelf();
 
   if (results.failed.length) {

@@ -762,20 +762,42 @@ const IDLE_MS = 3 * 60 * 1000;
 const FLUSH_EVERY_PAGES = 25;
 
 function startSession() {
-  session = { start: Date.now(), last: Date.now(), active: 0, pages: 0, words: 0 };
+  session = {
+    start: Date.now(), last: Date.now(), active: 0, pages: 0, words: 0,
+    // The furthest point reached so far, so re-reading is not counted twice.
+    furthest: pageInBook(),
+  };
 }
 
+/**
+ * Record a page turn.
+ *
+ * Time and pages are counted differently on purpose. Flipping back to re-read
+ * a paragraph is reading, so the clock keeps running whichever way you go.
+ * But pages and words are *progress*, and counting every turn meant going
+ * back and forth in one chapter inflated the stats indefinitely -- the number
+ * went up for doing nothing. Only ground you have not already covered this
+ * session counts.
+ */
 function countPage() {
   if (!session) return;
   const now = Date.now();
-  // Time only counts while someone is actually turning pages; a gap longer
-  // than three minutes is stripped rather than counted as reading.
+  // A gap longer than three minutes is stripped rather than counted.
   const gap = now - session.last;
   if (gap < IDLE_MS) session.active += gap;
   session.last = now;
-  session.pages += 1;
+
+  const reached = pageInBook();
+  if (reached <= session.furthest) return;
+
+  const advanced = reached - session.furthest;
+  session.furthest = reached;
+  session.pages += advanced;
+
   const chapter = state.chapters.find((c) => c.index === state.chapterIndex);
-  if (chapter && state.pageCount) session.words += Math.round((chapter.words || 0) / state.pageCount);
+  if (chapter && state.pageCount) {
+    session.words += Math.round(((chapter.words || 0) / state.pageCount) * advanced);
+  }
 
   // Long reads should survive being killed by the system, not vanish.
   if (session.pages >= FLUSH_EVERY_PAGES) flushSession();
@@ -803,7 +825,10 @@ export async function flushSession() {
   const done = session;
   // Replaced rather than nulled, so reading continues to accumulate against a
   // fresh window and nothing is counted twice.
-  session = { start: Date.now(), last: done.last, active: 0, pages: 0, words: 0 };
+  session = {
+    start: Date.now(), last: done.last, active: 0, pages: 0, words: 0,
+    furthest: done.furthest,
+  };
 
   await store.recordEvent({
     bookId: state.book.id,
