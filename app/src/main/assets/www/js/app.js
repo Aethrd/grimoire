@@ -41,6 +41,7 @@ async function show(name, { replace = false } = {}) {
   // longer see.
   if (name !== 'library') clearSelection();
   // The tab bar is app furniture; it has no business over a page of prose.
+  document.body.dataset.screen = name;
   el('tabbar').hidden = name === 'reader' || selecting();
   for (const button of el('tabbar').children) {
     button.setAttribute('aria-pressed', String(button.dataset.go === name));
@@ -94,6 +95,7 @@ function back() {
   screenNode(target)?.setAttribute('data-active', '');
   const previous = current;
   current = target;
+  document.body.dataset.screen = target;
   if (previous === 'reader') reader.pauseSession();   // back() is sync; the
   // stats screen re-reads on every open, so a late arrival still shows up.
   el('tabbar').hidden = target === 'reader';
@@ -112,7 +114,11 @@ function openFolder(folder) {
 }
 
 async function refreshShelf() {
-  await library.renderShelf({ onOpen: onTileTap, onLongPress: onTileHold, selection, selecting: selectMode, folder: activeFolder });
+  await library.renderShelf({
+    onOpen: onTileTap, onLongPress: onTileHold, selection,
+    selecting: selectMode, folder: activeFolder,
+    onNotice: (message) => toast(message, 6000),
+  });
 }
 
 async function openBook(book, opts) {
@@ -243,6 +249,13 @@ function wireSelection() {
     vault: async () => {
       const books = await selectedBooks();
       if (!books.length) return;
+      const settings = await store.settings();
+      if (!settings.vaultPassphrase) {
+        // Otherwise the books simply disappear: hidden from the shelf, and
+        // only reachable from a screen that asks for a passphrase nobody set.
+        toast('Set a vault passphrase first — Settings, then Vault.', 5000);
+        return;
+      }
       const anyOut = books.some((b) => !b.inVault);
       for (const book of books) {
         book.inVault = anyOut;
@@ -581,6 +594,38 @@ function wireReader() {
     reader.turn(dx < 0 ? 1 : -1);
   }, { passive: true });
 
+  /* Scroll mode taps.
+   *
+   * The tap layer is inert there -- it covered the scrollable area and
+   * swallowed every drag -- so taps are recognised here instead, and only
+   * when the finger did not travel. Anything else is a scroll and is left
+   * well alone. */
+  let tapX = 0, tapY = 0, tapAt = 0, moved = false;
+  host.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { moved = true; return; }
+    tapX = e.touches[0].clientX;
+    tapY = e.touches[0].clientY;
+    tapAt = Date.now();
+    moved = false;
+  }, { passive: true });
+  host.addEventListener('touchmove', (e) => {
+    if (Math.abs(e.touches[0].clientX - tapX) > 8
+      || Math.abs(e.touches[0].clientY - tapY) > 8) moved = true;
+  }, { passive: true });
+  host.addEventListener('touchend', async (e) => {
+    if (reader.state.mode !== 'scroll' || moved || Date.now() - tapAt > 400) return;
+    const settings = await store.settings();
+    const width = host.getBoundingClientRect().width;
+    const fraction = (e.changedTouches[0].clientX - host.getBoundingClientRect().left) / width;
+
+    if (fraction > settings.tapZone && fraction < 1 - settings.tapZone) {
+      reader.cycleChrome();
+      paintReader();
+    } else if (settings.turnBySideTap) {
+      reader.turn(fraction <= settings.tapZone ? -1 : 1);
+    }
+  }, { passive: true });
+
   el('chapter-prev').onclick = () => reader.prevChapter();
   el('chapter-next').onclick = () => reader.nextChapter();
 
@@ -646,6 +691,7 @@ function wireReader() {
       ? `${Math.round(fraction * 100)}%`
       : `p. ${Math.round(fraction * (reader.state.pageCount - 1)) + 1}`;
     rail.classList.add('dragging');
+    reader.setScrubbing(true);
     reader.scrubTo(fraction);
   };
   rail.addEventListener('touchmove', (e) => { scrub(e.touches[0].clientY); e.preventDefault(); });
@@ -653,6 +699,7 @@ function wireReader() {
   rail.addEventListener('touchend', () => {
     bubble.hidden = true;
     rail.classList.remove('dragging');
+    reader.setScrubbing(false);
   });
 
   // The progress bar is draggable too, and releases to a page boundary.
@@ -802,6 +849,8 @@ window.Grimoire = {
 async function boot() {
   const settings = await store.settings();
   theme.apply(settings);
+  // Locked only if a passphrase exists to unlock it with.
+  await library.initVaultGate();
   reader.setChrome('full');
 
   wireChrome();

@@ -63,6 +63,7 @@ function releaseAllSections() {
 }
 let scrollTimer = null;
 let extending = false;
+let scrubbing = false;
 
 /** How many chapters may sit in the DOM at once in endless mode. */
 const WINDOW = 5;
@@ -418,7 +419,7 @@ export async function toggleTranslation() {
  * exactly the inserted height or the text jumps under the reader's eyes.
  */
 async function extendIfNeeded() {
-  if (!isScroll() || !state.endless || extending) return;
+  if (!isScroll() || !state.endless || extending || scrubbing) return;
 
   const margin = viewportHeight() * 1.25;
   const nearBottom = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - margin;
@@ -604,7 +605,23 @@ export function scrollFraction() {
 /** How much of the text is on screen, as a fraction. Sizes the handle. */
 export function viewportRatio() {
   if (!isScroll()) return 1 / Math.max(1, state.pageCount);
-  return viewport.scrollHeight ? viewport.clientHeight / viewport.scrollHeight : 1;
+  if (!viewport.scrollHeight) return 1;
+  // Clamped: a viewport taller than its content gives a ratio above one, and
+  // a handle longer than its rail overhangs the bottom of it.
+  return Math.min(1, viewport.clientHeight / viewport.scrollHeight);
+}
+
+/**
+ * Held while the rail is being dragged.
+ *
+ * Endless scroll appends the next chapter as the end approaches, which changes
+ * scrollHeight -- and a thumb positioned as a fraction of that height jumps
+ * backwards the instant it does. Dragging to the bottom therefore fought
+ * itself. Loading is suspended for the drag and resumes when the finger lifts.
+ */
+export function setScrubbing(on) {
+  scrubbing = on;
+  if (!on) extendIfNeeded();
 }
 
 /** Drag target for the rail and the progress bar. */

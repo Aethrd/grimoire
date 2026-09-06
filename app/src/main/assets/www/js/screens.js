@@ -62,7 +62,11 @@ function renderSort() {
     const chip = document.createElement('button');
     chip.className = 'chip dashed';
     chip.textContent = `+ ${label}`;
-    chip.onclick = () => { draft.keys.push([key, 'asc']); renderSort(); };
+    // Added at the top, not the bottom. Appending it put the key you just
+    // asked to sort by behind every existing one, where it changed nothing
+    // visible unless the leading keys happened to tie -- which reads exactly
+    // like sorting being broken.
+    chip.onclick = () => { draft.keys.unshift([key, 'asc']); renderSort(); };
     pool.appendChild(chip);
   }
 

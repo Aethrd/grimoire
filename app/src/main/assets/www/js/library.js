@@ -438,8 +438,13 @@ async function applyTitleTranslations(books, settings) {
         book.id, [{ field: 'title', text: book.title }], lang, book.lang);
       const value = results.get('title');
       if (value && value !== book.title) { titles.set(book.id, value); changed = true; }
-    } catch {
-      break;   // no key, no quota or no pack; stop asking rather than retry 40 times
+    } catch (error) {
+      // Swallowing this was the whole reason translation looked like it did
+      // nothing: no key, no quota or -- most often -- no language pack, and
+      // not a word about it. Reported once, then the loop stops rather than
+      // failing forty more times.
+      lastHandlers.onNotice?.(error.message);
+      break;
     }
   }
 
@@ -460,7 +465,19 @@ export async function folderCounts() {
   return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 }
 
-/* The vault gate. Set by the account screen; read by every list that must
-   not leak a vault title before it is unlocked. */
-export let vaultUnlocked = false;
+/* The vault gate, read by every list that must not leak a vault title before
+   it is unlocked.
+ *
+ * It starts unlocked when no passphrase has been set, because a vault with no
+ * lock on it is not a vault -- and the alternative was books vanishing with no
+ * way to get them back: hidden from the shelf, and only listable from a screen
+ * that first demands a passphrase which does not exist. */
+export let vaultUnlocked = true;
 export function setVaultUnlocked(value) { vaultUnlocked = value; }
+
+/** Called at boot: locked only if there is something to unlock. */
+export async function initVaultGate() {
+  const settings = await store.settings();
+  vaultUnlocked = !settings.vaultPassphrase;
+  return vaultUnlocked;
+}
