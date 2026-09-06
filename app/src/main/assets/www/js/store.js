@@ -193,10 +193,6 @@ export const DEFAULT_SETTINGS = {
   translateChapters: true,
   translateBody: false,
   translateTarget: 'EN-GB',
-  // Used when a book does not declare its own language. On-device translation
-  // has to be told the source -- it does not sniff -- and scraped EPUBs very
-  // often carry no dc:language at all.
-  translateSource: '',
   streakPages: 10,
   streakMinutes: 10,
   heatRamp: 'ink',

@@ -602,10 +602,16 @@ function wireReader() {
 
   /* Scroll mode taps.
    *
-   * The tap layer is inert there -- it covered the scrollable area and
-   * swallowed every drag -- so taps are recognised here instead, and only
-   * when the finger did not travel. Anything else is a scroll and is left
-   * well alone. */
+   * A tap does one thing here: show or hide the chrome. Nothing turns a page
+   * and nothing changes chapter, anywhere on the screen -- in scroll mode the
+   * way to move through the text is to scroll it, and the way to change
+   * chapter is the button that says so. Taps that were doing either were
+   * being triggered by accident while reading.
+   *
+   * The tap layer is inert in this mode (it covered the scrollable area and
+   * swallowed every drag), so this is recognised here, and only when the
+   * finger did not travel.
+   */
   let tapX = 0, tapY = 0, tapAt = 0, moved = false;
   host.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1) { moved = true; return; }
@@ -618,20 +624,10 @@ function wireReader() {
     if (Math.abs(e.touches[0].clientX - tapX) > 8
       || Math.abs(e.touches[0].clientY - tapY) > 8) moved = true;
   }, { passive: true });
-  host.addEventListener('touchend', async (e) => {
+  host.addEventListener('touchend', () => {
     if (reader.state.mode !== 'scroll' || moved || Date.now() - tapAt > 400) return;
-    const settings = await store.settings();
-    const width = host.getBoundingClientRect().width;
-    const fraction = (e.changedTouches[0].clientX - host.getBoundingClientRect().left) / width;
-
-    if (fraction > settings.tapZone && fraction < 1 - settings.tapZone) {
-      reader.cycleChrome();
-      paintReader();
-    } else if (settings.turnBySideTap) {
-      // Scrolls by a screen and stops at the ends. Chapters are moved with
-      // the buttons, not by tapping near an edge.
-      reader.turn(fraction <= settings.tapZone ? -1 : 1);
-    }
+    reader.cycleChrome();
+    paintReader();
   }, { passive: true });
 
   el('chapter-prev').onclick = async () => {

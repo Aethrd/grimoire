@@ -104,16 +104,13 @@ export function supports(tag) {
  * ML Kit models are per language, not per pair and not the whole set. Reading
  * Korean in English needs Korean and English and nothing else.
  */
-export function neededLanguages(books, target, fallback) {
+export function neededLanguages(books, target) {
   const tags = new Set();
   for (const book of books) {
     const tag = (book.lang || '').split('-')[0].toLowerCase();
     if (tag && supports(tag)) tags.add(tag);
   }
-  // Books that declare nothing fall back to the chosen source, so its pack is
-  // needed too.
-  const from = (fallback || '').split('-')[0].toLowerCase();
-  if (from && supports(from)) tags.add(from);
+
   const to = (target || '').split('-')[0].toLowerCase();
   if (to && supports(to)) tags.add(to);
   return [...tags].sort();
@@ -149,16 +146,15 @@ export function allLanguages() {
 export const languageName = (tag) => LANGUAGE_NAMES[tag] || tag.toUpperCase();
 
 /**
- * The source language for a book.
+ * The source language for a book, when it declares one.
  *
- * The book's own declaration first, then whatever fallback has been set.
- * Without one there is nothing to translate from: ML Kit is told both
- * languages and does not detect either.
+ * An empty answer is fine and normal: the native side identifies the language
+ * from the text itself. Switching translation on means wanting whatever is
+ * foreign translated, not answering a question about which language a scraped
+ * EPUB happens to be in.
  */
-export function sourceFor(book, settings) {
-  const declared = (book?.lang || '').split('-')[0].toLowerCase();
-  if (declared) return declared;
-  return (settings?.translateSource || '').split('-')[0].toLowerCase();
+export function sourceFor(book) {
+  return (book?.lang || '').split('-')[0].toLowerCase();
 }
 export const setKey = (key) => call('setKey', [key], 30000).then(parse);
 export const clearKey = () => call('clearKey').then(parse);

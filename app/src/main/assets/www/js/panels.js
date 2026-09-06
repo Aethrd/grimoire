@@ -319,35 +319,6 @@ export async function openLanguage(host) {
   }
   body.appendChild(keyCard);
 
-  /* Source language.
-   *
-   * On-device translation is told both languages and detects neither, so a
-   * book that declares none has nothing to translate from. Most books say;
-   * scraped ones frequently do not, and this is what they fall back to.
-   */
-  const undeclared = (await store.all('books')).filter((b) => !b.lang).length;
-  const source = document.createElement('div');
-  source.className = 'field';
-  source.innerHTML = `<label><span>Translate from</span></label>
-    <p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 8px">
-      Used only for books that do not say what language they are in${
-        undeclared ? ` — ${undeclared} of yours` : ''}. A book that does say
-      is translated from its own language regardless. You can set one book's
-      language in its details.</p>`;
-  const sourceChips = document.createElement('div');
-  sourceChips.className = 'chip-row wrap';
-  for (const [code, label] of [['', 'Not set'], ...translate.allLanguages().map((t) => [t, translate.languageName(t)])].slice(0, 14)) {
-    const chip = document.createElement('button');
-    chip.className = 'chip';
-    chip.style.textTransform = 'none';
-    chip.textContent = label;
-    chip.setAttribute('aria-pressed', String((settings.translateSource || '') === code));
-    chip.onclick = async () => { await store.saveSettings({ translateSource: code }); openLanguage(body); };
-    sourceChips.appendChild(chip);
-  }
-  source.appendChild(sourceChips);
-  body.appendChild(source);
-
   // Target language.
   const target = document.createElement('div');
   target.className = 'field';
@@ -392,7 +363,7 @@ export async function openLanguage(host) {
   // Language packs, but only the ones this library could actually use.
   if (state.engine === 'ondevice') {
     const books = await store.all('books');
-    const needed = translate.neededLanguages(books, settings.translateTarget, settings.translateSource);
+    const needed = translate.neededLanguages(books, settings.translateTarget);
     let installed = [];
     try { installed = await translate.models() || []; } catch { installed = []; }
 
@@ -517,7 +488,7 @@ export async function openLanguage(host) {
       ['Engine', state.engine || 'none'],
       ['Set up', state.configured ? 'yes' : 'no'],
       ['Sample book', sample ? (sample.title || '').slice(0, 24) : 'none imported'],
-      ['Its language', sample?.lang || `not declared → ${from || 'nothing set'}`],
+      ['Its language', sample?.lang || 'not declared — detected from the text'],
       ['Translating to', settings.translateTarget],
     ];
 
@@ -534,9 +505,7 @@ export async function openLanguage(host) {
       }
     }
 
-    if (!from) {
-      rows.push(['Result', 'No source language. Set one above, or in the book\u2019s details.']);
-    } else {
+    {
       try {
         const { results } = await translate.translateBatch(
           -1, [{ field: `test:${Date.now()}`, text: 'Hello, world.' }],

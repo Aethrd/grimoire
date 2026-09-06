@@ -447,7 +447,7 @@ async function applyTitleTranslations(books, settings) {
     try {
       const { results } = await translate.translateBatch(
         book.id, [{ field: 'title', text: book.title }], lang,
-        translate.sourceFor(book, settings));
+        translate.sourceFor(book));
       const value = results.get('title');
       if (value && value !== book.title) { titles.set(book.id, value); changed = true; }
     } catch (error) {

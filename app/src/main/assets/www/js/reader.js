@@ -357,7 +357,7 @@ async function loadChapterNames() {
   try {
     const { results } = await translate.translateChapterNames(
       state.book.id, state.chapters, settings.translateTarget,
-      translate.sourceFor(state.book, settings));
+      translate.sourceFor(state.book));
     for (const chapter of state.chapters) {
       const value = results.get(`chapter:${chapter.index}`);
       if (value && value !== chapter.title) state.names.set(chapter.index, value);
@@ -388,7 +388,7 @@ export async function toggleTranslation() {
   const settings = await store.settings();
   const { html, characters } = await translate.translateChapterBody(
     state.book.id, chapter, settings.translateTarget,
-    translate.sourceFor(state.book, settings));
+    translate.sourceFor(state.book));
 
   state.translated = state.chapterIndex;
   const anchor = state.anchor;
@@ -572,6 +572,9 @@ export function repaginate() {
 
 export function turn(delta) {
   if (isScroll()) {
+    // Nothing calls this in scroll mode any more -- taps only toggle chrome
+    // there -- but if something does, it scrolls and stops at the ends. It
+    // must never reach for a chapter.
     // A tap moves by just under a screen, so a line or two carries over and
     // you can see you have not skipped anything.
     // Clamped, never a chapter change. Tapping near the top used to jump to
