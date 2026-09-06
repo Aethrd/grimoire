@@ -207,5 +207,6 @@ dependencies {
     implementation(libs.androidx.splashscreen)
     implementation(libs.androidx.webkit)
     implementation(libs.mlkit.translate)
+    implementation(libs.mlkit.language.id)
 
 }
