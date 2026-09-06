@@ -312,6 +312,25 @@ t('saving a view is not the loudest thing on the sort screen', () => {
   assert.match(sortScreen, /class="link-btn" id="sort-save"/);
 });
 
+t('the shelf remembers how it was arranged', () => {
+  // Sort keys and grouping were already persisted; the folder filter was a
+  // module variable and forgotten on every launch.
+  const store = read('app/src/main/assets/www/js/store.js');
+  assert.match(store, /shelfFolder: null/);
+  assert.match(app, /store\.saveSettings\(\{ shelfFolder: folder \}\)/);
+  assert.match(app, /activeFolder = settings\.shelfFolder/);
+});
+
+t('a filter that survives a relaunch can be cleared from the shelf', () => {
+  // Otherwise "why can I only see nine books" is answered two screens away.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /onClearFolder/);
+  assert.match(app, /onClearFolder: \(\) => openFolder\(null\)/);
+  // And clearing has to re-render: show() returns early when the screen is
+  // already the one showing.
+  assert.match(app, /if \(current === 'library'\) await refreshShelf\(\)/);
+});
+
 console.log('settings');
 
 t('settings is a screen with panes, reachable from the bar', () => {
