@@ -9,6 +9,13 @@ window.URL.revokeObjectURL = globalThis.URL.revokeObjectURL = () => {};
 const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
 const pdf = await import(new URL('../app/src/main/assets/www/js/pdf.js', import.meta.url).href);
 
+/* pdf.js itself is fetched by the build rather than committed -- 4.3MB of
+ * unmodified library code. The pure parts below are testable without it; the
+ * ones that open a real document are not, and skipping them with a clear
+ * notice beats a module resolver stack trace. */
+const vendored = fs.existsSync(
+  new URL('../app/src/main/assets/www/vendor/pdf.min.mjs', import.meta.url));
+
 let pass = 0;
 const t = async (name, fn) => { await fn(); console.log('  ok  ' + name); pass++; };
 
@@ -71,6 +78,16 @@ t('without an outline the pages are cut into even runs', () => {
 });
 
 console.log('a real file');
+
+if (!vendored) {
+  // The pure tests above are not awaited individually, so let them settle
+  // before reporting a count.
+  await new Promise((r) => setTimeout(r, 50));
+  console.log('  -- skipped: pdf.js is not vendored yet.');
+  console.log('     Run `node tools/vendor_pdfjs.mjs`, or any Gradle build.');
+  console.log(`\n${pass} assertions passed (PDF document tests skipped)`);
+  process.exit(0);
+}
 
 const file = new File([fs.readFileSync(new URL('./fixtures/sample.pdf', import.meta.url))], 'sample.pdf');
 const parsed = await parse.parse(file);
