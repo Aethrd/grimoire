@@ -122,4 +122,26 @@ t('only the languages the library uses are offered', () => {
   assert.match(download.slice(0, 500), /requireWifi/);
 });
 
+console.log('stats');
+
+t('reading counts progress, not page turns', () => {
+  // Flipping back and forth in one chapter used to raise the page count
+  // every time, so the numbers went up for doing nothing.
+  const js = read('app/src/main/assets/www/js/reader.js');
+  assert.match(js, /furthest/);
+  const count = js.slice(js.indexOf('function countPage'), js.indexOf('export async function flushSession'));
+  assert.match(count, /if \(reached <= session\.furthest\) return/);
+  // Time still accrues either way: re-reading a paragraph is reading.
+  assert.ok(count.indexOf('session.active += gap') < count.indexOf('session.furthest'),
+    'the clock stops when you turn back');
+});
+
+t('several language packs can be fetched in one go', () => {
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /Download all \$\{missing\.length\}/);
+  // One failure must not abandon the rest of the queue.
+  const bulk = panels.slice(panels.indexOf('Download all'), panels.indexOf('if (!needed.length)'));
+  assert.match(bulk, /catch \(error\)/);
+});
+
 console.log(`\n${pass} assertions passed`);

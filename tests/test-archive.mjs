@@ -132,12 +132,40 @@ await t('parse() refuses a container rather than guessing', async () => {
 
 console.log('extracted content');
 
+await t('books are extracted one at a time, not all at once', async () => {
+  // Unpacking every book up front holds the whole archive in memory --
+  // hundreds of megabytes for an ordinary library zip, which is enough to
+  // have the WebView killed mid-import. Entries come back as a read() the
+  // importer calls when that book's turn arrives.
+  const file = await zipOf({ 'A/one.txt': BOOK, 'B/two.txt': BOOK });
+  const { books } = await parse.expandArchive(file);
+  for (const book of books) {
+    assert.equal(book.blob, undefined, 'the entry was extracted eagerly');
+    assert.equal(typeof book.read, 'function');
+  }
+});
+
 await t('an extracted book still parses', async () => {
   const file = await zipOf({ 'Fiction/road.txt': 'CHAPTER ONE\n\nThe road bent north.\n' });
   const { books } = await parse.expandArchive(file);
-  const parsed = await parse.parse(new File([books[0].blob], books[0].name));
+  const parsed = await parse.parse(new File([await books[0].read()], books[0].name));
   assert.equal(parsed.chapters[0].title, 'CHAPTER ONE');
   assert.match(parsed.chapters[0].html, /road bent north/);
+});
+
+await t('several folders at once each keep their own path', async () => {
+  const file = await zipOf({
+    'Fantasy/a.txt': BOOK,
+    'Fantasy/Sub/b.txt': BOOK,
+    'Romance/c.txt': BOOK,
+    'loose.txt': BOOK,
+  });
+  const { books } = await parse.expandArchive(file);
+  const byName = Object.fromEntries(books.map((b) => [b.name, b.folder]));
+  assert.equal(byName['a.txt'], 'Fantasy');
+  assert.equal(byName['b.txt'], 'Fantasy/Sub');
+  assert.equal(byName['c.txt'], 'Romance');
+  assert.equal(byName['loose.txt'], '');
 });
 
 console.log(`\n${pass} assertions passed`);

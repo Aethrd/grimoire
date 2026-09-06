@@ -159,6 +159,51 @@ t('renaming a book drops its stale translated title', () => {
   assert.match(save, /translate\.clearCache\(book\.id\)/);
 });
 
+console.log('regressions');
+
+t('nothing inside a tile is left inline', () => {
+  // A <button> and the spans inside it are inline by default, and
+  // aspect-ratio does not apply to a non-replaced inline box. Leaving them
+  // inline collapsed every cover and flowed the grid sideways as text.
+  for (const selector of ['.tile', '.tile-cover', '.tile-meta']) {
+    assert.match(rule(selector), /display:\s*block/,
+      `${selector} is inline; the cover will collapse`);
+  }
+});
+
+t('the continue card follows the last book opened', () => {
+  const library = read('app/src/main/assets/www/js/library.js');
+  const filter = library.slice(library.indexOf('const candidates'), library.indexOf('.sort('));
+  assert.ok(!/percent/.test(filter),
+    'a book you opened but did not page through is still excluded');
+  assert.match(library, /lastReadAt && !b\.finishedAt/);
+  // And opening a book records that it was opened.
+  assert.match(app, /book\.lastReadAt = Date\.now\(\)/);
+});
+
+t('translated titles reach the tile and the continue card', () => {
+  // Patching a .tile-title node did nothing for any book with cover art,
+  // because that element is only rendered as the no-cover fallback.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /export const displayTitle/);
+  assert.match(library, /el\('continue-title'\)\.textContent = displayTitle\(book\)/);
+  assert.ok(!/querySelector\(`\[data-book/.test(library),
+    'still patching a DOM node that may not exist');
+});
+
+t('back leaves a tab for the shelf rather than the app', () => {
+  // Tabs replace rather than stack, so there was nothing to pop and back
+  // fell straight through to the system.
+  const fn = app.slice(app.indexOf('function back()'), app.indexOf('stack.pop()'));
+  assert.match(fn, /TABS\.includes\(current\) && current !== 'library'/);
+});
+
+t('importing reports progress rather than a silent wait', () => {
+  assert.match(html, /id="import-progress"/);
+  assert.match(app, /el\('import-bar'\)\.style\.width/);
+  assert.match(app, /onProgress: \(message, fraction, done, total\)/);
+});
+
 console.log('settings');
 
 t('settings is a screen with panes, reachable from the bar', () => {
