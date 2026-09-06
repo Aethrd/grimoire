@@ -106,8 +106,8 @@ t('nothing reaches the network unless translation is asked for', () => {
 
   // On-device fetches a model once. Doing that on someone's mobile data
   // without asking is not on, so it is Wi-Fi only.
-  const ondevice = java.slice(java.indexOf('translateOnDevice(String'));
-  assert.match(ondevice.slice(0, 2000), /requireWifi\(\)/,
+  const download = java.slice(java.indexOf('private void startTranslation'));
+  assert.match(download.slice(0, 1400), /requireWifi\(\)/,
     'the model download does not require Wi-Fi');
 });
 

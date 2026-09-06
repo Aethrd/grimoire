@@ -165,7 +165,20 @@ t('dragging the rail does not fight endless loading', () => {
   assert.match(reader, /Math\.min\(1, viewport\.clientHeight \/ viewport\.scrollHeight\)/);
 });
 
-t('a tap in scroll mode never changes chapter', () => {
+t('a tap in scroll mode does nothing but toggle chrome', () => {
+  // No page turn, no chapter change, anywhere on the screen. Both were being
+  // triggered by accident while reading.
+  const app = read('app/src/main/assets/www/js/app.js');
+  // Bounded by the block itself: el('chapter-prev') also appears earlier, in
+  // paintReader, which made this slice run backwards and match nothing.
+  const start = app.indexOf('/* Scroll mode taps.');
+  const taps = app.slice(start, app.indexOf("el('chapter-prev').onclick", start));
+  assert.match(taps, /reader\.cycleChrome\(\)/);
+  assert.ok(!/reader\.turn\(/.test(taps), 'a scroll-mode tap can still turn a page');
+  assert.ok(!/Chapter\(/.test(taps), 'a scroll-mode tap can still change chapter');
+});
+
+t('turn() still refuses to change chapter in scroll mode', () => {
   // Tapping near the top jumped to the previous chapter, which is a violent
   // answer to "scroll up a bit".
   const reader = read('app/src/main/assets/www/js/reader.js');
@@ -205,28 +218,24 @@ t('an async bridge reply is parsed whichever shape it arrives in', () => {
   assert.match(java, /JSONObject\.quote\(payloadJson\)/, 'the payload still crosses unquoted');
 });
 
-t('a book with no declared language has something to fall back to', () => {
-  // On-device translation is told both languages and detects neither, so a
-  // book with no dc:language had nothing to translate from -- and the error
-  // told people to pick a source language in a setting that did not exist.
-  const store = read('app/src/main/assets/www/js/store.js');
-  assert.match(store, /translateSource: ''/);
-  const translate = read('app/src/main/assets/www/js/translate.js');
-  assert.match(translate, /export function sourceFor/);
-  // Both the shelf and the reader go through it, rather than reading
-  // book.lang directly.
-  for (const file of ['library.js', 'reader.js']) {
-    const src = read(`app/src/main/assets/www/js/${file}`);
-    assert.match(src, /translate\.sourceFor\(/, `${file} still uses the raw language`);
-  }
-  const panels = read('app/src/main/assets/www/js/panels.js');
-  assert.match(panels, /Translate from/);
-});
+t('a book with no declared language is detected, not asked about', () => {
+  // Switching translation on means wanting whatever is foreign translated.
+  // Asking which language a scraped EPUB happens to be in is the wrong
+  // question, and ML Kit does not detect on its own -- so identification is
+  // run first, from the text.
+  const java = read('app/src/main/java/com/grimoire/ereader/TranslateBridge.java');
+  assert.match(java, /LanguageIdentification\.getClient\(\)/);
+  assert.match(java, /"und"\.equals\(code\)/, 'an unidentifiable text is not handled');
+  // Same language in and out is a no-op, not an error.
+  assert.match(java, /if \(source\.equals\(target\)\)/);
 
-t('the fallback language is counted when listing packs', () => {
+  const store = read('app/src/main/assets/www/js/store.js');
+  assert.ok(!/translateSource/.test(store), 'the source setting is back');
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.ok(!/Translate from/.test(panels), 'the source picker is back');
+
   const translate = read('app/src/main/assets/www/js/translate.js');
-  const fn = translate.slice(translate.indexOf('export function neededLanguages'));
-  assert.match(fn.slice(0, 700), /fallback/);
+  assert.match(translate, /export function sourceFor\(book\)/);
 });
 
 t('a failed translation can be diagnosed on the device', () => {
