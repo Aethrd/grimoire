@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Audit bundled web assets
+        # Fails on anything that would actually load off-origin. A URL sitting
+        # in a vendored library's licence header is not a violation; a <script
+        # src> or a fetch() pointed at one is.
+        run: python3 tools/audit_assets.py
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Reader tests
+        # The reader is plain ES modules, so its parsers, sort comparator and
+        # contrast guard can be exercised under jsdom without an emulator.
+        run: |
+          npm ci
+          node tests/run.mjs
+
+      - name: Assemble debug
+        run: gradle --no-daemon assembleDebug
+
+      # checkDuplicateClasses names the clashing classes but not the dependency
+      # that dragged them in, which is the only thing you actually need. Print
+      # the resolved graph so the culprit is in the same log as the failure.
+      - name: Dependency graph on failure
+        if: failure()
+        run: |
+          echo "::group::Resolved debug runtime classpath"
+          gradle --no-daemon :app:dependencies --configuration debugRuntimeClasspath || true
+          echo "::endgroup::"
+          echo "::group::Where kotlin-stdlib comes from"
+          gradle --no-daemon :app:dependencyInsight \
+            --configuration debugRuntimeClasspath \
+            --dependency org.jetbrains.kotlin:kotlin-stdlib || true
+          echo "::endgroup::"
+
+      # Uploaded before lint on purpose. Lint runs with abortOnError, so gating
+      # the artifact behind it means a style complaint costs you the APK you
+      # just successfully built.
+      # Uploaded before lint on purpose: lint runs with abortOnError, and
+      # gating the artifact behind it means a style complaint costs you the
+      # APK you just successfully built.
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: grimoire-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 14
+
+      - name: Report APK size
+        run: |
+          echo "### Debug build" >> "$GITHUB_STEP_SUMMARY"
+          for apk in app/build/outputs/apk/debug/*.apk; do
+            echo "- \`$(basename "$apk")\` — $(du -h "$apk" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Lint
+        run: gradle --no-daemon lintDebug
+
+      # The console only prints the *first* lint failure, which turns a
+      # three-error run into three round trips. Dump the full text report.
+      - name: Lint failures in full
+        if: failure()
+        run: |
+          report=$(find app/build -name 'lint-results-debug.txt' | head -1)
+          if [ -n "$report" ]; then
+            echo "::group::Full lint report"
+            cat "$report"
+            echo "::endgroup::"
+            { echo '### Lint errors'; echo '```'; grep -A3 'Error:' "$report" | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No lint text report found."
+          fi
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-debug.html
+          retention-days: 7
