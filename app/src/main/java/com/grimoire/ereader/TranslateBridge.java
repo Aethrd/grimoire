@@ -532,8 +532,14 @@ public class TranslateBridge {
     }
 
     private void settle(String requestId, boolean ok, String payloadJson) {
+        // Quoted, so the payload crosses as text and is parsed once on the
+        // other side. Injected raw it became a JavaScript object literal, and
+        // the reader -- which expected text -- parsed it into nothing.
+        // Quoting also sidesteps U+2028 and U+2029, which are legal in JSON
+        // strings and were line terminators in JavaScript.
         final String js = "window.Grimoire && window.Grimoire.settle("
-                + JSONObject.quote(requestId) + "," + ok + "," + payloadJson + ")";
+                + JSONObject.quote(requestId) + "," + ok + ","
+                + JSONObject.quote(payloadJson) + ")";
         activity.runOnUiThread(() -> {
             if (webView != null) webView.evaluateJavascript(js, null);
         });
