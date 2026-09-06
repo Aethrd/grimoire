@@ -107,10 +107,17 @@ await t('counts CJK by character over a per-language factor', () => {
 });
 
 console.log('refusals');
-await t('names a reason rather than failing silently', async () => {
+await t('an unsupported format names a reason rather than failing silently', async () => {
+  // PDF used to be the example here. It is read properly now, so this uses a
+  // format that genuinely is not supported yet.
   await assert.rejects(
-    parse.parse(new File([new Uint8Array([1,2,3])], 'book.pdf')),
-    (e) => /pdf\.js|PdfRenderer/.test(e.message));
+    parse.parse(new File([new Uint8Array([1, 2, 3])], 'book.mobi')),
+    (e) => /PalmDOC|No parser/.test(e.message));
+});
+
+await t('PDF is no longer in the refusal list', () => {
+  assert.equal(parse.UNSUPPORTED_REASON.PDF, undefined);
+  assert.ok(parse.SUPPORTED.has('PDF'));
 });
 await t('rejects a zip that is not an EPUB with a useful message', async () => {
   const JSZipMod = (await import('jszip')).default;
