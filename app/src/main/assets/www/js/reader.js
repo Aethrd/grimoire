@@ -356,7 +356,8 @@ async function loadChapterNames() {
   if (!settings.translateChapters || !translate.status().configured) return;
   try {
     const { results } = await translate.translateChapterNames(
-      state.book.id, state.chapters, settings.translateTarget, state.book.lang);
+      state.book.id, state.chapters, settings.translateTarget,
+      translate.sourceFor(state.book, settings));
     for (const chapter of state.chapters) {
       const value = results.get(`chapter:${chapter.index}`);
       if (value && value !== chapter.title) state.names.set(chapter.index, value);
@@ -386,7 +387,8 @@ export async function toggleTranslation() {
 
   const settings = await store.settings();
   const { html, characters } = await translate.translateChapterBody(
-    state.book.id, chapter, settings.translateTarget, state.book.lang);
+    state.book.id, chapter, settings.translateTarget,
+    translate.sourceFor(state.book, settings));
 
   state.translated = state.chapterIndex;
   const anchor = state.anchor;

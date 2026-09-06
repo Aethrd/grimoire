@@ -319,6 +319,35 @@ export async function openLanguage(host) {
   }
   body.appendChild(keyCard);
 
+  /* Source language.
+   *
+   * On-device translation is told both languages and detects neither, so a
+   * book that declares none has nothing to translate from. Most books say;
+   * scraped ones frequently do not, and this is what they fall back to.
+   */
+  const undeclared = (await store.all('books')).filter((b) => !b.lang).length;
+  const source = document.createElement('div');
+  source.className = 'field';
+  source.innerHTML = `<label><span>Translate from</span></label>
+    <p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 8px">
+      Used only for books that do not say what language they are in${
+        undeclared ? ` — ${undeclared} of yours` : ''}. A book that does say
+      is translated from its own language regardless. You can set one book's
+      language in its details.</p>`;
+  const sourceChips = document.createElement('div');
+  sourceChips.className = 'chip-row wrap';
+  for (const [code, label] of [['', 'Not set'], ...translate.allLanguages().map((t) => [t, translate.languageName(t)])].slice(0, 14)) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.style.textTransform = 'none';
+    chip.textContent = label;
+    chip.setAttribute('aria-pressed', String((settings.translateSource || '') === code));
+    chip.onclick = async () => { await store.saveSettings({ translateSource: code }); openLanguage(body); };
+    sourceChips.appendChild(chip);
+  }
+  source.appendChild(sourceChips);
+  body.appendChild(source);
+
   // Target language.
   const target = document.createElement('div');
   target.className = 'field';
@@ -363,7 +392,7 @@ export async function openLanguage(host) {
   // Language packs, but only the ones this library could actually use.
   if (state.engine === 'ondevice') {
     const books = await store.all('books');
-    const needed = translate.neededLanguages(books, settings.translateTarget);
+    const needed = translate.neededLanguages(books, settings.translateTarget, settings.translateSource);
     let installed = [];
     try { installed = await translate.models() || []; } catch { installed = []; }
 
@@ -465,35 +494,69 @@ export async function openLanguage(host) {
     }
   }
 
-  // A real translation, run on demand, reporting exactly what came back.
-  // Working out why nothing is translating by staring at unchanged titles is
-  // not a reasonable ask.
-  const check = document.createElement('button');
-  check.className = 'btn ghost block';
-  check.style.marginTop = '14px';
-  check.textContent = 'Test translation';
-  check.onclick = async () => {
-    check.disabled = true;
-    check.textContent = 'Translating…';
+  /* A report of every step, rather than a single line saying it did not work.
+   * Working out which of six things is wrong from unchanged titles is not a
+   * reasonable ask, and it is what "still not translating" kept meaning. */
+  const diag = document.createElement('section');
+  diag.className = 'block';
+  diag.innerHTML = '<h2>Check it works</h2>';
+  const report = document.createElement('div');
+  report.className = 'facts';
+  report.style.display = 'none';
+  const run = document.createElement('button');
+  run.className = 'btn ghost block';
+  run.textContent = 'Test translation';
+
+  run.onclick = async () => {
+    run.disabled = true;
+    run.textContent = 'Testing…';
     const books = await store.all('books');
-    const source = books.find((b) => b.lang)?.lang || 'en';
-    try {
-      const { results, translated } = await translate.translateBatch(
-        -1, [{ field: `test:${Date.now()}`, text: 'Hello, world.' }],
-        settings.translateTarget, source);
-      const out = results.get([...results.keys()][0]);
-      toast(translated === 0
-        ? 'Nothing was sent — that phrase was already cached.'
-        : `${source} → ${settings.translateTarget}: “${out}”`, 6000);
-    } catch (error) {
-      toast(error.message, 8000);
+    const sample = books.find((b) => b.lang) || books[0];
+    const from = translate.sourceFor(sample, settings);
+    const rows = [
+      ['Engine', state.engine || 'none'],
+      ['Set up', state.configured ? 'yes' : 'no'],
+      ['Sample book', sample ? (sample.title || '').slice(0, 24) : 'none imported'],
+      ['Its language', sample?.lang || `not declared → ${from || 'nothing set'}`],
+      ['Translating to', settings.translateTarget],
+    ];
+
+    if (state.engine === 'ondevice') {
+      try {
+        const installed = await translate.models() || [];
+        rows.push(['Packs installed', installed.length ? installed.join(', ') : 'none']);
+        const want = [from, (settings.translateTarget || '').split('-')[0].toLowerCase()]
+          .filter(Boolean);
+        const absent = want.filter((t) => !installed.includes(t));
+        if (absent.length) rows.push(['Missing', absent.map(translate.languageName).join(', ')]);
+      } catch (error) {
+        rows.push(['Packs installed', `could not tell: ${error.message}`]);
+      }
     }
-    check.disabled = false;
-    check.textContent = 'Test translation';
-    // The cache row below now has one more entry in it.
-    openLanguage(body);
+
+    if (!from) {
+      rows.push(['Result', 'No source language. Set one above, or in the book\u2019s details.']);
+    } else {
+      try {
+        const { results } = await translate.translateBatch(
+          -1, [{ field: `test:${Date.now()}`, text: 'Hello, world.' }],
+          settings.translateTarget, from);
+        rows.push(['Result', results.get([...results.keys()][0]) || 'empty']);
+      } catch (error) {
+        rows.push(['Result', error.message]);
+      }
+    }
+
+    report.innerHTML = rows
+      .map(([k, v]) => `<div><b>${escape(k)}</b><small>${escape(String(v))}</small></div>`)
+      .join('');
+    report.style.display = '';
+    run.disabled = false;
+    run.textContent = 'Test again';
   };
-  body.appendChild(check);
+
+  diag.append(run, report);
+  body.appendChild(diag);
 
   // Cache.
   const size = await translate.cacheSize();
