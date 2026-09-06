@@ -187,7 +187,7 @@ export const DEFAULT_SETTINGS = {
   sort: { keys: [['lastRead', 'desc'], ['author', 'asc']], group: [] },
   turnBySwipe: true,
   turnBySideTap: true,
-  tapZone: 0.26,                  // adjustable 12–40%
+  tapZone: 0.18,                  // adjustable 12–40% in Settings, Behaviour
   keepScreenOn: true,
   translateTitles: false,
   translateChapters: true,

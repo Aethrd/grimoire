@@ -56,7 +56,21 @@ function call(method, args = [], timeoutMs = 45000) {
   });
 }
 
-const parse = (text) => { try { return JSON.parse(text); } catch { return null; } };
+/**
+ * The native side settles a call by evaluating
+ *   window.Grimoire.settle("r1", true, {"texts":[...]})
+ * so the payload arrives as an already-parsed JavaScript value, not as text.
+ * Calling JSON.parse on it yields "[object Object]" and throws -- which is
+ * exactly what produced a recurring "returned something unreadable", and why
+ * language packs always reported as not installed.
+ *
+ * Both shapes are accepted: newer builds quote the payload, older ones do not.
+ */
+const parse = (value) => {
+  if (value == null || value === 'null') return null;
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch { return null; }
+};
 
 /** Synchronous and cheap. Never returns the key, only whether one is set. */
 export function status() {
@@ -204,7 +218,10 @@ export async function translateBatch(bookId, items, lang, sourceLang = '') {
     sourceLang || '',
   ], 120000);
   const payload = parse(response);
-  if (!payload?.texts) throw new Error('DeepL returned something unreadable');
+  if (!payload?.texts) {
+    // Not always DeepL: this is whichever engine is selected.
+    throw new Error('The translation engine returned something unreadable.');
+  }
 
   for (let i = 0; i < misses.length; i++) {
     const value = payload.texts[i];

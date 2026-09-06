@@ -519,6 +519,8 @@ function paintReader() {
   }
   document.body.dataset.mode = state.mode;
 
+  el('chapter-prev').disabled = !reader.hasPrevChapter();
+  el('chapter-next').disabled = !reader.hasNextChapter();
   refreshBookmarkState();
   refreshTranslateButton();
 }
@@ -626,12 +628,22 @@ function wireReader() {
       reader.cycleChrome();
       paintReader();
     } else if (settings.turnBySideTap) {
+      // Scrolls by a screen and stops at the ends. Chapters are moved with
+      // the buttons, not by tapping near an edge.
       reader.turn(fraction <= settings.tapZone ? -1 : 1);
     }
   }, { passive: true });
 
-  el('chapter-prev').onclick = () => reader.prevChapter();
-  el('chapter-next').onclick = () => reader.nextChapter();
+  el('chapter-prev').onclick = async () => {
+    // Doing nothing at the first chapter is correct and indistinguishable
+    // from being broken, which is how it was reported.
+    if (!await reader.prevChapter()) toast('Already at the first chapter');
+    paintReader();
+  };
+  el('chapter-next').onclick = async () => {
+    if (!await reader.nextChapter()) toast('Already at the last chapter');
+    paintReader();
+  };
 
   el('copy-chapter').onclick = async () => {
     const result = await reader.copyChapter();

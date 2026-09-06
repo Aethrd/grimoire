@@ -572,9 +572,11 @@ export function turn(delta) {
   if (isScroll()) {
     // A tap moves by just under a screen, so a line or two carries over and
     // you can see you have not skipped anything.
+    // Clamped, never a chapter change. Tapping near the top used to jump to
+    // the previous chapter, which is a violent answer to "scroll up a bit".
     const step = viewportHeight() * 0.9 * delta;
-    const target = viewport.scrollTop + step;
-    if (target < 0 && !state.endless && state.chapterIndex > 0) return prevChapter(true);
+    const limit = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    const target = Math.max(0, Math.min(limit, viewport.scrollTop + step));
     viewport.scrollTo({ top: target, behavior: reducedMotion() ? 'auto' : 'smooth' });
     countPage();
     return;
@@ -637,29 +639,38 @@ export function scrubTo(fraction) {
   show(Math.round(f * (state.pageCount - 1)), { animate: false });
 }
 
+export function hasNextChapter() { return state.chapterIndex < state.chapters.length - 1; }
+export function hasPrevChapter() { return state.chapterIndex > 0; }
+
 export async function nextChapter() {
-  if (state.chapterIndex >= state.chapters.length - 1) return;
+  if (!hasNextChapter()) return false;
   countPage();
   // In endless mode the next chapter may already be below; scroll to it
   // rather than tearing the view down and rebuilding it.
   if (isScroll() && state.loaded.includes(state.chapterIndex + 1)) {
     const section = sectionFor(state.chapterIndex + 1);
+    state.chapterIndex += 1;
     viewport.scrollTo({ top: section.offsetTop, behavior: reducedMotion() ? 'auto' : 'smooth' });
-    return;
+    onChange(state);
+    return true;
   }
   await loadChapter(state.chapterIndex + 1, 0);
+  return true;
 }
 
 export async function prevChapter(toEnd = false) {
-  if (state.chapterIndex <= 0) return;
+  if (!hasPrevChapter()) return false;
   countPage();
   if (isScroll() && state.loaded.includes(state.chapterIndex - 1)) {
     const section = sectionFor(state.chapterIndex - 1);
+    state.chapterIndex -= 1;
     viewport.scrollTo({ top: section.offsetTop, behavior: reducedMotion() ? 'auto' : 'smooth' });
-    return;
+    onChange(state);
+    return true;
   }
   await loadChapter(state.chapterIndex - 1, 0);
   if (toEnd && !isScroll()) show(state.pageCount - 1, { animate: false });
+  return true;
 }
 
 export async function goTo({ chapter, anchor = 0, flash = false }) {
