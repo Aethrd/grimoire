@@ -165,6 +165,46 @@ t('dragging the rail does not fight endless loading', () => {
   assert.match(reader, /Math\.min\(1, viewport\.clientHeight \/ viewport\.scrollHeight\)/);
 });
 
+t('a tap in scroll mode never changes chapter', () => {
+  // Tapping near the top jumped to the previous chapter, which is a violent
+  // answer to "scroll up a bit".
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  // Only the scroll branch. In paged mode turning past the last page moving
+  // to the next chapter is exactly right.
+  const turn = reader.slice(reader.indexOf('export function turn'), reader.indexOf('export function goToPage'));
+  const scrollBranch = turn.slice(turn.indexOf('if (isScroll())'), turn.indexOf('const next = state.page'));
+  assert.ok(!/Chapter\(/.test(scrollBranch), 'a tap can still fall through to a chapter change');
+  assert.match(scrollBranch, /Math\.max\(0, Math\.min\(limit/, 'the scroll is not clamped at the ends');
+});
+
+t('the chapter buttons say when they cannot move', () => {
+  // Doing nothing at the first chapter is correct, and indistinguishable
+  // from being broken.
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /export function hasNextChapter/);
+  assert.match(reader, /export function hasPrevChapter/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /Already at the first chapter/);
+  assert.match(app, /el\('chapter-prev'\)\.disabled = !reader\.hasPrevChapter\(\)/);
+});
+
+t('the side tap zones leave a wide middle band', () => {
+  const store = read('app/src/main/assets/www/js/store.js');
+  const match = /tapZone: ([\d.]+)/.exec(store);
+  assert.ok(match, 'no default tap zone');
+  assert.ok(Number(match[1]) <= 0.2, `sides are ${match[1]} of the width each, which crowds the centre`);
+});
+
+t('an async bridge reply is parsed whichever shape it arrives in', () => {
+  // The native side evaluated settle(id, true, {…}) with the JSON injected
+  // raw, so the payload arrived already parsed -- and JSON.parse on an object
+  // gives "[object Object]" and throws. Every translation failed on it.
+  const translate = read('app/src/main/assets/www/js/translate.js');
+  assert.match(translate, /if \(typeof value === 'object'\) return value/);
+  const java = read('app/src/main/java/com/grimoire/ereader/TranslateBridge.java');
+  assert.match(java, /JSONObject\.quote\(payloadJson\)/, 'the payload still crosses unquoted');
+});
+
 console.log('settings render for real');
 
 // jsdom now has a working IndexedDB, so the panes can actually be rendered

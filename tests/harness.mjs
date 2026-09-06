@@ -22,6 +22,23 @@ export async function boot() {
   globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
   globalThis.JSZip = (await import('jszip')).default;
 
+  // jsdom has no layout engine, so Range and Element measurement return
+  // nothing at all -- and the reader measures on every chapter load. Zeros
+  // are honest here: they mean "unmeasurable", which is what the reader has
+  // to cope with anyway. It does mean pagination itself cannot be tested,
+  // only the navigation around it.
+  if (!window.Range.prototype.getBoundingClientRect) {
+    window.Range.prototype.getBoundingClientRect =
+      () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 });
+    window.Range.prototype.getClientRects = () => [];
+  }
+  // Nor does jsdom implement scrolling.
+  if (!window.Element.prototype.scrollTo) {
+    window.Element.prototype.scrollTo = function scrollTo(options) {
+      this.scrollTop = typeof options === 'object' ? (options.top ?? this.scrollTop) : this.scrollTop;
+    };
+  }
+
   // jsdom has no IndexedDB, and the settings screens read their values from
   // it before rendering anything. Without this they throw and every pane
   // comes back empty, which is indistinguishable from a missing control.
