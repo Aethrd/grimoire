@@ -395,6 +395,10 @@ section.block > h2 { margin-top: 18px; }
                    35% { outline: 3px solid var(--accent); outline-offset: 3px; } }
 
 .tap-layer { position: absolute; inset: 0; display: flex; }
+/* In scroll mode the layer covered the scrollable area and swallowed every
+   drag, so the text could not be scrolled at all. Taps are picked up from the
+   host instead -- see wireReader. */
+[data-mode="scroll"] .tap-layer { pointer-events: none; }
 .tap-zone { height: 100%; }
 .tap-zone[data-tap="back"], .tap-zone[data-tap="forward"] { width: var(--tap-zone, 26%); }
 .tap-zone[data-tap="chrome"] { flex: 1; }
@@ -568,6 +572,10 @@ section.block > h2 { margin-top: 18px; }
          background: var(--accent-900); color: var(--accent-100);
          font-size: 13px; text-align: center; }
 [data-chrome="none"] .toast { bottom: calc(var(--safe-bottom) + 24px); }
+/* In the reader it goes to the top. At the bottom it landed squarely on the
+   Copy chapter button, covering the control that had just been pressed. */
+[data-screen="reader"] .toast { top: calc(var(--safe-top) + 64px); bottom: auto; }
+[data-screen="reader"][data-chrome="none"] .toast { top: calc(var(--safe-top) + 16px); }
 .toast[hidden] { display: none; }
 
 ::-webkit-scrollbar { width: 0; height: 0; }
