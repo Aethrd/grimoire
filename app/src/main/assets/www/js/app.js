@@ -374,13 +374,19 @@ async function openDetails(book) {
   body.querySelector('#details-cover-pick').onclick = () => {
     const picker = document.createElement('input');
     picker.type = 'file';
-    picker.accept = 'image/*';
-    picker.onchange = () => {
+    picker.accept = blobs.COVER_ACCEPT;
+    picker.onchange = async () => {
       const file = picker.files?.[0];
       if (!file) return;
-      newCover = file;
-      const preview = urls.url(file);
-      body.querySelector('#details-cover').innerHTML = `<img src="${preview}" alt="">`;
+      try {
+        // Decoded and re-encoded, so a format the picker offered but the
+        // WebView cannot draw is refused here rather than stored as a blank.
+        newCover = await blobs.normaliseCover(file);
+        const preview = urls.url(newCover);
+        body.querySelector('#details-cover').innerHTML = `<img src="${preview}" alt="">`;
+      } catch (error) {
+        toast(error.message, 6000);
+      }
     };
     picker.click();
   };

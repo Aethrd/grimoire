@@ -63,3 +63,86 @@ export function measure(blob) {
     img.src = url;
   });
 }
+
+
+/* ── cover images ─────────────────────────────────────────────────────── */
+
+/** What a cover can be picked from. */
+export const COVER_TYPES = [
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif',
+  'image/bmp', 'image/svg+xml', 'image/heic', 'image/heif',
+  'image/tiff', 'image/x-icon',
+];
+
+/** Extensions too, because SAF hands plenty of files over as octet-stream. */
+export const COVER_EXTENSIONS =
+  '.jpg,.jpeg,.jfif,.png,.apng,.webp,.gif,.avif,.bmp,.svg,.heic,.heif,.tif,.tiff,.ico';
+
+export const COVER_ACCEPT = `image/*,${COVER_TYPES.join(',')},${COVER_EXTENSIONS}`;
+
+/** Long edge of a stored cover. A shelf tile is a couple of hundred pixels. */
+const COVER_MAX_EDGE = 1000;
+
+/**
+ * Turn any picked file into a cover the app can actually draw.
+ *
+ * Accepting a file is not the same as being able to show it: a HEIC off a
+ * phone camera, or a TIFF, will be offered by the picker and then render as
+ * nothing. So the image is decoded first -- if that fails, it is refused with
+ * a reason rather than stored as a blank -- and then re-encoded, which both
+ * guarantees it displays and stops a 12 megapixel photograph being kept whole
+ * as the thumbnail for a book.
+ *
+ * An animated GIF or APNG becomes its first frame, which is what a cover
+ * should be anyway.
+ */
+export async function normaliseCover(file) {
+  const bitmap = await decode(file);
+  if (!bitmap) {
+    throw new Error('That image could not be read. JPEG, PNG, WebP, GIF, AVIF '
+      + 'and BMP all work; HEIC and TIFF often do not.');
+  }
+
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext ? canvas.getContext('2d') : null;
+  if (!context) {
+    // No canvas to re-encode with. It decoded, so it will display; keep it.
+    return file;
+  }
+
+  const scale = Math.min(1, COVER_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+
+  const encoded = await toBlob(canvas, 'image/webp', 0.85)
+    || await toBlob(canvas, 'image/jpeg', 0.85);
+  // Only if the re-encode actually saved something, and only when it worked.
+  return encoded && encoded.size < file.size ? encoded : (encoded || file);
+}
+
+function toBlob(canvas, type, quality) {
+  return new Promise((resolve) => {
+    if (!canvas.toBlob) return resolve(null);
+    canvas.toBlob((blob) => resolve(blob && blob.type === type ? blob : null), type, quality);
+  });
+}
+
+/** createImageBitmap where available; an <img> otherwise. Neither is certain. */
+async function decode(file) {
+  if (typeof createImageBitmap === 'function') {
+    try { return await createImageBitmap(file); } catch { /* fall through */ }
+  }
+  const url = URL.createObjectURL(file);
+  try {
+    return await new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img.naturalWidth ? img : null);
+      img.onerror = () => resolve(null);
+      img.src = url;
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}

@@ -10,6 +10,7 @@ import * as reader from './reader.js';
 import { setVaultUnlocked, vaultUnlocked } from './library.js';
 import { toast } from './screens.js';
 import * as translate from './translate.js';
+import * as blobs from './blobs.js';
 
 const el = (id) => document.getElementById(id);
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -214,17 +215,29 @@ export async function openAppearance(host) {
 function pickImage(onPicked) {
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = 'image/*';
-  input.onchange = () => {
+  // The same breadth as a book cover: anything the device can decode.
+  input.accept = blobs.COVER_ACCEPT;
+  input.onchange = async () => {
     const file = input.files?.[0];
     if (!file) return;
+    let usable;
+    try {
+      // Decoded and re-encoded first. A background is stored as a data URL in
+      // settings, and a twelve megapixel photograph kept whole there is a
+      // needless few megabytes carried around forever.
+      usable = await blobs.normaliseCover(file);
+    } catch (error) {
+      return toast(error.message, 6000);
+    }
     const fr = new FileReader();
     fr.onload = () => {
       const img = new Image();
       img.onload = () => onPicked(fr.result, img);
+      img.onerror = () => toast('That image could not be read.', 5000);
       img.src = fr.result;
     };
-    fr.readAsDataURL(file);
+    fr.onerror = () => toast('That image could not be read.', 5000);
+    fr.readAsDataURL(usable);
   };
   input.click();
 }
