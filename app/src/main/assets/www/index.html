@@ -89,7 +89,6 @@
     <header class="app-head">
       <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
       <div class="app-head-title"><h1>Sort &amp; group</h1></div>
-      <button class="btn ghost" id="sort-save">Save view</button>
     </header>
     <div class="scroll pad">
       <p class="eyebrow">Sort keys — order sets priority</p>
@@ -100,6 +99,10 @@
       <div class="chip-row wrap" id="group-levels"></div>
       <p class="eyebrow">Preview</p>
       <div class="tree" id="group-preview"></div>
+      <!-- Down here rather than in the header: saving a view is the rare
+           thing you do with this screen, and it was sitting where the eye
+           lands first, competing with the sort keys themselves. -->
+      <button class="link-btn" id="sort-save">Save this as a view</button>
     </div>
     <footer class="sheet-actions">
       <button class="btn ghost" data-back>Cancel</button>
