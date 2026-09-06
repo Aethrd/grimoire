@@ -349,6 +349,16 @@
   <div class="sheet" id="details-body"></div>
 </div>
 
+<!-- Importing a large archive takes a while, and a toast that says nothing
+     about how far along it is reads as a hang. -->
+<div class="import-progress" id="import-progress" hidden>
+  <div class="import-line">
+    <span id="import-label">Importing</span>
+    <span class="muted" id="import-count"></span>
+  </div>
+  <span class="bar"><span class="bar-fill" id="import-bar" style="width:0%"></span></span>
+</div>
+
 <div class="toast" id="toast" hidden></div>
 
 <input type="file" id="file-input" multiple hidden
