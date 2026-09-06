@@ -238,11 +238,15 @@ section.block > h2 { margin-top: 18px; }
 .shelf { display: grid; gap: 16px 12px; padding: 0 16px 16px;
          grid-template-columns: repeat(var(--cols, 2), 1fr); }
 
-/* A <button> and the spans inside it are inline by default, and
-   `aspect-ratio` does not apply to a non-replaced inline box. Without these
-   the cover collapses to nothing and the whole grid flows sideways as a run
-   of text -- which is precisely what it did. */
-.tile { display: block; text-align: left; }
+/* Two separate traps here, both of which broke this grid.
+   1. A <button> and the spans inside it are inline by default, and
+      `aspect-ratio` does not apply to a non-replaced inline box.
+   2. A grid item defaults to `min-width: auto`, which is min-content. The
+      author line below is `white-space: nowrap`, so its min-content width is
+      the whole name -- and the column refuses to shrink below it. One long
+      author and that column blows past its 1fr share, taking the rest of the
+      grid off the side of the screen with it. */
+.tile { display: block; min-width: 0; text-align: left; }
 
 /* Every cover is exactly 2:3, whatever is inside it.
    `aspect-ratio` only sets a *preferred* size: an in-flow child taller than
@@ -256,7 +260,19 @@ section.block > h2 { margin-top: 18px; }
 .tile-cover img { position: absolute; inset: 0; width: 100%; height: 100%;
                   object-fit: cover; display: block; }
 
-/* The typeset fallback, shown only when the file carried no cover. */
+/* Under the cover: the title, then the author. Putting the title only
+   *inside* the cover meant it vanished for every book that had cover art --
+   which is nearly all of them. */
+.tile-name { display: block; margin-top: 6px; font-family: var(--font-heading);
+             font-weight: 600; line-height: 1.25; letter-spacing: -.01em;
+             color: var(--text);
+             display: -webkit-box; -webkit-box-orient: vertical;
+             -webkit-line-clamp: 2; overflow: hidden; }
+.cols-2 .tile-name { font-size: 13px; }
+.cols-3 .tile-name { font-size: 11px; }
+.cols-4 .tile-name { font-size: 10px; -webkit-line-clamp: 1; }
+
+/* The typeset fallback, drawn inside the cover when the file carried none. */
 .tile-title { position: absolute; left: 10px; right: 10px; top: 12px;
               font-family: var(--font-heading); font-weight: 800; line-height: 1.15;
               letter-spacing: -.015em;
@@ -271,7 +287,7 @@ section.block > h2 { margin-top: 18px; }
 .tile-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
             background: rgba(0,0,0,.18); }
 .tile-bar > span { display: block; height: 100%; background: var(--accent-500); }
-.tile-meta { display: block; margin-top: 5px; font-size: 11px; color: var(--muted);
+.tile-meta { display: block; margin-top: 2px; font-size: 11px; color: var(--muted);
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cols-4 .tile-meta { display: none; }
 .tile.failed .tile-cover { outline: 2px solid #c0553f; outline-offset: -2px; }
@@ -731,14 +747,18 @@ section.block > h2 { margin-top: 18px; }
 .icon-strip { flex: none; display: flex; gap: 4px; padding: 2px 12px 10px;
               overflow-x: auto; }
 .icon-strip::-webkit-scrollbar { display: none; }
-.icon-strip button { flex: none; width: 46px; height: 40px; display: grid;
-                     place-items: center; border-radius: var(--radius-md);
-                     color: var(--muted);
+.icon-strip button { flex: none; min-width: 60px; display: grid; gap: 3px;
+                     place-items: center; padding: 8px 6px;
+                     border-radius: var(--radius-md); color: var(--muted);
                      transition: background-color var(--motion-fast) var(--ease),
                                  color var(--motion-fast) var(--ease); }
 .icon-strip button[aria-pressed="true"] { background: var(--accent-100);
                                           color: var(--accent-ink); }
-.icon-strip button svg { width: 22px; height: 22px; }
+.icon-strip button svg { width: 21px; height: 21px; }
+/* Labelled, because six unlabelled glyphs is a guessing game -- and the one
+   people go looking for first is buried behind an ambiguous grid icon. */
+.icon-strip button span { font-size: 10px; font-family: var(--font-heading);
+                          font-weight: 600; }
 
 /* ── book details ────────────────────────────────────────────────────── */
 
