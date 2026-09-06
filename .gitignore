@@ -1,0 +1,23 @@
+*.iml
+.gradle/
+local.properties
+keystore.properties
+google.properties
+personal.keystore.properties
+*.jks
+*.keystore
+.idea/
+.DS_Store
+build/
+captures/
+node_modules/
+tests/fixtures/*.epub
+tests/fixtures/*.cbz
+tests/fixtures/*.pdf
+
+# pdf.js is fetched by the vendorPdfJs Gradle task rather than committed:
+# 4.3MB of unmodified library code, 169 of them cmap files.
+app/src/main/assets/www/vendor/pdf.min.mjs
+app/src/main/assets/www/vendor/pdf.worker.min.mjs
+app/src/main/assets/www/vendor/cmaps/
+app/src/main/assets/www/vendor/standard_fonts/
