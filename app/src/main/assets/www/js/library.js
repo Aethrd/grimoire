@@ -356,6 +356,39 @@ export async function renderShelf(handlers) {
   applyTitleTranslations(sorted, settings);
 }
 
+/** Saved views are filter, sort and group snapshots kept as chips above the
+ *  control strip. Tapping one applies it; holding one deletes it. */
+async function renderViewChips() {
+  const host = el('view-chips');
+  const views = await store.all('views');
+  host.innerHTML = '';
+  host.hidden = views.length === 0;
+
+  for (const view of views) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.textContent = view.name;
+    chip.onclick = async () => {
+      await store.saveSettings({ sort: view.rules });
+      renderShelf(lastHandlers);
+    };
+
+    let timer = null;
+    chip.addEventListener('touchstart', () => {
+      timer = setTimeout(async () => {
+        timer = null;
+        await store.del('views', view.id);
+        renderViewChips();
+      }, 550);
+    }, { passive: true });
+    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    chip.addEventListener('touchend', cancel);
+    chip.addEventListener('touchmove', cancel, { passive: true });
+
+    host.appendChild(chip);
+  }
+}
+
 async function renderContinueCard(books, onOpen) {
   const card = el('continue-card');
 

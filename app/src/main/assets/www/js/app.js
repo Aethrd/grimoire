@@ -124,9 +124,6 @@ async function openBook(book, opts) {
     book.lastReadAt = Date.now();
     await store.put('books', book);
     await reader.open(book.id, opts);
-    const settings = await store.settings();
-    el('translate-chapter').hidden =
-      !(settings.translateBody && translate.status().configured);
     paintReader();
     if ((await store.settings()).keepScreenOn) window.GrimoireNative?.keepScreenOn?.(true);
   } catch (error) {
@@ -506,6 +503,15 @@ function paintReader() {
   document.body.dataset.mode = state.mode;
 
   refreshBookmarkState();
+  refreshTranslateButton();
+}
+
+/** Re-checked on every paint, so turning body translation on in settings does
+ *  not require closing and reopening the book. */
+async function refreshTranslateButton() {
+  const settings = await store.settings();
+  el('translate-chapter').hidden =
+    !(settings.translateBody && translate.status().configured);
 }
 
 async function refreshBookmarkState() {

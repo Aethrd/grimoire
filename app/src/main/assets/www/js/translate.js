@@ -101,12 +101,33 @@ export function neededLanguages(books, target) {
   return [...tags].sort();
 }
 
+/* The languages ML Kit can translate on device. Names in English because the
+ * list is long and a picker of endonyms is hard to scan; supports() is asked
+ * before any of them is offered, so an entry the installed ML Kit does not
+ * cover simply never appears. */
 export const LANGUAGE_NAMES = {
-  en: 'English', ko: 'Korean', ja: 'Japanese', zh: 'Chinese', de: 'German',
-  fr: 'French', es: 'Spanish', it: 'Italian', pt: 'Portuguese', ru: 'Russian',
-  nl: 'Dutch', pl: 'Polish', tr: 'Turkish', ar: 'Arabic', hi: 'Hindi',
-  id: 'Indonesian', th: 'Thai', vi: 'Vietnamese', sv: 'Swedish', cs: 'Czech',
+  af: 'Afrikaans', ar: 'Arabic', be: 'Belarusian', bg: 'Bulgarian',
+  bn: 'Bengali', ca: 'Catalan', cs: 'Czech', cy: 'Welsh', da: 'Danish',
+  de: 'German', el: 'Greek', en: 'English', eo: 'Esperanto', es: 'Spanish',
+  et: 'Estonian', fa: 'Persian', fi: 'Finnish', fr: 'French', ga: 'Irish',
+  gl: 'Galician', gu: 'Gujarati', he: 'Hebrew', hi: 'Hindi', hr: 'Croatian',
+  ht: 'Haitian Creole', hu: 'Hungarian', id: 'Indonesian', is: 'Icelandic',
+  it: 'Italian', ja: 'Japanese', ka: 'Georgian', kn: 'Kannada', ko: 'Korean',
+  lt: 'Lithuanian', lv: 'Latvian', mk: 'Macedonian', mr: 'Marathi',
+  ms: 'Malay', mt: 'Maltese', nl: 'Dutch', no: 'Norwegian', pl: 'Polish',
+  pt: 'Portuguese', ro: 'Romanian', ru: 'Russian', sk: 'Slovak',
+  sl: 'Slovenian', sq: 'Albanian', sv: 'Swedish', sw: 'Swahili',
+  ta: 'Tamil', te: 'Telugu', th: 'Thai', tl: 'Tagalog', tr: 'Turkish',
+  uk: 'Ukrainian', ur: 'Urdu', vi: 'Vietnamese', zh: 'Chinese',
 };
+
+/** Every language on-device translation covers, in name order. */
+export function allLanguages() {
+  return Object.keys(LANGUAGE_NAMES)
+    .filter((tag) => supports(tag))
+    .sort((a, b) => LANGUAGE_NAMES[a].localeCompare(LANGUAGE_NAMES[b]));
+}
+
 export const languageName = (tag) => LANGUAGE_NAMES[tag] || tag.toUpperCase();
 export const setKey = (key) => call('setKey', [key], 30000).then(parse);
 export const clearKey = () => call('clearKey').then(parse);

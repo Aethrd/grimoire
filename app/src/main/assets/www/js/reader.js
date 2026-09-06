@@ -400,9 +400,11 @@ export async function toggleTranslation() {
 
   await imagesSettled();
   relayout();
-  // The anchor is a character offset into the original, and the translation
-  // has a different length, so it can only be approximate here.
-  show(pageAtAnchor(Math.min(anchor, 0)), { animate: false });
+  // A character offset into the original does not map onto a translation of
+  // a different length, so the chapter opens at its start rather than at a
+  // position that would be quietly wrong. Toggling back restores the place.
+  state.anchor = anchor;
+  show(0, { animate: false });
   return { shown: true, characters };
 }
 

@@ -40,9 +40,17 @@ function toggle(on, onChange) {
 
 /* ── SCR-09 Theme & fonts ─────────────────────────────────────────────── */
 
-export async function openAppearance() {
+/*
+ * These three render into a container rather than a fixed element, because
+ * each is both a screen of its own and a pane inside Settings. Moving their
+ * children into the settings body once was not enough: every internal
+ * re-render went back to the original element, which is off-screen inside
+ * Settings -- so changing the engine, the target language or downloading a
+ * pack all looked like they did nothing at all.
+ */
+export async function openAppearance(host) {
+  const body = host || el('appearance-body');
   const settings = await store.settings();
-  const body = el('appearance-body');
   body.innerHTML = '';
 
   const modes = document.createElement('div');
@@ -63,7 +71,7 @@ export async function openAppearance() {
       });
       theme.apply(next);
       refreshTheme();
-      openAppearance();
+      openAppearance(body);
     };
     seg.appendChild(button);
   }
@@ -90,7 +98,7 @@ export async function openAppearance() {
       theme.apply(next);
       refreshTheme();
       if (!check.ok) toast('Adjusted to the nearest readable step of that hue');
-      openAppearance();
+      openAppearance(body);
     };
     swatches.appendChild(button);
   }
@@ -128,7 +136,7 @@ export async function openAppearance() {
       // A new image means a new palette, computed fresh every time.
       const palette = theme.extractPalette(img);
       renderPalette(palette);
-      openAppearance();
+      openAppearance(body);
     });
   };
   bg.appendChild(pick);
@@ -155,7 +163,7 @@ export async function openAppearance() {
     clear.onclick = async () => {
       const next = await store.saveSettings({ backgroundImage: null });
       theme.apply(next);
-      openAppearance();
+      openAppearance(body);
     };
     bg.appendChild(clear);
   }
@@ -194,7 +202,7 @@ export async function openAppearance() {
         const next = await store.saveSettings({ accent: hex });
         theme.apply(next);
         refreshTheme();
-        openAppearance();
+        openAppearance(body);
       };
       list.appendChild(button);
     }
@@ -223,10 +231,10 @@ function pickImage(onPicked) {
 
 /* ── SCR-10 Language ──────────────────────────────────────────────────── */
 
-export async function openLanguage() {
+export async function openLanguage(host) {
+  const body = host || el('language-body');
   const settings = await store.settings();
   const state = translate.status();
-  const body = el('language-body');
   body.innerHTML = '';
 
   if (state.unavailable) {
@@ -271,7 +279,7 @@ export async function openLanguage() {
         // rather than on the first chapter you try to read.
         await translate.setKey(input.value);
         toast('Connected to DeepL');
-        openLanguage();
+        openLanguage(body);
       } catch (error) {
         save.disabled = false;
         save.textContent = 'Connect';
@@ -304,7 +312,7 @@ export async function openLanguage() {
     forget.onclick = async () => {
       await translate.clearKey();
       toast('Key removed. No further requests will be made.');
-      openLanguage();
+      openLanguage(body);
     };
     row.append(check, forget);
     keyCard.appendChild(row);
@@ -325,7 +333,7 @@ export async function openLanguage() {
     chip.setAttribute('aria-pressed', String(settings.translateTarget === code));
     chip.onclick = async () => {
       await store.saveSettings({ translateTarget: code });
-      openLanguage();
+      openLanguage(body);
       refreshTheme();
     };
     chips.appendChild(chip);
@@ -390,7 +398,7 @@ export async function openLanguage() {
         toast(done === missing.length
           ? `${done} language packs ready offline`
           : `${done} of ${missing.length} installed`);
-        openLanguage();
+        openLanguage(body);
       };
       packs.appendChild(all);
     }
@@ -406,7 +414,34 @@ export async function openLanguage() {
     }
 
     for (const tag of needed) {
-      const have = installed.includes(tag);
+      packs.appendChild(packRow(tag, installed.includes(tag),
+        installed.includes(tag) ? null : 'In your library \u00b7 about 30MB, over Wi-Fi'));
+    }
+
+    // Packs for languages no longer in the library are still taking up room.
+    for (const tag of installed.filter((t) => !needed.includes(t))) {
+      packs.appendChild(packRow(tag, true, 'Installed, but nothing in your library uses it'));
+    }
+
+    /* Everything else on offer, behind a disclosure. Your library's own
+       languages are the ones you almost certainly want; the rest is a list of
+       fifty-odd and does not belong in the way of them. */
+    const rest = translate.allLanguages()
+      .filter((tag) => !needed.includes(tag) && !installed.includes(tag));
+    if (rest.length) {
+      const more = document.createElement('details');
+      more.className = 'more-langs';
+      more.innerHTML = `<summary>Other languages (${rest.length})</summary>`;
+      const restBody = document.createElement('div');
+      for (const tag of rest) restBody.appendChild(packRow(tag, false));
+      more.appendChild(restBody);
+      packs.appendChild(more);
+    }
+
+    body.appendChild(packs);
+
+    /** One row per language: download it, or remove it once installed. */
+    function packRow(tag, have, note) {
       const button = document.createElement('button');
       button.className = have ? 'btn ghost' : 'btn primary';
       button.textContent = have ? 'Remove' : 'Download';
@@ -416,31 +451,18 @@ export async function openLanguage() {
         try {
           if (have) await translate.deleteModel(tag);
           else await translate.downloadModel(tag);
-          toast(have ? `${translate.languageName(tag)} pack removed` : `${translate.languageName(tag)} ready offline`);
-          openLanguage();
+          toast(have
+            ? `${translate.languageName(tag)} pack removed`
+            : `${translate.languageName(tag)} ready offline`);
         } catch (error) {
-          button.disabled = false;
           toast(error.message, 5000);
-          openLanguage();
         }
+        openLanguage(body);
       };
-      packs.appendChild(row(translate.languageName(tag),
-        have ? 'Installed — translates offline' : 'About 30MB, over Wi-Fi', button));
+      return row(translate.languageName(tag),
+        note || (have ? 'Installed \u2014 translates offline' : 'About 30MB, over Wi-Fi'),
+        button);
     }
-
-    // Packs for languages no longer in the library are still taking up room.
-    for (const tag of installed.filter((t) => !needed.includes(t))) {
-      const button = document.createElement('button');
-      button.className = 'btn ghost';
-      button.textContent = 'Remove';
-      button.onclick = async () => {
-        await translate.deleteModel(tag).catch(() => {});
-        openLanguage();
-      };
-      packs.appendChild(row(translate.languageName(tag),
-        'Installed, but nothing in your library uses it', button));
-    }
-    body.appendChild(packs);
   }
 
   // Cache.
@@ -458,7 +480,7 @@ export async function openLanguage() {
   clear.onclick = async () => {
     await translate.clearCache();
     toast('Cache cleared');
-    openLanguage();
+    openLanguage(body);
   };
   cache.appendChild(clear);
   body.appendChild(cache);
@@ -659,10 +681,10 @@ async function hash(text) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export async function openVault(onVaultChange) {
+export async function openVault(onVaultChange, host) {
+  const body = host || el('vault-body');
   const settings = await store.settings();
   const books = await store.all('books');
-  const body = el('vault-body');
   body.innerHTML = '';
 
   const vault = document.createElement('section');
@@ -702,7 +724,7 @@ export async function openVault(onVaultChange) {
       await store.saveSettings({ vaultPassphrase: await hash(input.value) });
       setVaultUnlocked(true);
       onVaultChange();
-      openVault(onVaultChange);
+      openVault(onVaultChange, body);
     };
 
     set.append(input, meter, verdict, save);
@@ -722,7 +744,7 @@ export async function openVault(onVaultChange) {
       if (await hash(input.value) !== settings.vaultPassphrase) return toast('That is not the passphrase');
       setVaultUnlocked(true);
       onVaultChange();
-      openVault(onVaultChange);
+      openVault(onVaultChange, body);
       toast('Vault unlocked');
     };
     unlock.append(input, button);
@@ -738,7 +760,7 @@ export async function openVault(onVaultChange) {
       const button = document.createElement('button');
       button.className = 'btn ghost';
       button.textContent = 'Lock now';
-      button.onclick = () => { setVaultUnlocked(false); onVaultChange(); openVault(onVaultChange); };
+      button.onclick = () => { setVaultUnlocked(false); onVaultChange(); openVault(onVaultChange, body); };
       return button;
     })()));
 
@@ -821,24 +843,12 @@ export async function openSettings(onVaultChange) {
   await PANES[pane].render(body, onVaultChange);
 }
 
-/** The existing screens render into whatever container they are handed. */
-async function openAppearanceInto(body) {
-  const original = el('appearance-body');
-  await openAppearance();
-  body.append(...original.childNodes);
-}
-
-async function openLanguageInto(body) {
-  const original = el('language-body');
-  await openLanguage();
-  body.append(...original.childNodes);
-}
-
-async function renderDataPane(body, onVaultChange) {
-  const original = el('vault-body');
-  await openVault(onVaultChange);
-  body.append(...original.childNodes);
-}
+/* Declarations, not arrow consts: PANES is built above and references these,
+   so a const would still be in its temporal dead zone at that point and the
+   whole module would fail to load. */
+function openAppearanceInto(body) { return openAppearance(body); }
+function openLanguageInto(body) { return openLanguage(body); }
+function renderDataPane(body, onVaultChange) { return openVault(onVaultChange, body); }
 
 /** App-wide reading defaults. The per-book override still wins over these. */
 async function renderTextPane(body) {
