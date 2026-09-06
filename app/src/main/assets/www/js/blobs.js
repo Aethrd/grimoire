@@ -36,6 +36,21 @@ export function pool() {
   };
 }
 
+/**
+ * Blob.arrayBuffer() needs Chrome 76. minSdk here is 26, and a device that
+ * has never updated its WebView can be older than that, so fall back to
+ * FileReader -- the same reason parse.js does not rely on Blob.text().
+ */
+export function readArrayBuffer(blob) {
+  if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error);
+    fr.readAsArrayBuffer(blob);
+  });
+}
+
 /** Measure a bitmap without leaving its URL behind. */
 export function measure(blob) {
   return new Promise((resolve) => {

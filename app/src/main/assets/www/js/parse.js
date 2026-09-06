@@ -24,14 +24,13 @@ export const FORMATS = {
 };
 
 /** Formats with a working parser today. The rest are refused with a reason. */
-export const SUPPORTED = new Set(['EPUB', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2']);
+export const SUPPORTED = new Set(['EPUB', 'PDF', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2']);
 
 /** Book formats that can live inside an archive. ZIP is not one of them:
  *  nested archives are refused rather than recursed into. */
-export const ARCHIVE_CONTENTS = new Set(['EPUB', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2']);
+export const ARCHIVE_CONTENTS = new Set(['EPUB', 'PDF', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2']);
 
 export const UNSUPPORTED_REASON = {
-  PDF: 'PDF needs a renderer. Vendor pdf.js into www/vendor, or add a native bridge method backed by PdfRenderer.',
   DOCX: 'DOCX is OOXML in a zip. Readable with JSZip, but the styling model is a project of its own.',
   MOBI: 'MOBI is a PalmDOC container. No parser yet.',
   AZW3: 'AZW3 shares the MOBI container. No parser yet.',
@@ -573,6 +572,9 @@ export async function parse(file, onProgress) {
   }
 
   const result = format === 'EPUB' ? await parseEpub(file, onProgress)
+    // Loaded on demand: pdf.js is 1.8MB, and a library with no PDFs in it
+    // should never pay for it.
+    : format === 'PDF' ? await (await import('./pdf.js')).parsePdf(file, onProgress)
     : format === 'CBZ' ? await parseCbz(file, onProgress)
     : await parseText(file);
 
