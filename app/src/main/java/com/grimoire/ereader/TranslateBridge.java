@@ -231,7 +231,9 @@ public class TranslateBridge {
             return;
         }
         if (source == null) {
-            fail(requestId, "This book does not say what language it is in. Pick a source language in settings.");
+            fail(requestId, "This book does not say what language it is in. "
+                    + "Set \"Translate from\" in Settings \u2192 Translate, or give the book "
+                    + "a language in its details.");
             return;
         }
         if (source.equals(target)) {
