@@ -175,4 +175,53 @@ t('the behaviour pane renders its controls', async () => {
   assert.match(behaviourPane, /Tap the sides/);
 });
 
+console.log('settings panes update in place');
+
+/* The Theme, Translation and Vault panes are each also a screen of their own,
+ * and used to render into their own element which Settings then emptied into
+ * itself. Every internal re-render went back to that now-hidden element, so
+ * changing the engine, the target language, or downloading a pack all looked
+ * like they did nothing at all. */
+
+// A stand-in for the native bridge, so the pane has something to report.
+window.GrimoireTranslate = {
+  status: () => JSON.stringify({ engine: 'ondevice', configured: true }),
+  supports: () => true,
+  models: (id) => setTimeout(() => window.Grimoire.settle(id, true, '[]'), 0),
+};
+const translate = await import(new URL('../app/src/main/assets/www/js/translate.js', import.meta.url).href);
+window.Grimoire = { settle: translate.settle };
+
+const translationPane = await renderPane('translation');
+
+t('the translation pane renders into the settings body', () => {
+  assert.ok(translationPane.length > 500, `pane was ${translationPane.length} chars`);
+  assert.equal(document.getElementById('language-body').innerHTML, '',
+    'the pane rendered into its own hidden element instead');
+});
+
+t('changing the target language updates the pane you are looking at', async () => {
+  const body = document.getElementById('settings-body');
+  const chip = [...body.querySelectorAll('.chip')].find((c) => /Deutsch/.test(c.textContent));
+  assert.ok(chip, 'no target-language chips rendered');
+  chip.onclick();
+  await new Promise((r) => setTimeout(r, 120));
+
+  assert.equal(document.getElementById('language-body').innerHTML, '',
+    'the re-render went to the hidden element again');
+  const german = [...body.querySelectorAll('.chip')].find((c) => /Deutsch/.test(c.textContent));
+  assert.equal(german.getAttribute('aria-pressed'), 'true',
+    'the visible pane still shows the old selection');
+});
+
+t('every supported language can be downloaded, not just the library\u2019s', () => {
+  assert.equal(typeof translate.allLanguages, 'function');
+  // Well over the handful a library uses, and each with a readable name.
+  const names = Object.keys(translate.LANGUAGE_NAMES);
+  assert.ok(names.length >= 50, `only ${names.length} languages listed`);
+  for (const tag of names) assert.ok(translate.LANGUAGE_NAMES[tag].length > 2);
+  const panelsSrc = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panelsSrc, /Other languages \(\$\{rest\.length\}\)/);
+});
+
 console.log(`\n${pass} assertions passed`);

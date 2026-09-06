@@ -14,7 +14,7 @@ if (!existsSync(path.join(here, 'fixtures/salt-almanac.epub'))) {
 }
 
 let failed = 0;
-for (const file of ['test-logic.mjs', 'test-parse.mjs', 'test-more.mjs', 'test-archive.mjs', 'test-blobs.mjs', 'test-shelf.mjs', 'test-motion.mjs', 'test-freedom.mjs']) {
+for (const file of ['test-boot.mjs', 'test-logic.mjs', 'test-parse.mjs', 'test-more.mjs', 'test-archive.mjs', 'test-blobs.mjs', 'test-shelf.mjs', 'test-motion.mjs', 'test-freedom.mjs']) {
   console.log(`\n── ${file} ─────────────────────────────────`);
   const run = spawnSync(process.execPath, [`tests/${file}`], { cwd: root, stdio: 'inherit' });
   if (run.status !== 0) failed++;
