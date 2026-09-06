@@ -144,6 +144,27 @@ t('several language packs can be fetched in one go', () => {
   assert.match(bulk, /catch \(error\)/);
 });
 
+t('scroll mode can actually be scrolled', () => {
+  // The tap layer covered the scrollable area and swallowed every drag, so
+  // the text could not be moved at all.
+  assert.match(css, /\[data-mode="scroll"\] \.tap-layer \{ pointer-events: none; \}/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  // Taps are recognised from the host instead, and only when the finger did
+  // not travel -- anything else is a scroll.
+  assert.match(app, /Scroll mode taps/);
+  assert.match(app, /moved \|\| Date\.now\(\) - tapAt > 400/);
+});
+
+t('dragging the rail does not fight endless loading', () => {
+  // Appending the next chapter changes scrollHeight, and a thumb positioned
+  // as a fraction of it jumps backwards the instant that happens.
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /export function setScrubbing/);
+  assert.match(reader, /extending \|\| scrubbing/);
+  // And a handle longer than its rail would overhang the bottom.
+  assert.match(reader, /Math\.min\(1, viewport\.clientHeight \/ viewport\.scrollHeight\)/);
+});
+
 console.log('settings render for real');
 
 // jsdom now has a working IndexedDB, so the panes can actually be rendered

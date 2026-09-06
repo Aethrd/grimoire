@@ -253,6 +253,39 @@ t('importing writes each book in whole transactions', () => {
   assert.match(store, /export async function putAll/);
 });
 
+t('a vault with no passphrase does not swallow books', () => {
+  // Marking a book for the vault before setting one up hid it from the shelf
+  // and left it reachable only from a screen that demands a passphrase which
+  // does not exist.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /export let vaultUnlocked = true/);
+  assert.match(library, /export async function initVaultGate/);
+  assert.match(app, /await library\.initVaultGate\(\)/);
+  // And the action refuses rather than hiding them behind a lock that is not
+  // there.
+  const vault = app.slice(app.indexOf('vault: async'), app.indexOf('delete: ()'));
+  assert.match(vault, /!settings\.vaultPassphrase/);
+});
+
+t('a failed translation says why instead of nothing', () => {
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /onNotice\?\.\(error\.message\)/);
+  assert.match(app, /onNotice: \(message\) => toast/);
+});
+
+t('a new sort key takes priority rather than going last', () => {
+  // Appended, it sat behind every existing key and changed nothing visible --
+  // which reads exactly like sorting being broken.
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /draft\.keys\.unshift\(\[key, 'asc'\]\)/);
+});
+
+t('the toast keeps clear of the reader controls', () => {
+  // At the bottom it landed on the Copy chapter button it was reporting on.
+  assert.match(css, /\[data-screen="reader"\] \.toast/);
+  assert.match(app, /document\.body\.dataset\.screen = name/);
+});
+
 console.log('settings');
 
 t('settings is a screen with panes, reachable from the bar', () => {
