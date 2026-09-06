@@ -6,6 +6,7 @@ core = "1.15.0"
 splashscreen = "1.2.0"   # 1.0.1 predates the Kotlin 1.8 stdlib merge
 webkit = "1.12.1"
 mlkitTranslate = "17.0.3"
+mlkitLanguageId = "17.0.6"
 kotlin = "1.9.24"          # floor for the stdlib constraint, not a plugin
 
 [libraries]
@@ -19,6 +20,11 @@ androidx-webkit = { module = "androidx.webkit:webkit", version.ref = "webkit" }
 # model has been fetched. Models are ~30MB each and downloaded on demand, so
 # nothing ships in the APK.
 mlkit-translate = { module = "com.google.mlkit:translate", version.ref = "mlkitTranslate" }
+
+# Language identification, so a book that declares nothing can still be
+# translated. The model is bundled (~900KB) and available immediately, unlike
+# the translation models which are fetched per language.
+mlkit-language-id = { module = "com.google.mlkit:language-id", version.ref = "mlkitLanguageId" }
 
 
 
