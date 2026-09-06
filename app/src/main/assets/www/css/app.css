@@ -75,6 +75,13 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* The `hidden` attribute only sets `display: none` through the user-agent
+   stylesheet, so any rule of ours that sets `display` beats it. That is how
+   the selection header ended up permanently on screen: it carries .app-head,
+   which sets `display: flex`. One rule here rather than a matching
+   `[hidden]` beside every component. */
+[hidden] { display: none !important; }
+
 html, body {
   height: 100%; margin: 0; overflow: hidden;
   background: var(--bg); color: var(--text);
@@ -123,7 +130,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor;
 .pad-x { padding-left: 16px; padding-right: 16px; }
 
 .app-head { flex: none; display: flex; align-items: center; gap: 6px;
-            padding: 13px 12px 10px 16px; }
+            padding: 10px 12px 6px 16px; }
 .app-head-title { flex: 1; min-width: 0; }
 .app-head-title .eyebrow { margin-top: 4px; }
 
@@ -166,7 +173,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .chip-row::-webkit-scrollbar { display: none; }
 
 .search-field {
-  flex: none; margin: 2px 16px 12px; display: flex; align-items: center; gap: 9px;
+  flex: none; margin: 2px 16px 10px; display: flex; align-items: center; gap: 9px;
   padding: 11px 12px; border-radius: var(--radius-pill);
   border: 1px solid var(--hairline); background: var(--surface);
   color: var(--muted); font-size: 13px; text-align: left;
@@ -177,7 +184,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
          border-bottom: 2px solid var(--accent); color: var(--text);
          font: 16px var(--font-ui); padding: 8px 2px; outline: none; }
 
-.control-strip { flex: none; display: flex; align-items: center; gap: 7px; padding: 0 16px 10px; }
+.control-strip { flex: none; display: flex; align-items: center; gap: 7px; padding: 0 16px 8px; }
 .strip-btn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
              padding: 9px 10px; border-radius: var(--radius-md);
              border: 1px solid var(--hairline); text-align: left; }
@@ -185,8 +192,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
                   overflow: hidden; text-overflow: ellipsis; }
 .strip-btn svg { width: 15px; height: 15px; }
 
-.group-head { flex: none; display: flex; align-items: baseline;
-              justify-content: space-between; padding: 2px 16px 8px;
+.group-head { position: sticky; top: 0; z-index: 2; background: var(--bg);
+              display: flex; align-items: baseline;
+              justify-content: space-between; padding: 8px 16px;
               font-family: var(--font-heading); font-weight: 800; font-size: 12px;
               letter-spacing: .08em; text-transform: uppercase; }
 .group-head .muted { font-size: 11px; letter-spacing: 0; text-transform: none; }
@@ -294,7 +302,7 @@ section.block > h2 { margin-top: 18px; }
 .tile.selected .tile-cover { outline: 3px solid var(--accent); outline-offset: -3px; }
 
 .continue-card {
-  flex: none; margin: 0 16px 14px; display: flex; align-items: center; gap: 12px;
+  flex: none; margin: 0 16px 10px; display: flex; align-items: center; gap: 12px;
   padding: 12px; border: 1px solid var(--hairline); border-radius: var(--radius-lg);
   text-align: left;
 }
