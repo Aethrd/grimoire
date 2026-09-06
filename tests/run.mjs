@@ -7,11 +7,26 @@ import path from 'node:path';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
 
-if (!existsSync(path.join(here, 'fixtures/salt-almanac.epub'))
-    || !existsSync(path.join(here, 'fixtures/sample.pdf'))) {
-  console.log('Building fixtures…');
-  const built = spawnSync(process.execPath, ['tests/fixtures/build.mjs'], { cwd: root, stdio: 'inherit' });
-  if (built.status !== 0) process.exit(built.status);
+/* Test fixtures are generated rather than committed -- they are binary files
+ * that would otherwise sit in the repo forever, and generating them keeps
+ * them honest. The builder itself must be committed, though, and a missing
+ * one otherwise surfaces as a bare MODULE_NOT_FOUND from Node with no
+ * indication of what to do about it. */
+const builder = path.join(here, 'fixtures/build.mjs');
+const fixtures = ['salt-almanac.epub', 'comic.cbz', 'sample.pdf'];
+const missing = fixtures.filter((f) => !existsSync(path.join(here, 'fixtures', f)));
+
+if (missing.length) {
+  if (!existsSync(builder)) {
+    console.error(
+      `\nMissing tests/fixtures/build.mjs, which generates ${missing.join(', ')}.\n` +
+      `It is a committed file, not a generated one -- check it was added:\n` +
+      `    git ls-files tests/fixtures\n`);
+    process.exit(1);
+  }
+  console.log(`Building fixtures (${missing.join(', ')})…`);
+  const built = spawnSync(process.execPath, [builder], { cwd: root, stdio: 'inherit' });
+  if (built.status !== 0) process.exit(built.status || 1);
 }
 
 let failed = 0;
