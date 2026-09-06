@@ -574,8 +574,8 @@ section.block > h2 { margin-top: 18px; }
 [data-chrome="none"] .toast { bottom: calc(var(--safe-bottom) + 24px); }
 /* In the reader it goes to the top. At the bottom it landed squarely on the
    Copy chapter button, covering the control that had just been pressed. */
-[data-screen="reader"] .toast { top: calc(var(--safe-top) + 64px); bottom: auto; }
-[data-screen="reader"][data-chrome="none"] .toast { top: calc(var(--safe-top) + 16px); }
+[data-view="reader"] .toast { top: calc(var(--safe-top) + 64px); bottom: auto; }
+[data-view="reader"][data-chrome="none"] .toast { top: calc(var(--safe-top) + 16px); }
 .toast[hidden] { display: none; }
 
 ::-webkit-scrollbar { width: 0; height: 0; }
@@ -812,3 +812,11 @@ section.block > h2 { margin-top: 18px; }
 .more-langs > summary::-webkit-details-marker { display: none; }
 .more-langs > summary::after { content: " ▾"; color: var(--muted); }
 .more-langs[open] > summary::after { content: " ▴"; }
+
+
+/* A text button for the occasional action, so it does not compete with the
+   controls the screen is actually for. */
+.link-btn { display: block; margin: 4px 0 8px; padding: 8px 0;
+            font-family: var(--font-heading); font-weight: 600; font-size: 12px;
+            color: var(--accent-ink); text-align: left; }
+.link-btn:active { opacity: .6; }
