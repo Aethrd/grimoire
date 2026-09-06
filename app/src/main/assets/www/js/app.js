@@ -61,6 +61,7 @@ async function enter(name) {
     case 'layout': return reader.state.book
       ? screens.openLayout(reader.state.book.id)
       : (el('layout-body').innerHTML = '<p class="muted" style="padding:24px 0">Open a book first.</p>');
+    case 'folders': return panels.openFolders(openFolder);
     case 'settings': return panels.openSettings(refreshShelf);
     case 'appearance': return panels.openAppearance();
     case 'language': return panels.openLanguage();
@@ -102,8 +103,16 @@ function back() {
 
 /* ── library ──────────────────────────────────────────────────────────── */
 
+/** The folder the shelf is filtered to, or null for everything. */
+let activeFolder = null;
+
+function openFolder(folder) {
+  activeFolder = folder;
+  show('library', { replace: true });
+}
+
 async function refreshShelf() {
-  await library.renderShelf({ onOpen: onTileTap, onLongPress: onTileHold, selection, selecting: selectMode });
+  await library.renderShelf({ onOpen: onTileTap, onLongPress: onTileHold, selection, selecting: selectMode, folder: activeFolder });
 }
 
 async function openBook(book, opts) {
@@ -655,7 +664,7 @@ function wireReader() {
 /* The three tab screens sit in a row you can swipe between, in the order the
  * bar shows them. The reader is deliberately not in this set: a horizontal
  * swipe there already means turn the page. */
-const TABS = ['library', 'sort', 'stats', 'settings'];
+const TABS = ['library', 'folders', 'sort', 'stats', 'settings'];
 
 function wireSwipeBetweenTabs() {
   let startX = 0, startY = 0, startAt = 0, tracking = false;
@@ -674,10 +683,15 @@ function wireSwipeBetweenTabs() {
     const dx = e.changedTouches[0].clientX - startX;
     const dy = e.changedTouches[0].clientY - startY;
 
-    // Deliberately strict: a swipe has to be long, quick and clearly sideways,
-    // or scrolling a shelf with a slightly slanted finger would change screens.
-    if (Date.now() - startAt > 500) return;
-    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2) return;
+    // Strict on purpose, and stricter than it was: a shelf is a tall scrolling
+    // grid, and a flick down with any lean to it was changing screens.
+    //   - long: 110px, not 70
+    //   - almost flat: under 45px of vertical drift in absolute terms, as well
+    //     as a 3:1 ratio, so a fast diagonal cannot pass on ratio alone
+    //   - quick: still under half a second
+    if (Date.now() - startAt > 450) return;
+    if (Math.abs(dx) < 110) return;
+    if (Math.abs(dy) > 45 || Math.abs(dx) < Math.abs(dy) * 3) return;
 
     const index = TABS.indexOf(current);
     const next = TABS[index + (dx < 0 ? 1 : -1)];

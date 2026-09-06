@@ -204,12 +204,11 @@ export async function importFiles(files, { onProgress, onDone } = {}) {
         tags: [],
       });
 
-      for (const chapter of parsed.chapters) {
-        await store.put('chapters', { bookId, ...chapter });
-      }
-      for (const image of parsed.images) {
-        await store.put('images', { bookId, ...image });
-      }
+      // One transaction each rather than one per record: a long book has
+      // hundreds of chapters, and a transaction apiece is what made importing
+      // a shelf take minutes.
+      await store.putAll('chapters', parsed.chapters.map((c) => ({ bookId, ...c })));
+      await store.putAll('images', parsed.images.map((i) => ({ bookId, ...i })));
       results.added += 1;
     } catch (error) {
       results.failed.push({ name, reason: error.message || 'Could not be parsed' });
@@ -242,7 +241,8 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
       <span class="tile-bar"><span style="width:${Math.round((book.percent || 0) * 100)}%"></span></span>
       ${selecting ? '<span class="tile-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7"/></svg></span>' : ''}
     </span>
-    <span class="tile-meta">${escape(book.author || '—')}</span>`;
+    <span class="tile-name">${escape(displayTitle(book))}</span>
+    <span class="tile-meta">${escape(cleanAuthor(book.author))}</span>`;
 
   node.addEventListener('click', () => onOpen(book));
 
@@ -263,6 +263,13 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
   return node;
 }
 
+/** Scraped EPUBs routinely carry a literal "<unknown>" as the author. */
+function cleanAuthor(author) {
+  const value = (author || '').trim();
+  if (!value || /^<?unknown>?$/i.test(value) || value === '---') return '—';
+  return value;
+}
+
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -280,13 +287,20 @@ export const displayTitle = (book) => titles.get(book.id) || book.title;
 
 export async function renderShelf(handlers) {
   lastHandlers = handlers;
-  const { onOpen, onLongPress, selection, selecting } = handlers;
+  const { onOpen, onLongPress, selection, selecting, folder } = handlers;
   const settings = await store.settings();
   const all = await store.all('books');
 
   // Vault contents stay out of the shelf until the vault is unlocked. The
   // same filter is applied in search, the reel and the stats totals.
-  const visible = all.filter((b) => !b.inVault || vaultUnlocked);
+  let visible = all.filter((b) => !b.inVault || vaultUnlocked);
+
+  // Filtered to one folder, and to anything nested under it.
+  if (folder != null) {
+    visible = visible.filter((b) => folder === ''
+      ? !b.folder
+      : b.folder === folder || (b.folder || '').startsWith(`${folder}/`));
+  }
 
   const sorted = sortBooks(visible, settings.sort.keys);
   const groups = groupBooks(sorted, settings.sort.group);
@@ -329,7 +343,9 @@ export async function renderShelf(handlers) {
     : 'No books yet';
 
   el('sort-summary').textContent = sortSummary(settings.sort.keys);
-  el('group-title').textContent = settings.sort.group.length
+  el('group-title').textContent = folder != null
+    ? (folder || 'Unfiled')
+    : settings.sort.group.length
     ? settings.sort.group.map((g) => GROUP_LEVELS[g]).join(' → ')
     : 'All books';
   el('group-count').textContent = `${visible.length} shown`;

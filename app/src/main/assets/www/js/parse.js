@@ -15,8 +15,6 @@
  * origin as the app.
  */
 
-import { measure } from './blobs.js';
-
 const DOMP = new DOMParser();
 
 export const FORMATS = {
@@ -220,11 +218,13 @@ export async function parseEpub(file, onProgress) {
       if (!record) {
         const blob = await blobOf(zip, href);
         if (!blob) { img.remove(); continue; }
-        const dims = await measure(blob);
         record = {
           href, blob, order: order++, chapterIndex: i,
           animated: href.toLowerCase().endsWith('.gif'),
-          width: dims.width, height: dims.height,
+          // Left unmeasured on purpose. Decoding every illustration in every
+          // book at import time is minutes of work for a number only the
+          // image reel ever reads, and it measures them itself on first open.
+          width: 0, height: 0,
         };
         images.push(record);
       }
@@ -315,11 +315,10 @@ export async function parseCbz(file, onProgress) {
   for (let i = 0; i < entries.length; i++) {
     onProgress?.((i + 1) / entries.length);
     const blob = await blobOf(zip, entries[i].name);
-    const dims = await measure(blob);
     images.push({
       href: entries[i].name, blob, order: i, chapterIndex: 0,
       animated: /\.gif$/i.test(entries[i].name),
-      width: dims.width, height: dims.height,
+      width: 0, height: 0,   // measured lazily by the reel; see parseEpub
     });
     html += `<figure><img data-img="${entries[i].name.replace(/"/g, '&quot;')}" alt="Page ${i + 1}"></figure>`;
   }

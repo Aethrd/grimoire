@@ -958,3 +958,43 @@ function slider(label, value, min, max, step, unit, onChange) {
 
 let renderSettings = () => {};
 export function onSettingsChange(fn) { renderSettings = fn; }
+
+
+/* ── Folders ──────────────────────────────────────────────────────────────
+ * Every folder in use, with counts. Tapping one filters the shelf to it.
+ */
+
+export async function openFolders(onOpenFolder) {
+  const books = await store.all('books');
+  const visible = books.filter((b) => !b.inVault || vaultUnlocked);
+
+  const counts = new Map();
+  for (const book of visible) {
+    const folder = book.folder || '';
+    counts.set(folder, (counts.get(folder) || 0) + 1);
+  }
+
+  const list = el('folders-list');
+  list.innerHTML = '';
+  el('folders-count').textContent =
+    `${counts.size} folder${counts.size === 1 ? '' : 's'} · ${visible.length} books`;
+
+  const entry = (label, count, folder, note) => {
+    const button = document.createElement('button');
+    button.className = 'list-row';
+    button.innerHTML = `<span class="body"><b>${escape(label)}</b>${
+      note ? `<small>${escape(note)}</small>` : ''}</span><span class="trail">${count}</span>`;
+    button.onclick = () => onOpenFolder(folder);
+    list.appendChild(button);
+  };
+
+  entry('All books', visible.length, null, 'Everything, unfiltered');
+
+  // Nested paths sort together, so "Fantasy" sits above "Fantasy/Sub".
+  for (const [folder, count] of [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    if (!folder) continue;
+    entry(folder, count, folder);
+  }
+
+  if (counts.has('')) entry('Unfiled', counts.get(''), '', 'Not in any folder');
+}

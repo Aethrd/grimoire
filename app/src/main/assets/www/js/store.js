@@ -117,6 +117,26 @@ export async function add(store, value) {
   return wrap(s.add(value));
 }
 
+/**
+ * Write many records in one transaction.
+ *
+ * put() opens a transaction per call, so importing a 200-chapter book meant
+ * 200 of them. Batching is most of the difference between an import that
+ * takes minutes and one that does not.
+ */
+export async function putAll(store, values) {
+  if (!values.length) return;
+  const db = await open();
+  const t = db.transaction(store, 'readwrite');
+  const s = t.objectStore(store);
+  for (const value of values) s.put(value);
+  return new Promise((res, rej) => {
+    t.oncomplete = res;
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error);
+  });
+}
+
 export async function get(store, key) {
   const s = await tx(store);
   return wrap(s.get(key));

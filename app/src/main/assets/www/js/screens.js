@@ -3,7 +3,7 @@
 import * as store from './store.js';
 import * as reader from './reader.js';
 import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, vaultUnlocked } from './library.js';
-import { pool } from './blobs.js';
+import { pool, measure } from './blobs.js';
 
 const el = (id) => document.getElementById(id);
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -271,6 +271,19 @@ const reelUrls = pool();
 export async function openReel(bookId, onJump) {
   const settings = await store.settings();
   const images = (await store.byIndex('images', 'bookId', bookId)).sort((a, b) => a.order - b.order);
+
+  // Dimensions are not recorded at import -- decoding a whole book's artwork
+  // to fill in two numbers is minutes nobody asked for. They are measured
+  // here instead, once, and written back.
+  const unmeasured = images.filter((i) => i.blob && !i.width);
+  if (unmeasured.length) {
+    for (const image of unmeasured) {
+      const dims = await measure(image.blob);
+      image.width = dims.width;
+      image.height = dims.height;
+    }
+    await store.putAll('images', unmeasured);
+  }
   const stills = images.filter((i) => !i.animated).length;
 
   el('reel-counts').textContent = `${stills} stills · ${images.length - stills} animated`;
