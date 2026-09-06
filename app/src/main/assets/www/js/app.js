@@ -879,6 +879,8 @@ async function boot() {
   const settings = await store.settings();
   theme.apply(settings);
   activeFolder = settings.shelfFolder ?? null;
+  // Anything a crash left half-written is cleared before the shelf is drawn.
+  await library.sweepUnfinishedImports();
   // Locked only if a passphrase exists to unlock it with.
   await library.initVaultGate();
   reader.setChrome('full');

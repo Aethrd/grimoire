@@ -179,10 +179,43 @@ export async function importFiles(files, { onProgress, onDone } = {}) {
 
       // Extracted only now, and only this one.
       const file = entry.file || new File([await entry.read()], name);
-      const parsed = await parse(file, (p) =>
-        onProgress?.(`Parsing ${name}`, (i + p) / queue.length, i, queue.length));
 
+      /* The book row is created first so images can be written as they are
+         extracted rather than piling up in memory. A heavily illustrated book
+         is well over a hundred megabytes of blobs, and holding all of them
+         until the parse finished is what killed the app partway through a
+         shelf. `importing` marks it incomplete until the rest lands. */
       const bookId = await store.add('books', {
+        title: name, fingerprint, folder, importing: true,
+        addedAt: Date.now(), lastReadAt: null, finishedAt: null,
+        percent: 0, inVault: false, tags: [],
+      });
+
+      let parsed;
+      try {
+        const buffered = [];
+        const flush = async () => {
+          if (buffered.length) await store.putAll('images', buffered.splice(0));
+        };
+
+        parsed = await parse(file, (p) =>
+          onProgress?.(`Parsing ${name}`, (i + p) / queue.length, i, queue.length), {
+          onImage: async (record) => {
+            buffered.push({ bookId, ...record });
+            // Written in batches: one transaction per image is as wasteful as
+            // holding them all, just in the other direction.
+            if (buffered.length >= 12) await flush();
+          },
+        });
+        await flush();
+      } catch (error) {
+        // No half-imported book left on the shelf.
+        await store.deleteBook(bookId).catch(() => {});
+        throw error;
+      }
+
+      await store.put('books', {
+        id: bookId,
         title: parsed.title,
         author: parsed.author,
         series: parsed.series,
@@ -192,10 +225,11 @@ export async function importFiles(files, { onProgress, onDone } = {}) {
         coverBlob: parsed.coverBlob,
         words: parsed.words,
         chapterCount: parsed.chapters.length,
-        imageCount: parsed.images.length,
+        imageCount: parsed.imageCount ?? parsed.images.length,
         tocSource: parsed.tocSource,
         fingerprint,
         folder,
+        importing: false,
         addedAt: Date.now(),
         lastReadAt: null,
         finishedAt: null,
@@ -204,11 +238,10 @@ export async function importFiles(files, { onProgress, onDone } = {}) {
         tags: [],
       });
 
-      // One transaction each rather than one per record: a long book has
-      // hundreds of chapters, and a transaction apiece is what made importing
-      // a shelf take minutes.
+      // One transaction rather than one per chapter: a long book has hundreds
+      // of them, and a transaction apiece is what made importing a shelf take
+      // minutes.
       await store.putAll('chapters', parsed.chapters.map((c) => ({ bookId, ...c })));
-      await store.putAll('images', parsed.images.map((i) => ({ bookId, ...i })));
       results.added += 1;
     } catch (error) {
       results.failed.push({ name, reason: error.message || 'Could not be parsed' });
@@ -293,7 +326,9 @@ export async function renderShelf(handlers) {
 
   // Vault contents stay out of the shelf until the vault is unlocked. The
   // same filter is applied in search, the reel and the stats totals.
-  let visible = all.filter((b) => !b.inVault || vaultUnlocked);
+  // A hard kill during import leaves a row with no chapters behind it. It is
+  // not a book yet, so it does not belong on the shelf.
+  let visible = all.filter((b) => !b.importing && (!b.inVault || vaultUnlocked));
 
   // Filtered to one folder, and to anything nested under it.
   if (folder != null) {
@@ -501,6 +536,13 @@ export let vaultUnlocked = true;
 export function setVaultUnlocked(value) { vaultUnlocked = value; }
 
 /** Called at boot: locked only if there is something to unlock. */
+/** Clear out anything a crash left half-imported. */
+export async function sweepUnfinishedImports() {
+  const stale = (await store.all('books')).filter((b) => b.importing);
+  for (const book of stale) await store.deleteBook(book.id).catch(() => {});
+  return stale.length;
+}
+
 export async function initVaultGate() {
   const settings = await store.settings();
   vaultUnlocked = !settings.vaultPassphrase;
