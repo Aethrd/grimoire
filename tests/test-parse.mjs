@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { boot } from './harness.mjs';
+
+const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = (p) => fs.readFileSync(path.join(repoRoot, p), 'utf8');
 const window = await boot();
 
 // jsdom has no object URLs or image decoding; stub just enough that the
@@ -123,6 +128,65 @@ await t('rejects a zip that is not an EPUB with a useful message', async () => {
   const JSZipMod = (await import('jszip')).default;
   const junk = await new JSZipMod().file('a.txt','x').generateAsync({type:'nodebuffer'});
   await assert.rejects(parse.parse(new File([junk],'fake.epub')), /container\.xml/);
+});
+
+console.log('import cost');
+
+await t('images can be handed off instead of accumulated', async () => {
+  // A heavily illustrated book is well over a hundred megabytes of blobs.
+  // Holding all of them until the parse finished is what killed the app
+  // partway through a shelf.
+  const sunk = [];
+  const streamed = await parse.parse(
+    new File([fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url))], 'salt.epub'),
+    null, { onImage: (record) => { sunk.push(record); } });
+
+  assert.ok(sunk.length > 0, 'nothing reached the sink');
+  assert.equal(streamed.images.length, 0, 'images were kept as well as handed off');
+  // The count still has to be reported, since the book record stores it.
+  assert.equal(streamed.imageCount, sunk.length);
+  for (const record of sunk) assert.ok(record.blob, 'a record arrived without its blob');
+});
+
+await t('without a sink the images come back as before', async () => {
+  const whole = await parse.parse(
+    new File([fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url))], 'salt.epub'));
+  assert.ok(whole.images.length > 0);
+  assert.equal(whole.imageCount, whole.images.length);
+});
+
+await t('a comic keeps its cover even when the images are handed off', async () => {
+  // The cover was taken from images[0], which is empty with a sink.
+  const cbz = await parse.parse(
+    new File([fs.readFileSync(new URL('./fixtures/comic.cbz', import.meta.url))], 'c.cbz'),
+    null, { onImage: () => {} });
+  assert.ok(cbz.coverBlob, 'the comic lost its cover');
+  assert.equal(cbz.images.length, 0);
+  assert.ok(cbz.imageCount > 0);
+});
+
+t('a chapter is read once, not four times', () => {
+  // Build a sanitised DOM, serialise, re-parse to fix images, serialise
+  // again, parse a third time for the word count: 5.9ms per chapter against
+  // 0.19ms for one walk. Sixty per cent of the import was re-reading work
+  // already done.
+  const src = read('app/src/main/assets/www/js/parse.js');
+  assert.match(src, /function readChapter/);
+  assert.ok(!/function sanitise\(/.test(src), 'the separate sanitise pass is back');
+  assert.ok(!/function textOf\(/.test(src), 'the text is being extracted by a third parse again');
+  // No intermediate DOM: markup is emitted as strings.
+  const fn = src.slice(src.indexOf('function readChapter'), src.indexOf('const CJK_FACTOR'));
+  assert.ok(!/createElement/.test(fn), 'readChapter builds a DOM again');
+});
+
+t('progress is throttled and yields the main thread', () => {
+  // A bar redrawn once per chapter is hundreds of layouts a book, and it
+  // competes with the work it describes. The yield is what lets it paint at
+  // all, and keeps Android from deciding the app has stopped responding.
+  const src = read('app/src/main/assets/www/js/parse.js');
+  const tick = src.slice(src.indexOf('async function tick'));
+  assert.match(tick.slice(0, 400), /now - lastTick < 100/);
+  assert.match(tick.slice(0, 400), /setTimeout/);
 });
 
 console.log(`\n${pass} assertions passed`);

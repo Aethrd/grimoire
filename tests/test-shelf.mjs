@@ -331,6 +331,19 @@ t('a filter that survives a relaunch can be cleared from the shelf', () => {
   assert.match(app, /if \(current === 'library'\) await refreshShelf\(\)/);
 });
 
+t('a half-imported book is neither shown nor kept', () => {
+  // Images are written as they are extracted now, so the book row exists
+  // before its chapters do. A hard kill in the middle used to leave that row
+  // on the shelf as a book with nothing in it.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /!b\.importing && \(!b\.inVault/);
+  assert.match(library, /export async function sweepUnfinishedImports/);
+  assert.match(app, /await library\.sweepUnfinishedImports\(\)/);
+  // And a failure during parse cleans up after itself rather than waiting
+  // for the next launch.
+  assert.match(library, /await store\.deleteBook\(bookId\)\.catch/);
+});
+
 console.log('settings');
 
 t('settings is a screen with panes, reachable from the bar', () => {
