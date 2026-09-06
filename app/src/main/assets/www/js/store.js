@@ -184,6 +184,10 @@ export const DEFAULT_SETTINGS = {
   backgroundImage: null,
   veil: 0.62,                     // 62% in dark, 28% in light
   columns: 2,
+  // Which folder the shelf is filtered to: null for everything, '' for
+  // unfiled. Kept with the rest of the shelf's arrangement rather than in a
+  // module variable, which forgot it on every launch.
+  shelfFolder: null,
   sort: { keys: [['lastRead', 'desc'], ['author', 'asc']], group: [] },
   turnBySwipe: true,
   turnBySideTap: true,

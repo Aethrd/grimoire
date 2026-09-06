@@ -109,12 +109,22 @@ function back() {
 
 /* ── library ──────────────────────────────────────────────────────────── */
 
-/** The folder the shelf is filtered to, or null for everything. */
+/**
+ * The folder the shelf is filtered to, or null for everything.
+ *
+ * Mirrored from settings so the shelf can render synchronously, but settings
+ * is what survives a relaunch -- as a module variable alone it was forgotten
+ * every time the app was closed.
+ */
 let activeFolder = null;
 
-function openFolder(folder) {
+async function openFolder(folder) {
   activeFolder = folder;
-  show('library', { replace: true });
+  await store.saveSettings({ shelfFolder: folder });
+  // show() returns early when the screen is already showing, so clearing the
+  // filter from the shelf itself would otherwise change nothing on screen.
+  if (current === 'library') await refreshShelf();
+  else show('library', { replace: true });
 }
 
 async function refreshShelf() {
@@ -122,6 +132,7 @@ async function refreshShelf() {
     onOpen: onTileTap, onLongPress: onTileHold, selection,
     selecting: selectMode, folder: activeFolder,
     onNotice: (message) => toast(message, 6000),
+    onClearFolder: () => openFolder(null),
   });
 }
 
@@ -861,6 +872,7 @@ window.Grimoire = {
 async function boot() {
   const settings = await store.settings();
   theme.apply(settings);
+  activeFolder = settings.shelfFolder ?? null;
   // Locked only if a passphrase exists to unlock it with.
   await library.initVaultGate();
   reader.setChrome('full');

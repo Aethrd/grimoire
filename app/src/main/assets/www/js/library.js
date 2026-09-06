@@ -352,17 +352,30 @@ export async function renderShelf(handlers) {
   el('density-icon').innerHTML = DENSITY_ICONS[settings.columns];
 
   await renderContinueCard(sorted, onOpen);
-  await renderViewChips();
+  await renderViewChips(folder);
   applyTitleTranslations(sorted, settings);
 }
 
 /** Saved views are filter, sort and group snapshots kept as chips above the
  *  control strip. Tapping one applies it; holding one deletes it. */
-async function renderViewChips() {
+async function renderViewChips(folder) {
   const host = el('view-chips');
   const views = await store.all('views');
   host.innerHTML = '';
-  host.hidden = views.length === 0;
+  host.hidden = views.length === 0 && folder == null;
+
+  /* A filter that survives a relaunch needs a way out that is visible from
+     the shelf. Without one, "why can I only see nine books" is answered two
+     screens away. */
+  if (folder != null) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.setAttribute('aria-pressed', 'true');
+    chip.style.textTransform = 'none';
+    chip.textContent = `${folder || 'Unfiled'}  ✕`;
+    chip.onclick = () => lastHandlers.onClearFolder?.();
+    host.appendChild(chip);
+  }
 
   for (const view of views) {
     const chip = document.createElement('button');
