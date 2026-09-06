@@ -48,6 +48,19 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # The Gradle build fetches this too, but the reader tests run before
+      # Gradle does and the PDF suite needs it.
+      - name: Vendor pdf.js
+        run: |
+          npm pack pdfjs-dist@4.10.38 --silent
+          tar xf pdfjs-dist-4.10.38.tgz
+          V=app/src/main/assets/www/vendor
+          cp package/legacy/build/pdf.min.mjs        "$V/"
+          cp package/legacy/build/pdf.worker.min.mjs "$V/"
+          cp -r package/cmaps                        "$V/"
+          cp -r package/standard_fonts               "$V/"
+          rm -rf package pdfjs-dist-4.10.38.tgz
+
       - name: Reader tests
         # The reader is plain ES modules, so its parsers, sort comparator and
         # contrast guard can be exercised under jsdom without an emulator.
