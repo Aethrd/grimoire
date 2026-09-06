@@ -465,6 +465,36 @@ export async function openLanguage(host) {
     }
   }
 
+  // A real translation, run on demand, reporting exactly what came back.
+  // Working out why nothing is translating by staring at unchanged titles is
+  // not a reasonable ask.
+  const check = document.createElement('button');
+  check.className = 'btn ghost block';
+  check.style.marginTop = '14px';
+  check.textContent = 'Test translation';
+  check.onclick = async () => {
+    check.disabled = true;
+    check.textContent = 'Translating…';
+    const books = await store.all('books');
+    const source = books.find((b) => b.lang)?.lang || 'en';
+    try {
+      const { results, translated } = await translate.translateBatch(
+        -1, [{ field: `test:${Date.now()}`, text: 'Hello, world.' }],
+        settings.translateTarget, source);
+      const out = results.get([...results.keys()][0]);
+      toast(translated === 0
+        ? 'Nothing was sent — that phrase was already cached.'
+        : `${source} → ${settings.translateTarget}: “${out}”`, 6000);
+    } catch (error) {
+      toast(error.message, 8000);
+    }
+    check.disabled = false;
+    check.textContent = 'Test translation';
+    // The cache row below now has one more entry in it.
+    openLanguage(body);
+  };
+  body.appendChild(check);
+
   // Cache.
   const size = await translate.cacheSize();
   const cache = document.createElement('section');

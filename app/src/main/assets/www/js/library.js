@@ -423,10 +423,21 @@ async function renderContinueCard(books, onOpen) {
  * blocking the shelf on that would mean staring at nothing.
  */
 async function applyTitleTranslations(books, settings) {
-  if (!settings.translateTitles || !translate.status().configured) {
+  if (!settings.translateTitles) {
     if (!titles.size) return;
     titles.clear();
     return renderShelf(lastHandlers);
+  }
+
+  // Switched on but not usable. This returned silently before, which is
+  // indistinguishable from translation being broken -- and it is the most
+  // likely state to be in, because the engine needs setting up first.
+  const state = translate.status();
+  if (!state.configured) {
+    lastHandlers.onNotice?.(state.unavailable
+      ? 'Translation is unavailable in this build.'
+      : 'Translation is on but no engine is set up — Settings, then Translate.');
+    return;
   }
   const lang = settings.translateTarget;
   let changed = false;

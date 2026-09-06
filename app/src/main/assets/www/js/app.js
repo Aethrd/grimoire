@@ -18,7 +18,11 @@ const stack = ['library'];
 let current = 'library';
 
 function screenNode(name) {
-  return document.querySelector(`[data-screen="${name}"]`);
+  // Scoped to the container on purpose. This used to be a bare
+  // document.querySelector, and the moment <body> gained a data-screen
+  // attribute of its own it started matching that instead -- so the real
+  // section was never switched off and screens piled up on top of each other.
+  return document.getElementById('screens').querySelector(`[data-screen="${name}"]`);
 }
 
 async function show(name, { replace = false } = {}) {
@@ -41,7 +45,7 @@ async function show(name, { replace = false } = {}) {
   // longer see.
   if (name !== 'library') clearSelection();
   // The tab bar is app furniture; it has no business over a page of prose.
-  document.body.dataset.screen = name;
+  document.body.dataset.view = name;
   el('tabbar').hidden = name === 'reader' || selecting();
   for (const button of el('tabbar').children) {
     button.setAttribute('aria-pressed', String(button.dataset.go === name));
@@ -95,7 +99,7 @@ function back() {
   screenNode(target)?.setAttribute('data-active', '');
   const previous = current;
   current = target;
-  document.body.dataset.screen = target;
+  document.body.dataset.view = target;
   if (previous === 'reader') reader.pauseSession();   // back() is sync; the
   // stats screen re-reads on every open, so a late arrival still shows up.
   el('tabbar').hidden = target === 'reader';
