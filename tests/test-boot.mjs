@@ -67,4 +67,22 @@ await t('the sort sheet renders and previews', async () => {
   assert.ok(document.getElementById('sort-keys').children.length > 0);
 });
 
+await t('navigating never leaves two screens on top of each other', async () => {
+  // A body attribute colliding with the screen sections made the lookup match
+  // the wrong element, so screens stopped being switched off. Every visible
+  // symptom was in the rendering; nothing in the source looked wrong.
+  const app = await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const screens = document.getElementById('screens');
+  const active = () => [...screens.querySelectorAll('[data-screen]')]
+    .filter((s) => s.hasAttribute('data-active')).map((s) => s.dataset.screen);
+
+  for (const name of ['folders', 'sort', 'stats', 'settings', 'library', 'folders']) {
+    const button = [...document.getElementById('tabbar').children]
+      .find((b) => b.dataset.go === name);
+    button.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 60));
+    assert.deepEqual(active(), [name], `showing ${name} left ${active().join(' + ')} active`);
+  }
+});
+
 console.log(`\n${pass} assertions passed`);

@@ -282,8 +282,34 @@ t('a new sort key takes priority rather than going last', () => {
 
 t('the toast keeps clear of the reader controls', () => {
   // At the bottom it landed on the Copy chapter button it was reporting on.
-  assert.match(css, /\[data-screen="reader"\] \.toast/);
-  assert.match(app, /document\.body\.dataset\.screen = name/);
+  assert.match(css, /\[data-view="reader"\] \.toast/);
+  assert.match(app, /document\.body\.dataset\.view = name/);
+});
+
+t('only one screen can be active at a time', () => {
+  // <body data-screen="folders"> made document.querySelector('[data-screen=…]')
+  // match the body instead of the section, so screens stopped being switched
+  // off and piled up on top of each other. The lookup is scoped now, and the
+  // body uses a different attribute.
+  assert.match(app, /getElementById\('screens'\)\.querySelector/);
+  assert.ok(!/document\.body\.dataset\.screen/.test(app),
+    'the body shares an attribute name with the screen sections again');
+});
+
+t('a translation that cannot run says so', () => {
+  // Switched on but with no engine set up returned silently, which is
+  // indistinguishable from translation being broken.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /no engine is set up/);
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /Test translation/);
+});
+
+t('saving a view is not the loudest thing on the sort screen', () => {
+  const sortScreen = html.slice(html.indexOf('data-screen="sort"'), html.indexOf('data-screen="reader"'));
+  const header = sortScreen.slice(0, sortScreen.indexOf('</header>'));
+  assert.ok(!/sort-save/.test(header), 'still in the header, where the eye lands first');
+  assert.match(sortScreen, /class="link-btn" id="sort-save"/);
 });
 
 console.log('settings');
