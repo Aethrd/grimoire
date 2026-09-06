@@ -85,6 +85,26 @@ function groupLabel(book, level) {
   }
 }
 
+/**
+ * Levels whose groups have a natural order that is not alphabetical.
+ *
+ * Status is the one that matters: sorted by name it reads Finished, Reading,
+ * Unread -- the books you have already finished at the top and the one you
+ * are in the middle of buried beneath them. What you want first is what you
+ * are reading, then what you have not started, and the finished ones last.
+ */
+const GROUP_ORDER = {
+  status: ['Reading', 'Unread', 'Finished'],
+};
+
+function groupRank(level, label) {
+  const order = GROUP_ORDER[level];
+  if (!order) return -1;
+  const at = order.indexOf(label);
+  // Anything unlisted sorts after the listed ones, then alphabetically.
+  return at === -1 ? order.length : at;
+}
+
 export function groupBooks(books, levels) {
   if (!levels.length) return [{ label: 'All books', count: books.length, books, children: [] }];
   const [head, ...rest] = levels;
@@ -95,7 +115,10 @@ export function groupBooks(books, levels) {
     map.get(key).push(book);
   }
   return [...map.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
+    .sort((a, b) => {
+      const rank = groupRank(head, a[0]) - groupRank(head, b[0]);
+      return rank || a[0].localeCompare(b[0]);
+    })
     .map(([label, list]) => ({
       label,
       count: list.length,
