@@ -151,4 +151,53 @@ await t('the schema migrates rather than leaving dead references', () => {
   assert.match(src, /imagesLost/);
 });
 
+console.log('cover images');
+
+await t('the picker offers every image type, by MIME and by extension', () => {
+  // SAF hands plenty of files over as octet-stream, so the extensions matter
+  // as much as the types.
+  assert.match(blobs.COVER_ACCEPT, /image\/\*/);
+  for (const type of ['image/webp', 'image/avif', 'image/heic', 'image/svg\\+xml']) {
+    assert.ok(new RegExp(type).test(blobs.COVER_ACCEPT), `${type} is not offered`);
+  }
+  for (const ext of ['.avif', '.heic', '.tiff', '.apng', '.jfif']) {
+    assert.ok(blobs.COVER_ACCEPT.includes(ext), `${ext} is not offered`);
+  }
+});
+
+await t('an image that cannot be decoded is refused, not stored blank', async () => {
+  // Being offered by the picker is not the same as being drawable: a HEIC off
+  // a phone camera renders as nothing.
+  const before = globalThis.Image;
+  globalThis.Image = class { set src(v) { setTimeout(() => this.onerror && this.onerror(), 0); } };
+  const previousBitmap = globalThis.createImageBitmap;
+  globalThis.createImageBitmap = undefined;
+  await assert.rejects(
+    blobs.normaliseCover(new File([new Uint8Array([1])], 'x.heic', { type: 'image/heic' })),
+    (e) => /could not be read/.test(e.message) && /JPEG/.test(e.message));
+  globalThis.Image = before;
+  globalThis.createImageBitmap = previousBitmap;
+});
+
+await t('a decodable image is kept even where it cannot be re-encoded', async () => {
+  // jsdom has no canvas. The image decoded, so it will display; keeping it is
+  // better than refusing it.
+  const before = globalThis.Image;
+  globalThis.Image = class { set src(v) { this.naturalWidth = 60; this.naturalHeight = 90;
+    setTimeout(() => this.onload && this.onload(), 0); } };
+  const previousBitmap = globalThis.createImageBitmap;
+  globalThis.createImageBitmap = undefined;
+  const file = new File([new Uint8Array([1, 2, 3])], 'c.webp', { type: 'image/webp' });
+  assert.equal(await blobs.normaliseCover(file), file);
+  globalThis.Image = before;
+  globalThis.createImageBitmap = previousBitmap;
+});
+
+await t('the background picker goes through the same check', () => {
+  const panels = fs.readFileSync(
+    new URL('../app/src/main/assets/www/js/panels.js', import.meta.url), 'utf8');
+  assert.match(panels, /blobs\.COVER_ACCEPT/);
+  assert.match(panels, /blobs\.normaliseCover/);
+});
+
 console.log(`\n${pass} assertions passed`);
