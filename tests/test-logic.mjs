@@ -86,4 +86,38 @@ t('groups nest and carry per-node counts', () => {
   assert.equal(g.find(n=>n.label==='Standalone').count, 1);
 });
 
+t('status groups run reading, unread, finished', () => {
+  // Sorted by name it reads Finished, Reading, Unread -- the books you have
+  // already finished at the top, and the one you are in the middle of buried
+  // beneath them.
+  const states = [
+    { finishedAt: 1, lastReadAt: 5 },
+    {},
+    { lastReadAt: 9 },
+    { finishedAt: 2 },
+    {},
+  ];
+  assert.deepEqual(
+    lib.groupBooks(states, ['status']).map((g) => [g.label, g.count]),
+    [['Reading', 1], ['Unread', 2], ['Finished', 2]]);
+});
+
+t('levels with no natural order stay alphabetical', () => {
+  const formats = [{ format: 'PDF' }, { format: 'CBZ' }, { format: 'EPUB' }];
+  assert.deepEqual(
+    lib.groupBooks(formats, ['format']).map((g) => g.label),
+    ['CBZ', 'EPUB', 'PDF']);
+});
+
+t('the order applies at whichever level status sits', () => {
+  const mixed = [
+    { format: 'EPUB', finishedAt: 1 },
+    { format: 'EPUB', lastReadAt: 2 },
+    { format: 'EPUB' },
+  ];
+  assert.deepEqual(
+    lib.groupBooks(mixed, ['format', 'status'])[0].children.map((g) => g.label),
+    ['Reading', 'Unread', 'Finished']);
+});
+
 console.log(`\n${pass} assertions passed`);
