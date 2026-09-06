@@ -205,6 +205,39 @@ t('an async bridge reply is parsed whichever shape it arrives in', () => {
   assert.match(java, /JSONObject\.quote\(payloadJson\)/, 'the payload still crosses unquoted');
 });
 
+t('a book with no declared language has something to fall back to', () => {
+  // On-device translation is told both languages and detects neither, so a
+  // book with no dc:language had nothing to translate from -- and the error
+  // told people to pick a source language in a setting that did not exist.
+  const store = read('app/src/main/assets/www/js/store.js');
+  assert.match(store, /translateSource: ''/);
+  const translate = read('app/src/main/assets/www/js/translate.js');
+  assert.match(translate, /export function sourceFor/);
+  // Both the shelf and the reader go through it, rather than reading
+  // book.lang directly.
+  for (const file of ['library.js', 'reader.js']) {
+    const src = read(`app/src/main/assets/www/js/${file}`);
+    assert.match(src, /translate\.sourceFor\(/, `${file} still uses the raw language`);
+  }
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /Translate from/);
+});
+
+t('the fallback language is counted when listing packs', () => {
+  const translate = read('app/src/main/assets/www/js/translate.js');
+  const fn = translate.slice(translate.indexOf('export function neededLanguages'));
+  assert.match(fn.slice(0, 700), /fallback/);
+});
+
+t('a failed translation can be diagnosed on the device', () => {
+  // Six things can be wrong and unchanged titles distinguish none of them.
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /Check it works/);
+  for (const row of ['Engine', 'Its language', 'Packs installed', 'Result']) {
+    assert.ok(panels.includes(`'${row}'`), `the report does not mention ${row}`);
+  }
+});
+
 console.log('settings render for real');
 
 // jsdom now has a working IndexedDB, so the panes can actually be rendered
