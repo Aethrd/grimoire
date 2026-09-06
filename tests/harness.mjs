@@ -21,6 +21,15 @@ export async function boot() {
   globalThis.matchMedia = window.matchMedia || (() => ({ matches:false, addEventListener(){} }));
   globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
   globalThis.JSZip = (await import('jszip')).default;
+
+  // jsdom has no IndexedDB, and the settings screens read their values from
+  // it before rendering anything. Without this they throw and every pane
+  // comes back empty, which is indistinguishable from a missing control.
+  const fake = await import('fake-indexeddb');
+  globalThis.indexedDB = fake.indexedDB;
+  globalThis.IDBKeyRange = fake.IDBKeyRange;
+  window.indexedDB = fake.indexedDB;
+  window.IDBKeyRange = fake.IDBKeyRange;
   // jsdom's Blob has no text(); removing it exercises the FileReader fallback.
   if (window.Blob?.prototype?.text) delete window.Blob.prototype.text;
   // jsdom implements neither half of the object-URL API. Tests that care

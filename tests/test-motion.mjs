@@ -144,4 +144,35 @@ t('several language packs can be fetched in one go', () => {
   assert.match(bulk, /catch \(error\)/);
 });
 
+console.log('settings render for real');
+
+// jsdom now has a working IndexedDB, so the panes can actually be rendered
+// rather than pattern-matched. This exists because "the scroll toggle is
+// absent" was reported twice and grepping the source said it was there.
+const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+
+async function renderPane(name) {
+  await panels.openSettings(() => {});
+  const button = [...document.getElementById('settings-strip').children]
+    .find((b) => b.dataset.pane === name);
+  button.onclick();
+  await new Promise((r) => setTimeout(r, 80));
+  return document.getElementById('settings-body').innerHTML;
+}
+
+const layoutPane = await renderPane('layout');
+const behaviourPane = await renderPane('behaviour');
+
+t('the layout pane really renders a paged/scroll switch', () => {
+  assert.match(layoutPane, /Paged/);
+  assert.match(layoutPane, /Scroll/);
+  assert.match(layoutPane, /Endless/);
+});
+
+t('the behaviour pane renders its controls', async () => {
+  // Not an empty pane pretending to be a feature.
+  assert.ok(behaviourPane.length > 300, `behaviour pane was ${behaviourPane.length} chars`);
+  assert.match(behaviourPane, /Tap the sides/);
+});
+
 console.log(`\n${pass} assertions passed`);

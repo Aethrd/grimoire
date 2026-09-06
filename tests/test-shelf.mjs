@@ -204,12 +204,69 @@ t('importing reports progress rather than a silent wait', () => {
   assert.match(app, /onProgress: \(message, fraction, done, total\)/);
 });
 
+t('a long author name cannot widen its column', () => {
+  // Grid items default to min-width:auto, which is min-content. The author
+  // line is nowrap, so one long name used to blow its column past its 1fr
+  // share and push the whole grid off the side of the screen.
+  assert.match(rule('.tile'), /min-width:\s*0/);
+});
+
+t('the title is shown under the cover, not only inside it', () => {
+  // Drawn only inside the cover, it was invisible for every book that had
+  // cover art — which is nearly all of them.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /class="tile-name"/);
+  assert.match(rule('.tile-name'), /line-clamp/);
+});
+
+t('a literal "<unknown>" author is not shown as one', () => {
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /function cleanAuthor/);
+  assert.match(library, /\^<\?unknown>\?\$/);
+});
+
+t('folders have their own tab and filter the shelf', () => {
+  assert.match(html, /data-screen="folders"/);
+  assert.match(html, /data-go="folders"/);
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /export async function openFolders/);
+  // Nested folders count towards their parent.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /startsWith\(`\$\{folder\}\/`\)/);
+});
+
+t('a swipe has to be long and flat to change tabs', () => {
+  // A shelf is a tall scrolling grid; a flick down with any lean to it was
+  // changing screens.
+  const swipe = app.slice(app.indexOf('function wireSwipeBetweenTabs'), app.indexOf('function wireChrome'));
+  assert.match(swipe, /Math\.abs\(dx\) < 110/);
+  assert.match(swipe, /Math\.abs\(dy\) > 45/);
+  assert.match(swipe, /Math\.abs\(dy\) \* 3/);
+});
+
+t('importing writes each book in whole transactions', () => {
+  // A transaction per chapter meant hundreds per book.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /store\.putAll\('chapters'/);
+  assert.match(library, /store\.putAll\('images'/);
+  const store = read('app/src/main/assets/www/js/store.js');
+  assert.match(store, /export async function putAll/);
+});
+
 console.log('settings');
 
 t('settings is a screen with panes, reachable from the bar', () => {
   assert.match(html, /data-screen="settings"/);
   assert.match(html, /data-go="settings"/);
-  assert.match(app, /TABS = \['library', 'sort', 'stats', 'settings'\]/);
+  assert.match(app, /TABS = \['library', 'folders', 'sort', 'stats', 'settings'\]/);
+});
+
+t('the settings strip is labelled', () => {
+  // Six unlabelled glyphs is a guessing game, and the pane people look for
+  // first was behind an ambiguous grid icon.
+  const strip = html.slice(html.indexOf('id="settings-strip"'), html.indexOf('id="settings-body"'));
+  const labels = [...strip.matchAll(/<span>(\w+)<\/span>/g)].map((m) => m[1]);
+  assert.deepEqual(labels, ['Text', 'Layout', 'Theme', 'Behaviour', 'Translate', 'Vault']);
 });
 
 t('the strip offers no share and no text-to-speech', () => {

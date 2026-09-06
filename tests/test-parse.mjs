@@ -50,7 +50,10 @@ await t('keeps the prose and the footnote marker', () => {
 await t('keeps images as blobs and records them in reading order', () => {
   assert.equal(epub.images.length, 1);
   assert.equal(epub.images[0].chapterIndex, 0);
-  assert.equal(epub.images[0].width, 800);
+  // Not measured at import: decoding every illustration in every book to fill
+  // in two numbers costs minutes on a real shelf. The reel measures on first
+  // open and writes the result back.
+  assert.equal(epub.images[0].width, 0);
   assert.ok(epub.images[0].blob, 'image blob missing');
   // Not a blob: URL. Those stop resolving once the app is closed, so the
   // chapter keeps a reference the reader resolves at render time instead.

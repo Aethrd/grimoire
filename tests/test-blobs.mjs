@@ -78,18 +78,25 @@ await t('chapter HTML references an href, never a blob URL', () => {
   assert.ok(!/<img[^>]*\ssrc=/.test(html), 'chapter markup carries a src that will dangle');
 });
 
-await t('dimensions are still measured', () => {
-  // Measuring needs a URL, but it must not leave one behind.
-  assert.equal(parsed.images[0].width, 600);
-  assert.equal(parsed.images[0].height, 900);
+await t('dimensions are deferred, not measured at import', () => {
+  // Measuring means decoding, and decoding a whole library's artwork at
+  // import is minutes of work for numbers only the image reel reads.
+  assert.equal(parsed.images[0].width, 0);
+  assert.equal(parsed.images[0].height, 0);
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /images\.filter\(\(i\) => i\.blob && !i\.width\)/,
+    'the reel does not fill them in either');
+  assert.match(screens, /store\.putAll\('images', unmeasured\)/,
+    'measured sizes are not written back, so it re-measures every time');
 });
 
 console.log('URL lifetime');
 
-await t('every URL minted during parsing is released again', () => {
-  assert.ok(created > 0, 'nothing was measured at all');
-  assert.equal(created, revoked,
-    `${created - revoked} object URL(s) leaked while parsing`);
+await t('parsing mints no object URLs at all', () => {
+  // Stronger than balancing them: the parsers now deal only in blobs, so
+  // there is nothing to leak and nothing that can be persisted by mistake.
+  assert.equal(created, 0, `parsing created ${created} object URL(s)`);
+  assert.equal(created, revoked);
 });
 
 await t('the pool releases everything it handed out', () => {
