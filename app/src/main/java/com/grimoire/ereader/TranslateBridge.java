@@ -12,6 +12,8 @@ import com.google.mlkit.nl.translate.TranslateLanguage;
 import com.google.mlkit.nl.translate.TranslateRemoteModel;
 import com.google.mlkit.nl.translate.Translation;
 import com.google.mlkit.nl.translate.Translator;
+import com.google.mlkit.nl.languageid.LanguageIdentification;
+import com.google.mlkit.nl.languageid.LanguageIdentifier;
 import com.google.mlkit.nl.translate.TranslatorOptions;
 
 import org.json.JSONArray;
@@ -223,21 +225,63 @@ public class TranslateBridge {
     private void translateOnDevice(String requestId, JSONArray texts,
                                    String targetLang, String sourceLang, int chars) {
         String target = TranslateLanguage.fromLanguageTag(base(targetLang));
-        String source = sourceLang == null || sourceLang.isEmpty()
-                ? null : TranslateLanguage.fromLanguageTag(base(sourceLang));
-
         if (target == null) {
             fail(requestId, "On-device translation does not cover that language. Try DeepL for it.");
             return;
         }
-        if (source == null) {
-            fail(requestId, "This book does not say what language it is in. "
-                    + "Set \"Translate from\" in Settings \u2192 Translate, or give the book "
-                    + "a language in its details.");
+
+        String declared = sourceLang == null || sourceLang.isEmpty()
+                ? null : TranslateLanguage.fromLanguageTag(base(sourceLang));
+
+        if (declared != null) {
+            startTranslation(requestId, texts, declared, target, chars);
             return;
         }
+
+        /*
+         * Nothing declared, so work it out from the text.
+         *
+         * Switching translation on means wanting whatever is foreign
+         * translated, not answering a question about which language a
+         * scraped EPUB happens to be in. The identification model is bundled
+         * and needs no download, so this costs nothing but a moment.
+         */
+        StringBuilder sample = new StringBuilder();
+        for (int i = 0; i < texts.length() && sample.length() < 400; i++) {
+            try {
+                sample.append(texts.getString(i)).append(' ');
+            } catch (JSONException ignored) {
+            }
+        }
+
+        final LanguageIdentifier identifier = LanguageIdentification.getClient();
+        identifier.identifyLanguage(sample.toString())
+                .addOnSuccessListener(code -> {
+                    identifier.close();
+                    if (code == null || "und".equals(code)) {
+                        fail(requestId, "Could not tell what language that is. "
+                                + "Set the language in the book\u2019s details.");
+                        return;
+                    }
+                    String detected = TranslateLanguage.fromLanguageTag(base(code));
+                    if (detected == null) {
+                        fail(requestId, "On-device translation does not cover " + code + ".");
+                        return;
+                    }
+                    startTranslation(requestId, texts, detected, target, chars);
+                })
+                .addOnFailureListener(e -> {
+                    identifier.close();
+                    fail(requestId, describe(e));
+                });
+    }
+
+    /** Both languages known: fetch the models if needed, then translate. */
+    private void startTranslation(String requestId, JSONArray texts,
+                                  String source, String target, int chars) {
         if (source.equals(target)) {
-            // Nothing to do, and asking ML Kit would be an error.
+            // Already in the target language. Nothing to do, and asking ML Kit
+            // for a same-language translator is an error.
             echo(requestId, texts, chars);
             return;
         }
@@ -255,8 +299,9 @@ public class TranslateBridge {
                 .addOnSuccessListener(ignored -> translateAll(requestId, translator, texts, chars))
                 .addOnFailureListener(e -> {
                     translator.close();
-                    fail(requestId, "Could not fetch the language model. It needs Wi-Fi the first time, "
-                            + "then works offline. (" + describe(e) + ")");
+                    fail(requestId, "Could not fetch the " + source + " language pack. "
+                            + "It needs Wi-Fi the first time, then works offline. ("
+                            + describe(e) + ")");
                 });
     }
 
