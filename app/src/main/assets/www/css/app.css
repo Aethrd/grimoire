@@ -793,3 +793,14 @@ section.block > h2 { margin-top: 18px; }
                font-size: 12px; margin-bottom: 8px; }
 .import-line span:first-child { white-space: nowrap; overflow: hidden;
                                 text-overflow: ellipsis; }
+
+
+/* Fifty-odd languages behind a disclosure, so the handful your library
+   actually needs is not buried under them. */
+.more-langs { margin-top: 14px; border-top: 1px solid var(--divider); }
+.more-langs > summary { padding: 13px 0; font-family: var(--font-heading);
+                        font-weight: 600; font-size: 13px; cursor: pointer;
+                        list-style: none; }
+.more-langs > summary::-webkit-details-marker { display: none; }
+.more-langs > summary::after { content: " ▾"; color: var(--muted); }
+.more-langs[open] > summary::after { content: " ▴"; }
