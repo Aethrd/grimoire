@@ -1,0 +1,26 @@
+[versions]
+agp = "8.9.1"
+activity = "1.9.3"
+appcompat = "1.7.0"
+core = "1.15.0"
+splashscreen = "1.2.0"   # 1.0.1 predates the Kotlin 1.8 stdlib merge
+webkit = "1.12.1"
+mlkitTranslate = "17.0.3"
+kotlin = "1.9.24"          # floor for the stdlib constraint, not a plugin
+
+[libraries]
+androidx-activity = { module = "androidx.activity:activity", version.ref = "activity" }
+androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
+androidx-core = { module = "androidx.core:core", version.ref = "core" }
+androidx-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "splashscreen" }
+androidx-webkit = { module = "androidx.webkit:webkit", version.ref = "webkit" }
+
+# On-device translation. No API key, no account, and offline once a language
+# model has been fetched. Models are ~30MB each and downloaded on demand, so
+# nothing ships in the APK.
+mlkit-translate = { module = "com.google.mlkit:translate", version.ref = "mlkitTranslate" }
+
+
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }

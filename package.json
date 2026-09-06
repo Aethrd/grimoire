@@ -1,0 +1,13 @@
+{
+  "name": "grimoire-reader",
+  "private": true,
+  "description": "Test harness for the bundled reader. The app itself has no build step.",
+  "scripts": {
+    "test": "node tests/run.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1",
+    "jszip": "^3.10.1"
+  },
+  "type": "module"
+}

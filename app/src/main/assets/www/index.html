@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="color-scheme" content="dark light">
+<title>Grimoire</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<!-- Every screen lives here; only one carries [data-active] at a time. -->
+<main id="screens">
+
+  <!-- SCR-01 Library -->
+  <section class="screen" data-screen="library" data-active>
+    <header class="app-head" id="select-head" hidden>
+      <button class="icon-btn" id="select-cancel" title="Done">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <div class="app-head-title"><h1 id="select-count">1 selected</h1></div>
+      <button class="btn ghost" id="select-all">Select all</button>
+    </header>
+
+    <header class="app-head" id="library-head">
+      <div class="app-head-title">
+        <h1>Library</h1>
+        <p class="eyebrow" id="library-counts">No books yet</p>
+      </div>
+      <button class="icon-btn" data-go="vault" title="Private vault">
+        <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+      </button>
+      <button class="icon-btn" data-go="settings" title="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></svg>
+      </button>
+      <button class="icon-btn accent" data-import title="Import files">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </header>
+
+    <!-- A real field, not an icon: the most-used action gets the widest target. -->
+    <button class="search-field" data-go="find">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>
+      <span>Search titles, authors, text</span>
+    </button>
+
+    <!-- Hidden entirely when nothing is in progress. Never shown empty. -->
+    <button class="continue-card" id="continue-card" hidden>
+      <span class="continue-cover" id="continue-cover"></span>
+      <span class="continue-body">
+        <span class="eyebrow accent-ink">Continue</span>
+        <span class="continue-title" id="continue-title"></span>
+        <span class="continue-meta" id="continue-meta"></span>
+        <span class="bar"><span class="bar-fill" id="continue-bar"></span></span>
+      </span>
+      <svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
+    </button>
+
+    <div class="chip-row pad-x" id="view-chips"></div>
+
+    <div class="control-strip">
+      <button class="strip-btn" data-go="sort">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6"/></svg>
+        <span id="sort-summary">Last read, newest first</span>
+      </button>
+      <button class="pill" id="translate-pill">A/文</button>
+      <button class="icon-btn" id="density-btn" title="Cover size">
+        <svg viewBox="0 0 24 24" id="density-icon"></svg>
+      </button>
+    </div>
+
+    <div class="group-head">
+      <span id="group-title">All books</span>
+      <span class="muted" id="group-count"></span>
+    </div>
+
+    <div class="scroll" id="shelf-scroll">
+      <div class="shelf" id="shelf"></div>
+      <div class="empty" id="library-empty">
+        <h2>No books yet</h2>
+        <p class="muted">EPUB, CBZ, TXT, HTML, Markdown and FB2. Drop in a .zip and it is unpacked, with the folders inside kept as folders here.</p>
+        <button class="btn primary" data-import>Import files</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCR-02 Sort and group -->
+  <section class="screen" data-screen="sort">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="app-head-title"><h1>Sort &amp; group</h1></div>
+      <button class="btn ghost" id="sort-save">Save view</button>
+    </header>
+    <div class="scroll pad">
+      <p class="eyebrow">Sort keys — order sets priority</p>
+      <ul class="key-list" id="sort-keys"></ul>
+      <p class="eyebrow">Key pool</p>
+      <div class="chip-row wrap" id="sort-pool"></div>
+      <p class="eyebrow">Group levels — up to three</p>
+      <div class="chip-row wrap" id="group-levels"></div>
+      <p class="eyebrow">Preview</p>
+      <div class="tree" id="group-preview"></div>
+    </div>
+    <footer class="sheet-actions">
+      <button class="btn ghost" data-back>Cancel</button>
+      <button class="btn primary" id="sort-apply">Apply</button>
+    </footer>
+  </section>
+
+  <!-- SCR-03 / SCR-04 Reader -->
+  <section class="screen reader-screen" data-screen="reader">
+    <header class="reader-top" id="reader-top">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="reader-title">
+        <span id="reader-book"></span>
+        <span class="reader-pos" id="reader-pos"></span>
+      </div>
+      <button class="icon-btn" data-go="find" title="Find in book">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>
+      </button>
+      <button class="icon-btn" id="bookmark-btn" title="Bookmark">
+        <svg viewBox="0 0 24 24"><path d="M6 4h12v16l-6-4-6 4z"/></svg>
+      </button>
+    </header>
+
+    <div class="page-host" id="page-host">
+      <div class="page-viewport" id="page-viewport">
+        <article class="page-flow" id="page-flow"></article>
+      </div>
+      <!-- Tap zones sit above the text: sides turn, the middle band cycles
+           chrome. They never overlap, so the gesture is never ambiguous. -->
+      <div class="tap-layer" id="tap-layer">
+        <div class="tap-zone" data-tap="back"></div>
+        <div class="tap-zone" data-tap="chrome"></div>
+        <div class="tap-zone" data-tap="forward"></div>
+      </div>
+      <div class="scrub-rail" id="scrub-rail">
+        <div class="scrub-thumb" id="scrub-thumb"></div>
+        <div class="scrub-bubble" id="scrub-bubble" hidden></div>
+      </div>
+    </div>
+
+    <footer class="reader-bottom" id="reader-bottom">
+      <!-- The row that survives into COPY mode. -->
+      <div class="copy-row">
+        <button class="btn ghost" id="chapter-prev">‹ Ch</button>
+        <button class="btn primary" id="copy-chapter">Copy chapter</button>
+        <button class="btn ghost" id="chapter-next">Ch ›</button>
+      </div>
+      <div class="full-only">
+        <div class="progress">
+          <span class="progress-page" id="progress-page"></span>
+          <span class="progress-track" id="progress-track"><span class="progress-fill" id="progress-fill"></span></span>
+          <span class="progress-pct" id="progress-pct"></span>
+        </div>
+        <div class="tool-row">
+          <button class="icon-btn" data-go="toc" title="Index"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+          <button class="icon-btn" data-go="layout" title="Layout"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h9"/></svg></button>
+          <button class="icon-btn" data-go="reel" title="Images"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1"/><path d="M3 15l5-4 4 3 3-2 6 4"/></svg></button>
+          <button class="icon-btn" id="translate-chapter" title="Translate this chapter" hidden>
+            <svg viewBox="0 0 24 24"><path d="M4 6h10M9 4v2c0 4-2 7-5 8M6 11c1.5 3 4 5 7 5"/><path d="M13 20l4-10 4 10M14.5 16h5"/></svg>
+          </button>
+        </div>
+      </div>
+    </footer>
+  </section>
+
+  <!-- SCR-05 Layout override -->
+  <section class="screen" data-screen="layout">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="app-head-title"><h1>Layout override</h1><p class="eyebrow">Ignores the file's own styling</p></div>
+    </header>
+    <div class="scroll pad" id="layout-body"></div>
+    <footer class="sheet-actions">
+      <button class="btn ghost" id="layout-reset">Reset</button>
+      <button class="btn ghost" id="layout-default">App default</button>
+      <button class="btn primary" data-back>Done</button>
+    </footer>
+  </section>
+
+  <!-- SCR-06 Image reel -->
+  <section class="screen" data-screen="reel">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="app-head-title"><h1>Image reel</h1><p class="eyebrow" id="reel-counts"></p></div>
+    </header>
+    <div class="chip-row pad-x" id="reel-filters"></div>
+    <div class="scroll pad" id="reel-grid"></div>
+  </section>
+
+  <!-- SCR-07 Find in book -->
+  <section class="screen" data-screen="find">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <input class="query" id="find-input" type="search" placeholder="Search" autocomplete="off" autocapitalize="off">
+    </header>
+    <div class="chip-row pad-x" id="find-scope"></div>
+    <div class="scroll" id="find-results"></div>
+    <footer class="stepper" id="find-stepper" hidden>
+      <button class="btn ghost" id="find-prev">‹ Prev</button>
+      <span class="muted" id="find-count"></span>
+      <button class="btn ghost" id="find-next">Next ›</button>
+    </footer>
+  </section>
+
+  <!-- SCR-08 Index and marks -->
+  <section class="screen" data-screen="toc">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="app-head-title"><h1>Index &amp; marks</h1><p class="eyebrow" id="toc-source"></p></div>
+      <button class="btn ghost" id="toc-rebuild">Rebuild</button>
+    </header>
+    <div class="tabs" id="toc-tabs"></div>
+    <div class="scroll" id="toc-list"></div>
+  </section>
+
+  <!-- Settings, with an icon strip across the top. Deliberately no share and
+       no text-to-speech: neither exists in this app, and a strip of buttons
+       that do nothing is worse than a shorter strip. -->
+  <section class="screen" data-screen="settings">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="app-head-title"><h1 id="settings-title">Settings</h1></div>
+    </header>
+    <nav class="icon-strip" id="settings-strip">
+      <button data-pane="text" title="Text">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M9 6v13M15 10h5M17 10v9"/></svg>
+      </button>
+      <button data-pane="layout" title="Layout">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="6" rx="1"/><rect x="14" y="14" width="7" height="6" rx="1"/></svg>
+      </button>
+      <button data-pane="theme" title="Theme">
+        <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.7 0 2-1.2 1.3-2-.8-1 .1-2 1.2-2H17a4 4 0 0 0 4-4c0-5-4-10-9-10z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="12" cy="7.5" r="1"/><circle cx="16.5" cy="11.5" r="1"/></svg>
+      </button>
+      <button data-pane="behaviour" title="Behaviour">
+        <svg viewBox="0 0 24 24"><path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11"/><path d="M12 11V4.5a1.5 1.5 0 0 1 3 0V11"/><path d="M15 11V6.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-6-6v-3a1.5 1.5 0 0 1 3 0"/></svg>
+      </button>
+      <button data-pane="translation" title="Translation">
+        <svg viewBox="0 0 24 24"><path d="M4 6h10M9 4v2c0 4-2 7-5 8M6 11c1.5 3 4 5 7 5"/><path d="M13 20l4-10 4 10M14.5 16h5"/></svg>
+      </button>
+      <button data-pane="data" title="Data &amp; vault">
+        <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+      </button>
+    </nav>
+    <div class="scroll pad" id="settings-body"></div>
+  </section>
+
+  <!-- SCR-09 Theme and fonts -->
+  <section class="screen" data-screen="appearance">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="app-head-title"><h1>Theme &amp; fonts</h1></div>
+    </header>
+    <div class="scroll pad" id="appearance-body"></div>
+  </section>
+
+  <!-- SCR-10 Language -->
+  <section class="screen" data-screen="language">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="app-head-title"><h1>Language</h1></div>
+    </header>
+    <div class="scroll pad" id="language-body"></div>
+  </section>
+
+  <!-- SCR-11 Stats and streaks -->
+  <section class="screen" data-screen="stats">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="app-head-title"><h1>Stats &amp; streaks</h1></div>
+    </header>
+    <div class="scroll pad" id="stats-body"></div>
+  </section>
+
+  <!-- SCR-12, minus the account: there is nothing to sign in to. -->
+  <section class="screen" data-screen="vault">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="app-head-title"><h1>Private vault</h1></div>
+    </header>
+    <div class="scroll pad" id="vault-body"></div>
+  </section>
+
+
+</main>
+
+<!-- Three seats, and they are the three screens that mean something with no
+     book open. Reader and Marks are book-dependent: reached from a book, not
+     from a bar that would otherwise sit there dead. Swipe between these. -->
+<nav class="tabbar" id="tabbar">
+  <button data-go="library"><svg viewBox="0 0 24 24"><path d="M4 5h6v14H4zM14 5h6v14h-6z"/></svg><span>Shelf</span></button>
+  <button data-go="sort"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6"/></svg><span>Groups</span></button>
+  <button data-go="stats"><svg viewBox="0 0 24 24"><path d="M4 19V10M10 19V5M16 19v-6M2 19h20"/></svg><span>Stats</span></button>
+  <button data-go="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
+</nav>
+
+<!-- Actions for the selected books. Labelled, because a row of bare glyphs
+     makes you tap one to find out what it does — and one of them is a bin. -->
+<div class="action-grid" id="select-actions" hidden>
+  <button data-act="open">
+    <svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+    <span>Open</span>
+  </button>
+  <button data-act="folder">
+    <svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z"/><path d="M3 7V5h6"/></svg>
+    <span>Folder</span>
+  </button>
+  <button data-act="status">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>
+    <span>Status</span>
+  </button>
+  <button data-act="details">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+    <span>Details</span>
+  </button>
+  <button data-act="vault">
+    <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+    <span>Vault</span>
+  </button>
+  <button data-act="delete" class="danger">
+    <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>
+    <span>Delete</span>
+  </button>
+</div>
+
+<!-- Confirmation happens in the bar itself rather than a system dialog. -->
+<div class="select-bar confirm" id="confirm-bar" hidden>
+  <span class="select-count" id="confirm-text"></span>
+  <button class="btn ghost" id="confirm-no">Cancel</button>
+  <button class="btn danger" id="confirm-yes">Delete</button>
+</div>
+
+<div class="sheet-scrim" id="folder-sheet" hidden>
+  <div class="sheet">
+    <p class="eyebrow">Move to</p>
+    <div class="sheet-list" id="folder-list"></div>
+    <div class="field" style="margin:12px 0 0">
+      <input type="text" id="folder-new" placeholder="New folder — use / to nest" autocapitalize="words">
+    </div>
+    <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
+      <button class="btn ghost" id="folder-cancel">Cancel</button>
+      <button class="btn primary" id="folder-create">Create &amp; move</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-scrim" id="details-sheet" hidden>
+  <div class="sheet" id="details-body"></div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<input type="file" id="file-input" multiple hidden
+       accept="application/epub+zip,application/vnd.comicbook+zip,application/zip,text/plain,text/html,text/markdown,application/x-fictionbook+xml">
+
+<script src="vendor/jszip.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

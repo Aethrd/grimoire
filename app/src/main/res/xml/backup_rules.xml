@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- The reader's library index and progress live in WebView local storage. -->
+    <include domain="database" path="." />
+    <include domain="file" path="app_webview" />
+    <exclude domain="file" path="app_webview/Default/GPUCache" />
+</full-backup-content>

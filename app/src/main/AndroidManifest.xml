@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      One permission, for one feature: translation via DeepL.
+
+      It is inert until you enter an API key. No key means no request is ever
+      made, so an install that never opens Language settings behaves exactly
+      as it did before this permission existed.
+
+      Books are still read through the Storage Access Framework, which grants
+      access to the one file you picked. There is no account, no sync, no
+      analytics and no advertising SDK. The only host the app ever contacts is
+      DeepL's, and only with text you asked it to translate.
+
+      The reader itself makes no network calls at all: DeepL refuses
+      client-side JavaScript, so every request is made from TranslateBridge on
+      the native side. tools/audit_assets.py still fails the build if anything
+      in the bundled reader tries.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:name=".GrimoireApp"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true"
+        android:hardwareAccelerated="true"
+        android:theme="@style/Theme.Grimoire.Splash">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density|fontScale|smallestScreenSize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Open books tapped in a file manager. Only the formats the
+                 reader can actually parse are claimed: offering to open a PDF
+                 and then failing is worse than not appearing in the list. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/vnd.comicbook+zip" />
+                <data android:mimeType="application/x-cbz" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-fictionbook+xml" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="text/markdown" />
+                <data android:mimeType="text/html" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/vnd.comicbook+zip" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

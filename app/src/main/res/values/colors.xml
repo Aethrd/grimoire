@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="grimoire_parchment">#FFF6EFE2</color>
+    <color name="grimoire_ink">#FF16130F</color>
+    <color name="grimoire_gilt">#FFB08432</color>
+</resources>

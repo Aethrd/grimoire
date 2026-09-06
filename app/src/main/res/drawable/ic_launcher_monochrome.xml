@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Themed-icon layer. Android fills this with a single colour drawn from the
+  user's wallpaper, so it has to read as a shape, not a picture: an isometric
+  closed book with the cover's star emblem punched through as a hole.
+
+  Content sits inside the centre 66dp of the 108dp canvas, the only region a
+  launcher mask is guaranteed not to clip.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Page block: the thickness below the cover. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M24,53 L24,65 L54,83 L84,65 L84,53 L54,71 Z" />
+
+    <!-- Cover, with the star cut out by the even-odd rule. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M24,52 L54,34 L84,52 L54,70 Z
+                          M54,44 L58,50.5 L65,52 L58,53.5 L54,60 L50,53.5 L43,52 L50,50.5 Z" />
+
+    <!-- Clasp, so the shape is not a bare wedge at small sizes. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M84,55 L88,57 L88,63 L84,61 Z" />
+</vector>
