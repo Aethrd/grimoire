@@ -513,6 +513,24 @@ function snippetAt(text, at, length) {
 
 let tocTab = 'chapters';
 
+/**
+ * Put the chapter being read at the top of the index.
+ *
+ * The list is rebuilt on every open but the container is not, so it kept
+ * whatever offset the last book left behind -- open the index on chapter 50
+ * of one book and then on another, and you land at 50 there too. Scrolling to
+ * the current chapter is both per-book by definition and the place you
+ * actually want: an index that opens at chapter 1 when you are a hundred in
+ * is no more use than one that opens at someone else's chapter 50.
+ */
+function revealCurrentChapter(list) {
+  const current = list.querySelector('.list-row.current');
+  if (!current) { list.scrollTop = 0; return; }
+  // A couple of rows of lead-in, so it reads as a position in a list rather
+  // than the list starting there.
+  list.scrollTop = Math.max(0, current.offsetTop - list.clientHeight / 3);
+}
+
 export async function openToc(onGoToChapter) {
   const book = reader.state.book;
   const list = el('toc-list');
@@ -559,8 +577,11 @@ export async function openToc(onGoToChapter) {
       row.onclick = () => onGoToChapter({ chapter: chapter.index });
       list.appendChild(row);
     }
+    revealCurrentChapter(list);
     return;
   }
+
+  list.scrollTop = 0;
 
   // Bookmarks and highlights are the same list filtered, so a mark is always
   // reachable from one screen.
