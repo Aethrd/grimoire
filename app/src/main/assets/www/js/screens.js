@@ -367,6 +367,26 @@ const foldDiacritics = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 
 export function initFind(onGoToMatch) {
   const input = el('find-input');
+  const inBook = !!reader.state.book;
+
+  /* Opening the screen resets it.
+   *
+   * initFind runs on every visit, but it only ever re-registered handlers --
+   * so the field still held the last query while the list below it showed
+   * that query's results from whatever was open at the time. Coming from the
+   * shelf it starts empty; inside a book the query and the stepper's place
+   * are kept, which is the point of being able to dismiss and come back. */
+  if (!inBook) {
+    input.value = '';
+    matches = [];
+    matchCursor = 0;
+    el('find-results').innerHTML =
+      '<p class="muted" style="padding:20px 16px">Search your library by title or author.</p>';
+    el('find-stepper').hidden = true;
+  }
+
+  // The keyboard should be up: the screen exists to be typed into.
+  requestAnimationFrame(() => input.focus());
 
   input.oninput = () => {
     // Debounced: typing should not run the whole book on every keystroke.
@@ -374,9 +394,14 @@ export function initFind(onGoToMatch) {
     findTimer = setTimeout(() => runFind(input.value, onGoToMatch), 250);
   };
 
+  /* Whole book, this chapter, bookmarked: all meaningless with no book open,
+     where the search is over the shelf. */
   const scope = el('find-scope');
   scope.innerHTML = '';
-  for (const [key, label] of [['book', 'Whole book'], ['chapter', 'This chapter'], ['marked', 'Bookmarked']]) {
+  scope.hidden = !inBook;
+  for (const [key, label] of inBook
+    ? [['book', 'Whole book'], ['chapter', 'This chapter'], ['marked', 'Bookmarked']]
+    : []) {
     const chip = document.createElement('button');
     chip.className = 'chip';
     chip.textContent = label;
@@ -417,7 +442,10 @@ async function runFind(query, onGoToMatch) {
 
   // No book open: search the shelf by title and author instead of the text.
   if (!reader.state.book) {
-    const books = (await store.all('books')).filter((b) => !b.inVault || vaultUnlocked);
+    // The same books the shelf shows: nothing from the vault while it is
+    // locked, and nothing still being imported.
+    const books = (await store.all('books'))
+      .filter((b) => !b.importing && (!b.inVault || vaultUnlocked));
     const hits = books.filter((b) =>
       foldDiacritics(b.title).includes(needle) || foldDiacritics(b.author || '').includes(needle));
     results.innerHTML = hits.length ? '' : '<p class="muted" style="padding:20px 16px">Nothing found.</p>';
