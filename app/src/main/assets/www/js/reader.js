@@ -273,6 +273,25 @@ function currentAnchor() {
   return 0;
 }
 
+/**
+ * Where an offset sits in the scrollable content, in pixels.
+ *
+ * Scroll mode has no pages, so rounding a position to the nearest screenful
+ * is a real movement of the text -- which is what made a tap on the chrome
+ * jump the page.
+ */
+function anchorOffset(anchor, chapterIndex = state.chapterIndex) {
+  const section = sectionFor(chapterIndex);
+  if (!section) return null;
+  for (const entry of textNodes(section)) {
+    if (anchor >= entry.start && anchor <= entry.start + entry.length) {
+      const top = scrollTopOfRange(rangeAt(entry, anchor - entry.start));
+      if (top !== null) return top;
+    }
+  }
+  return null;
+}
+
 /** Which page shows a given offset in a given chapter. */
 function pageAtAnchor(anchor, chapterIndex = state.chapterIndex) {
   const section = sectionFor(chapterIndex);
@@ -562,6 +581,31 @@ export function repaginate() {
   if (!state.book) return;
   const anchor = state.anchor;
   const chapter = state.chapterIndex;
+
+  if (isScroll()) {
+    /* Keep the anchor exactly where it sits on screen.
+     *
+     * Going through pages here rounded the position to the nearest whole
+     * screenful, so showing or hiding the chrome -- which changes the
+     * viewport's height and re-flows the text -- moved the page under the
+     * reader. Measuring how far down the view the anchor currently is, and
+     * putting it back the same distance down, leaves it where it was. */
+    const before = anchorOffset(anchor, chapter);
+    const within = before === null ? 0 : viewport.scrollTop - before;
+
+    requestAnimationFrame(() => {
+      relayout();
+      estimateTotals();
+      const after = anchorOffset(anchor, chapter);
+      if (after !== null) viewport.scrollTop = Math.max(0, after + within);
+      state.page = Math.round(viewport.scrollTop / viewportHeight());
+      state.anchor = currentAnchor();
+      save();
+      onChange(state);
+    });
+    return;
+  }
+
   requestAnimationFrame(() => {
     relayout();
     estimateTotals();
