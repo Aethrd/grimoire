@@ -200,4 +200,30 @@ await t('the background picker goes through the same check', () => {
   assert.match(panels, /blobs\.normaliseCover/);
 });
 
+await t('a keyed cache reuses a URL until the data changes', async () => {
+  // A pool is for things rebuilt wholesale; this is for things redrawn often
+  // from the same data. Re-minting a shelf's covers on every render made the
+  // browser decode every image again, and until they landed each tile was an
+  // empty placeholder.
+  const before = created;
+  const cache = blobs.urlCache();
+  const first = new Blob(['a']);
+
+  const url = cache.url(7, first, 100);
+  assert.equal(cache.url(7, new Blob(['a']), 100), url, 'a redraw minted a new URL');
+  assert.equal(created - before, 1);
+
+  // A different signature is a different picture.
+  const changed = cache.url(7, new Blob(['bb']), 200);
+  assert.notEqual(changed, url);
+
+  // And keys that have gone are released.
+  const releasedBefore = revoked;
+  cache.forget(new Set([7]));
+  assert.equal(revoked - releasedBefore, 0);
+  cache.forget(new Set());
+  assert.equal(revoked - releasedBefore, 1);
+  assert.equal(cache.size, 0);
+});
+
 console.log(`\n${pass} assertions passed`);

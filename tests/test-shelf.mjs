@@ -161,6 +161,35 @@ t('renaming a book drops its stale translated title', () => {
   assert.match(save, /translate\.clearCache\(book\.id\)/);
 });
 
+t('a refresh redraws the same covers rather than reloading them', () => {
+  // Releasing and re-minting every URL meant the browser decoding a hundred
+  // and forty images again, and until they landed every tile was a
+  // placeholder rectangle. That is the flash.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /const covers = urlCache\(\)/);
+  assert.ok(!/covers\.release\(\)/.test(library), 'the covers are still released on every render');
+  // Only URLs for books that have left the shelf are released, and only after
+  // the render, so nothing on screen is ever revoked.
+  assert.match(library, /covers\.forget\(new Set/);
+  assert.match(library, /Only after the render/);
+  // The signature lives on the record: a stored Blob comes back as a new
+  // object every time, so identity is no use.
+  assert.match(library, /book\.coverBytes \?\? book\.coverBlob\?\.size/);
+  // And the minting still lives in one place, where it can be released.
+  const blobs = read('app/src/main/assets/www/js/blobs.js');
+  assert.match(blobs, /export function urlCache/);
+});
+
+t('nothing waiting for an image looks like a light box', () => {
+  // A shelf of pale rectangles reads as a flash every time the list redraws.
+  assert.match(rule('.tile-cover'), /background: var\(--surface\)/);
+  // The accent stays where it is the cover rather than a stand-in for one.
+  assert.match(css, /\.tile-cover:not\(:has\(img\)\) \{ background: var\(--accent-300\)/);
+  // And the tiles no longer animate in on every redraw.
+  assert.ok(!/\.shelf \.tile \{ animation: tile-in/.test(css));
+  assert.match(css, /@keyframes cover-in/);
+});
+
 console.log('regressions');
 
 t('nothing inside a tile is left inline', () => {
