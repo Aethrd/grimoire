@@ -317,9 +317,13 @@ section.block > h2 { margin-top: 18px; }
 .continue-cover { flex: none; width: 40px; height: 60px; border-radius: var(--radius-sm);
                   background: var(--accent-400); background-size: cover; background-position: center; }
 .continue-body { flex: 1; min-width: 0; display: block; }
-.continue-title { display: block; font-family: var(--font-heading); font-weight: 700;
-                  font-size: 14px; line-height: 1.2; margin-top: 3px;
-                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.continue-title { font-family: var(--font-heading); font-weight: 700;
+                  font-size: 14px; line-height: 1.25; margin-top: 3px;
+                  /* Wraps to a second line rather than being cut off. A long
+                     title on one line told you almost nothing about which
+                     book it was. */
+                  display: -webkit-box; -webkit-box-orient: vertical;
+                  -webkit-line-clamp: 2; overflow: hidden; }
 .continue-meta { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; }
 .chev { flex: none; width: 18px; height: 18px; color: var(--muted); }
 
@@ -918,3 +922,21 @@ section.block > h2 { margin-top: 18px; }
   text-transform: uppercase;
   color: var(--muted);
 }
+
+
+/* ── bundles ─────────────────────────────────────────────────────────────
+   Two editions of the same book -- a translation and its original -- are one
+   thing on a shelf and two things to open. */
+
+.tile-bundle { position: absolute; left: 8px; top: 8px; z-index: 1;
+               display: flex; align-items: center; gap: 3px;
+               padding: 3px 6px; border-radius: var(--radius-pill);
+               background: rgba(0, 0, 0, .55); color: #fff;
+               font-family: var(--font-heading); font-weight: 600; font-size: 9px;
+               letter-spacing: .04em; }
+.tile-bundle svg { width: 10px; height: 10px; }
+
+/* The stacked-paper edge, so a bundle reads as more than one book before the
+   badge is even noticed. */
+.tile.bundled .tile-cover { box-shadow: 3px -3px 0 -1px var(--surface),
+                                        4px -4px 0 0 var(--hairline); }
