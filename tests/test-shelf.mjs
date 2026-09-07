@@ -71,7 +71,7 @@ t('actions are labelled, not a row of bare glyphs', () => {
   // not acceptable when that is a possible outcome.
   const grid = html.slice(html.indexOf('id="select-actions"'), html.indexOf('id="confirm-bar"'));
   const acts = [...grid.matchAll(/data-act="(\w+)"/g)].map((m) => m[1]);
-  assert.deepEqual(acts, ['open', 'folder', 'status', 'details', 'vault', 'delete']);
+  assert.deepEqual(acts, ['open', 'folder', 'status', 'bundle', 'details', 'vault', 'delete']);
   // Every one carries a text label beside its icon.
   assert.equal((grid.match(/<span>/g) || []).length, acts.length);
   assert.ok(html.includes('id="select-all"') && html.includes('id="select-cancel"'));
@@ -490,6 +490,30 @@ t('chapter names are searchable inside a book', () => {
 t('search shows the same books the shelf does', () => {
   const screens = read('app/src/main/assets/www/js/screens.js');
   assert.match(screens, /!b\.importing && \(!b\.inVault \|\| vaultUnlocked\)/);
+});
+
+t('bundling is one action that reads both ways', () => {
+  // Several books become a bundle; a bundle already selected comes apart.
+  // Two buttons for something that is its own opposite is one too many.
+  assert.match(app, /bundle: async/);
+  assert.match(app, /taken out of/);
+  assert.match(app, /Select two or more books to bundle/);
+  // Unbundling releases every member, not only what was selected: a bundle
+  // shows as one tile, so selecting it selects the leader alone.
+  assert.match(app, /ids\.has\(b\.bundleId\)/);
+  assert.ok(html.includes('data-act="bundle"'));
+});
+
+t('a bundle asks which edition to open', () => {
+  assert.match(app, /if \(book\.bundle\) return openBundleSheet/);
+  // Language and format are what actually tell two editions apart.
+  assert.match(app, /book\.lang \? book\.lang\.toUpperCase\(\) : null, book\.format/);
+  assert.ok(html.includes('id="bundle-sheet"'));
+});
+
+t('a long title on the continue card wraps instead of being cut', () => {
+  assert.match(rule('.continue-title'), /line-clamp: 2/);
+  assert.ok(!/white-space: nowrap/.test(rule('.continue-title')));
 });
 
 console.log('settings');

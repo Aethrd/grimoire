@@ -195,4 +195,47 @@ t('every state has a place in the group order', () => {
   assert.deepEqual(labels, ['Reading', 'Unread', 'On hold', 'Dropped', 'Finished']);
 });
 
+console.log('bundles');
+
+t('editions collapse to one entry led by one of them', () => {
+  const books = [
+    { id: 1, title: 'Witch City', bundleId: 1 },
+    { id: 2, title: '마녀의 도시', bundleId: 1 },
+    { id: 3, title: 'Something Else' },
+  ];
+  const shelf = lib.collapseBundles(books);
+  assert.deepEqual(shelf.map((b) => b.title), ['Witch City', 'Something Else']);
+  assert.equal(shelf[0].bundle.length, 2);
+  // The leader comes first, so the sheet reads the same way every time.
+  assert.equal(shelf[0].bundle[0].id, 1);
+});
+
+t('a bundle keeps the place its leader was sorted to', () => {
+  const books = [
+    { id: 9, title: 'Aardvark' },
+    { id: 1, title: 'Middle', bundleId: 1 },
+    { id: 2, title: 'Middle (raw)', bundleId: 1 },
+    { id: 8, title: 'Zebra' },
+  ];
+  assert.deepEqual(lib.collapseBundles(books).map((b) => b.title),
+    ['Aardvark', 'Middle', 'Zebra']);
+});
+
+t('a member whose leader is gone stands for itself', () => {
+  // Deleting one edition must not take the other off the shelf with it.
+  const books = [{ id: 2, title: 'Orphan', bundleId: 1 }];
+  assert.deepEqual(lib.collapseBundles(books).map((b) => b.title), ['Orphan']);
+});
+
+t('a leader released on its own does not appear twice', () => {
+  // It no longer leads, so its former members stand for themselves rather
+  // than re-forming a group around a book that is not in one.
+  const books = [
+    { id: 1, title: 'Was the leader' },
+    { id: 2, title: 'Still points at it', bundleId: 1 },
+  ];
+  assert.deepEqual(lib.collapseBundles(books).map((b) => b.title),
+    ['Was the leader', 'Still points at it']);
+});
+
 console.log(`\n${pass} assertions passed`);
