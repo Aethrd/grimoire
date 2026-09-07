@@ -244,22 +244,7 @@ function wireSelection() {
       if (book) openDetails(book);
     },
 
-    // Finished or not. Both directions from one button, because a shelf has
-    // both and a one-way "mark read" is half a control.
-    status: async () => {
-      const books = await selectedBooks();
-      if (!books.length) return;
-      const anyUnfinished = books.some((b) => !b.finishedAt);
-      for (const book of books) {
-        book.finishedAt = anyUnfinished ? Date.now() : null;
-        if (anyUnfinished) book.percent = 1;
-        await store.put('books', book);
-      }
-      clearSelection();
-      toast(anyUnfinished
-        ? `${books.length} marked as finished`
-        : `${books.length} marked as unread`);
-    },
+    status: () => openStatusSheet(),
 
     vault: async () => {
       const books = await selectedBooks();
@@ -304,6 +289,11 @@ function wireSelection() {
     if (e.target === el('details-sheet')) el('details-sheet').hidden = true;
   };
 
+  el('status-cancel').onclick = () => { el('status-sheet').hidden = true; };
+  el('status-sheet').onclick = (e) => {
+    if (e.target === el('status-sheet')) el('status-sheet').hidden = true;
+  };
+
   el('folder-cancel').onclick = () => { el('folder-sheet').hidden = true; };
   el('folder-sheet').onclick = (e) => {
     // Dismiss on the scrim, not on the sheet itself.
@@ -328,6 +318,32 @@ async function openDetails(book) {
         <button class="btn ghost" id="details-cover-clear">Remove cover</button>
       </span>
     </div>`;
+
+  const statusField = document.createElement('div');
+  statusField.className = 'field';
+  statusField.innerHTML = `<label><span>Status</span><span class="muted">${
+    library.statusIsPinned(book) ? 'set by hand' : 'from your reading'}</span></label>`;
+  const statusChips = document.createElement('div');
+  statusChips.className = 'chip-row wrap';
+  let pickedStatus;   // undefined = leave as it is
+  for (const [value, label] of [...library.STATUSES, [null, 'Automatic']]) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.style.textTransform = 'none';
+    chip.textContent = label;
+    const active = value === null
+      ? !library.statusIsPinned(book)
+      : library.statusOf(book) === value && library.statusIsPinned(book);
+    chip.setAttribute('aria-pressed', String(active));
+    chip.onclick = () => {
+      pickedStatus = value;
+      for (const other of statusChips.children) other.setAttribute('aria-pressed', 'false');
+      chip.setAttribute('aria-pressed', 'true');
+    };
+    statusChips.appendChild(chip);
+  }
+  statusField.appendChild(statusChips);
+  body.appendChild(statusField);
 
   const fields = [
     ['title', 'Title', book.title || ''],
@@ -414,6 +430,10 @@ async function openDetails(book) {
     book.folder = inputs.folder.value.trim().replace(/^\/+|\/+$/g, '');
     book.lang = inputs.lang.value.trim() || null;
     if (newCover !== undefined) book.coverBlob = newCover;
+    if (pickedStatus !== undefined) {
+      if (pickedStatus === null) delete book.status;
+      else book.status = pickedStatus;
+    }
 
     await store.put('books', book);
     // Titles were translated from the old text, so that cache is now wrong.
@@ -428,6 +448,63 @@ async function openDetails(book) {
 
 const escapeText = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/**
+ * Set the reading status of the selected books.
+ *
+ * More than finished-or-not: a book can be on hold or dropped, and those are
+ * not the same as unread. Automatic puts it back to being worked out from
+ * whether the book has been opened and finished, which is what it does until
+ * someone says otherwise.
+ */
+async function openStatusSheet() {
+  const books = await selectedBooks();
+  if (!books.length) return;
+
+  const list = el('status-list');
+  list.innerHTML = '';
+
+  const current = new Set(books.map((b) => library.statusOf(b)));
+  const pinned = books.filter((b) => library.statusIsPinned(b)).length;
+
+  for (const [value, label] of library.STATUSES) {
+    const button = document.createElement('button');
+    const shared = current.size === 1 && current.has(value);
+    button.innerHTML = `<span>${label}</span><span>${shared ? '✓' : ''}</span>`;
+    button.onclick = () => applyStatus(books, value);
+    list.appendChild(button);
+  }
+
+  // Only offered when there is something to revert.
+  if (pinned) {
+    const revert = document.createElement('button');
+    revert.innerHTML = `<span>Automatic</span><span>${pinned} set by hand</span>`;
+    revert.onclick = () => applyStatus(books, null);
+    list.appendChild(revert);
+  }
+
+  el('status-sheet').hidden = false;
+}
+
+async function applyStatus(books, status) {
+  for (const book of books) {
+    if (status === null) delete book.status;
+    else book.status = status;
+
+    // The dates stay coherent with the state, so a book marked finished by
+    // hand behaves like one that was read to the end.
+    if (status === 'finished') { book.finishedAt = book.finishedAt || Date.now(); book.percent = 1; }
+    if (status === 'reading' || status === 'unread') book.finishedAt = null;
+    if (status === 'unread') book.percent = 0;
+
+    await store.put('books', book);
+  }
+  el('status-sheet').hidden = true;
+  clearSelection();
+  toast(status === null
+    ? `${books.length} book${books.length === 1 ? '' : 's'} back to automatic`
+    : `${books.length} marked ${library.STATUS_LABELS[status].toLowerCase()}`);
+}
 
 async function openFolderSheet() {
   const list = el('folder-list');
@@ -515,9 +592,14 @@ function paintReader() {
   const within = state.mode === 'scroll'
     ? `screen ${state.page + 1}/${state.pageCount}`
     : `p. ${state.page + 1}/${state.pageCount}`;
-  el('reader-pos').textContent =
-    `${name} · ${within} · ` +
-    `${reader.pageInBook()} of ${state.totalPages} · ${Math.round(reader.percent() * 100)}%`;
+  // Only the chapter name is tinted: the page numbers beside it are not a
+  // translation of anything.
+  const shownName = reader.isTranslatedName(state.chapterIndex)
+    ? `<span class="translated-text">${escapeText(name)}</span>`
+    : escapeText(name);
+  el('reader-pos').innerHTML =
+    `${shownName} · ${within} · `
+    + `${reader.pageInBook()} of ${state.totalPages} · ${Math.round(reader.percent() * 100)}%`;
 
   const pct = reader.percent();
   el('progress-fill').style.width = `${pct * 100}%`;
@@ -866,6 +948,7 @@ window.Grimoire = {
 
   /** Return true to swallow the back gesture. */
   onBack() {
+    if (!el('status-sheet').hidden) { el('status-sheet').hidden = true; return true; }
     if (!el('folder-sheet').hidden) { el('folder-sheet').hidden = true; return true; }
     if (!el('confirm-bar').hidden) { el('confirm-bar').hidden = true; return true; }
     // Selection is a mode, and back should leave a mode before leaving a

@@ -3,7 +3,6 @@
 import * as store from './store.js';
 import * as reader from './reader.js';
 import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, vaultUnlocked } from './library.js';
-import { pool, measure } from './blobs.js';
 
 const el = (id) => document.getElementById(id);
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -25,33 +24,22 @@ function renderSort() {
   keys.innerHTML = '';
   draft.keys.forEach(([key, dir], i) => {
     const li = document.createElement('li');
-    // Priority is the order of this list, so it has to be movable in both
-    // directions -- a promote-only control makes demoting a key a matter of
-    // promoting everything else past it.
     li.innerHTML = `
-      <span class="rank">${i + 1}</span>
+      <span class="grab">⠿</span>
       <span class="name">${SORT_KEYS[key]}</span>
-      <span class="move">
-        <button class="up" ${i === 0 ? 'disabled' : ''} aria-label="Higher priority">↑</button>
-        <button class="down" ${i === draft.keys.length - 1 ? 'disabled' : ''} aria-label="Lower priority">↓</button>
-      </span>
       <button class="dir">${dir === 'desc' ? 'DESC' : 'ASC'}</button>
-      <button class="drop" aria-label="Remove">✕</button>`;
-
-    const swap = (a, b) => {
-      [draft.keys[a], draft.keys[b]] = [draft.keys[b], draft.keys[a]];
-      renderSort();
-    };
-    li.querySelector('.up').onclick = () => { if (i > 0) swap(i, i - 1); };
-    li.querySelector('.down').onclick = () => {
-      if (i < draft.keys.length - 1) swap(i, i + 1);
-    };
+      <button class="drop">✕</button>`;
     // Direction is per key and independent of every other key.
     li.querySelector('.dir').onclick = () => {
       draft.keys[i][1] = dir === 'desc' ? 'asc' : 'desc';
       renderSort();
     };
     li.querySelector('.drop').onclick = () => { draft.keys.splice(i, 1); renderSort(); };
+    li.querySelector('.grab').onclick = () => {
+      if (i === 0) return;
+      [draft.keys[i - 1], draft.keys[i]] = [draft.keys[i], draft.keys[i - 1]];
+      renderSort();
+    };
     keys.appendChild(li);
   });
 
@@ -62,11 +50,7 @@ function renderSort() {
     const chip = document.createElement('button');
     chip.className = 'chip dashed';
     chip.textContent = `+ ${label}`;
-    // Added at the top, not the bottom. Appending it put the key you just
-    // asked to sort by behind every existing one, where it changed nothing
-    // visible unless the leading keys happened to tie -- which reads exactly
-    // like sorting being broken.
-    chip.onclick = () => { draft.keys.unshift([key, 'asc']); renderSort(); };
+    chip.onclick = () => { draft.keys.push([key, 'asc']); renderSort(); };
     pool.appendChild(chip);
   }
 
@@ -138,49 +122,6 @@ export async function openLayout(bookId) {
   const layout = await store.layoutFor(bookId);
   const body = el('layout-body');
   body.innerHTML = '';
-
-  // Reading mode first: it changes what every control below means.
-  const modeField = document.createElement('div');
-  modeField.className = 'field';
-  modeField.innerHTML = '<label><span>Reading mode</span></label>';
-  const modeSeg = document.createElement('div');
-  modeSeg.className = 'seg';
-  for (const [value, label] of [['paged', 'Paged'], ['scroll', 'Scroll']]) {
-    const button = document.createElement('button');
-    button.textContent = label;
-    button.setAttribute('aria-pressed', String(layout.mode === value));
-    button.onclick = async () => {
-      const next = await store.saveLayout(bookId, { mode: value });
-      reader.applyLayout(next);
-      // Switching rebuilds the view; the anchor is what carries the place
-      // across, so you land on the same sentence either way.
-      await reader.setMode(value);
-      openLayout(bookId);
-    };
-    modeSeg.appendChild(button);
-  }
-  modeField.appendChild(modeSeg);
-  body.appendChild(modeField);
-
-  if (layout.mode === 'scroll') {
-    const endless = document.createElement('div');
-    endless.className = 'row';
-    endless.innerHTML = `<div class="row-text"><b>Endless scroll</b>
-      <small>Run straight into the next chapter instead of stopping at the end of one.
-      Chapters load as you reach them and are dropped again once well behind you.</small></div>`;
-    const sw = document.createElement('button');
-    sw.className = 'switch';
-    sw.setAttribute('aria-pressed', String(layout.endless !== false));
-    sw.onclick = async () => {
-      const on = sw.getAttribute('aria-pressed') !== 'true';
-      sw.setAttribute('aria-pressed', String(on));
-      const next = await store.saveLayout(bookId, { endless: on });
-      reader.applyLayout(next);
-      reader.setEndless(on);
-    };
-    endless.appendChild(sw);
-    body.appendChild(endless);
-  }
 
   const faces = document.createElement('div');
   faces.innerHTML = '<p class="eyebrow">Face</p>';
@@ -268,26 +209,9 @@ export async function openLayout(bookId) {
 
 let reelFilter = 'all';
 
-/* The reel rebuilds wholesale on every filter change, so its URLs are
-   released and re-minted with it. */
-const reelUrls = pool();
-
 export async function openReel(bookId, onJump) {
   const settings = await store.settings();
   const images = (await store.byIndex('images', 'bookId', bookId)).sort((a, b) => a.order - b.order);
-
-  // Dimensions are not recorded at import -- decoding a whole book's artwork
-  // to fill in two numbers is minutes nobody asked for. They are measured
-  // here instead, once, and written back.
-  const unmeasured = images.filter((i) => i.blob && !i.width);
-  if (unmeasured.length) {
-    for (const image of unmeasured) {
-      const dims = await measure(image.blob);
-      image.width = dims.width;
-      image.height = dims.height;
-    }
-    await store.putAll('images', unmeasured);
-  }
   const stills = images.filter((i) => !i.animated).length;
 
   el('reel-counts').textContent = `${stills} stills · ${images.length - stills} animated`;
@@ -304,7 +228,6 @@ export async function openReel(bookId, onJump) {
   }
 
   const grid = el('reel-grid');
-  reelUrls.release();
   grid.innerHTML = '<div class="reel-grid"></div>';
   const inner = grid.firstElementChild;
 
@@ -323,24 +246,22 @@ export async function openReel(bookId, onJump) {
   }
 
   for (const image of visible) {
-    const url = reelUrls.url(image.blob);
-    if (!url) continue;   // imported before blobs were stored; nothing to show
     const figure = document.createElement('figure');
     figure.className = 'reel-item';
     figure.innerHTML = `
       ${image.animated ? '<span class="gif">GIF</span>' : ''}
-      <img src="${url}" alt="" loading="lazy">
+      <img src="${image.url}" alt="" loading="lazy">
       <figcaption>Ch. ${image.chapterIndex + 1} · ${image.width}×${image.height}</figcaption>`;
-    figure.querySelector('img').onclick = () => viewer(url, image, () => onJump(image));
+    figure.querySelector('img').onclick = () => viewer(image, () => onJump(image));
     inner.appendChild(figure);
   }
 }
 
-function viewer(url, image, onGo) {
+function viewer(image, onGo) {
   const overlay = document.createElement('div');
   overlay.className = 'viewer';
   overlay.innerHTML = `
-    <img src="${url}" alt="">
+    <img src="${image.url}" alt="">
     <div class="viewer-bar">
       <button class="btn ghost" data-close>Close</button>
       <button class="btn ghost" data-share>Share</button>
@@ -513,24 +434,6 @@ function snippetAt(text, at, length) {
 
 let tocTab = 'chapters';
 
-/**
- * Put the chapter being read at the top of the index.
- *
- * The list is rebuilt on every open but the container is not, so it kept
- * whatever offset the last book left behind -- open the index on chapter 50
- * of one book and then on another, and you land at 50 there too. Scrolling to
- * the current chapter is both per-book by definition and the place you
- * actually want: an index that opens at chapter 1 when you are a hundred in
- * is no more use than one that opens at someone else's chapter 50.
- */
-function revealCurrentChapter(list) {
-  const current = list.querySelector('.list-row.current');
-  if (!current) { list.scrollTop = 0; return; }
-  // A couple of rows of lead-in, so it reads as a position in a list rather
-  // than the list starting there.
-  list.scrollTop = Math.max(0, current.offsetTop - list.clientHeight / 3);
-}
-
 export async function openToc(onGoToChapter) {
   const book = reader.state.book;
   const list = el('toc-list');
@@ -571,17 +474,14 @@ export async function openToc(onGoToChapter) {
       const markCount = marks.filter((m) => m.chapterIndex === chapter.index).length;
       row.innerHTML = `
         <span class="lead">${chapter.index + 1}</span>
-        <span class="body"><b>${escape(reader.chapterName(chapter.index))}</b>
+        <span class="body"><b>${escape(chapter.title)}</b>
           <small>${status}${markCount ? ` · ${markCount} mark${markCount === 1 ? '' : 's'}` : ''}</small></span>
         <span class="trail">p. ${(reader.state.pagesBefore[chapter.index] || 0) + 1}</span>`;
       row.onclick = () => onGoToChapter({ chapter: chapter.index });
       list.appendChild(row);
     }
-    revealCurrentChapter(list);
     return;
   }
-
-  list.scrollTop = 0;
 
   // Bookmarks and highlights are the same list filtered, so a mark is always
   // reachable from one screen.
@@ -598,7 +498,7 @@ export async function openToc(onGoToChapter) {
     const row = document.createElement('div');
     row.className = 'list-row';
     row.innerHTML = `
-      <span class="body"><b>${escape(chapter ? reader.chapterName(chapter.index) : 'Chapter')}</b>
+      <span class="body"><b>${escape(chapter?.title || 'Chapter')}</b>
         <small>${escape(mark.excerpt || 'Bookmark')}</small></span>
       <button class="trail" data-del>✕</button>`;
     row.onclick = (e) => {

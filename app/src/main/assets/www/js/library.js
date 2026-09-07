@@ -76,7 +76,7 @@ function groupLabel(book, level) {
     // can add Author as a second level if they want it broken down.
     case 'folder': return book.folder || 'Unfiled';
     case 'series': return book.series || 'Standalone';
-    case 'status': return book.finishedAt ? 'Finished' : book.lastReadAt ? 'Reading' : 'Unread';
+    case 'status': return STATUS_LABELS[statusOf(book)];
     case 'format': return book.format || 'Unknown';
     case 'author': return book.author || 'Unknown author';
     case 'tag': return (book.tags && book.tags[0]) || 'Untagged';
@@ -93,8 +93,37 @@ function groupLabel(book, level) {
  * are in the middle of buried beneath them. What you want first is what you
  * are reading, then what you have not started, and the finished ones last.
  */
+/**
+ * The reading states, in the order they belong on a shelf.
+ *
+ * `null` is not a state: it means no one has said, and the state is worked out
+ * from whether the book has been opened and whether it was finished. Setting
+ * one of these pins it; reverting to Automatic lets it follow the reading
+ * again.
+ */
+export const STATUSES = [
+  ['reading', 'Reading'],
+  ['unread', 'Unread'],
+  ['onHold', 'On hold'],
+  ['dropped', 'Dropped'],
+  ['finished', 'Finished'],
+];
+
+export const STATUS_LABELS = Object.fromEntries(STATUSES);
+
+/** The state a book is actually in: what was set, or what can be inferred. */
+export function statusOf(book) {
+  if (book.status && STATUS_LABELS[book.status]) return book.status;
+  if (book.finishedAt) return 'finished';
+  if (book.lastReadAt) return 'reading';
+  return 'unread';
+}
+
+/** Whether the state was set by hand rather than inferred. */
+export const statusIsPinned = (book) => !!(book.status && STATUS_LABELS[book.status]);
+
 const GROUP_ORDER = {
-  status: ['Reading', 'Unread', 'Finished'],
+  status: STATUSES.map(([, label]) => label),
 };
 
 function groupRank(level, label) {
@@ -297,7 +326,7 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
       <span class="tile-bar"><span style="width:${Math.round((book.percent || 0) * 100)}%"></span></span>
       ${selecting ? '<span class="tile-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7"/></svg></span>' : ''}
     </span>
-    <span class="tile-name">${escape(displayTitle(book))}</span>
+    <span class="tile-name${isTranslatedTitle(book) ? ' translated-text' : ''}">${escape(displayTitle(book))}</span>
     <span class="tile-meta">${escape(cleanAuthor(book.author))}</span>`;
 
   node.addEventListener('click', () => onOpen(book));
@@ -340,6 +369,9 @@ const covers = pool();
    cover art, so patching it silently did nothing. */
 const titles = new Map();
 export const displayTitle = (book) => titles.get(book.id) || book.title;
+/** Whether the title on screen is a machine translation rather than the
+ *  book's own. Used to mark it, so the two are never mistaken. */
+export const isTranslatedTitle = (book) => titles.has(book.id);
 
 export async function renderShelf(handlers) {
   lastHandlers = handlers;
@@ -395,7 +427,7 @@ export async function renderShelf(handlers) {
   }
 
   const shelves = new Set(sorted.map((b) => b.series).filter(Boolean)).size;
-  const reading = sorted.filter((b) => b.lastReadAt && !b.finishedAt).length;
+  const reading = sorted.filter((b) => statusOf(b) === 'reading').length;
   el('library-counts').textContent = visible.length
     ? `${visible.length} titles · ${shelves} series · ${reading} reading`
     : 'No books yet';
@@ -467,8 +499,10 @@ async function renderContinueCard(books, onOpen) {
   // demanded progress above zero, which meant the book you opened a minute
   // ago was not the one offered until you had turned a page -- so "last
   // opened" and "continue reading" disagreed.
+  // Anything opened and not put aside. A book marked finished, dropped or on
+  // hold is not what you want offered next, whatever its dates say.
   const candidates = books
-    .filter((b) => b.lastReadAt && !b.finishedAt)
+    .filter((b) => b.lastReadAt && !['finished', 'dropped', 'onHold'].includes(statusOf(b)))
     .sort((a, b) => b.lastReadAt - a.lastReadAt);
 
   // Hidden entirely when nothing is in progress. It is never shown empty.
@@ -480,6 +514,7 @@ async function renderContinueCard(books, onOpen) {
 
   card.hidden = false;
   el('continue-title').textContent = displayTitle(book);
+  el('continue-title').classList.toggle('translated-text', isTranslatedTitle(book));
   el('continue-cover').style.backgroundImage = coverUrl ? `url("${coverUrl}")` : '';
   el('continue-meta').textContent = position
     ? `Ch. ${position.chapterIndex + 1} · p. ${position.pageInBook} of ${position.totalPages} · ${Math.round(position.percent * 100)}%`
