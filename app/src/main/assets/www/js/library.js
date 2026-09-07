@@ -111,6 +111,60 @@ export const STATUSES = [
 
 export const STATUS_LABELS = Object.fromEntries(STATUSES);
 
+/* ── bundles ──────────────────────────────────────────────────────────────
+ *
+ * Several editions of one book kept together: a translation and its original,
+ * a revised text beside the one you started, a paperback scan next to an
+ * EPUB. One tile on the shelf, several things to open.
+ *
+ * A bundle is just a shared id on the members, and it is the id of whichever
+ * book leads it -- so there is no separate record to go stale, and deleting
+ * the lot leaves nothing behind. The leader supplies the cover and title.
+ */
+
+export const isBundled = (book) => !!book.bundleId;
+export const leadsBundle = (book) => book.bundleId === book.id;
+
+/**
+ * Reduce a list to one entry per bundle.
+ *
+ * The leader stands for the group, with its members attached. A member whose
+ * leader is missing -- deleted on its own, say -- stands for itself rather
+ * than vanishing.
+ */
+export function collapseBundles(books) {
+  const byId = new Map(books.map((b) => [b.id, b]));
+  const members = new Map();
+  const out = [];
+
+  for (const book of books) {
+    // A leader that has been unbundled on its own no longer leads: its former
+    // members stand for themselves rather than re-forming a group around a
+    // book that is not in one, which would list the leader twice.
+    const leader = byId.get(book.bundleId);
+    if (!book.bundleId || !leader || leader.bundleId !== book.bundleId) {
+      out.push(book);
+      continue;
+    }
+    if (!members.has(book.bundleId)) members.set(book.bundleId, []);
+    members.get(book.bundleId).push(book);
+  }
+
+  for (const [id, group] of members) {
+    const leader = byId.get(id);
+    // Ordered so the leader is first, then by title: the sheet reads the same
+    // way every time.
+    const rest = group.filter((b) => b.id !== id)
+      .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    out.push(Object.assign(Object.create(Object.getPrototypeOf(leader)), leader,
+      { bundle: [leader, ...rest] }));
+  }
+
+  // Back into the order they arrived in, which is the sort the caller chose.
+  const rank = new Map(books.map((b, i) => [b.id, i]));
+  return out.sort((a, b) => rank.get(a.id) - rank.get(b.id));
+}
+
 /** The state a book is actually in: what was set, or what can be inferred. */
 export function statusOf(book) {
   if (book.status && STATUS_LABELS[book.status]) return book.status;
@@ -319,6 +373,7 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
   const coverUrl = coverUrlFor(book);
   const node = document.createElement('button');
   node.className = selection?.has(book.id) ? 'tile selected' : 'tile';
+  if (book.bundle) node.classList.add('bundled');
   node.dataset.book = String(book.id);
   node.innerHTML = `
     <span class="tile-cover">
@@ -328,6 +383,7 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
       <span class="tile-badge">${escape(book.format || '?')}</span>
       <span class="tile-bar"><span style="width:${Math.round((book.percent || 0) * 100)}%"></span></span>
       ${selecting ? '<span class="tile-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7"/></svg></span>' : ''}
+      ${book.bundle ? `<span class="tile-bundle"><svg viewBox="0 0 24 24" fill="none"><path d="M4 8h13v12H4z"/><path d="M7 5h13v12"/></svg>${book.bundle.length}</span>` : ''}
     </span>
     <span class="tile-name${isTranslatedTitle(book) ? ' translated-text' : ''}">${escape(displayTitle(book))}</span>
     <span class="tile-meta">${escape(cleanAuthor(book.author))}</span>`;
@@ -408,7 +464,8 @@ export async function renderShelf(handlers) {
       : b.folder === folder || (b.folder || '').startsWith(`${folder}/`));
   }
 
-  const sorted = sortBooks(visible, settings.sort.keys);
+  // Sorted first, then collapsed, so a bundle sits where its leader would.
+  const sorted = collapseBundles(sortBooks(visible, settings.sort.keys));
   const groups = groupBooks(sorted, settings.sort.group);
 
   const shelf = el('shelf');

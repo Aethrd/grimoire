@@ -165,7 +165,12 @@ let selectMode = false;
 function selecting() { return selectMode; }
 
 function onTileTap(book) {
-  if (!selectMode) return openBook(book);
+  if (!selectMode) {
+    // A bundle is one thing on the shelf and several things to open, so it
+    // asks which rather than guessing.
+    if (book.bundle) return openBundleSheet(book.bundle);
+    return openBook(book);
+  }
   if (selection.has(book.id)) selection.delete(book.id);
   else selection.add(book.id);
   // Deliberately stays in the mode at zero: dropping out because you
@@ -246,6 +251,36 @@ function wireSelection() {
 
     status: () => openStatusSheet(),
 
+    /* Bundling is one action that reads both ways: several books become a
+       bundle, and a bundle already selected comes apart. Two buttons for
+       something that is its own opposite is one too many. */
+    bundle: async () => {
+      const books = await selectedBooks();
+      if (!books.length) return;
+
+      const bundled = books.filter((b) => b.bundleId);
+      if (bundled.length === books.length && books.length) {
+        /* Every member comes apart, not only the ones selected. A bundle
+           shows as a single tile, so selecting it selects the leader alone --
+           and releasing just the leader would leave the others pointing at a
+           book that is no longer in a bundle. */
+        const ids = new Set(bundled.map((b) => b.bundleId));
+        const all = (await store.all('books')).filter((b) => ids.has(b.bundleId));
+        for (const book of all) { delete book.bundleId; await store.put('books', book); }
+        clearSelection();
+        return toast(`${all.length} editions taken out of ${ids.size === 1 ? 'their bundle' : 'their bundles'}`);
+      }
+
+      if (books.length < 2) return toast('Select two or more books to bundle them');
+
+      // The first by the shelf's own order leads, so the bundle keeps the
+      // cover and title you were already looking at.
+      const leader = books[0];
+      for (const book of books) { book.bundleId = leader.id; await store.put('books', book); }
+      clearSelection();
+      toast(`${books.length} editions bundled under “${leader.title}”`);
+    },
+
     vault: async () => {
       const books = await selectedBooks();
       if (!books.length) return;
@@ -287,6 +322,11 @@ function wireSelection() {
 
   el('details-sheet').onclick = (e) => {
     if (e.target === el('details-sheet')) el('details-sheet').hidden = true;
+  };
+
+  el('bundle-cancel').onclick = () => { el('bundle-sheet').hidden = true; };
+  el('bundle-sheet').onclick = (e) => {
+    if (e.target === el('bundle-sheet')) el('bundle-sheet').hidden = true;
   };
 
   el('status-cancel').onclick = () => { el('status-sheet').hidden = true; };
@@ -460,6 +500,25 @@ const escapeText = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
  * whether the book has been opened and finished, which is what it does until
  * someone says otherwise.
  */
+/** Which edition of a bundled book to open. */
+function openBundleSheet(members) {
+  const list = el('bundle-list');
+  list.innerHTML = '';
+
+  for (const book of members) {
+    const row = document.createElement('button');
+    // Language and format are what actually tell two editions apart.
+    const marks = [book.lang ? book.lang.toUpperCase() : null, book.format]
+      .filter(Boolean).join(' · ');
+    row.innerHTML = `<span>${escapeText(library.displayTitle(book))}</span>`
+      + `<span>${escapeText(marks)}</span>`;
+    row.onclick = () => { el('bundle-sheet').hidden = true; openBook(book); };
+    list.appendChild(row);
+  }
+
+  el('bundle-sheet').hidden = false;
+}
+
 async function openStatusSheet() {
   const books = await selectedBooks();
   if (!books.length) return;
@@ -951,6 +1010,7 @@ window.Grimoire = {
 
   /** Return true to swallow the back gesture. */
   onBack() {
+    if (!el('bundle-sheet').hidden) { el('bundle-sheet').hidden = true; return true; }
     if (!el('status-sheet').hidden) { el('status-sheet').hidden = true; return true; }
     if (!el('folder-sheet').hidden) { el('folder-sheet').hidden = true; return true; }
     if (!el('confirm-bar').hidden) { el('confirm-bar').hidden = true; return true; }
