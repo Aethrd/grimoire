@@ -146,11 +146,13 @@ t('a single selection can have its metadata corrected by hand', () => {
   assert.match(app, /newCover = null/, 'a cover cannot be removed, only replaced');
 });
 
-t('marking read and unread is one control, both ways', () => {
-  // A one-way "mark as read" is half a control, and a shelf has both kinds.
-  const status = app.slice(app.indexOf('status: async'), app.indexOf('vault: async'));
-  assert.match(status, /anyUnfinished/);
-  assert.match(status, /marked as unread/);
+t('the status action opens a picker, not a toggle', () => {
+  // Read-or-unread is two of five states, and a two-way toggle cannot reach
+  // the other three.
+  assert.match(app, /status: \(\) => openStatusSheet\(\)/);
+  assert.match(app, /async function openStatusSheet/);
+  // A shared state is ticked, so a batch shows what it already is.
+  assert.match(app, /current\.size === 1 && current\.has\(value\)/);
 });
 
 t('renaming a book drops its stale translated title', () => {
@@ -176,7 +178,7 @@ t('the continue card follows the last book opened', () => {
   const filter = library.slice(library.indexOf('const candidates'), library.indexOf('.sort('));
   assert.ok(!/percent/.test(filter),
     'a book you opened but did not page through is still excluded');
-  assert.match(library, /lastReadAt && !b\.finishedAt/);
+  assert.match(library, /b\.lastReadAt && !\['finished', 'dropped', 'onHold'\]/);
   // And opening a book records that it was opened.
   assert.match(app, /book\.lastReadAt = Date\.now\(\)/);
 });
@@ -215,7 +217,7 @@ t('the title is shown under the cover, not only inside it', () => {
   // Drawn only inside the cover, it was invisible for every book that had
   // cover art — which is nearly all of them.
   const library = read('app/src/main/assets/www/js/library.js');
-  assert.match(library, /class="tile-name"/);
+  assert.match(library, /class="tile-name\$\{/);
   assert.match(rule('.tile-name'), /line-clamp/);
 });
 
@@ -353,6 +355,67 @@ t('the index opens where you are, not where the last book was', () => {
   assert.match(screens, /list\.querySelector\('\.list-row\.current'\)/);
   // Marks are a different list, and start at the top.
   assert.match(screens, /list\.scrollTop = 0;\n\n  \/\/ Bookmarks and highlights/);
+});
+
+t('translated text is marked wherever it appears', () => {
+  // Machine translation is a guess, and a good one is easy to mistake for the
+  // author's own words.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /export const isTranslatedTitle/);
+  assert.match(library, /tile-name\$\{isTranslatedTitle\(book\) \? ' translated-text'/);
+  assert.match(library, /continue-title'\)\.classList\.toggle\('translated-text'/);
+
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /export function isTranslatedName/);
+  assert.match(reader, /'chapter translated'/);
+
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /isTranslatedName\(chapter\.index\) \? 'translated-text'/);
+});
+
+t('only the chapter name is tinted in the reader header', () => {
+  // The page numbers beside it are not a translation of anything.
+  const paint = app.slice(app.indexOf('function paintReader'), app.indexOf('reader-pos\').innerHTML'));
+  assert.ok(!/classList\.toggle\('translated-text'/.test(paint),
+    'the whole position line is tinted');
+  assert.match(app, /<span class="translated-text">\$\{escapeText\(name\)\}/);
+});
+
+t('a chapter of translated body text is legible, not a gradient', () => {
+  // A gradient over a thousand words is unreadable, and colour far from the
+  // body ink is tiring to read for long.
+  const rule = css.slice(css.indexOf('.page-flow .chapter.translated {'));
+  assert.ok(!/linear-gradient/.test(rule.slice(0, 200)));
+  assert.match(rule.slice(0, 200), /--read-ink/);
+  // And it says what it is.
+  assert.match(css, /content: "Machine translation"/);
+});
+
+t('the gradient degrades to a flat tint where it is unsupported', () => {
+  // background-clip on text with a transparent fill leaves invisible text
+  // anywhere it is not supported.
+  assert.match(css, /@supports not \(\(-webkit-background-clip: text\)/);
+});
+
+t('status is more than read or unread, and can be reverted', () => {
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /export const STATUSES/);
+  for (const state of ['reading', 'unread', 'onHold', 'dropped', 'finished']) {
+    assert.ok(library.includes(`'${state}'`), `no ${state} state`);
+  }
+  // Automatic is the revert: it clears what was set rather than picking one.
+  assert.match(app, /if \(status === null\) delete book\.status/);
+  assert.match(app, /back to automatic/);
+  // Offered only when there is something to revert.
+  assert.match(app, /if \(pinned\) \{/);
+  assert.ok(html.includes('id="status-sheet"'));
+});
+
+t('a book put aside is not offered as the one to continue', () => {
+  // Finished, dropped and on hold are all "not what I am reading next",
+  // whatever the dates say.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /\['finished', 'dropped', 'onHold'\]\.includes\(statusOf\(b\)\)/);
 });
 
 console.log('settings');

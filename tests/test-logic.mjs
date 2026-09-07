@@ -120,4 +120,79 @@ t('the order applies at whichever level status sits', () => {
     ['Reading', 'Unread', 'Finished']);
 });
 
+console.log('translated text');
+
+t('the tint is legible on every ground and every preset', () => {
+  // Picking ramp steps by index gave 1.4:1 on the light ground, which is not
+  // a tint but an invisibility: which steps read depends on the ground.
+  for (const themeMode of ['dark', 'light']) {
+    for (const [name, accent] of theme.ACCENT_PRESETS) {
+      theme.apply({ themeMode, accent, tapZone: 0.18, veil: 0.5, heat: 'ember' });
+      const root = document.documentElement.style;
+      const ground = theme.GROUNDS[themeMode];
+      for (const token of ['--translated-from', '--translated-to', '--translated-ink']) {
+        const value = root.getPropertyValue(token).trim();
+        assert.ok(theme.contrast(value, ground.bg) >= 4.5,
+          `${themeMode}/${name}${token} is ${theme.contrast(value, ground.bg).toFixed(1)}:1`);
+      }
+    }
+  }
+});
+
+t('the tint is also distinguishable from ordinary text', () => {
+  // The most readable step on a dark ground is nearly the text colour, so
+  // translated prose came out looking exactly like the author's -- which is
+  // the one thing this is for.
+  for (const themeMode of ['dark', 'light']) {
+    for (const [name, accent] of theme.ACCENT_PRESETS) {
+      theme.apply({ themeMode, accent, tapZone: 0.18, veil: 0.5, heat: 'ember' });
+      const root = document.documentElement.style;
+      const ground = theme.GROUNDS[themeMode];
+      const ink = root.getPropertyValue('--translated-ink').trim();
+      assert.ok(theme.contrast(ink, ground.text) >= 1.3,
+        `${themeMode}/${name} body tint is indistinguishable from the text`);
+    }
+  }
+});
+
+t('it follows the accent rather than owning a colour', () => {
+  theme.apply({ themeMode: 'dark', accent: '#C0553F', tapZone: 0.18, veil: 0.5, heat: 'ember' });
+  const warm = document.documentElement.style.getPropertyValue('--translated-ink');
+  theme.apply({ themeMode: 'dark', accent: '#3FA37A', tapZone: 0.18, veil: 0.5, heat: 'ember' });
+  const cool = document.documentElement.style.getPropertyValue('--translated-ink');
+  assert.notEqual(warm, cool);
+});
+
+console.log('reading status');
+
+t('a state is inferred until someone says otherwise', () => {
+  assert.equal(lib.statusOf({}), 'unread');
+  assert.equal(lib.statusOf({ lastReadAt: 5 }), 'reading');
+  assert.equal(lib.statusOf({ lastReadAt: 9, finishedAt: 9 }), 'finished');
+  for (const book of [{}, { lastReadAt: 5 }, { finishedAt: 9 }]) {
+    assert.equal(lib.statusIsPinned(book), false);
+  }
+});
+
+t('a state that was set wins over the dates', () => {
+  // The whole point of setting one: a book you have opened but put down is
+  // not "reading", and the dates cannot know that.
+  assert.equal(lib.statusOf({ lastReadAt: 5, status: 'onHold' }), 'onHold');
+  assert.equal(lib.statusOf({ finishedAt: 9, status: 'unread' }), 'unread');
+  assert.equal(lib.statusIsPinned({ lastReadAt: 5, status: 'onHold' }), true);
+});
+
+t('an unrecognised state falls back to inference', () => {
+  // Rather than showing a book as something with no label.
+  assert.equal(lib.statusOf({ lastReadAt: 5, status: 'banana' }), 'reading');
+  assert.equal(lib.statusIsPinned({ status: 'banana' }), false);
+});
+
+t('every state has a place in the group order', () => {
+  const labels = lib.groupBooks(
+    [{}, { lastReadAt: 1 }, { finishedAt: 1 }, { status: 'dropped' }, { status: 'onHold' }],
+    ['status']).map((g) => g.label);
+  assert.deepEqual(labels, ['Reading', 'Unread', 'On hold', 'Dropped', 'Finished']);
+});
+
 console.log(`\n${pass} assertions passed`);
