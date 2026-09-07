@@ -168,6 +168,21 @@ fine. The blob data lives in IndexedDB and URLs are minted at render time
 through `js/blobs.js`, which also releases them: one pool per rendered chapter,
 because endless scroll drops chapters off the far end as you read.
 
+**Archives are read, not loaded.** JSZip has to materialise an entire zip
+before a single entry can be touched. A 463MB EPUB full of 80MB animated GIFs
+imported fine on its own and killed the app in the middle of a shelf — the
+shape of a heap with no room left rather than a broken file. `js/zipreader.js`
+reads the central directory from the tail of the Blob and slices each entry
+out as it is wanted, so peak memory is the largest single entry rather than
+the whole archive. Measured on that book: reading one 83MB illustration cost
+JSZip 84MB; twenty chapters through the streaming reader cost 2MB. JSZip
+remains the fallback for zip64 and unusual compression, so nothing that
+imported before stops importing.
+
+Illustrations over 12MB are skipped. Nothing on a phone will decode an 83MB
+GIF, and merely holding one is enough to end the import; the chapter is shown
+without it rather than the book failing.
+
 **Books are untrusted input.** `sanitise()` strips scripts, styles, stylesheet
 links and event handlers at parse time, not at render time — the reader runs on
 the same origin as the app. There is a test asserting a `<script>` inside an
