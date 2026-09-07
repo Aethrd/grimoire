@@ -418,6 +418,29 @@ t('a book put aside is not offered as the one to continue', () => {
   assert.match(library, /\['finished', 'dropped', 'onHold'\]\.includes\(statusOf\(b\)\)/);
 });
 
+t('search resets when opened from the shelf', () => {
+  // initFind runs on every visit but only re-registered handlers, so the
+  // field kept the last query while the list showed that query's results
+  // from whatever was open at the time.
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /const inBook = !!reader\.state\.book/);
+  assert.match(screens, /if \(!inBook\) \{[\s\S]{0,400}input\.value = ''/);
+  // Inside a book the query and the stepper's place are kept, which is the
+  // point of being able to dismiss and come back.
+  assert.match(screens, /input\.focus\(\)/);
+});
+
+t('the scope chips are hidden with no book open', () => {
+  // Whole book, this chapter, bookmarked: all meaningless over a shelf.
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /scope\.hidden = !inBook/);
+});
+
+t('search shows the same books the shelf does', () => {
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /!b\.importing && \(!b\.inVault \|\| vaultUnlocked\)/);
+});
+
 console.log('settings');
 
 t('settings is a screen with panes, reachable from the bar', () => {
