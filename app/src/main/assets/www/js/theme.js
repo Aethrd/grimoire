@@ -138,6 +138,37 @@ export function apply(settings) {
   // Body-size text in the accent needs a deeper step than chrome does.
   root.setProperty('--accent-ink', guard(base, ground.bg).ink);
 
+  /* Translated text is marked with colour drawn from the accent, so it is
+     always obviously the machine's words rather than the author's -- and so
+     it follows whatever theme is set rather than introducing one of its own.
+
+     The two ends are chosen from the ramp by measuring, not by picking step
+     numbers: which steps are legible depends entirely on the ground. On a
+     dark page the pale end of a ramp reads and the deep end does not; on a
+     light page it is the other way round. Picking by index gave 1.4:1 on the
+     light ground, which is not a tint but an invisibility. */
+  const legible = steps.filter((step) => contrast(step, ground.bg) >= 4.5);
+  const fallbackInk = guard(base, ground.bg).ink;
+
+  /* Legible is not the same as distinguishable. The most readable step on a
+     dark ground is very nearly the ordinary text colour, so translated prose
+     came out looking exactly like the author's -- which is the one thing this
+     is for. Steps too close to the page's own text are dropped. */
+  const marked = legible.filter((step) => contrast(step, ground.text) >= 1.35);
+  const usable = marked.length ? marked : legible;
+
+  const from = usable[0] || fallbackInk;
+  const to = usable[usable.length - 1] || fallbackInk;
+  root.setProperty('--translated-from', from);
+  root.setProperty('--translated-to', to);
+
+  // Body text gets one colour, not a gradient: a gradient running down a
+  // whole chapter is unreadable at the pale end and looks like a fault. The
+  // most legible step available, since this is a page of prose.
+  const strongest = usable.slice().sort(
+    (a, b) => contrast(b, ground.bg) - contrast(a, ground.bg))[0];
+  root.setProperty('--translated-ink', strongest || fallbackInk);
+
   const heat = heatRamp(settings.heatRamp, settings.accent, dark);
   heat.forEach((c, i) => root.setProperty(`--heat-${i}`, c));
 
