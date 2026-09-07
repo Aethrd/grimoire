@@ -264,9 +264,17 @@ section.block > h2 { margin-top: 18px; }
    positioned so no amount of text can push the box around. */
 .tile-cover { display: block; position: relative; aspect-ratio: 2 / 3; min-height: 0;
               border-radius: var(--radius-cover); overflow: hidden;
-              background: var(--accent-300); color: var(--accent-900); }
+              /* Dim, not pale. This is what shows while an image decodes, and
+                 a shelf of pale rectangles reads as a flash of light every
+                 time the list is redrawn. */
+              background: var(--surface); color: var(--accent-900); }
+/* The accent belongs behind the typeset fallback, where it is the cover
+   rather than a placeholder standing in for one. */
+.tile-cover:not(:has(img)) { background: var(--accent-300); }
 .tile-cover img { position: absolute; inset: 0; width: 100%; height: 100%;
-                  object-fit: cover; display: block; }
+                  object-fit: cover; display: block;
+                  animation: cover-in var(--motion) var(--ease) both; }
+@keyframes cover-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* Under the cover: the title, then the author. Putting the title only
    *inside* the cover meant it vanished for every book that had cover art --
@@ -659,11 +667,10 @@ section.block > h2 { margin-top: 18px; }
                                       transform var(--motion-fast) var(--ease); }
 
 /* Reveal for lists that rebuild wholesale, so the shelf does not blink. */
-.shelf .tile { animation: tile-in var(--motion) var(--ease) both; }
-@keyframes tile-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: none; }
-}
+/* No entrance animation on the tiles themselves. The shelf is redrawn
+   whenever anything changes -- a status, a folder, a translated title -- and
+   animating a hundred and forty tiles each time is a blink, not a flourish.
+   The covers fade in on their own, and only when they are actually new. */
 
 /*
  * Reduced motion is a system setting people turn on for real reasons --
