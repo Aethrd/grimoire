@@ -15,7 +15,50 @@
  * origin as the app.
  */
 
+import { openZip } from './zipreader.js';
+
 const DOMP = new DOMParser();
+
+/**
+ * Open an archive, reading only its directory.
+ *
+ * The streaming reader slices entries out of the Blob as they are asked for;
+ * JSZip loads the whole file first. For a 463MB book that is the difference
+ * between 26MB of heap and half a gigabyte, which on a phone is the
+ * difference between importing it and the process being killed.
+ *
+ * JSZip stays as the fallback for archives the streaming reader will not
+ * touch -- zip64, unusual compression -- so nothing that used to import
+ * stops importing.
+ */
+async function openArchive(file) {
+  const streamed = await openZip(file).catch(() => null);
+  if (streamed) return streamed;
+
+  const zip = await JSZip.loadAsync(file);
+  const files = Object.values(zip.files).filter((f) => !f.dir);
+  return {
+    entries: new Map(files.map((f) => [f.name, f])),
+    has: (name) => !!zip.file(name),
+    names: () => files.map((f) => f.name),
+    sizeOf: (name) => zip.file(name)?._data?.uncompressedSize ?? 0,
+    async text(name) { return zip.file(name)?.async('string') ?? null; },
+    async blob(name, type) {
+      const data = await zip.file(name)?.async('blob');
+      return data ? new Blob([data], { type }) : null;
+    },
+  };
+}
+
+/**
+ * An illustration larger than this is skipped.
+ *
+ * The book that prompted it carries 83MB animated GIFs. Nothing on a phone
+ * will decode one, and merely holding it is enough to end the import -- so it
+ * is left out and the reader shows the chapter without it, rather than the
+ * whole book failing.
+ */
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 
 export const FORMATS = {
   epub: 'EPUB', cbz: 'CBZ', cbr: 'CBR', txt: 'TXT', md: 'MD',
@@ -210,15 +253,15 @@ export /**
  *   partway through a shelf.
  */
 async function parseEpub(file, onProgress, { onImage } = {}) {
-  const zip = await JSZip.loadAsync(file);
+  const zip = await openArchive(file);
 
-  const containerXml = await zip.file('META-INF/container.xml')?.async('string');
+  const containerXml = await zip.text('META-INF/container.xml');
   if (!containerXml) throw new Error('Not an EPUB: META-INF/container.xml is missing');
   const opfPath = DOMP.parseFromString(containerXml, 'application/xml')
     .querySelector('rootfile')?.getAttribute('full-path');
   if (!opfPath) throw new Error('EPUB container names no OPF file');
 
-  const opf = DOMP.parseFromString(await zip.file(opfPath).async('string'), 'application/xml');
+  const opf = DOMP.parseFromString(await zip.text(opfPath), 'application/xml');
 
   // Dublin Core elements are namespaced (dc:title, dc:creator), and the
   // prefix is not guaranteed to be "dc". Matching on localName sidesteps both
@@ -280,7 +323,7 @@ async function parseEpub(file, onProgress, { onImage } = {}) {
 
   for (let i = 0; i < spine.length; i++) {
     const item = spine[i];
-    const raw = await zip.file(item.href)?.async('string');
+    const raw = await zip.text(item.href);
     if (!raw) continue;
 
     const doc = DOMP.parseFromString(raw, 'application/xhtml+xml');
@@ -347,7 +390,7 @@ async function readToc(zip, opf, manifest, opfPath) {
   const map = new Map();
   const nav = Object.values(manifest).find((m) => m.props.includes('nav'));
   if (nav) {
-    const raw = await zip.file(nav.href)?.async('string');
+    const raw = await zip.text(nav.href);
     if (raw) {
       const doc = DOMP.parseFromString(raw, 'application/xhtml+xml');
       for (const a of doc.querySelectorAll('nav a')) {
@@ -362,7 +405,7 @@ async function readToc(zip, opf, manifest, opfPath) {
   const ncxId = opf.getElementsByTagName('spine')[0]?.getAttribute('toc');
   const ncx = ncxId && manifest[ncxId];
   if (ncx) {
-    const raw = await zip.file(ncx.href)?.async('string');
+    const raw = await zip.text(ncx.href);
     if (raw) {
       const doc = DOMP.parseFromString(raw, 'application/xml');
       for (const point of doc.querySelectorAll('navPoint')) {
@@ -377,19 +420,19 @@ async function readToc(zip, opf, manifest, opfPath) {
 }
 
 async function blobOf(zip, path) {
-  const entry = zip.file(path);
-  if (!entry) return null;
-  const data = await entry.async('blob');
-  return new Blob([data], { type: mimeOf(path) });
+  if (!zip.has(path)) return null;
+  if (zip.sizeOf(path) > MAX_IMAGE_BYTES) return null;   // see MAX_IMAGE_BYTES
+  return zip.blob(path, mimeOf(path));
 }
 
 
 /* ── CBZ ──────────────────────────────────────────────────────────────── */
 
 export async function parseCbz(file, onProgress, { onImage } = {}) {
-  const zip = await JSZip.loadAsync(file);
-  const entries = Object.values(zip.files)
-    .filter((f) => !f.dir && /\.(jpe?g|png|gif|webp|avif)$/i.test(f.name))
+  const zip = await openArchive(file);
+  const entries = zip.names()
+    .filter((name) => /\.(jpe?g|png|gif|webp|avif)$/i.test(name))
+    .map((name) => ({ name }))
     // Comic archives are ordered by filename and nothing else, so a natural
     // sort is the difference between page 2 and page 10 being adjacent.
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
@@ -592,12 +635,12 @@ export function stripCommonRoot(paths) {
  * tedium this avoids.
  */
 export async function expandArchive(file, onProgress) {
-  const zip = await JSZip.loadAsync(file);
+  const zip = await openArchive(file);
 
-  const entries = Object.values(zip.files).filter((f) => !f.dir
+  const entries = zip.names().map((name) => ({ name })).filter((f) =>
     // Skip macOS resource forks and Windows thumbnail junk, which otherwise
     // import as empty "books" or invent a __MACOSX folder.
-    && !f.name.startsWith('__MACOSX/')
+    !f.name.startsWith('__MACOSX/')
     && !f.name.split('/').pop().startsWith('._')
     && f.name.split('/').pop() !== 'Thumbs.db'
     && !f.name.split('/').pop().startsWith('.'));
@@ -625,7 +668,7 @@ export async function expandArchive(file, onProgress) {
   // Each book is handed back with a read() that extracts it on demand, so the
   // importer can take one, store it, and let it go before touching the next.
   const out = books.map((entry, i) => {
-    const uncompressed = entry._data?.uncompressedSize ?? 0;
+    const uncompressed = zip.sizeOf(entry.name);
     const relative = folders[i];
     const parts = relative.split('/');
     const name = parts.pop();
@@ -637,7 +680,7 @@ export async function expandArchive(file, onProgress) {
         if (uncompressed > MAX_ENTRY_BYTES) {
           throw new Error(`${name} unpacks to something implausibly large; refusing.`);
         }
-        return entry.async('blob');
+        return zip.blob(entry.name);
       },
     };
   });
