@@ -430,10 +430,32 @@ t('search resets when opened from the shelf', () => {
   assert.match(screens, /input\.focus\(\)/);
 });
 
-t('the scope chips are hidden with no book open', () => {
-  // Whole book, this chapter, bookmarked: all meaningless over a shelf.
+t('the scopes suit what is being searched', () => {
+  // Whole book and this chapter mean nothing over a shelf; titles and authors
+  // mean nothing inside a book.
   const screens = read('app/src/main/assets/www/js/screens.js');
-  assert.match(screens, /scope\.hidden = !inBook/);
+  assert.match(screens, /\['all', 'Everything'\], \['title', 'Titles'\], \['author', 'Authors'\]/);
+  assert.match(screens, /\['names', 'Chapter names'\]/);
+});
+
+t('a title search matches the title as shown', () => {
+  // Including a translated one: searching for what is on screen should find
+  // it.
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /library\.displayTitle\(b\)/);
+  assert.match(screens, /if \(shelfScope === 'title'\) return titleMatches\(b\)/);
+  assert.match(screens, /if \(shelfScope === 'author'\) return authorMatches\(b\)/);
+});
+
+t('chapter names are searchable inside a book', () => {
+  // A book of a thousand chapters is not one you find your way around by
+  // scrolling the index.
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /if \(findScope === 'names'\)/);
+  assert.match(screens, /reader\.chapterName\(c\.index\)/);
+  // Both the shown name and the book's own, so a translated index still finds
+  // the original.
+  assert.match(screens, /foldDiacritics\(c\.title \|\| ''\)/);
 });
 
 t('search shows the same books the shelf does', () => {
