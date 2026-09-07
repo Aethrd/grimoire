@@ -2,6 +2,7 @@
 
 import * as store from './store.js';
 import * as reader from './reader.js';
+import * as library from './library.js';
 import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, vaultUnlocked } from './library.js';
 import { pool, measure } from './blobs.js';
 
@@ -358,6 +359,8 @@ function viewer(url, image, onGo) {
 /* ── SCR-07 Find in book ──────────────────────────────────────────────── */
 
 let findScope = 'book';
+/** Shelf search: everything, or narrowed to one field. */
+let shelfScope = 'all';
 let matches = [];
 let matchCursor = 0;
 let findTimer = null;
@@ -394,22 +397,30 @@ export function initFind(onGoToMatch) {
     findTimer = setTimeout(() => runFind(input.value, onGoToMatch), 250);
   };
 
-  /* Whole book, this chapter, bookmarked: all meaningless with no book open,
-     where the search is over the shelf. */
+  /* The scopes depend on what is being searched. Whole book and this chapter
+     mean nothing over a shelf; titles and authors mean nothing inside a book.
+     Chapter names sit inside, where they are a way of finding a chapter
+     without scrolling the index. */
   const scope = el('find-scope');
   scope.innerHTML = '';
-  scope.hidden = !inBook;
-  for (const [key, label] of inBook
-    ? [['book', 'Whole book'], ['chapter', 'This chapter'], ['marked', 'Bookmarked']]
-    : []) {
+  scope.hidden = false;
+
+  const options = inBook
+    ? [['book', 'Whole book'], ['chapter', 'This chapter'],
+       ['names', 'Chapter names'], ['marked', 'Bookmarked']]
+    : [['all', 'Everything'], ['title', 'Titles'], ['author', 'Authors']];
+  const selected = () => (inBook ? findScope : shelfScope);
+
+  for (const [key, label] of options) {
     const chip = document.createElement('button');
     chip.className = 'chip';
     chip.textContent = label;
-    chip.setAttribute('aria-pressed', String(findScope === key));
+    chip.setAttribute('aria-pressed', String(selected() === key));
     chip.onclick = () => {
-      findScope = key;
-      [...scope.children].forEach((c, i) => c.setAttribute('aria-pressed',
-        String(['book', 'chapter', 'marked'][i] === key)));
+      if (inBook) findScope = key; else shelfScope = key;
+      for (const other of scope.children) {
+        other.setAttribute('aria-pressed', String(other === chip));
+      }
       runFind(input.value, onGoToMatch);
     };
     scope.appendChild(chip);
@@ -446,14 +457,45 @@ async function runFind(query, onGoToMatch) {
     // locked, and nothing still being imported.
     const books = (await store.all('books'))
       .filter((b) => !b.importing && (!b.inVault || vaultUnlocked));
-    const hits = books.filter((b) =>
-      foldDiacritics(b.title).includes(needle) || foldDiacritics(b.author || '').includes(needle));
+    // Both the book's own title and the translated one shown on the shelf:
+    // searching for what is on screen should find it.
+    const titleMatches = (b) => foldDiacritics(b.title).includes(needle)
+      || foldDiacritics(library.displayTitle(b)).includes(needle);
+    const authorMatches = (b) => foldDiacritics(b.author || '').includes(needle);
+
+    const hits = books.filter((b) => {
+      if (shelfScope === 'title') return titleMatches(b);
+      if (shelfScope === 'author') return authorMatches(b);
+      return titleMatches(b) || authorMatches(b);
+    });
     results.innerHTML = hits.length ? '' : '<p class="muted" style="padding:20px 16px">Nothing found.</p>';
     for (const book of hits) {
       const row = document.createElement('button');
       row.className = 'list-row';
-      row.innerHTML = `<span class="body"><b>${escape(book.title)}</b><small>${escape(book.author || '')}</small></span>`;
+      row.innerHTML = `<span class="body"><b>${escape(library.displayTitle(book))}</b>`
+        + `<small>${escape(book.author || '')}</small></span>`;
       row.onclick = () => onGoToMatch({ bookId: book.id });
+      results.appendChild(row);
+    }
+    stepper.hidden = true;
+    return;
+  }
+
+  /* Chapter names. A book of a thousand chapters is not something you find
+     your way around by scrolling the index. */
+  if (findScope === 'names') {
+    const hits = reader.state.chapters.filter((c) =>
+      foldDiacritics(reader.chapterName(c.index)).includes(needle)
+      || foldDiacritics(c.title || '').includes(needle));
+
+    results.innerHTML = hits.length ? ''
+      : '<p class="muted" style="padding:20px 16px">No chapter with that in its name.</p>';
+    for (const chapter of hits) {
+      const row = document.createElement('button');
+      row.className = 'list-row';
+      row.innerHTML = `<span class="body"><b>${escape(reader.chapterName(chapter.index))}</b>`
+        + `<small>Chapter ${chapter.index + 1}</small></span>`;
+      row.onclick = () => onGoToMatch({ chapter: chapter.index, anchor: 0 });
       results.appendChild(row);
     }
     stepper.hidden = true;
