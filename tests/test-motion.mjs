@@ -178,6 +178,30 @@ t('a tap in scroll mode does nothing but toggle chrome', () => {
   assert.ok(!/Chapter\(/.test(taps), 'a scroll-mode tap can still change chapter');
 });
 
+t('no tap or swipe crosses a chapter, in either mode', () => {
+  // Turning a whole chapter is a far larger movement than a page. Sharing a
+  // gesture with the page turn means doing the larger one by accident every
+  // time a chapter ends.
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  const turn = reader.slice(reader.indexOf('export function turn'), reader.indexOf('export function goToPage'));
+  assert.ok(!/Chapter\(/.test(turn), 'turn() still reaches for a chapter somewhere');
+  // It reports the refusal rather than looking like a missed tap.
+  assert.match(turn, /return false/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /if \(!reader\.turn\(/);
+  assert.match(app, /function atChapterEdge/);
+  // Said once, not on every attempt at the end of a chapter.
+  assert.match(app, /Date\.now\(\) - edgeToldAt < 2500/);
+});
+
+t('an unmeasured page count cannot let a turn through', () => {
+  // NaN fails every comparison silently, so a chapter that never measured
+  // would slip straight past the check meant to stop it.
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /Number\.isFinite\(state\.pageCount\)/);
+  assert.match(reader, /Number\.isFinite\(count\)/);
+});
+
 t('turn() still refuses to change chapter in scroll mode', () => {
   // Tapping near the top jumped to the previous chapter, which is a violent
   // answer to "scroll up a bit".
