@@ -344,6 +344,17 @@ t('a half-imported book is neither shown nor kept', () => {
   assert.match(library, /await store\.deleteBook\(bookId\)\.catch/);
 });
 
+t('the index opens where you are, not where the last book was', () => {
+  // The list is rebuilt on every open but the container is not, so it kept
+  // whatever offset the previous book left behind: open the index on chapter
+  // 50 of one book and you land at 50 in the next one too.
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /function revealCurrentChapter/);
+  assert.match(screens, /list\.querySelector\('\.list-row\.current'\)/);
+  // Marks are a different list, and start at the top.
+  assert.match(screens, /list\.scrollTop = 0;\n\n  \/\/ Bookmarks and highlights/);
+});
+
 console.log('settings');
 
 t('settings is a screen with panes, reachable from the bar', () => {
