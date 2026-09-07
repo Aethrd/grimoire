@@ -45,6 +45,7 @@ async function show(name, { replace = false } = {}) {
   // longer see.
   if (name !== 'library') clearSelection();
   // The tab bar is app furniture; it has no business over a page of prose.
+  cameFrom = current;
   document.body.dataset.view = name;
   el('tabbar').hidden = name === 'reader' || selecting();
   for (const button of el('tabbar').children) {
@@ -58,7 +59,7 @@ async function enter(name) {
   switch (name) {
     case 'library': return refreshShelf();
     case 'sort': return screens.openSort();
-    case 'find': return screens.initFind(goToMatch);
+    case 'find': return screens.initFind(goToMatch, cameFrom === 'reader');
     case 'toc': return screens.openToc(goToChapter);
     case 'reel': return reader.state.book
       ? screens.openReel(reader.state.book.id, jumpToImage)
@@ -117,6 +118,12 @@ function back() {
  * every time the app was closed.
  */
 let activeFolder = null;
+
+/* The screen the current one was opened from. Search needs it: reader.state
+   keeps the last book open so it can be resumed, so "has a book ever been
+   opened" is true forever -- and searching from the shelf kept offering
+   in-book scopes and the in-book query. */
+let cameFrom = 'library';
 
 async function openFolder(folder) {
   activeFolder = folder;
@@ -622,14 +629,27 @@ async function handleFiles(files) {
   el('import-count').textContent = '';
   el('import-bar').style.width = '0%';
 
+  el('import-minimise').onclick = () => panel.classList.toggle('minimised');
+
+  /* The shelf is refreshed as books land rather than only at the end, so an
+     import can be watched -- and used -- while it runs. Not per book: on a
+     large shelf that is a redraw a second competing with the parsing. */
+  let shownAt = 0;
+
   const results = await library.importFiles(files, {
     onProgress: (message, fraction, done, total) => {
       el('import-label').textContent = message;
       el('import-bar').style.width = `${Math.round((fraction || 0) * 100)}%`;
       el('import-count').textContent = total ? `${done + 1} of ${total}` : '';
+
+      if (Date.now() - shownAt > 3000) {
+        shownAt = Date.now();
+        refreshShelf();
+      }
     },
   });
   panel.hidden = true;
+  panel.classList.remove('minimised');
   await refreshShelf();
 
   if (results.failed.length) {

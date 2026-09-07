@@ -8,6 +8,7 @@ import * as translate from './translate.js';
 const el = (id) => document.getElementById(id);
 
 export const SORT_KEYS = {
+  bundle: 'Bundle',
   folder: 'Folder',
   author: 'Author',
   added: 'Date added',
@@ -30,6 +31,9 @@ export const MAX_GROUP_DEPTH = 3;
 
 function valueOf(book, key) {
   switch (key) {
+    // How many editions are gathered here. Descending puts bundles first,
+    // which is the useful direction; a lone book counts as one.
+    case 'bundle': return book.bundle ? book.bundle.length : 1;
     case 'folder': return book.folder?.toLowerCase() || null;
     case 'author': return book.author?.toLowerCase() ?? null;
     case 'added': return book.addedAt ?? null;
@@ -132,7 +136,7 @@ export const leadsBundle = (book) => book.bundleId === book.id;
  * leader is missing -- deleted on its own, say -- stands for itself rather
  * than vanishing.
  */
-export function collapseBundles(books) {
+export function collapseBundles(books, levels = []) {
   const byId = new Map(books.map((b) => [b.id, b]));
   const members = new Map();
   const out = [];
@@ -152,6 +156,16 @@ export function collapseBundles(books) {
 
   for (const [id, group] of members) {
     const leader = byId.get(id);
+
+    /* A bundle collapses only while its members belong in the same place.
+       Group by language and an English edition and its raw belong under two
+       headings, not one -- so the bundle comes apart for as long as that
+       grouping is on, rather than filing both under whichever one leads. */
+    const splits = levels.some((level) => {
+      const first = groupLabel(leader, level);
+      return group.some((member) => groupLabel(member, level) !== first);
+    });
+    if (splits) { out.push(leader, ...group.filter((b) => b.id !== id)); continue; }
     // Ordered so the leader is first, then by title: the sheet reads the same
     // way every time.
     const rest = group.filter((b) => b.id !== id)
@@ -160,9 +174,7 @@ export function collapseBundles(books) {
       { bundle: [leader, ...rest] }));
   }
 
-  // Back into the order they arrived in, which is the sort the caller chose.
-  const rank = new Map(books.map((b, i) => [b.id, i]));
-  return out.sort((a, b) => rank.get(a.id) - rank.get(b.id));
+  return out;
 }
 
 /** The state a book is actually in: what was set, or what can be inferred. */
@@ -383,7 +395,9 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
       <span class="tile-badge">${escape(book.format || '?')}</span>
       <span class="tile-bar"><span style="width:${Math.round((book.percent || 0) * 100)}%"></span></span>
       ${selecting ? '<span class="tile-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7"/></svg></span>' : ''}
-      ${book.bundle ? `<span class="tile-bundle"><svg viewBox="0 0 24 24" fill="none"><path d="M4 8h13v12H4z"/><path d="M7 5h13v12"/></svg>${book.bundle.length}</span>` : ''}
+      ${book.bundle
+        ? `<span class="tile-bundle"><img src="img/bundle.png" alt="">${book.bundle.length}</span>`
+        : ''}
     </span>
     <span class="tile-name${isTranslatedTitle(book) ? ' translated-text' : ''}">${escape(displayTitle(book))}</span>
     <span class="tile-meta">${escape(cleanAuthor(book.author))}</span>`;
@@ -464,8 +478,10 @@ export async function renderShelf(handlers) {
       : b.folder === folder || (b.folder || '').startsWith(`${folder}/`));
   }
 
-  // Sorted first, then collapsed, so a bundle sits where its leader would.
-  const sorted = collapseBundles(sortBooks(visible, settings.sort.keys));
+  // Collapsed first, then sorted: a bundle is one entry on the shelf, so it
+  // sorts like one -- including on how many editions it holds.
+  const sorted = sortBooks(
+    collapseBundles(visible, settings.sort.group), settings.sort.keys);
   const groups = groupBooks(sorted, settings.sort.group);
 
   const shelf = el('shelf');

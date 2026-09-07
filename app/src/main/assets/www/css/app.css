@@ -84,11 +84,17 @@
 
 html, body {
   height: 100%; margin: 0; overflow: hidden;
-  background: var(--bg); color: var(--text);
+  /* Transparent on purpose. A body background propagates to the canvas, and
+     body::before at z-index -1 then paints behind it -- so the background
+     image was there the whole time, underneath an opaque sheet of colour.
+     The base colour lives on <html> instead. */
+  background: transparent; color: var(--text);
   font-family: var(--font-ui); font-size: 14px;
   overscroll-behavior: none;
   -webkit-user-select: none; user-select: none;
 }
+
+html { background: var(--bg); }
 
 /* The background image sits under everything, dimmed by the veil. */
 body::before {
@@ -811,10 +817,18 @@ section.block > h2 { margin-top: 18px; }
 .import-progress {
   position: fixed; left: 12px; right: 12px; z-index: 30;
   bottom: calc(var(--safe-bottom) + 74px);
-  padding: 12px 14px; border-radius: var(--radius-lg);
+  padding: 10px 12px; border-radius: var(--radius-lg);
   background: var(--surface); border: 1px solid var(--hairline);
   animation: chrome-in var(--motion-fast) var(--ease) both;
+  /* Importing a shelf takes minutes, and nothing about it should stop the
+     shelf being used meanwhile. The panel reports; it does not take taps. */
+  pointer-events: none;
 }
+/* Except the one control on it. */
+.import-progress .icon-btn { pointer-events: auto; }
+.import-progress.minimised { left: auto; width: 46px; padding: 8px; }
+.import-progress.minimised .import-line span:first-child,
+.import-progress.minimised .bar { display: none; }
 .import-progress[hidden] { display: none; }
 .import-line { display: flex; justify-content: space-between; gap: 10px;
                font-size: 12px; margin-bottom: 8px; }
@@ -928,13 +942,14 @@ section.block > h2 { margin-top: 18px; }
    Two editions of the same book -- a translation and its original -- are one
    thing on a shelf and two things to open. */
 
-.tile-bundle { position: absolute; left: 8px; top: 8px; z-index: 1;
+.tile-bundle { position: absolute; left: 6px; bottom: 6px; z-index: 1;
                display: flex; align-items: center; gap: 3px;
-               padding: 3px 6px; border-radius: var(--radius-pill);
+               padding: 2px 5px 2px 3px; border-radius: var(--radius-pill);
                background: rgba(0, 0, 0, .55); color: #fff;
-               font-family: var(--font-heading); font-weight: 600; font-size: 9px;
-               letter-spacing: .04em; }
-.tile-bundle svg { width: 10px; height: 10px; }
+               font-family: var(--font-heading); font-weight: 700; font-size: 9px; }
+.tile-bundle img { width: 16px; height: 16px; display: block; }
+/* Sits above the progress bar, which runs along the bottom of the cover. */
+.tile.bundled .tile-bar { bottom: 26px; }
 
 /* The stacked-paper edge, so a bundle reads as more than one book before the
    badge is even noticed. */

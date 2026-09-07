@@ -203,22 +203,44 @@ t('editions collapse to one entry led by one of them', () => {
     { id: 2, title: '마녀의 도시', bundleId: 1 },
     { id: 3, title: 'Something Else' },
   ];
+  // Order is the sorter's job now -- collapsing runs first, so what matters
+  // here is what survives, not where it lands.
   const shelf = lib.collapseBundles(books);
-  assert.deepEqual(shelf.map((b) => b.title), ['Witch City', 'Something Else']);
-  assert.equal(shelf[0].bundle.length, 2);
+  assert.deepEqual(shelf.map((b) => b.title).sort(), ['Something Else', 'Witch City']);
+  // shelf[0] is no longer necessarily the bundle, since ordering moved to
+  // the sorter. Find it by what it is.
+  const gathered = shelf.find((b) => b.bundle);
+  assert.equal(gathered.bundle.length, 2);
   // The leader comes first, so the sheet reads the same way every time.
-  assert.equal(shelf[0].bundle[0].id, 1);
+  assert.equal(gathered.bundle[0].id, 1);
 });
 
-t('a bundle keeps the place its leader was sorted to', () => {
+t('a bundle sorts like any other entry, including on its size', () => {
   const books = [
     { id: 9, title: 'Aardvark' },
     { id: 1, title: 'Middle', bundleId: 1 },
     { id: 2, title: 'Middle (raw)', bundleId: 1 },
     { id: 8, title: 'Zebra' },
   ];
-  assert.deepEqual(lib.collapseBundles(books).map((b) => b.title),
+  const shelf = lib.collapseBundles(books);
+  assert.deepEqual(lib.sortBooks(shelf, [['title', 'asc']]).map((b) => b.title),
     ['Aardvark', 'Middle', 'Zebra']);
+  // Descending by bundle puts the gathered editions first, which is the
+  // useful direction; a lone book counts as one.
+  assert.equal(lib.sortBooks(shelf, [['bundle', 'desc']])[0].title, 'Middle');
+});
+
+t('a bundle comes apart when grouping would separate its editions', () => {
+  // Group by language and a translation and its original belong under two
+  // headings, not one.
+  const books = [
+    { id: 1, title: 'Witch City', lang: 'en', bundleId: 1 },
+    { id: 2, title: '마녀의 도시', lang: 'ko', bundleId: 1 },
+  ];
+  assert.equal(lib.collapseBundles(books, []).length, 1);
+  assert.equal(lib.collapseBundles(books, ['language']).length, 2);
+  // A grouping they agree on leaves the bundle whole.
+  assert.equal(lib.collapseBundles(books, ['format']).length, 1);
 });
 
 t('a member whose leader is gone stands for itself', () => {

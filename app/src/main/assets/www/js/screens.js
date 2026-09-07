@@ -368,9 +368,10 @@ const MAX_HITS = 500;
 
 const foldDiacritics = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
-export function initFind(onGoToMatch) {
+export function initFind(onGoToMatch, fromReader = false) {
   const input = el('find-input');
-  const inBook = !!reader.state.book;
+  // Told, not inferred: the reader keeps its book so reading can be resumed.
+  const inBook = fromReader && !!reader.state.book;
 
   /* Opening the screen resets it.
    *
