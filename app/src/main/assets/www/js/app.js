@@ -586,6 +586,24 @@ async function jumpToImage(image) {
   reader.flashImage(image.href);
 }
 
+/**
+ * A tap or swipe that could not move because the chapter has ended.
+ *
+ * Doing nothing is correct -- crossing into another chapter is a much bigger
+ * jump than a page, and it should take the button that says so -- but silence
+ * is indistinguishable from a missed tap. Said once, not on every attempt.
+ */
+let edgeToldAt = 0;
+function atChapterEdge(direction) {
+  if (Date.now() - edgeToldAt < 2500) return;
+  edgeToldAt = Date.now();
+  const more = direction > 0 ? reader.hasNextChapter() : reader.hasPrevChapter();
+  const which = direction > 0 ? 'next' : 'previous';
+  toast(more
+    ? `End of the chapter — use ${direction > 0 ? 'Ch \u203a' : '\u2039 Ch'} for the ${which} one`
+    : `That is the ${direction > 0 ? 'last' : 'first'} chapter`);
+}
+
 function wireReader() {
   reader.init({ onChange: paintReader });
 
@@ -594,7 +612,9 @@ function wireReader() {
     zone.addEventListener('click', () => {
       const action = zone.dataset.tap;
       if (action === 'chrome') { reader.cycleChrome(); paintReader(); return; }
-      reader.turn(action === 'forward' ? 1 : -1);
+      if (!reader.turn(action === 'forward' ? 1 : -1)) {
+        atChapterEdge(action === 'forward' ? 1 : -1);
+      }
     });
   }
 
@@ -614,7 +634,7 @@ function wireReader() {
     const dy = e.changedTouches[0].clientY - startY;
     if (Date.now() - startAt > 600) return;
     if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
-    reader.turn(dx < 0 ? 1 : -1);
+    if (!reader.turn(dx < 0 ? 1 : -1)) atChapterEdge(dx < 0 ? 1 : -1);
   }, { passive: true });
 
   /* Scroll mode taps.

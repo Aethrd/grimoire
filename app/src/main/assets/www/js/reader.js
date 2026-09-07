@@ -134,7 +134,8 @@ function relayout() {
   flow.style.columnGap = `${gap}px`;
   // n columns measure n*w + (n-1)*gap, so invert that rather than dividing.
   const total = flow.scrollWidth + gap;
-  state.pageCount = Math.max(1, Math.round(total / (contentWidth() + gap)));
+  const count = Math.round(total / (contentWidth() + gap));
+  state.pageCount = Number.isFinite(count) ? Math.max(1, count) : 1;
 }
 
 /** Suppress the turn animation around a jump that is not a page turn. */
@@ -570,28 +571,37 @@ export function repaginate() {
 
 /* ── navigation ───────────────────────────────────────────────────────── */
 
+/**
+ * Move within the current chapter. Never beyond it.
+ *
+ * Taps and swipes stop at the chapter's edges in both modes; only the chapter
+ * buttons cross that line. Turning a whole chapter is a much larger movement
+ * than a page, and having the same gesture do both means doing the larger one
+ * by accident every time you reach the end of a chapter.
+ *
+ * Returns false when it could not move, so the caller can say why rather than
+ * appearing to have missed the tap.
+ */
 export function turn(delta) {
   if (isScroll()) {
-    // Nothing calls this in scroll mode any more -- taps only toggle chrome
-    // there -- but if something does, it scrolls and stops at the ends. It
-    // must never reach for a chapter.
-    // A tap moves by just under a screen, so a line or two carries over and
-    // you can see you have not skipped anything.
-    // Clamped, never a chapter change. Tapping near the top used to jump to
-    // the previous chapter, which is a violent answer to "scroll up a bit".
     const step = viewportHeight() * 0.9 * delta;
     const limit = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
     const target = Math.max(0, Math.min(limit, viewport.scrollTop + step));
+    if (Math.abs(target - viewport.scrollTop) < 1) return false;
     viewport.scrollTo({ top: target, behavior: reducedMotion() ? 'auto' : 'smooth' });
     countPage();
-    return;
+    return true;
   }
 
+  // Guarded against a page count that never measured. NaN fails every
+  // comparison silently, so an unmeasured chapter would let a turn straight
+  // through the check that is meant to stop it.
+  const pages = Number.isFinite(state.pageCount) ? state.pageCount : 1;
   const next = state.page + delta;
-  if (next < 0) return prevChapter(true);
-  if (next >= state.pageCount) return nextChapter();
+  if (!Number.isFinite(next) || next < 0 || next >= pages) return false;
   countPage();
   show(next);
+  return true;
 }
 
 export function goToPage(page) { show(page, { animate: false }); }
