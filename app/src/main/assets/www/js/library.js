@@ -1,8 +1,8 @@
 /* Library: import, shelf, sort and group. */
 
 import * as store from './store.js';
+import { urlCache } from './blobs.js';
 import { parse, formatOf, expandArchive, SUPPORTED, UNSUPPORTED_REASON } from './parse.js';
-import { pool } from './blobs.js';
 import * as translate from './translate.js';
 
 const el = (id) => document.getElementById(id);
@@ -275,6 +275,9 @@ export async function importFiles(files, { onProgress, onDone } = {}) {
         lang: parsed.lang,
         format: parsed.format,
         coverBlob: parsed.coverBlob,
+        // Recorded so a redraw can tell one cover from another without
+        // reading the Blob back; see coverUrlFor.
+        coverBytes: parsed.coverBlob?.size ?? null,
         words: parsed.words,
         chapterCount: parsed.chapters.length,
         imageCount: parsed.imageCount ?? parsed.images.length,
@@ -313,7 +316,7 @@ const DENSITY_ICONS = {
 };
 
 function tile(book, onOpen, onLongPress, selection, selecting) {
-  const coverUrl = covers.url(book.coverBlob);
+  const coverUrl = coverUrlFor(book);
   const node = document.createElement('button');
   node.className = selection?.has(book.id) ? 'tile selected' : 'tile';
   node.dataset.book = String(book.id);
@@ -362,7 +365,20 @@ let lastHandlers = {};
 
 /* URLs for the covers currently on screen. Released and re-minted on every
    render: holding them forever would leak one per cover per refresh. */
-const covers = pool();
+/* Cover URLs, kept between renders.
+ *
+ * They used to be released and re-minted on every render, so each refresh
+ * meant the browser decoding a hundred and forty images again -- and until
+ * they landed, every tile was a placeholder rectangle. That is the bright
+ * flash: not a transition, just the shelf briefly having no covers on it.
+ *
+ * The signature comes off the book record rather than the Blob: a stored Blob
+ * comes back from IndexedDB as a new object every time, so identity is no
+ * use, and not every platform hands back one that still reports its size.
+ */
+const covers = urlCache();
+const coverUrlFor = (book) =>
+  covers.url(book.id, book.coverBlob, book.coverBytes ?? book.coverBlob?.size);
 
 /* Translated titles, keyed by book id. Held here rather than written into the
    DOM after the fact: the shelf tile has no title element when a book has
@@ -397,7 +413,6 @@ export async function renderShelf(handlers) {
 
   const shelf = el('shelf');
   const empty = el('library-empty');
-  covers.release();
   shelf.innerHTML = '';
   shelf.style.setProperty('--cols', settings.columns);
   shelf.className = `shelf cols-${settings.columns}`;
@@ -440,6 +455,9 @@ export async function renderShelf(handlers) {
     : 'All books';
   el('group-count').textContent = `${visible.length} shown`;
   el('density-icon').innerHTML = DENSITY_ICONS[settings.columns];
+
+  // Only after the render, so a cover still on screen is never revoked.
+  covers.forget(new Set(visible.map((b) => b.id)));
 
   await renderContinueCard(sorted, onOpen);
   await renderViewChips(folder);
@@ -510,7 +528,7 @@ async function renderContinueCard(books, onOpen) {
 
   const book = candidates[0];
   const position = await store.get('positions', book.id);
-  const coverUrl = covers.url(book.coverBlob);
+  const coverUrl = coverUrlFor(book);
 
   card.hidden = false;
   el('continue-title').textContent = displayTitle(book);

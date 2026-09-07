@@ -429,7 +429,10 @@ async function openDetails(book) {
     book.seriesIndex = Number.isFinite(index) ? index : null;
     book.folder = inputs.folder.value.trim().replace(/^\/+|\/+$/g, '');
     book.lang = inputs.lang.value.trim() || null;
-    if (newCover !== undefined) book.coverBlob = newCover;
+    if (newCover !== undefined) {
+      book.coverBlob = newCover;
+      book.coverBytes = newCover?.size ?? null;
+    }
     if (pickedStatus !== undefined) {
       if (pickedStatus === null) delete book.status;
       else book.status = pickedStatus;

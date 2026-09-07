@@ -51,6 +51,54 @@ export function readArrayBuffer(blob) {
   });
 }
 
+/**
+ * URLs that outlive a render.
+ *
+ * A pool is for things rebuilt wholesale; this is for things redrawn often
+ * from the same data. Releasing and re-minting a shelf's covers on every
+ * render made the browser decode every image again, and until they landed
+ * each tile was an empty placeholder -- the flash.
+ *
+ * Keyed, with a caller-supplied signature saying when the underlying data has
+ * actually changed. Identity is no use for anything read back from IndexedDB,
+ * which hands back a new object every time.
+ */
+export function urlCache() {
+  const held = new Map();
+
+  return {
+    /** The URL for this key, minting one only if the data is new. */
+    url(key, blob, signature) {
+      if (!blob) return null;
+      const existing = held.get(key);
+      const unchanged = existing && (existing.blob === blob
+        || (signature !== undefined && existing.signature === signature));
+      if (unchanged) return existing.url;
+
+      if (existing) URL.revokeObjectURL(existing.url);
+      const url = URL.createObjectURL(blob);
+      held.set(key, { url, blob, signature });
+      return url;
+    },
+
+    /** Release everything whose key is not in `keep`. */
+    forget(keep) {
+      for (const [key, entry] of held) {
+        if (keep.has(key)) continue;
+        URL.revokeObjectURL(entry.url);
+        held.delete(key);
+      }
+    },
+
+    release() {
+      for (const entry of held.values()) URL.revokeObjectURL(entry.url);
+      held.clear();
+    },
+
+    get size() { return held.size; },
+  };
+}
+
 /** Measure a bitmap without leaving its URL behind. */
 export function measure(blob) {
   return new Promise((resolve) => {
