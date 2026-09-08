@@ -223,7 +223,12 @@ licence header is not a violation, which is why it replaced a blanket `grep`.
 
 Honest list, in rough order of how much they matter:
 
-- **Highlights cannot be created.** The tab renders and the data model supports
+- **No optical centering.** The text block is centred by its margins rather
+  than by how it looks. Doing it properly means measuring the shape of the set
+  text — the ragged edge, the indents, where paragraphs fall — and the honest
+  version of that is a typesetting problem rather than a margin tweak.
+- ~~**Highlights cannot be created.**~~ Done: select text in the reader and the
+  annotation bar appears. The tab renders and the data model supports
   them, but there is no text-selection handler, so that tab stays empty.
 - **The vault is a filter, not encryption.** Vault books are hidden from every
   list until unlocked, but the files are not encrypted and the passphrase is a

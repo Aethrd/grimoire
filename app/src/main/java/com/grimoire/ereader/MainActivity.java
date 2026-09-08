@@ -40,6 +40,10 @@ public class MainActivity extends AppCompatActivity {
     private static final String START_URL = ORIGIN + "/assets/www/index.html";
 
     private WebView webView;
+
+    /** A file handed over before the page was ready to take it. */
+    private String pendingUri;
+    private boolean readerReady;
     private WebViewAssetLoader assetLoader;
     private boolean contentReady = false;
 
@@ -282,10 +286,27 @@ public class MainActivity extends AppCompatActivity {
             data = intent.getParcelableExtra(Intent.EXTRA_STREAM);
         }
         if (data == null) return;
-        final String uri = data.toString().replace("'", "\\'");
-        webView.postDelayed(() -> webView.evaluateJavascript(
-                "window.Grimoire && window.Grimoire.openExternalBook && " +
-                        "window.Grimoire.openExternalBook('" + uri + "')", null), 400);
+        pendingUri = data.toString();
+        // Delivered when the reader says it is ready, not after a guessed
+        // delay. Opening a file from elsewhere is always a cold start, and
+        // four hundred milliseconds is not enough for the page to have loaded
+        // -- the call landed on a window with no Grimoire on it and vanished.
+        deliverPendingUri();
+    }
+
+    /** Called from JavaScript once the reader has booted. */
+    void onReaderReady() {
+        readerReady = true;
+        deliverPendingUri();
+    }
+
+    private void deliverPendingUri() {
+        if (!readerReady || pendingUri == null) return;
+        final String uri = pendingUri.replace("\\", "\\\\").replace("'", "\\'");
+        pendingUri = null;
+        runOnUiThread(() -> webView.evaluateJavascript(
+                "window.Grimoire && window.Grimoire.openExternalBook "
+                        + "&& window.Grimoire.openExternalBook('" + uri + "')", null));
     }
 
     @Override

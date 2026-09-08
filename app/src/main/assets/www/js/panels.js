@@ -624,8 +624,11 @@ export async function openStats() {
 
   const byDay = new Map();
   for (const event of log) {
-    const day = byDay.get(event.day) || { pages: 0, words: 0, ms: 0 };
-    day.pages += event.pages; day.words += event.words; day.ms += event.activeMs;
+    const day = byDay.get(event.day) || { pages: 0, words: 0, ms: 0, chapters: 0 };
+    day.pages += event.pages;
+    day.words += event.words;
+    day.ms += event.activeMs;
+    day.chapters += event.chapters || 0;
     byDay.set(event.day, day);
   }
 
@@ -643,25 +646,82 @@ export async function openStats() {
       Two missed days a month are forgiven rather than resetting to zero.</p>`;
   body.appendChild(card);
 
-  // Heat levels are quintiles of this reader's own distribution, not fixed
-  // page counts, so the grid stays legible for light and heavy readers alike.
-  const counts = [...byDay.values()].map((d) => d.pages).filter((n) => n > 0).sort((a, b) => a - b);
+  /* Words, not pages.
+   *
+   * A page is a function of type size and screen; the same chapter is thirty
+   * pages at one setting and twelve at another, and a chapter copied out to
+   * be read elsewhere is no pages at all. Words are what was actually read,
+   * whichever way it happened.
+   *
+   * The levels are quintiles of this reader's own distribution rather than
+   * fixed counts, so the grid stays legible for light and heavy readers
+   * alike. */
+  const counts = [...byDay.values()].map((d) => d.words).filter((n) => n > 0).sort((a, b) => a - b);
   const quintile = (q) => counts.length ? counts[Math.min(counts.length - 1, Math.floor(counts.length * q))] : 1;
   const cuts = [quintile(0.2), quintile(0.4), quintile(0.6), quintile(0.8)];
 
+  /* Averages that hold up when most of the reading happens somewhere else.
+   *
+   * Time and pages only see what happened in the app. Words and chapters see
+   * what was read wherever it was read, so those are the ones worth showing
+   * an average of. */
+  const shelf = await store.all('books');
+  const totalWords = log.reduce((n, e) => n + (e.words || 0), 0);
+  const totalChapters = log.reduce((n, e) => n + (e.chapters || 0), 0);
+  const elsewhereWords = log.filter((e) => e.elsewhere).reduce((n, e) => n + (e.words || 0), 0);
+  const activeDays = [...byDay.values()].filter((d) => d.words > 0).length;
+  const booksTouched = new Set(log.map((e) => e.bookId).filter(Boolean)).size;
+
+  const averages = document.createElement('section');
+  averages.className = 'block';
+  averages.innerHTML = '<h2>Averages</h2>';
+  const table = document.createElement('div');
+  table.className = 'facts';
+
+  const fact = (label, value, note) => {
+    const cell = document.createElement('div');
+    cell.innerHTML = `<b>${escape(label)}</b><small>${escape(value)}</small>`
+      + (note ? `<small class="muted">${escape(note)}</small>` : '');
+    table.appendChild(cell);
+  };
+
+  fact('Words a chapter', totalChapters
+    ? Math.round(totalWords / totalChapters).toLocaleString() : '—');
+  fact('Words a book', booksTouched
+    ? Math.round(totalWords / booksTouched).toLocaleString() : '—');
+  fact('Chapters a day', activeDays
+    ? (totalChapters / activeDays).toFixed(1) : '—', 'on days you read');
+  fact('Words a day', activeDays
+    ? Math.round(totalWords / activeDays).toLocaleString() : '—', 'on days you read');
+  fact('Read elsewhere', totalWords
+    ? `${Math.round((elsewhereWords / totalWords) * 100)}%`
+    : '—', 'copied out of the app');
+  fact('Books touched', String(booksTouched), `of ${shelf.length} on the shelf`);
+
+  averages.appendChild(table);
+  body.appendChild(averages);
+
   const heatWrap = document.createElement('section');
   heatWrap.className = 'block';
-  heatWrap.innerHTML = '<h2>26 weeks</h2>';
+  heatWrap.innerHTML = '<h2>26 weeks</h2>'
+    + '<p class="muted" style="font-size:11px;margin:0 0 8px">By words read, '
+    + 'including chapters copied out to read elsewhere.</p>';
   const heat = document.createElement('div');
   heat.className = 'heat';
   const start = Date.now() - 181 * DAY;
   for (let i = 0; i < 182; i++) {
     const key = store.dayKey(start + i * DAY);
-    const pages = byDay.get(key)?.pages || 0;
-    const level = pages === 0 ? 0 : pages <= cuts[0] ? 1 : pages <= cuts[1] ? 2 : pages <= cuts[2] ? 3 : 4;
+    const day = byDay.get(key);
+    const words = day?.words || 0;
+    const level = words === 0 ? 0
+      : words <= cuts[0] ? 1 : words <= cuts[1] ? 2 : words <= cuts[2] ? 3 : 4;
     const cell = document.createElement('i');
     cell.dataset.l = String(level);
-    cell.title = `${key} · ${pages} pages`;
+    // A continuous shade within the level, so a heavy day reads as heavier
+    // than a merely busy one rather than both flattening to the top step.
+    const ceiling = cuts[3] || 1;
+    cell.style.setProperty('--fill', String(Math.min(1, words / (ceiling * 1.5))));
+    cell.title = `${key} · ${words.toLocaleString()} words`;
     heat.appendChild(cell);
   }
   heatWrap.appendChild(heat);
@@ -1080,8 +1140,81 @@ async function renderLayoutPane(body) {
   body.appendChild(shelf);
 }
 
+let onGuidesChange = null;
+/** The reader re-reads the guide settings when they change. */
+export function onGuides(fn) { onGuidesChange = fn; }
+
 async function renderBehaviourPane(body) {
   const settings = await store.settings();
+
+  const marks = document.createElement('section');
+  marks.className = 'block';
+  marks.innerHTML = `<h2>Annotations</h2>
+    <p class="muted" style="font-size:12px;line-height:1.55">
+      How loud your marks are on a re-read. Style and colour are chosen as you
+      make each one.</p>`;
+
+  const density = document.createElement('div');
+  density.className = 'seg';
+  for (const [value, label] of [['full', 'Full'], ['markers', 'Markers'], ['hidden', 'Hidden']]) {
+    const button = document.createElement('button');
+    button.textContent = label;
+    button.setAttribute('aria-pressed', String((settings.markDensity || 'full') === value));
+    button.onclick = async () => { await reader.setMarkDensity(value); renderSettings(); };
+    density.appendChild(button);
+  }
+  marks.appendChild(density);
+  marks.appendChild(row('Join marks that touch',
+    'Two highlights of the same style and colour with nothing between them become one.',
+    toggle(settings.mergeMarks !== false, (on) => store.saveSettings({ mergeMarks: on }))));
+
+  marks.appendChild(slider('Highlight strength',
+    Math.round((settings.markOpacity ?? 0.35) * 100), 10, 90, 5, '%',
+    async (value) => {
+      await store.saveSettings({ markOpacity: value / 100 });
+      document.documentElement.style.setProperty('--mark-opacity', String(value / 100));
+    }));
+  body.appendChild(marks);
+
+  const guides = document.createElement('section');
+  guides.className = 'block';
+  guides.innerHTML = `<h2>Reading guides</h2>
+    <p class="muted" style="font-size:12px;line-height:1.55">
+      For dense text, textbooks and tired eyes. Off unless you want them.</p>`;
+  guides.appendChild(row('Reading ruler', 'A band that follows the line you touch',
+    toggle(settings.readingRuler, async (on) => {
+      await store.saveSettings({ readingRuler: on });
+      onGuidesChange?.();
+    })));
+
+  const focus = document.createElement('div');
+  focus.className = 'seg';
+  for (const [value, label] of [['off', 'No dimming'], ['paragraph', 'Paragraph'], ['line', 'Line']]) {
+    const button = document.createElement('button');
+    button.textContent = label;
+    button.setAttribute('aria-pressed', String((settings.focusMode || 'off') === value));
+    button.onclick = async () => {
+      await store.saveSettings({ focusMode: value });
+      onGuidesChange?.();
+      renderSettings();
+    };
+    focus.appendChild(button);
+  }
+  guides.appendChild(focus);
+  body.appendChild(guides);
+
+  const pages = document.createElement('section');
+  pages.className = 'block';
+  pages.innerHTML = '<h2>Page breaks</h2>';
+  pages.appendChild(row('Keep paragraphs whole',
+    'Never split one across a page. Costs a little space at the foot of the page to buy it.',
+    toggle(settings.keepParagraphs, async (on) => {
+      await store.saveSettings({ keepParagraphs: on });
+      document.body.dataset.keepParagraphs = String(on);
+      if (reader.state.book) reader.repaginate();
+    })));
+  body.appendChild(pages);
+
 
   body.innerHTML = '<h2>Page turning</h2>';
   body.appendChild(row('Tap the sides', 'Left and right edges turn the page',

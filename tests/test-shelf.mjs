@@ -592,6 +592,53 @@ t('a backup can be restored, not only written', () => {
   assert.match(panels, /not on the shelf yet/);
 });
 
+t('in-book search knows it came from a book', () => {
+  // cameFrom was assigned after the screen had already changed, so it was
+  // always the screen just arrived at -- and searching from inside a book
+  // behaved as though it had come from the shelf.
+  const show = app.slice(app.indexOf('async function show('), app.indexOf('await enter(name)'));
+  assert.ok(show.indexOf('cameFrom = current') < show.indexOf('current = name'),
+    'cameFrom is still recorded after the change');
+});
+
+t('a file opened from outside waits for the reader to be ready', () => {
+  // Opening from a file manager is always a cold start, and the old fixed
+  // delay landed on a window with no Grimoire on it.
+  const main = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(main, /void onReaderReady/);
+  assert.match(main, /private String pendingUri/);
+  assert.ok(!/postDelayed\([^)]*openExternalBook/.test(main), 'still guessing at a delay');
+  const bridge = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
+  assert.match(bridge, /public void ready\(\)/);
+  assert.match(app, /window\.GrimoireNative\?\.ready\?\.\(\)/);
+  // And a file too big for the bridge says so rather than failing blankly.
+  assert.match(bridge, /"TOO_LARGE"/);
+  assert.match(app, /too large to open this way/);
+});
+
+t('the heat map is drawn from words, not pages', () => {
+  // A page is a function of type size; the same chapter is thirty pages at
+  // one setting and twelve at another, and a chapter read elsewhere is none.
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /\.map\(\(d\) => d\.words\)\.filter/);
+  assert.match(panels, /words\.toLocaleString\(\)\} words/);
+  // A continuous shade within each level, so a heavy day is not flattened
+  // into the same step as a merely busy one.
+  assert.match(panels, /cell\.style\.setProperty\('--fill'/);
+  assert.match(css, /color-mix\(in srgb, var\(--heat-4\)/);
+});
+
+t('the averages hold up when reading happens elsewhere', () => {
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  for (const label of ['Words a chapter', 'Words a book', 'Chapters a day', 'Read elsewhere']) {
+    assert.ok(panels.includes(`'${label}'`), `no ${label} figure`);
+  }
+  // Copying a chapter out is recorded as reading, since that is what it is.
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /async function recordCopiedChapter/);
+  assert.match(reader, /elsewhere: true/);
+});
+
 console.log('settings');
 
 t('settings is a screen with panes, reachable from the bar', () => {

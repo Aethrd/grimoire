@@ -187,7 +187,9 @@ t('only the book\u2019s own words can be selected', () => {
   // the copy row, every other screen -- inherits the app-wide `none`.
   const enabling = [...css.matchAll(/([^{}]+)\{[^}]*user-select:\s*text/g)]
     .map((m) => m[1].trim().split('\n').pop().trim());
-  assert.deepEqual(enabling, ['.page-flow'],
+  // The book, and anything typed into -- a field whose text cannot be
+  // selected has no caret and no paste.
+  assert.deepEqual(enabling.sort(), ['.page-flow', 'input, textarea'],
     `selection is enabled somewhere else: ${enabling.join(', ')}`);
 
   // And two things inside the flow that are not the author's words: the label
@@ -286,6 +288,35 @@ t('a failed translation can be diagnosed on the device', () => {
 
 
 
+
+t('the passage being read is held together across a re-flow', () => {
+  // Changing the type size re-flows everything, and the paragraph someone is
+  // halfway through can end up split across the break -- precisely the one
+  // that should not be.
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /function keepPassageWhole/);
+  // Only when it is actually split, and only that paragraph.
+  assert.match(reader, /if \(startsIn === endsIn\) return/);
+  assert.match(reader, /block\.classList\.add\('keep-whole'\)/);
+  // One correction, not a loop: fixing a break can make another.
+  const fn = reader.slice(reader.indexOf('function keepPassageWhole'));
+  assert.equal((fn.slice(0, 1600).match(/keepPassageWhole\(/g) || []).length, 1,
+    'the correction calls itself');
+  assert.match(css, /\.page-flow \.keep-whole \{ break-inside: avoid/);
+});
+
+t('the desk is a workspace over the book, not a screen away from it', () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  // Where to come back to, recorded once when the desk opens.
+  assert.match(app, /home: \{ chapterIndex: reader\.state\.chapterIndex/);
+  assert.match(app, /async function closeDesk/);
+  // Tapping outside is a peek at the page, not a close -- closing moves the
+  // reader, which is not what tapping outside asks for.
+  assert.match(app, /Dismissing by the scrim is a peek at the page/);
+  // Pins belong to the desk and go with it.
+  assert.match(app, /desk\.pinned\.push/);
+  assert.match(app, /desk = null/);
+});
 
 console.log('settings render for real');
 

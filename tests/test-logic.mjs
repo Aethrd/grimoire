@@ -7,6 +7,10 @@ const lib   = await import(new URL('../app/src/main/assets/www/js/library.js', i
 
 let pass = 0;
 const t = (name, fn) => { fn(); console.log('  ok  ' + name); pass++; };
+/* Awaited separately: the summary at the end of this file is printed
+   synchronously, so an async test that is merely started would not be
+   counted by the time it runs. */
+const t2 = async (name, fn) => { await fn(); console.log('  ok  ' + name); pass++; };
 
 console.log('theme');
 t('ramp produces eight steps, light to dark', () => {
@@ -201,6 +205,28 @@ t('opening a book is not reading it', () => {
   assert.equal(lib.statusOf({ lastOpenedAt: 5 }), 'unread');
   assert.equal(lib.statusOf({ lastOpenedAt: 5, lastReadAt: 6 }), 'reading');
 });
+
+console.log('reading elsewhere');
+
+await (async () => {
+  await t2('words alone count as a reading session', async () => {
+  // A chapter copied out to be read in a translator produces no pages and no
+  // time. Requiring either meant that reading recorded nothing at all.
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const id = await store.add('books', { title: 'Copied', fingerprint: 'c', addedAt: 1 });
+
+  await store.recordEvent({ bookId: id, words: 4000, chapters: 1, elsewhere: true });
+  const log = await store.all('events');
+  assert.equal(log.length, 1, 'the copied chapter was not recorded');
+  assert.equal(log[0].words, 4000);
+  assert.equal(log[0].chapters, 1);
+  assert.equal(log[0].elsewhere, true);
+
+    // An empty session is still nothing.
+    await store.recordEvent({ bookId: id, words: 0 });
+    assert.equal((await store.all('events')).length, 1);
+  });
+})();
 
 console.log('bundles');
 

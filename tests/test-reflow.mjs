@@ -51,6 +51,145 @@ await (async () => {
   });
 })();
 
+await (async () => {
+  /* Highlights could not be created at all until text became selectable --
+   * the store, the Highlights tab and the data model were all there, waiting
+   * for a way to make one. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const reader = await import(
+    `${new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href}?marks`);
+
+  const id = await store.add('books', { title: 'Marked', fingerprint: 'mk', addedAt: 1 });
+  await store.put('chapters', {
+    bookId: id, index: 0, title: 'One', words: 20,
+    html: '<p>The quick brown fox jumps over the lazy dog.</p><p>A second paragraph.</p>',
+  });
+
+  reader.init({ onChange() {} });
+  await reader.open(id);
+
+  await t('a highlight is made from a selection and survives a re-render', async () => {
+    const paragraph = document.querySelector('#page-flow p');
+    const range = document.createRange();
+    range.setStart(paragraph.firstChild, 4);
+    range.setEnd(paragraph.firstChild, 19);          // "quick brown fox"
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const found = reader.selectionRange();
+    assert.ok(found, 'the selection was not recognised');
+    assert.equal(found.text, 'quick brown fox');
+    assert.equal(found.anchor, 4);
+
+    await reader.addMark(found, 'underline', 'green', 'compare with chapter 9');
+
+    const painted = document.querySelector('#page-flow mark.hl');
+    assert.ok(painted, 'the mark was not drawn');
+    assert.equal(painted.textContent, 'quick brown fox');
+    assert.ok(painted.classList.contains('hl-underline'));
+    assert.ok(painted.classList.contains('hl-green'));
+    assert.equal(painted.dataset.note, 'compare with chapter 9');
+  });
+
+  await t('it comes back when the chapter is loaded again', async () => {
+    await reader.open(id);
+    const painted = document.querySelector('#page-flow mark.hl');
+    assert.ok(painted, 'the mark did not survive reopening');
+    assert.equal(painted.textContent, 'quick brown fox');
+  });
+
+  await t('removing one takes it off the page', async () => {
+    const stored = (await store.byIndex('marks', 'bookId', id))
+      .filter((m) => m.kind === 'highlight');
+    assert.equal(stored.length, 1);
+    await reader.removeMark(stored[0].id);
+    assert.equal(document.querySelector('#page-flow mark.hl'), null);
+  });
+
+  /* Selecting by character offset into the chapter, the way the reader
+     addresses text.
+     Two things make the obvious approach wrong: painting a mark replaces the
+     whole section, so a node held from before is detached; and once part of a
+     paragraph is marked its first child is a <mark> element rather than a
+     text node, so offsets into it mean nothing. */
+  const pickIn = (from, to) => {
+    const section = document.querySelector('#page-flow .chapter') || document.getElementById('page-flow');
+    const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let at = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+      nodes.push({ node, start: at, length: node.nodeValue.length });
+      at += node.nodeValue.length;
+    }
+    const locate = (offset) => {
+      const entry = nodes.find((n) => offset >= n.start && offset <= n.start + n.length);
+      return [entry.node, offset - entry.start];
+    };
+    const range = document.createRange();
+    range.setStart(...locate(from));
+    range.setEnd(...locate(to));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return reader.selectionRange();
+  };
+
+  await t('two marks that touch become one', async () => {
+    // Marking a sentence, then the next, then the next leaves three ranges
+    // that are really one passage -- and they render with seams where the
+    // gaps fall.
+    const pick = pickIn;
+
+    await reader.addMark(pick(0, 9), 'highlight', 'yellow');    // "The quick"
+    await reader.addMark(pick(10, 19), 'highlight', 'yellow');  // "brown fox"
+
+    const marks = reader.marksInOrder();
+    assert.equal(marks.length, 1, 'the two were not joined');
+    assert.equal(marks[0].anchor, 0);
+    assert.equal(marks[0].end, 19);
+  });
+
+  await t('marks that disagree are left alone', async () => {
+    // A different colour is saying something different about the words.
+    await reader.addMark(pickIn(20, 25), 'underline', 'blue');
+    assert.equal(reader.marksInOrder().length, 2);
+  });
+
+  await t('a phrase can be split out of a longer mark', async () => {
+    for (const mark of reader.marksInOrder()) await reader.removeMark(mark.id);
+
+    await reader.addMark(pickIn(0, 30), 'highlight', 'yellow');
+
+    // A phrase inside it.
+    const found = pickIn(4, 9);
+    const around = reader.markAround(found);
+    assert.ok(around, 'the surrounding mark was not recognised');
+
+    await reader.splitMark(around, found, 'box', 'green');
+    const after = reader.marksInOrder();
+    assert.equal(after.length, 3, 'the remainder was not kept');
+    assert.deepEqual(after.map((m) => m.style), ['highlight', 'box', 'highlight']);
+  });
+
+  await t('stepping moves between marks without opening a list', async () => {
+    const all = reader.marksInOrder();
+    const second = await reader.stepToMark(all[0].id, 1);
+    assert.equal(second.id, all[1].id);
+    // And wraps rather than stopping at the end.
+    const wrapped = await reader.stepToMark(all[all.length - 1].id, 1);
+    assert.equal(wrapped.id, all[0].id);
+  });
+
+  await t('density is a setting the reader keeps to hand', async () => {
+    await reader.setMarkDensity('hidden');
+    assert.equal(document.body.dataset.marks, 'hidden');
+    assert.equal((await store.settings()).markDensity, 'hidden');
+    await reader.setMarkDensity('full');
+  });
+})();
+
 console.log('what counts as reading');
 
 await (async () => {

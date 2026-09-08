@@ -160,6 +160,9 @@
           <button class="icon-btn" data-go="toc" title="Index"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
           <button class="icon-btn" data-go="layout" title="Layout"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h9"/></svg></button>
           <button class="icon-btn" data-go="reel" title="Images"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1"/><path d="M3 15l5-4 4 3 3-2 6 4"/></svg></button>
+          <button class="icon-btn" id="desk-open" title="Reading desk">
+            <svg viewBox="0 0 24 24"><path d="M3 7h18v4H3z"/><path d="M5 11v8M19 11v8M9 15h6"/></svg>
+          </button>
           <button class="btn ghost" id="keep-book" hidden>Keep in library</button>
           <button class="icon-btn" id="translate-chapter" title="Translate this chapter" hidden>
             <svg viewBox="0 0 24 24"><path d="M4 6h10M9 4v2c0 4-2 7-5 8M6 11c1.5 3 4 5 7 5"/><path d="M13 20l4-10 4 10M14.5 16h5"/></svg>
@@ -404,6 +407,47 @@
     </button>
   </div>
   <span class="bar"><span class="bar-fill" id="import-bar" style="width:0%"></span></span>
+</div>
+
+<!-- Sits opposite Android's own selection menu, never over it. -->
+<div class="annotate" id="annotate" hidden>
+  <div class="annotate-styles" id="annotate-styles"></div>
+  <div class="annotate-colours" id="annotate-colours"></div>
+  <textarea class="annotate-note" id="annotate-text" rows="2" placeholder="Note" hidden></textarea>
+  <div class="annotate-actions">
+    <button class="btn ghost" id="annotate-note">Note</button>
+    <button class="btn primary" id="annotate-save">Mark</button>
+  </div>
+</div>
+
+<!-- A note shown where its marker is, then gone again. -->
+<!-- A temporary workspace over the book, not a screen away from it. -->
+<div class="sheet-scrim" id="desk" hidden>
+  <div class="sheet desk">
+    <div class="desk-head">
+      <p class="eyebrow">Reading desk</p>
+      <button class="btn ghost" id="desk-pin">Pin this page</button>
+    </div>
+    <div id="desk-body"></div>
+    <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
+      <button class="btn ghost" id="desk-hide">Look at the page</button>
+      <button class="btn primary" id="desk-close">Close desk</button>
+    </div>
+  </div>
+</div>
+
+<!-- Stays put while the desk is open, so a jump is never a one-way trip. -->
+<button class="desk-tab" id="desk-tab" hidden>Desk</button>
+
+<div class="ruler" id="ruler" hidden></div>
+
+<div class="peek" id="peek" hidden>
+  <p class="peek-note" id="peek-note"></p>
+  <div class="peek-steps">
+    <button class="btn ghost" id="peek-prev">‹ Previous</button>
+    <button class="btn ghost" id="peek-remove">Remove</button>
+    <button class="btn ghost" id="peek-next">Next ›</button>
+  </div>
 </div>
 
 <div class="toast" id="toast" hidden></div>

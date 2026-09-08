@@ -97,6 +97,12 @@ html, body {
 
 html { background: var(--bg); }
 
+/* Anything typed into has to be selectable, or the caret cannot be placed and
+   the phone's own cut and paste does not appear. The app-wide `none` above
+   would otherwise take it from the search field, the note field and every
+   box in the book details. */
+input, textarea { -webkit-user-select: text; user-select: text; }
+
 /* The background image sits under everything, dimmed by the veil. */
 body::before {
   content: ""; position: fixed; inset: 0; z-index: -1;
@@ -985,3 +991,163 @@ section.block > h2 { margin-top: 18px; }
    badge is even noticed. */
 .tile.bundled .tile-cover { box-shadow: 3px -3px 0 -1px var(--surface),
                                         4px -4px 0 0 var(--hairline); }
+
+
+/* ── annotations ─────────────────────────────────────────────────────────
+   Style carries meaning separately from colour: once a colour means
+   something -- disagree, look up, quote -- you still want a second axis for
+   how loudly it says it. Opacity is a setting because a page of highlights
+   from a previous reading should not shout over the text on the next one. */
+
+.hl { color: inherit; background: none; }
+.hl-highlight { background: color-mix(in srgb, var(--hl) calc(var(--mark-opacity) * 100%), transparent); }
+.hl-underline { border-bottom: 2px solid var(--hl); }
+.hl-double    { border-bottom: 3px double var(--hl); }
+.hl-wavy      { text-decoration: underline wavy var(--hl); text-underline-offset: 3px; }
+.hl-box       { outline: 1.5px solid var(--hl); outline-offset: 1px; border-radius: 2px; }
+
+/* Where color-mix is unsupported the highlight would have no background at
+   all, so it falls back to a plain tint. */
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+  .hl-highlight { background: var(--hl); opacity: .999; }
+}
+
+.hl-yellow { --hl: #e8c14a; }
+.hl-green  { --hl: #5aa469; }
+.hl-blue   { --hl: #5b8fd6; }
+.hl-pink   { --hl: #d4779b; }
+.hl-purple { --hl: #9b7bd4; }
+
+/* Three densities: every mark, a marker in the margin only, or nothing. */
+[data-marks="markers"] .hl { background: none; border: 0; outline: 0; text-decoration: none; }
+[data-marks="markers"] .hl::after {
+  content: ""; display: inline-block; width: 5px; height: 5px; margin-left: 2px;
+  border-radius: 50%; background: var(--hl); vertical-align: super;
+}
+[data-marks="hidden"] .hl { background: none; border: 0; outline: 0; text-decoration: none; }
+
+.annotate {
+  position: fixed; left: 12px; right: 12px; z-index: 32;
+  padding: 10px; border-radius: var(--radius-lg);
+  background: var(--surface); border: 1px solid var(--hairline);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .3);
+  animation: chrome-in var(--motion-fast) var(--ease) both;
+}
+.annotate[hidden] { display: none; }
+.annotate-styles, .annotate-colours { display: flex; gap: 6px; margin-bottom: 8px; }
+.annotate-styles button { flex: 1; padding: 7px 4px; border-radius: var(--radius-md);
+                          border: 1px solid var(--hairline); font-size: 10px;
+                          font-family: var(--font-heading); font-weight: 600; }
+.annotate-styles button[aria-pressed="true"] { background: var(--accent-100);
+                                               color: var(--accent-ink); }
+.annotate-colours button { width: 28px; height: 28px; border-radius: 50%;
+                           border: 2px solid transparent; }
+.annotate-colours button[aria-pressed="true"] { border-color: var(--text); }
+.annotate-note { width: 100%; margin-bottom: 8px; padding: 8px 10px;
+                 border-radius: var(--radius-md); border: 1px solid var(--hairline);
+                 background: var(--bg); color: var(--text); font: inherit;
+                 font-size: 13px; resize: none; }
+.annotate-note[hidden] { display: none; }
+.annotate-actions { display: flex; gap: 8px; }
+.annotate-actions .btn { flex: 1; }
+
+.peek {
+  position: fixed; left: 16px; right: 16px; z-index: 33;
+  padding: 12px 14px; border-radius: var(--radius-lg);
+  background: var(--surface); border: 1px solid var(--hairline);
+  font-size: 13px; line-height: 1.5;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .3);
+  animation: chrome-in var(--motion-fast) var(--ease) both;
+}
+.peek[hidden] { display: none; }
+.peek-note { margin: 0 0 10px; }
+.peek-note:empty { display: none; }
+.peek-steps { display: flex; gap: 6px; }
+.peek-steps .btn { flex: 1; font-size: 11px; padding: 8px 4px; }
+
+/* ── reading guides ──────────────────────────────────────────────────────
+   Both off by default. They help a great deal with dense non-fiction,
+   textbooks, dyslexia and tired eyes, and are a distraction to anyone who
+   does not need them. */
+
+.ruler {
+  position: fixed; left: 0; right: 0; height: 2.1em; z-index: 4;
+  pointer-events: none;
+  border-top: 1px solid var(--accent-400);
+  border-bottom: 1px solid var(--accent-400);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.ruler[hidden] { display: none; }
+
+/* Dim everything but the passage being read. Opacity rather than colour, so
+   it works against any theme and any background image. */
+[data-focus="paragraph"] .page-flow p,
+[data-focus="paragraph"] .page-flow li,
+[data-focus="line"] .page-flow p,
+[data-focus="line"] .page-flow li {
+  transition: opacity var(--motion) var(--ease);
+  opacity: .3;
+}
+[data-focus="paragraph"] .page-flow p.in-focus,
+[data-focus="paragraph"] .page-flow li.in-focus,
+[data-focus="line"] .page-flow p.in-focus,
+[data-focus="line"] .page-flow li.in-focus { opacity: 1; }
+
+/* ── page breaks ─────────────────────────────────────────────────────────
+   Only visible at a page boundary, and only wrong when they are. */
+
+.page-flow p { orphans: 2; widows: 2; }
+/* A heading stranded at the foot of a page with its chapter overleaf. */
+.page-flow h1, .page-flow h2, .page-flow h3,
+.page-flow h4, .page-flow h5, .page-flow h6 { break-after: avoid; page-break-after: avoid; }
+.page-flow figure { break-inside: avoid; page-break-inside: avoid; }
+/* Optional, because it costs space at the bottom of a page to buy it. */
+[data-keep-paragraphs="true"] .page-flow p { break-inside: avoid; page-break-inside: avoid; }
+/* The one paragraph being read, held together across a re-flow. Applied by
+   the reader and removed at the next one, so it costs nothing elsewhere. */
+.page-flow .keep-whole { break-inside: avoid; page-break-inside: avoid; }
+
+
+/* A gradient within each heat level rather than five flat steps: a heavy day
+   should read as heavier than a merely busy one. --fill is set per cell from
+   the words read that day. */
+.heat i[data-l="0"] { background: var(--heat-0); }
+.heat i[data-l]:not([data-l="0"]) {
+  background: color-mix(in srgb, var(--heat-4) calc(var(--fill, .5) * 100%), var(--heat-1));
+}
+@supports not (background: color-mix(in srgb, red 50%, blue)) {
+  .heat i[data-l="1"] { background: var(--heat-1); }
+  .heat i[data-l="2"] { background: var(--heat-2); }
+  .heat i[data-l="3"] { background: var(--heat-3); }
+  .heat i[data-l="4"] { background: var(--heat-4); }
+}
+
+
+/* ── reading desk ────────────────────────────────────────────────────────
+   A workspace held over the book rather than a screen away from it. Jumping
+   from it moves the reader; closing it puts the reader back where the desk
+   was opened, and the workspace itself is gone. */
+
+.desk { max-height: 80%; }
+.desk-head { display: flex; align-items: center; justify-content: space-between;
+             gap: 10px; margin-bottom: 6px; }
+.desk-group { margin-bottom: 14px; }
+.desk-group > h3 { margin: 0 0 4px; font-family: var(--font-heading);
+                   font-weight: 600; font-size: 11px; letter-spacing: .08em;
+                   text-transform: uppercase; color: var(--muted); }
+.desk-group .list-row { padding: 10px 4px; }
+.desk-group .list-row small { display: block; color: var(--muted); font-size: 12px;
+                              overflow: hidden; text-overflow: ellipsis;
+                              white-space: nowrap; }
+.desk-empty { font-size: 12px; color: var(--muted); padding: 4px 0 8px; }
+
+.desk-tab {
+  position: fixed; right: 12px; z-index: 26;
+  bottom: calc(var(--safe-bottom) + 16px);
+  padding: 10px 16px; border-radius: var(--radius-pill);
+  background: var(--accent); color: var(--accent-900);
+  font-family: var(--font-heading); font-weight: 700; font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .3);
+  animation: chrome-in var(--motion-fast) var(--ease) both;
+}
+.desk-tab[hidden] { display: none; }

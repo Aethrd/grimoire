@@ -33,10 +33,15 @@ async function show(name, { replace = false } = {}) {
   // Await it: the stats screen reads the log the moment it opens, and an
   // unawaited flush would land just after it had rendered the old numbers.
   if (current === 'reader' && name !== 'reader') {
+    if (desk) await closeDesk({ returnHome: false });
     await reader.pauseSession();
     await forgetTransientBook();
   }
 
+  // Recorded before the change, or it is simply the screen just arrived at --
+  // which is how in-book search kept behaving as though it had come from the
+  // shelf.
+  cameFrom = current;
   screenNode(current)?.removeAttribute('data-active');
   screenNode(name)?.setAttribute('data-active', '');
   current = name;
@@ -48,7 +53,6 @@ async function show(name, { replace = false } = {}) {
   // longer see.
   if (name !== 'library') clearSelection();
   // The tab bar is app furniture; it has no business over a page of prose.
-  cameFrom = current;
   document.body.dataset.view = name;
   el('tabbar').hidden = name === 'reader' || selecting();
   for (const button of el('tabbar').children) {
@@ -807,6 +811,330 @@ function atChapterEdge(direction) {
     : `That is the ${direction > 0 ? 'last' : 'first'} chapter`);
 }
 
+/* ── annotating ───────────────────────────────────────────────────────────
+ *
+ * The bar is placed opposite Android's own selection menu rather than near
+ * the selection. The system puts its toolbar above the selected text when
+ * there is room above and below it otherwise, so going the other way is what
+ * keeps the two from covering each other -- and covering Copy, Translate or
+ * Web search would be worse than showing nothing at all.
+ */
+
+let pendingSelection = null;
+
+function placeAnnotateBar(rect) {
+  const bar = el('annotate');
+  const host = el('page-host').getBoundingClientRect();
+  const roomAbove = rect.top - host.top;
+
+  bar.hidden = false;
+  bar.style.top = '';
+  bar.style.bottom = '';
+
+  // Room above means the system menu goes there, so this goes below.
+  if (roomAbove > 120) bar.style.top = `${Math.min(rect.bottom + 16, host.bottom - 170)}px`;
+  else bar.style.bottom = `${Math.max(16, window.innerHeight - rect.top + 16)}px`;
+}
+
+function hideAnnotateBar() {
+  el('annotate').hidden = true;
+  const note = el('annotate-text');
+  note.value = '';
+  note.hidden = true;
+  pendingSelection = null;
+}
+
+async function wireAnnotations() {
+  const settings = await store.settings();
+  let style = settings.markStyle;
+  let colour = settings.markColour;
+
+  const styles = el('annotate-styles');
+  for (const [value, label] of reader.MARK_STYLES) {
+    const button = document.createElement('button');
+    button.textContent = label.replace('Double underline', 'Double').replace('Wavy underline', 'Wavy');
+    button.setAttribute('aria-pressed', String(style === value));
+    button.onclick = () => {
+      style = value;
+      for (const other of styles.children) other.setAttribute('aria-pressed', String(other === button));
+      store.saveSettings({ markStyle: value });
+    };
+    styles.appendChild(button);
+  }
+
+  const colours = el('annotate-colours');
+  for (const [value, hex] of reader.MARK_COLOURS) {
+    const button = document.createElement('button');
+    button.style.background = hex;
+    button.setAttribute('aria-pressed', String(colour === value));
+    button.onclick = () => {
+      colour = value;
+      for (const other of colours.children) other.setAttribute('aria-pressed', String(other === button));
+      store.saveSettings({ markColour: value });
+    };
+    colours.appendChild(button);
+  }
+
+  const save = async (note) => {
+    if (!pendingSelection) return;
+    // A selection inside an existing mark is a phrase being picked out of it,
+    // not a second mark laid over the first -- two overlapping ranges saying
+    // different things about the same words help nobody.
+    const around = reader.markAround(pendingSelection);
+    if (around) await reader.splitMark(around, pendingSelection, style, colour, note);
+    else await reader.addMark(pendingSelection, style, colour, note);
+
+    window.getSelection?.().removeAllRanges();
+    hideAnnotateBar();
+    toast(around ? 'Split out' : note ? 'Note saved' : 'Marked');
+  };
+
+  const noteField = el('annotate-text');
+
+  el('annotate-save').onclick = () => save(noteField.value.trim() || null);
+
+  // The field appears in place rather than as a dialog: a note is written
+  // while looking at the sentence it is about.
+  el('annotate-note').onclick = () => {
+    noteField.hidden = !noteField.hidden;
+    if (!noteField.hidden) noteField.focus();
+  };
+
+  // Offered as soon as there is something to mark, and withdrawn the moment
+  // there is not.
+  document.addEventListener('selectionchange', () => {
+    if (current !== 'reader') return;
+    // Typing in the note field selects text too; that is not a passage to
+    // mark, and reacting to it would close the bar being typed into.
+    if (document.activeElement === noteField) return;
+    const found = reader.selectionRange();
+    if (!found) { hideAnnotateBar(); return; }
+    pendingSelection = found;
+    // The button says which of the two it will do.
+    el('annotate-save').textContent = reader.markAround(found) ? 'Split out' : 'Mark';
+    placeAnnotateBar(found.rect);
+  });
+
+  /* A note is read where its marker is, not on another screen -- and the
+     same card steps between marks, so going from one to the next does not
+     mean opening a list and losing the thread. */
+  let peekedMark = null;
+
+  const showPeek = (mark, rect) => {
+    const peek = el('peek');
+    peekedMark = mark;
+    el('peek-note').textContent = mark.note || '';
+    peek.hidden = false;
+
+    const below = rect.bottom + 12;
+    peek.style.top = below + peek.offsetHeight > window.innerHeight
+      ? `${Math.max(12, rect.top - peek.offsetHeight - 12)}px`
+      : `${below}px`;
+  };
+
+  const step = async (delta) => {
+    const next = await reader.stepToMark(peekedMark?.id, delta);
+    if (!next) return;
+    paintReader();
+    // Wait for the page to settle before measuring where it landed.
+    requestAnimationFrame(() => {
+      const drawn = document.querySelector(`mark[data-mark="${next.id}"]`);
+      showPeek(next, drawn ? drawn.getBoundingClientRect()
+        : { top: 120, bottom: 140 });
+    });
+  };
+
+  el('peek-prev').onclick = () => step(-1);
+  el('peek-next').onclick = () => step(1);
+  el('peek-remove').onclick = async () => {
+    if (!peekedMark) return;
+    await reader.removeMark(peekedMark.id);
+    el('peek').hidden = true;
+    peekedMark = null;
+    toast('Removed');
+  };
+
+  el('page-host').addEventListener('click', (e) => {
+    const marker = e.target.closest?.('mark[data-mark]');
+    if (!marker) { el('peek').hidden = true; peekedMark = null; return; }
+    const mark = reader.markById(Number(marker.dataset.mark));
+    if (mark) showPeek(mark, marker.getBoundingClientRect());
+  });
+
+}
+
+/* ── reading desk ─────────────────────────────────────────────────────────
+ *
+ * A workspace held over the book for as long as it is wanted.
+ *
+ * The problem it answers: comparing three passages means jumping between
+ * them, and every jump costs the place you were reading. So opening the desk
+ * records where you were, jumping from it is free, and closing it puts you
+ * back exactly there. The pins are the desk's own -- they last as long as it
+ * does and no longer, which is what makes pinning something cheap enough to
+ * do without thinking about it.
+ */
+
+let desk = null;
+
+function deskEntry(label, note, onGo) {
+  const row = document.createElement('button');
+  row.className = 'list-row';
+  row.innerHTML = `<span class="body"><b>${escapeText(label)}</b>`
+    + (note ? `<small>${escapeText(note)}</small>` : '') + '</span>';
+  row.onclick = onGo;
+  return row;
+}
+
+async function renderDesk() {
+  const body = el('desk-body');
+  body.innerHTML = '';
+  if (!desk) return;
+
+  const state = reader.state;
+  const group = (title) => {
+    const section = document.createElement('div');
+    section.className = 'desk-group';
+    section.innerHTML = `<h3>${title}</h3>`;
+    body.appendChild(section);
+    return section;
+  };
+
+  const here = group('Current');
+  here.appendChild(deskEntry(
+    reader.chapterName(state.chapterIndex),
+    `p. ${reader.pageInBook()} of ${state.totalPages}`,
+    () => jumpFromDesk(state.chapterIndex, state.anchor)));
+
+  const pins = group('Pinned');
+  if (!desk.pinned.length) {
+    pins.insertAdjacentHTML('beforeend',
+      '<p class="desk-empty">Nothing pinned. Pin this page to come back to it.</p>');
+  }
+  for (const pin of desk.pinned) {
+    pins.appendChild(deskEntry(pin.label, pin.excerpt,
+      () => jumpFromDesk(pin.chapterIndex, pin.anchor)));
+  }
+
+  const marks = await store.byIndex('marks', 'bookId', state.book.id);
+
+  const bookmarks = group('Bookmarks');
+  const saved = marks.filter((m) => m.kind === 'bookmark');
+  if (!saved.length) bookmarks.insertAdjacentHTML('beforeend', '<p class="desk-empty">None yet.</p>');
+  for (const mark of saved) {
+    bookmarks.appendChild(deskEntry(reader.chapterName(mark.chapterIndex), null,
+      () => jumpFromDesk(mark.chapterIndex, mark.anchor)));
+  }
+
+  const notes = group('Notes');
+  const written = marks.filter((m) => m.note);
+  if (!written.length) notes.insertAdjacentHTML('beforeend', '<p class="desk-empty">None yet.</p>');
+  for (const mark of written) {
+    notes.appendChild(deskEntry(mark.note, mark.text || reader.chapterName(mark.chapterIndex),
+      () => jumpFromDesk(mark.chapterIndex, mark.anchor)));
+  }
+}
+
+async function jumpFromDesk(chapterIndex, anchor) {
+  el('desk').hidden = true;
+  el('desk-tab').hidden = false;
+  await reader.goTo({ chapter: chapterIndex, anchor });
+  paintReader();
+}
+
+async function openDesk() {
+  if (!reader.state.book) return toast('Open a book first');
+  // Where to come back to. Recorded once, when the desk is opened, so that
+  // jumping around from it costs nothing.
+  if (!desk) {
+    desk = {
+      home: { chapterIndex: reader.state.chapterIndex, anchor: reader.state.anchor },
+      pinned: [],
+    };
+  }
+  el('desk-tab').hidden = true;
+  el('desk').hidden = false;
+  await renderDesk();
+}
+
+async function closeDesk({ returnHome = true } = {}) {
+  const home = desk?.home;
+  desk = null;
+  el('desk').hidden = true;
+  el('desk-tab').hidden = true;
+  if (returnHome && home) {
+    await reader.goTo({ chapter: home.chapterIndex, anchor: home.anchor });
+    paintReader();
+  }
+}
+
+function wireDesk() {
+  el('desk-open').onclick = () => openDesk();
+  el('desk-tab').onclick = () => openDesk();
+  el('desk-hide').onclick = () => { el('desk').hidden = true; el('desk-tab').hidden = false; };
+  el('desk-close').onclick = () => closeDesk();
+  el('desk').onclick = (e) => {
+    // Dismissing by the scrim is a peek at the page, not a close: closing
+    // would move the reader, which is not what tapping outside asks for.
+    if (e.target !== el('desk')) return;
+    el('desk').hidden = true;
+    el('desk-tab').hidden = false;
+  };
+
+  el('desk-pin').onclick = async () => {
+    if (!desk) return;
+    const state = reader.state;
+    desk.pinned.push({
+      chapterIndex: state.chapterIndex,
+      anchor: state.anchor,
+      label: `p. ${reader.pageInBook()} · ${reader.chapterName(state.chapterIndex)}`,
+      excerpt: reader.excerptAt(state.anchor),
+    });
+    await renderDesk();
+  };
+}
+
+/* ── reading guides ───────────────────────────────────────────────────────
+ *
+ * A band that follows the line being read, and a dimming of everything but
+ * the passage in front of you. Both are aids for dense text, tired eyes and
+ * dyslexia, and both are off unless asked for.
+ */
+
+let guideSettings = { readingRuler: false, focusMode: 'off' };
+
+export async function refreshGuides() {
+  const settings = await store.settings();
+  guideSettings = settings;
+  document.body.dataset.focus = settings.focusMode || 'off';
+  el('ruler').hidden = !settings.readingRuler;
+  if (!settings.readingRuler) return;
+  // Parked in the middle until a line is chosen, rather than at the top where
+  // it would sit over the first line by accident.
+  const host = el('page-host').getBoundingClientRect();
+  el('ruler').style.top = `${host.top + host.height / 2}px`;
+}
+
+/** Put the guides on whatever is under a given point. */
+function moveGuides(clientY) {
+  if (guideSettings.readingRuler) {
+    const ruler = el('ruler');
+    ruler.hidden = false;
+    ruler.style.top = `${clientY - ruler.offsetHeight / 2}px`;
+  }
+
+  if ((guideSettings.focusMode || 'off') === 'off') return;
+
+  // The block under the point, rather than the nearest by distance: a finger
+  // resting in a margin should not light up the paragraph across the page.
+  const target = document.elementFromPoint(window.innerWidth / 2, clientY);
+  const block = target?.closest?.('#page-flow p, #page-flow li');
+  for (const lit of document.querySelectorAll('#page-flow .in-focus')) {
+    lit.classList.remove('in-focus');
+  }
+  if (block) block.classList.add('in-focus');
+}
+
 function wireReader() {
   reader.init({ onChange: paintReader });
 
@@ -825,6 +1153,7 @@ function wireReader() {
 
   host.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1) { moved = true; return; }
+    moveGuides(e.touches[0].clientY);
     tapX = e.touches[0].clientX;
     tapY = e.touches[0].clientY;
     tapAt = Date.now();
@@ -1107,6 +1436,10 @@ window.Grimoire = {
    */
   async openExternalBook(contentUri) {
     const base64 = window.GrimoireNative?.readContentUri?.(contentUri);
+    if (base64 === 'TOO_LARGE') {
+      return toast('That file is too large to open this way. Import it instead — '
+        + 'the shelf reads it straight from disk.', 8000);
+    }
     if (!base64) return toast('That file could not be read');
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
     const name = decodeURIComponent(contentUri.split('/').pop() || 'book.epub');
@@ -1137,7 +1470,14 @@ async function boot() {
   wireReader();
   wireSwipeBetweenTabs();
   wireSelection();
+  wireAnnotations();
+  wireDesk();
+  refreshGuides();
+
+  // Anything handed to the app from elsewhere has been waiting for this.
+  window.GrimoireNative?.ready?.();
   panels.onSettingsChange(() => panels.openSettings(refreshShelf));
+  panels.onGuides(refreshGuides);
 
 
   await refreshShelf();

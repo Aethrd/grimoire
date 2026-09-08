@@ -202,6 +202,26 @@ export const DEFAULT_SETTINGS = {
    * book, so it lives with the settings and applies everywhere. It used to
    * sit in the per-book layout, where choosing it on one book left every
    * other one unchanged -- which reads as the app forgetting. */
+  /* Annotations.
+   *
+   * Style is separate from colour on purpose: once a colour carries a meaning
+   * -- disagree, look up, quote -- you want a second axis for how loud it is.
+   */
+  markStyle: 'highlight',   // highlight | underline | double | wavy | box
+  markColour: 'yellow',
+  markOpacity: 0.35,
+  markDensity: 'full',      // full | markers | hidden
+  mergeMarks: true,         // two marks that touch become one
+
+  /* Guides. Both are off by default: they help a great deal with dense
+     non-fiction, textbooks, dyslexia and tired eyes, and are a distraction
+     for anyone who does not need them. */
+  readingRuler: false,
+  focusMode: 'off',         // off | paragraph | line
+
+  /* Typography that only matters at a page boundary. */
+  keepParagraphs: false,    // never split a paragraph across a page
+
   readingMode: 'paged',
   endlessScroll: true,
 
@@ -320,10 +340,20 @@ export async function markRead(bookId) {
   await put('books', book);
 }
 
-export async function recordEvent({ bookId, activeMs, pages, words, lang }) {
-  if (pages <= 0 && activeMs <= 0) return;
+export async function recordEvent({
+  bookId, activeMs = 0, pages = 0, words = 0, chapters = 0, elsewhere = false, lang,
+}) {
+  /* Words count as reading on their own.
+   *
+   * This used to require pages or time, which are the two things a chapter
+   * copied out to be read somewhere else produces none of -- so the reading
+   * that happens away from the app recorded nothing at all, which is the
+   * opposite of what the log is for.
+   */
+  if (pages <= 0 && activeMs <= 0 && words <= 0) return;
+
   await add('events', {
-    bookId, activeMs, pages, words,
+    bookId, activeMs, pages, words, chapters, elsewhere,
     lang: lang || 'und',
     day: dayKey(),
     at: Date.now(),

@@ -37,6 +37,9 @@ export const state = {
   names: new Map(),  // chapter index -> translated name, when enabled
   translated: null,  // chapter index whose body is currently shown translated
 
+  markDensity: 'full',
+  mergeMarks: true,
+
   mode: 'paged',     // 'paged' | 'scroll'
   endless: true,     // scroll mode only: run on into the next chapter
   loaded: [],        // chapter indices currently in the DOM, ascending
@@ -175,12 +178,137 @@ function sectionFor(index) {
   return flow.querySelector(`[data-chapter="${index}"]`);
 }
 
+/* ── annotations ──────────────────────────────────────────────────────── */
+
+export const MARK_STYLES = [
+  ['highlight', 'Highlight'],
+  ['underline', 'Underline'],
+  ['double', 'Double underline'],
+  ['wavy', 'Wavy underline'],
+  ['box', 'Box'],
+];
+
+export const MARK_COLOURS = [
+  ['yellow', '#e8c14a'], ['green', '#5aa469'], ['blue', '#5b8fd6'],
+  ['pink', '#d4779b'], ['purple', '#9b7bd4'],
+];
+
+/** Marks for the open book, by chapter. Loaded with the book. */
+let marksByChapter = new Map();
+
+export async function reloadMarks() {
+  marksByChapter = new Map();
+  if (!state.book) return;
+  for (const mark of await store.byIndex('marks', 'bookId', state.book.id)) {
+    if (mark.kind !== 'highlight') continue;
+    if (!marksByChapter.has(mark.chapterIndex)) marksByChapter.set(mark.chapterIndex, []);
+    marksByChapter.get(mark.chapterIndex).push(mark);
+  }
+  for (const [, list] of marksByChapter) list.sort((a, b) => a.anchor - b.anchor);
+}
+
+/**
+ * Wrap the marked ranges in the rendered chapter.
+ *
+ * Anchors are character offsets into the chapter, the same ones the reader
+ * uses to keep a place, so a mark survives a change of type size, a switch
+ * between paged and scrolling, and a re-import of the same book.
+ */
+function paintMarks(section, chapterIndex) {
+  const marks = marksByChapter.get(chapterIndex);
+  if (!marks?.length || state.markDensity === 'hidden') return;
+
+  for (const mark of marks) {
+    const nodes = textNodes(section);
+    const range = document.createRange();
+    const from = nodes.find((n) => mark.anchor >= n.start && mark.anchor < n.start + n.length);
+    const to = nodes.find((n) => mark.end > n.start && mark.end <= n.start + n.length);
+    if (!from || !to) continue;
+
+    try {
+      range.setStart(from.node, mark.anchor - from.start);
+      range.setEnd(to.node, mark.end - to.start);
+    } catch {
+      continue;      // the text moved under it; skip rather than throw
+    }
+
+    const wrap = document.createElement('mark');
+    wrap.className = `hl hl-${mark.style || 'highlight'} hl-${mark.colour || 'yellow'}`;
+    wrap.dataset.mark = String(mark.id);
+    if (mark.note) wrap.dataset.note = mark.note;
+
+    try {
+      // surroundContents fails across element boundaries, which a highlight
+      // spanning two paragraphs does. Falling back to wrapping each text node
+      // in the range keeps those working rather than dropping them.
+      range.surroundContents(wrap);
+    } catch {
+      wrapPiecewise(range, mark);
+    }
+  }
+}
+
+/** A highlight that crosses elements becomes one wrapper per text node. */
+function wrapPiecewise(range, mark) {
+  const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT);
+  const pieces = [];
+  let node;
+  while ((node = walker.nextNode())) {
+    if (range.intersectsNode(node)) pieces.push(node);
+  }
+  for (const piece of pieces) {
+    const slice = document.createRange();
+    slice.selectNodeContents(piece);
+    if (piece === range.startContainer) slice.setStart(piece, range.startOffset);
+    if (piece === range.endContainer) slice.setEnd(piece, range.endOffset);
+    if (slice.collapsed) continue;
+    const wrap = document.createElement('mark');
+    wrap.className = `hl hl-${mark.style || 'highlight'} hl-${mark.colour || 'yellow'}`;
+    wrap.dataset.mark = String(mark.id);
+    if (mark.note) wrap.dataset.note = mark.note;
+    try { slice.surroundContents(wrap); } catch { /* leave that piece plain */ }
+  }
+}
+
+/**
+ * Where the current selection sits, as offsets into the chapter.
+ *
+ * Returns null when there is no selection or it lies outside the text, so a
+ * stray tap on the chrome cannot produce a mark over nothing.
+ */
+export function selectionRange() {
+  const selection = window.getSelection?.();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
+
+  const range = selection.getRangeAt(0);
+  const section = sectionFor(state.chapterIndex);
+  if (!section || !section.contains(range.commonAncestorContainer)) return null;
+
+  const nodes = textNodes(section);
+  const at = (node, offset) => {
+    const entry = nodes.find((n) => n.node === node);
+    return entry ? entry.start + offset : null;
+  };
+  const start = at(range.startContainer, range.startOffset);
+  const end = at(range.endContainer, range.endOffset);
+  if (start === null || end === null || end <= start) return null;
+
+  return {
+    chapterIndex: state.chapterIndex,
+    anchor: start,
+    end,
+    text: selection.toString().replace(/\s+/g, ' ').trim(),
+    rect: range.getBoundingClientRect(),
+  };
+}
+
 function chapterSection(chapter) {
   const section = document.createElement('section');
   section.className = 'chapter';
   section.dataset.chapter = String(chapter.index);
   section.innerHTML = chapter.html;
   hydrateImages(section, chapter.index);
+  paintMarks(section, chapter.index);
   return section;
 }
 
@@ -332,6 +460,7 @@ export async function open(bookId, opts = {}) {
   const chapterIndex = opts.chapter ?? saved?.chapterIndex ?? 0;
   const anchor = opts.anchor ?? (opts.chapter != null ? 0 : saved?.anchor ?? 0);
 
+  await reloadMarks();
   await loadChapter(chapterIndex, anchor);
   startSession();
   loadChapterNames();     // not awaited: the book opens now, names follow
@@ -587,6 +716,10 @@ export function applyLayout(layout, settings) {
   /* Reading mode comes from the settings, not the book. An older install may
      still carry it in a per-book layout row; that is honoured once so nobody
      loses the mode they had, and the setting takes over from then on. */
+  state.markDensity = settings?.markDensity || 'full';
+  state.mergeMarks = settings ? settings.mergeMarks !== false : true;
+  document.body.dataset.marks = state.markDensity;
+
   const mode = settings?.readingMode || layout.mode || 'paged';
   state.endless = settings ? settings.endlessScroll !== false : layout.endless !== false;
 
@@ -631,7 +764,46 @@ export function repaginate() {
     relayout();
     estimateTotals();
     show(pageAtAnchor(anchor, chapter), { animate: false });
+    keepPassageWhole(anchor, chapter);
   });
+}
+
+/**
+ * Stop the passage being read from landing across a page break.
+ *
+ * Changing the type size re-flows everything, and the paragraph someone was
+ * halfway through can end up with two lines on one page and the rest on the
+ * next -- which is precisely the paragraph that should not be split, because
+ * it is the one being read.
+ *
+ * Only that paragraph is protected, and only until the next re-flow. Applying
+ * it to every paragraph is the `keepParagraphs` setting, which costs space at
+ * the foot of every page; this costs nothing anywhere else.
+ */
+function keepPassageWhole(anchor, chapterIndex) {
+  const section = sectionFor(chapterIndex);
+  if (!section || isScroll()) return;
+
+  for (const held of section.querySelectorAll('.keep-whole')) held.classList.remove('keep-whole');
+
+  const entry = textNodes(section).find((n) => anchor >= n.start && anchor <= n.start + n.length);
+  const block = entry?.node.parentElement?.closest('p, li, blockquote');
+  if (!block) return;
+
+  // Only worth doing when it is actually split: a paragraph whose top and
+  // bottom sit in different columns.
+  const rect = block.getBoundingClientRect();
+  const width = pageWidth();
+  if (width <= 0) return;
+  const startsIn = Math.floor((rect.left - viewport.getBoundingClientRect().left) / width);
+  const endsIn = Math.floor((rect.right - viewport.getBoundingClientRect().left - 1) / width);
+  if (startsIn === endsIn) return;
+
+  block.classList.add('keep-whole');
+  // One correction, not a loop: re-flowing to fix a break can create another,
+  // and chasing it would be a good way to never stop.
+  relayout();
+  show(pageAtAnchor(anchor, chapterIndex), { animate: false });
 }
 
 /* ── navigation ───────────────────────────────────────────────────────── */
@@ -728,6 +900,7 @@ export function hasPrevChapter() { return state.chapterIndex > 0; }
 export async function nextChapter() {
   if (!hasNextChapter()) return false;
   noteReading();
+  if (session) session.chapters += 1;
   countPage();
   // In endless mode the next chapter may already be below; scroll to it
   // rather than tearing the view down and rebuilding it.
@@ -840,11 +1013,41 @@ export async function copyChapter() {
     // fallback for older WebViews, which are common on Android 8 devices.
     if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
     else legacyCopy(text);
-    return { ok: true, words: countWords(text, state.book?.lang) };
+    const words = countWords(text, state.book?.lang);
+    await recordCopiedChapter(words);
+    return { ok: true, words };
   } catch {
-    try { legacyCopy(text); return { ok: true, words: countWords(text, state.book?.lang) }; }
-    catch { return { ok: false, words: 0 }; }
+    try {
+      legacyCopy(text);
+      const words = countWords(text, state.book?.lang);
+      await recordCopiedChapter(words);
+      return { ok: true, words };
+    } catch { return { ok: false, words: 0 }; }
   }
+}
+
+/**
+ * A chapter copied out is a chapter read.
+ *
+ * Reading happens elsewhere often enough to matter: the text is copied into a
+ * translator or another app and read there. None of that comes back as page
+ * turns, so time and pages say a reader did almost nothing on a day they got
+ * through six chapters. The words are what actually happened, so they are
+ * recorded, marked as read away from the app, and counted separately where
+ * the distinction matters.
+ */
+async function recordCopiedChapter(words) {
+  if (!state.book || !words) return;
+  noteReading();
+  await store.recordEvent({
+    bookId: state.book.id,
+    activeMs: 0,
+    pages: 0,
+    words,
+    chapters: 1,
+    elsewhere: true,
+    lang: state.book.lang,
+  });
 }
 
 function legacyCopy(text) {
@@ -878,7 +1081,7 @@ const FLUSH_EVERY_PAGES = 25;
 
 function startSession() {
   session = {
-    start: Date.now(), last: Date.now(), active: 0, pages: 0, words: 0,
+    start: Date.now(), last: Date.now(), active: 0, pages: 0, words: 0, chapters: 0,
     // The furthest point reached so far, so re-reading is not counted twice.
     furthest: pageInBook(),
   };
@@ -956,7 +1159,7 @@ export async function flushSession() {
   // Replaced rather than nulled, so reading continues to accumulate against a
   // fresh window and nothing is counted twice.
   session = {
-    start: Date.now(), last: done.last, active: 0, pages: 0, words: 0,
+    start: Date.now(), last: done.last, active: 0, pages: 0, words: 0, chapters: 0,
     furthest: done.furthest,
   };
 
@@ -965,6 +1168,8 @@ export async function flushSession() {
     activeMs: done.active,
     pages: done.pages,
     words: done.words,
+    chapters: done.chapters,
+    elsewhere: false,
     lang: state.book.lang,
   });
 }
@@ -979,4 +1184,178 @@ export async function pauseSession() {
   if (session) session.last = Date.now();
   await store.flushPosition();
   await flushSession();
+}
+
+/** Marks that touch or overlap, close enough to be one. */
+const MERGE_GAP = 8;
+
+/**
+ * An existing mark the selection falls entirely inside.
+ *
+ * Used to offer a split rather than a second mark on top of the first, which
+ * would leave two overlapping ranges saying different things about the same
+ * words.
+ */
+export function markAround({ chapterIndex, anchor, end }) {
+  const marks = marksByChapter.get(chapterIndex) || [];
+  return marks.find((m) => anchor >= m.anchor && end <= m.end
+    && !(anchor === m.anchor && end === m.end)) || null;
+}
+
+/**
+ * Take a phrase out of a longer mark and give it its own.
+ *
+ * The remainder stays as it was, in up to two pieces. Splitting a paragraph's
+ * worth of highlight to pick out one sentence is otherwise a matter of
+ * deleting the lot and redoing it by hand.
+ */
+export async function splitMark(mark, { anchor, end }, style, colour, note) {
+  await removeMark(mark.id);
+
+  const pieces = [];
+  if (anchor - mark.anchor > 1) {
+    pieces.push({ anchor: mark.anchor, end: anchor, style: mark.style, colour: mark.colour, note: mark.note });
+  }
+  pieces.push({ anchor, end, style, colour, note: note || null });
+  if (mark.end - end > 1) {
+    pieces.push({ anchor: end, end: mark.end, style: mark.style, colour: mark.colour, note: mark.note });
+  }
+
+  const made = [];
+  for (const piece of pieces) {
+    made.push(await storeMark({
+      chapterIndex: mark.chapterIndex,
+      anchor: piece.anchor,
+      end: piece.end,
+      text: null,
+    }, piece.style, piece.colour, piece.note, { merge: false }));
+  }
+  repaintChapter();
+  return made;
+}
+
+/** Record a highlight over a selection, and show it immediately. */
+export async function addMark(selection, style, colour, note, options = {}) {
+  const mark = await storeMark(selection, style, colour, note, options);
+  repaintChapter();
+  return mark;
+}
+
+async function storeMark({ chapterIndex, anchor, end, text }, style, colour, note, options = {}) {
+  const mark = {
+    bookId: state.book.id,
+    kind: 'highlight',
+    chapterIndex, anchor, end, text,
+    style, colour,
+    note: note || null,
+    at: Date.now(),
+  };
+  /* Two marks that touch become one.
+   *
+   * Marking a sentence, then the next, then the next leaves three ranges that
+   * are really one passage -- and they render with seams between them where
+   * the gap falls. Only marks that agree on style and colour are joined:
+   * differing ones are saying different things and should stay apart. */
+  if (options.merge !== false && state.mergeMarks) {
+    const neighbours = (marksByChapter.get(chapterIndex) || []).filter((m) =>
+      m.style === style && m.colour === colour
+      && anchor - MERGE_GAP <= m.end && end + MERGE_GAP >= m.anchor);
+
+    if (neighbours.length) {
+      mark.anchor = Math.min(mark.anchor, ...neighbours.map((m) => m.anchor));
+      mark.end = Math.max(mark.end, ...neighbours.map((m) => m.end));
+      // A note on either survives the join rather than being thrown away.
+      mark.note = mark.note || neighbours.map((m) => m.note).filter(Boolean).join(' · ') || null;
+      for (const gone of neighbours) {
+        await store.del('marks', gone.id);
+        const list = marksByChapter.get(chapterIndex);
+        list.splice(list.indexOf(gone), 1);
+      }
+    }
+  }
+
+  mark.id = await store.add('marks', mark);
+
+  if (!marksByChapter.has(chapterIndex)) marksByChapter.set(chapterIndex, []);
+  marksByChapter.get(chapterIndex).push(mark);
+  marksByChapter.get(chapterIndex).sort((a, b) => a.anchor - b.anchor);
+  return mark;
+}
+
+/** A few words from around an offset, to say what a pin is a pin of. */
+export function excerptAt(anchor, length = 60) {
+  const section = sectionFor(state.chapterIndex);
+  if (!section) return null;
+  const text = section.textContent || '';
+  return text.slice(anchor, anchor + length).replace(/\s+/g, ' ').trim() || null;
+}
+
+/** Every mark in the book, in reading order. */
+export function marksInOrder() {
+  return [...marksByChapter.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .flatMap(([, list]) => list);
+}
+
+/**
+ * Step to the mark before or after the one given, wherever it is in the book.
+ *
+ * The point is to move between them without leaving the page for a list and
+ * losing the thread of what they were about.
+ */
+export async function stepToMark(fromId, delta) {
+  const all = marksInOrder();
+  if (!all.length) return null;
+  const at = all.findIndex((m) => m.id === fromId);
+  const next = all[(at === -1 ? 0 : at + delta + all.length) % all.length];
+  if (!next) return null;
+
+  if (next.chapterIndex !== state.chapterIndex) {
+    await loadChapter(next.chapterIndex, next.anchor);
+  } else {
+    show(pageAtAnchor(next.anchor, next.chapterIndex), { animate: false });
+  }
+  return next;
+}
+
+/** Remove one, by id. */
+export async function removeMark(id) {
+  await store.del('marks', id);
+  for (const [, list] of marksByChapter) {
+    const at = list.findIndex((m) => m.id === id);
+    if (at !== -1) list.splice(at, 1);
+  }
+  repaintChapter();
+}
+
+export const markById = (id) => {
+  for (const [, list] of marksByChapter) {
+    const found = list.find((m) => m.id === id);
+    if (found) return found;
+  }
+  return null;
+};
+
+/** How loud annotations are, from every one to none at all. */
+export async function setMarkDensity(density) {
+  state.markDensity = density;
+  document.body.dataset.marks = density;
+  await store.saveSettings({ markDensity: density });
+  repaintChapter();
+}
+
+/** Re-render the open chapter in place, keeping the reader's position. */
+function repaintChapter() {
+  const anchor = state.anchor;
+  const chapter = state.chapters.find((c) => c.index === state.chapterIndex);
+  if (!chapter) return;
+
+  releaseSection(chapter.index);
+  const section = chapterSection(chapter);
+  const existing = sectionFor(chapter.index);
+  if (existing) existing.replaceWith(section);
+  else flow.replaceChildren(section);
+
+  relayout();
+  show(pageAtAnchor(anchor, chapter.index), { animate: false });
 }

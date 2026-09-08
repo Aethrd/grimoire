@@ -94,6 +94,17 @@ public class GrimoireBridge {
     }
 
     /** Read an imported book the user picked, as base64. Read-only, no writes. */
+    /** The reader has booted and can take a file handed to it from outside. */
+    @JavascriptInterface
+    public void ready() {
+        // Typed loosely here, so a file handed over before the page loaded is
+        // delivered rather than dropped.
+        if (activity instanceof MainActivity) {
+            final MainActivity host = (MainActivity) activity;
+            activity.runOnUiThread(host::onReaderReady);
+        }
+    }
+
     @JavascriptInterface
     public String readContentUri(String uriString) {
         try {
@@ -107,7 +118,11 @@ public class GrimoireBridge {
                 long total = 0;
                 while ((n = in.read(buf)) != -1) {
                     total += n;
-                    if (total > 96L * 1024 * 1024) return null; // sanity ceiling
+                    // Base64 across the bridge costs a third again on top, so
+                    // this is a real ceiling rather than a formality. Reported
+                    // as its own answer so the reader can say what went wrong
+                    // instead of "could not be read".
+                    if (total > 96L * 1024 * 1024) return "TOO_LARGE";
                     out.write(buf, 0, n);
                 }
                 return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);

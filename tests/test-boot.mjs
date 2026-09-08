@@ -85,4 +85,56 @@ await t('navigating never leaves two screens on top of each other', async () => 
   }
 });
 
+await t('the reading desk returns you to where you opened it', async () => {
+  /* The problem it answers: comparing three passages means jumping between
+   * them, and every jump costs the place you were reading. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
+
+  const id = await store.add('books', { title: 'Desk', fingerprint: 'desk', addedAt: 9 });
+  for (let i = 0; i < 20; i++) {
+    await store.put('chapters', {
+      bookId: id, index: i, title: `Chapter ${i}`, words: 100,
+      html: `<p>Chapter ${i} opens with a sentence long enough to excerpt from.</p>`,
+    });
+  }
+  await store.add('marks', { bookId: id, kind: 'bookmark', chapterIndex: 3, anchor: 0, at: Date.now() });
+  await store.add('marks', {
+    bookId: id, kind: 'highlight', chapterIndex: 7, anchor: 0, end: 10,
+    note: 'Compare these two scenes', text: 'Chapter 7', at: Date.now(),
+  });
+
+  const tap = (name) => document.getElementById(name)
+    .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+  await reader.open(id);
+  await reader.goTo({ chapter: 12, anchor: 0 });
+
+  tap('desk-open');
+  await new Promise((r) => setTimeout(r, 120));
+  const groups = [...document.querySelectorAll('#desk-body .desk-group')];
+  assert.deepEqual(groups.map((g) => g.querySelector('h3').textContent),
+    ['Current', 'Pinned', 'Bookmarks', 'Notes']);
+
+  tap('desk-pin');
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(document.querySelectorAll('#desk-body .desk-group')[1]
+    .querySelectorAll('.list-row').length, 1, 'the page was not pinned');
+
+  // Jump somewhere else from the desk.
+  document.querySelectorAll('#desk-body .desk-group')[2].querySelector('.list-row').onclick();
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(reader.state.chapterIndex, 3);
+  // The desk stays reachable, so a jump is never a one-way trip.
+  assert.equal(document.getElementById('desk-tab').hidden, false);
+
+  tap('desk-tab');
+  await new Promise((r) => setTimeout(r, 100));
+  tap('desk-close');
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(reader.state.chapterIndex, 12, 'closing did not put the reader back');
+  // And the workspace is gone with it.
+  assert.equal(document.getElementById('desk-tab').hidden, true);
+});
+
 console.log(`\n${pass} assertions passed`);
