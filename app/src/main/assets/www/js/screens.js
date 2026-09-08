@@ -1,6 +1,7 @@
 /* Screens that hang off a book: sort, layout, reel, find, index. */
 
 import * as store from './store.js';
+import { chapterPlainText } from './parse.js';
 import * as reader from './reader.js';
 import * as library from './library.js';
 import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, vaultUnlocked } from './library.js';
@@ -518,7 +519,9 @@ async function runFind(query, onGoToMatch) {
   const grouped = [];
   for (const chapter of chapters) {
     if (markedChapters && !markedChapters.has(chapter.index)) continue;
-    const text = plainText(chapter.html);
+    // Only the words are wanted here; sanitising every chapter to throw the
+    // markup away again cost about a second a keystroke on a long book.
+    const text = chapterPlainText(chapter);
     const folded = foldDiacritics(text);
     const hits = [];
     let from = 0;

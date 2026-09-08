@@ -72,7 +72,7 @@ await t('images are stored as Blobs, keyed by href', () => {
 });
 
 await t('chapter HTML references an href, never a blob URL', () => {
-  const html = parsed.chapters[0].html;
+  const html = parse.chapterHtml(parsed.chapters[0]);
   assert.ok(!/blob:/.test(html), 'a blob: URL was baked into the chapter markup');
   assert.match(html, /data-img="cover\.png"/);
   assert.ok(!/<img[^>]*\ssrc=/.test(html), 'chapter markup carries a src that will dangle');

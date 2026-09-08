@@ -318,6 +318,16 @@ t('the desk is a workspace over the book, not a screen away from it', () => {
   assert.match(app, /desk = null/);
 });
 
+t('a chapter does not wait forever for a picture', () => {
+  // An image that fires neither load nor error would leave the chapter
+  // waiting indefinitely, and a book that never opens is worse than one
+  // measured a moment before its pictures arrive.
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  const fn = reader.slice(reader.indexOf('function imagesSettled'));
+  assert.match(fn.slice(0, 900), /Promise\.race/);
+  assert.match(fn.slice(0, 900), /setTimeout\(res, 3000\)/);
+});
+
 console.log('settings render for real');
 
 // jsdom now has a working IndexedDB, so the panes can actually be rendered

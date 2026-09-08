@@ -15,7 +15,7 @@
  */
 
 import * as store from './store.js';
-import { countWords } from './parse.js';
+import { countWords, chapterHtml } from './parse.js';
 import { pool } from './blobs.js';
 import * as translate from './translate.js';
 
@@ -306,7 +306,7 @@ function chapterSection(chapter) {
   const section = document.createElement('section');
   section.className = 'chapter';
   section.dataset.chapter = String(chapter.index);
-  section.innerHTML = chapter.html;
+  section.innerHTML = chapterHtml(chapter);
   hydrateImages(section, chapter.index);
   paintMarks(section, chapter.index);
   return section;
@@ -491,8 +491,18 @@ export async function loadChapter(index, anchor = 0) {
 function imagesSettled() {
   const images = [...flow.querySelectorAll('img')];
   if (!images.length) return Promise.resolve();
-  return Promise.all(images.map((img) => (img.complete ? Promise.resolve()
+
+  /* Bounded. An image that fires neither load nor error -- a decode that
+     stalls, a blob that went away -- would otherwise leave the chapter
+     waiting forever, and a book that never opens is a worse outcome than one
+     measured a moment before its pictures arrive. */
+  const settled = Promise.all(images.map((img) => (img.complete ? Promise.resolve()
     : new Promise((res) => { img.onload = img.onerror = res; }))));
+
+  return Promise.race([
+    settled,
+    new Promise((res) => setTimeout(res, 3000)),
+  ]);
 }
 
 /** The display name for a chapter: translated if that is switched on. */
@@ -990,7 +1000,7 @@ export function chapterText(index = state.chapterIndex) {
   const chapter = state.chapters.find((c) => c.index === index);
   if (!chapter) return '';
   const holder = document.createElement('div');
-  holder.innerHTML = chapter.html;
+  holder.innerHTML = chapterHtml(chapter);
 
   for (const sup of holder.querySelectorAll('sup')) {
     sup.replaceWith(document.createTextNode(` [${sup.textContent.trim()}]`));

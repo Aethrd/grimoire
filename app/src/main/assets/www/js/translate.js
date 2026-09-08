@@ -18,6 +18,7 @@
  */
 
 import * as store from './store.js';
+import { chapterHtml } from './parse.js';
 
 /* ── the promise bridge ───────────────────────────────────────────────── */
 
@@ -264,11 +265,11 @@ export async function translateChapterNames(bookId, chapters, lang, sourceLang) 
  */
 export async function translateChapterBody(bookId, chapter, lang, sourceLang) {
   const holder = document.createElement('div');
-  holder.innerHTML = chapter.html;
+  holder.innerHTML = chapterHtml(chapter);
 
   const blocks = [...holder.querySelectorAll('p, h1, h2, h3, h4, li, blockquote')]
     .filter((node) => node.textContent.trim());
-  if (!blocks.length) return { html: chapter.html, translated: 0, characters: 0 };
+  if (!blocks.length) return { html: chapterHtml(chapter), translated: 0, characters: 0 };
 
   const { results, translated, characters } = await translateBatch(
     bookId,

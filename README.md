@@ -161,6 +161,19 @@ and returns the nearest passing step of the same hue instead.
 comparator chain with a reverse: flipping a descending key would float every
 book with no value to the top of the shelf.
 
+**Importing does not parse the chapters.** Building a DOM costs about 1.6ms a
+chapter and produces nothing an import needs: the word count and the list of
+pictures both come out of the markup as text for a fifth of that. The source
+is kept as it came and sanitised on the way to the page instead, where 1.6ms
+is invisible. Measured on a 200-chapter novel, import went from 10.7ms a
+chapter to 0.8ms — the sanitiser did not go anywhere, it just runs when a
+chapter is actually opened.
+
+Keeping the source rather than the sanitised HTML costs about **14% more
+storage** — attributes and stylesheets that the sanitiser would have dropped.
+Anything that only wants the words strips the source with a regular
+expression instead of parsing it, which is what searching a book does.
+
 **Images are stored as blobs, never as blob URLs.** A `blob:` URL is scoped to
 the document that created it, so persisting one persists a handle to something
 that will not exist next launch — covers come back blank while the text is

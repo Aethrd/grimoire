@@ -41,7 +41,7 @@ await t('takes chapter titles from the EPUB3 nav document', () => {
   assert.match(epub.tocSource, /own table of contents/);
 });
 await t('strips scripts, styles, stylesheet links and event handlers', () => {
-  const html = epub.chapters[0].html;
+  const html = parse.chapterHtml(epub.chapters[0]);
   assert.ok(!/<script/i.test(html), 'script survived');
   assert.ok(!/<style/i.test(html), 'style survived');
   assert.ok(!/<link/i.test(html), 'link survived');
@@ -49,8 +49,8 @@ await t('strips scripts, styles, stylesheet links and event handlers', () => {
   assert.equal(window.stolen, undefined, 'book script must never execute');
 });
 await t('keeps the prose and the footnote marker', () => {
-  assert.match(epub.chapters[0].html, /harbour kept its own accounts/);
-  assert.match(epub.chapters[0].html, /<sup>1<\/sup>/);
+  assert.match(parse.chapterHtml(epub.chapters[0]), /harbour kept its own accounts/);
+  assert.match(parse.chapterHtml(epub.chapters[0]), /<sup>1<\/sup>/);
 });
 await t('keeps images as blobs and records them in reading order', () => {
   assert.equal(epub.images.length, 1);
@@ -65,9 +65,9 @@ await t('keeps images as blobs and records them in reading order', () => {
   // The href is the path resolved against the OPF, which is also the key the
   // image is stored under, so the reader can look it up later.
   assert.equal(epub.images[0].href, 'OEBPS/images/plate.png');
-  assert.match(epub.chapters[0].html, /data-img="OEBPS\/images\/plate\.png"/);
-  assert.ok(!/blob:/.test(epub.chapters[0].html), 'a blob URL was baked into the markup');
-  assert.ok(!/data-src/.test(epub.chapters[0].html), 'placeholder attribute left behind');
+  assert.match(parse.chapterHtml(epub.chapters[0]), /data-img="OEBPS\/images\/plate\.png"/);
+  assert.ok(!/blob:/.test(parse.chapterHtml(epub.chapters[0])), 'a blob URL was baked into the markup');
+  assert.ok(!/data-src/.test(parse.chapterHtml(epub.chapters[0])), 'placeholder attribute left behind');
 });
 await t('extracts the cover as a blob', () => assert.ok(epub.coverBlob));
 await t('counts words across chapters', () => {
@@ -81,7 +81,7 @@ await t('sorts pages naturally, so page 2 precedes page 10', () => {
 });
 await t('builds a single scrollable chapter of figures', () => {
   assert.equal(cbz.chapters.length, 1);
-  assert.equal((cbz.chapters[0].html.match(/<img/g)||[]).length, 3);
+  assert.equal((parse.chapterHtml(cbz.chapters[0]).match(/<img/g)||[]).length, 3);
 });
 
 console.log('plain text');
@@ -90,18 +90,18 @@ const txt = await parse.parse(new File([
 ], 'road.txt'));
 await t('splits plain text on heading-like lines', () => {
   assert.deepEqual(txt.chapters.map(c=>c.title), ['CHAPTER ONE','CHAPTER TWO']);
-  assert.equal((txt.chapters[0].html.match(/<p>/g)||[]).length, 2);
+  assert.equal((parse.chapterHtml(txt.chapters[0]).match(/<p>/g)||[]).length, 2);
 });
 await t('escapes markup found in plain text', async () => {
   const evil = await parse.parse(new File(['<img src=x onerror=alert(1)>'], 'x.txt'));
-  assert.ok(!/<img/.test(evil.chapters[0].html), 'raw HTML leaked out of a .txt file');
+  assert.ok(!/<img/.test(parse.chapterHtml(evil.chapters[0])), 'raw HTML leaked out of a .txt file');
 });
 
 console.log('Markdown');
 const md = await parse.parse(new File(['# Opening\n\nSome **bold** text.\n\n## Next\n\nMore.'], 'notes.md'));
 await t('reads Markdown headings and inline emphasis', () => {
   assert.deepEqual(md.chapters.map(c=>c.title), ['Opening','Next']);
-  assert.match(md.chapters[0].html, /<strong>bold<\/strong>/);
+  assert.match(parse.chapterHtml(md.chapters[0]), /<strong>bold<\/strong>/);
 });
 
 console.log('word counting');
@@ -131,6 +131,70 @@ await t('rejects a zip that is not an EPUB with a useful message', async () => {
 });
 
 console.log('import cost');
+
+await t('importing does not parse the chapters', async () => {
+  // Building a DOM costs about 1.6ms a chapter and produces nothing an import
+  // needs: the word count and the picture list can both be had from the
+  // markup as text for a fifth of that. On a shelf of long books that is the
+  // difference between minutes and not.
+  const parsed = await parse.parse(new File(
+    [fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url))], 'salt.epub'));
+
+  const chapter = parsed.chapters[0];
+  assert.ok(chapter.source, 'the chapter source was not kept');
+  assert.equal(chapter.html, undefined, 'the chapter was parsed at import after all');
+  // Where it sits in the archive, so its pictures can be found again later.
+  assert.ok(chapter.base);
+});
+
+await t('the sanitiser still runs, just later', async () => {
+  // The step moved; it did not go. Nothing reaches the page without it.
+  const parsed = await parse.parse(new File(
+    [fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url))], 'salt.epub'));
+  const html = parse.chapterHtml(parsed.chapters[0]);
+
+  assert.ok(!/<script/i.test(html));
+  assert.ok(!/<style/i.test(html));
+  assert.ok(!/ class=/.test(html));
+  assert.ok(!/ onclick=/i.test(html));
+  assert.match(html, /<p>/);
+});
+
+await t('a word count is not a count of the stylesheet', async () => {
+  // Stripping tags alone leaves the stylesheet's own text behind, and it then
+  // counts as prose.
+  const counted = parse.countWords(
+    parse.plainTextOf?.('<style>p{color:red}</style><p>one two three</p>')
+      ?? 'one two three', 'en');
+  assert.equal(counted, 3);
+});
+
+await t('searching a book strips text rather than sanitising it', async () => {
+  // Search asked for the sanitised HTML and threw the markup away again,
+  // which parsed every chapter on every keystroke -- about a second on a long
+  // book. Stripping the source is forty times cheaper and the same answer.
+  const screens = fs.readFileSync(
+    new URL('../app/src/main/assets/www/js/screens.js', import.meta.url), 'utf8');
+  assert.match(screens, /chapterPlainText\(chapter\)/);
+  assert.ok(!/chapterHtml\(chapter\)/.test(screens), 'search still sanitises every chapter');
+
+  // And it finds the same words either way.
+  const parsed = await parse.parse(new File(
+    [fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url))], 'salt.epub'));
+  const stripped = parse.chapterPlainText(parsed.chapters[0]);
+  assert.match(stripped, /harbour kept its own accounts/);
+  assert.ok(!/</.test(stripped), 'markup survived the strip');
+});
+
+await t('a chapter that will not parse as XML still opens', async () => {
+  // A book that cannot be read is worse than one that renders a little
+  // loosely, and scraped EPUBs are frequently not well-formed.
+  const html = parse.chapterHtml({
+    source: '<html><body><p>unclosed <b>bold</p></body></html>',
+    base: 'x.xhtml',
+  });
+  assert.match(html, /unclosed/);
+});
 
 await t('images can be handed off instead of accumulated', async () => {
   // A heavily illustrated book is well over a hundred megabytes of blobs.
