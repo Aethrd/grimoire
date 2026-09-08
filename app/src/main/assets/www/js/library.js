@@ -236,7 +236,13 @@ export function sortSummary(keys) {
  * thread for the whole batch and each file reports its own outcome. A failure
  * is confined to its own tile: the rest of the batch still lands.
  */
-export async function importFiles(files, { onProgress, onDone } = {}) {
+/**
+ * @param options.transient  Marks the book as passing through rather than
+ *   collected: it is kept out of the shelf and removed when the reader is
+ *   closed. Opening a file from elsewhere on the phone should not silently
+ *   add it to someone's library.
+ */
+export async function importFiles(files, { onProgress, onDone, transient = false } = {}) {
   const results = { added: 0, failed: [], folders: new Set() };
 
   // Archives are flattened first, so the loop below never has to know whether
@@ -304,7 +310,7 @@ export async function importFiles(files, { onProgress, onDone } = {}) {
          until the parse finished is what killed the app partway through a
          shelf. `importing` marks it incomplete until the rest lands. */
       const bookId = await store.add('books', {
-        title: name, fingerprint, folder, importing: true,
+        title: name, fingerprint, folder, importing: true, transient,
         addedAt: Date.now(), lastReadAt: null, finishedAt: null,
         percent: 0, inVault: false, tags: [],
       });
@@ -351,6 +357,7 @@ export async function importFiles(files, { onProgress, onDone } = {}) {
         fingerprint,
         folder,
         importing: false,
+        transient,
         addedAt: Date.now(),
         lastReadAt: null,
         finishedAt: null,
@@ -469,7 +476,8 @@ export async function renderShelf(handlers) {
   // same filter is applied in search, the reel and the stats totals.
   // A hard kill during import leaves a row with no chapters behind it. It is
   // not a book yet, so it does not belong on the shelf.
-  let visible = all.filter((b) => !b.importing && (!b.inVault || vaultUnlocked));
+  let visible = all.filter((b) =>
+    !b.importing && !b.transient && (!b.inVault || vaultUnlocked));
 
   // Filtered to one folder, and to anything nested under it.
   if (folder != null) {
@@ -592,9 +600,12 @@ async function renderContinueCard(books, onOpen) {
   // opened" and "continue reading" disagreed.
   // Anything opened and not put aside. A book marked finished, dropped or on
   // hold is not what you want offered next, whatever its dates say.
+  // Opened, whether or not a page was turned: Continue is about where you
+  // were, not about what counts as reading.
+  const openedAt = (b) => b.lastOpenedAt || b.lastReadAt || 0;
   const candidates = books
-    .filter((b) => b.lastReadAt && !['finished', 'dropped', 'onHold'].includes(statusOf(b)))
-    .sort((a, b) => b.lastReadAt - a.lastReadAt);
+    .filter((b) => openedAt(b) && !['finished', 'dropped', 'onHold'].includes(statusOf(b)))
+    .sort((a, b) => openedAt(b) - openedAt(a));
 
   // Hidden entirely when nothing is in progress. It is never shown empty.
   if (!candidates.length) { card.hidden = true; return; }
@@ -685,9 +696,12 @@ export let vaultUnlocked = true;
 export function setVaultUnlocked(value) { vaultUnlocked = value; }
 
 /** Called at boot: locked only if there is something to unlock. */
-/** Clear out anything a crash left half-imported. */
+/**
+ * Clear out anything a crash left behind: a half-written import, or a book
+ * that was only ever passing through and never got tidied up.
+ */
 export async function sweepUnfinishedImports() {
-  const stale = (await store.all('books')).filter((b) => b.importing);
+  const stale = (await store.all('books')).filter((b) => b.importing || b.transient);
   for (const book of stale) await store.deleteBook(book.id).catch(() => {});
   return stale.length;
 }

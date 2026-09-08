@@ -195,6 +195,13 @@ t('every state has a place in the group order', () => {
   assert.deepEqual(labels, ['Reading', 'Unread', 'On hold', 'Dropped', 'Finished']);
 });
 
+t('opening a book is not reading it', () => {
+  // Displaying a book saves a position, and that used to set lastReadAt --
+  // so anything glanced at came back marked Reading.
+  assert.equal(lib.statusOf({ lastOpenedAt: 5 }), 'unread');
+  assert.equal(lib.statusOf({ lastOpenedAt: 5, lastReadAt: 6 }), 'reading');
+});
+
 console.log('bundles');
 
 t('editions collapse to one entry led by one of them', () => {

@@ -32,7 +32,10 @@ async function show(name, { replace = false } = {}) {
   // someone spent on the stats page as reading.
   // Await it: the stats screen reads the log the moment it opens, and an
   // unawaited flush would land just after it had rendered the old numbers.
-  if (current === 'reader' && name !== 'reader') await reader.pauseSession();
+  if (current === 'reader' && name !== 'reader') {
+    await reader.pauseSession();
+    await forgetTransientBook();
+  }
 
   screenNode(current)?.removeAttribute('data-active');
   screenNode(name)?.setAttribute('data-active', '');
@@ -117,6 +120,20 @@ function back() {
  * is what survives a relaunch -- as a module variable alone it was forgotten
  * every time the app was closed.
  */
+/**
+ * Discard a book that was only being looked at.
+ *
+ * Deliberately on leaving the reader rather than at the next launch: someone
+ * who opened a file to glance at it should not find it still taking up space
+ * days later because the app was never restarted.
+ */
+async function forgetTransientBook() {
+  const book = reader.state.book;
+  if (!book?.transient) return;
+  await store.deleteBook(book.id).catch(() => {});
+  reader.state.book = null;
+}
+
 let activeFolder = null;
 
 /* The screen the current one was opened from. Search needs it: reader.state
@@ -146,10 +163,9 @@ async function refreshShelf() {
 async function openBook(book, opts) {
   await show('reader');
   try {
-    // Opening is itself an event worth recording: otherwise a book you opened
-    // but did not turn a page in never becomes the one Continue offers, and
-    // "last opened" and "continue reading" disagree.
-    book.lastReadAt = Date.now();
+    // Opened, not read. Continue follows this; the status does not, because
+    // glancing at a book is not reading it.
+    book.lastOpenedAt = Date.now();
     await store.put('books', book);
     await reader.open(book.id, opts);
     paintReader();
@@ -620,7 +636,7 @@ function pickFiles() {
   el('file-input').click();
 }
 
-async function handleFiles(files) {
+async function handleFiles(files, { transient = false } = {}) {
   if (!files.length) return;
 
   const panel = el('import-progress');
@@ -637,6 +653,7 @@ async function handleFiles(files) {
   let shownAt = 0;
 
   const results = await library.importFiles(files, {
+    transient,
     onProgress: (message, fraction, done, total) => {
       el('import-label').textContent = message;
       el('import-bar').style.width = `${Math.round((fraction || 0) * 100)}%`;
@@ -662,6 +679,8 @@ async function handleFiles(files) {
       ? `${results.added} book${results.added === 1 ? '' : 's'} added across ${folders} folder${folders === 1 ? '' : 's'}`
       : `${results.added} book${results.added === 1 ? '' : 's'} added`);
   }
+
+  return results;
 }
 
 /* ── reader wiring ────────────────────────────────────────────────────── */
@@ -703,11 +722,31 @@ function paintReader() {
   el('chapter-prev').disabled = !reader.hasPrevChapter();
   el('chapter-next').disabled = !reader.hasNextChapter();
   refreshBookmarkState();
+  refreshKeepButton();
   refreshTranslateButton();
 }
 
 /** Re-checked on every paint, so turning body translation on in settings does
  *  not require closing and reopening the book. */
+/**
+ * A book that is only passing through says so, and offers to stay.
+ *
+ * Without this it would be indistinguishable from one in the library right up
+ * until it vanished.
+ */
+function refreshKeepButton() {
+  const book = reader.state.book;
+  const keep = el('keep-book');
+  keep.hidden = !book?.transient;
+  keep.onclick = async () => {
+    delete book.transient;
+    await store.put('books', book);
+    keep.hidden = true;
+    await refreshShelf();
+    toast('Kept in your library');
+  };
+}
+
 async function refreshTranslateButton() {
   const settings = await store.settings();
   el('translate-chapter').hidden =
@@ -1045,17 +1084,27 @@ window.Grimoire = {
   },
 
   /** A book tapped in a file manager or sent from a share sheet. */
+  /**
+   * A file handed over from elsewhere on the phone.
+   *
+   * Read, not collected. It is opened straight away and never appears on the
+   * shelf; closing the reader forgets it. "Keep in library" is there for when
+   * it turns out to be worth keeping, which is the right way round -- opening
+   * something to look at it should not quietly add it to a library.
+   */
   async openExternalBook(contentUri) {
     const base64 = window.GrimoireNative?.readContentUri?.(contentUri);
     if (!base64) return toast('That file could not be read');
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
     const name = decodeURIComponent(contentUri.split('/').pop() || 'book.epub');
-    const file = new File([bytes], name);
-    await handleFiles([file]);
-    // Land the reader on what was just opened rather than the shelf.
-    const books = await store.all('books');
-    const newest = books.sort((a, b) => b.addedAt - a.addedAt)[0];
-    if (newest) openBook(newest);
+
+    const results = await handleFiles([new File([bytes], name)], { transient: true });
+    if (!results?.added) return;
+
+    const passing = (await store.all('books'))
+      .filter((b) => b.transient)
+      .sort((a, b) => b.addedAt - a.addedAt)[0];
+    if (passing) openBook(passing);
   },
 };
 

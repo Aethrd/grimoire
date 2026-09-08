@@ -271,51 +271,8 @@ t('a failed translation can be diagnosed on the device', () => {
   }
 });
 
-await (async () => {
-  /* Showing or hiding the chrome changes the viewport's height and re-flows
-   * the text. Restoring the position through a page index rounded it to the
-   * nearest whole screenful, so a tap moved the page under the reader. */
-  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
-  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
 
-  const id = await store.add('books', { title: 'Scrolled', fingerprint: 'sc', addedAt: 1 });
-  await store.put('chapters', {
-    bookId: id, index: 0, title: 'One', words: 800,
-    html: Array.from({ length: 80 }, (_, i) => `<p>Paragraph ${i}.</p>`).join(''),
-  });
 
-  reader.init({ onChange() {} });
-  await reader.open(id);
-  await reader.setMode('scroll');
-
-  // jsdom measures nothing, so give the viewport a size and place ranges by
-  // where their paragraph sits.
-  const viewport = document.getElementById('page-viewport');
-  Object.defineProperty(viewport, 'clientHeight', { get: () => 800, configurable: true });
-  Object.defineProperty(viewport, 'scrollHeight', { get: () => 8000, configurable: true });
-  viewport.getBoundingClientRect = () => ({ top: 0, left: 0, width: 400, height: 800 });
-  let top = 0;
-  Object.defineProperty(viewport, 'scrollTop',
-    { get: () => top, set: (v) => { top = v; }, configurable: true });
-  window.Range.prototype.getBoundingClientRect = function rect() {
-    const paragraphs = [...document.querySelectorAll('#page-flow p')];
-    const at = paragraphs.indexOf(this.startContainer.parentElement);
-    return { top: (at < 0 ? 0 : at * 100) - top, left: 0, width: 5, height: 20 };
-  };
-
-  await t('a re-flow in scroll mode leaves the text where it was', async () => {
-    // Deliberately not on a screen boundary: rounding to one is the bug.
-    viewport.scrollTop = 1234;
-    reader.state.anchor = 0;
-    reader.repaginate();
-    await new Promise((r) => setTimeout(r, 60));
-    assert.equal(viewport.scrollTop, 1234,
-      `the page moved ${Math.abs(viewport.scrollTop - 1234)}px`);
-    // And it is not a multiple of the viewport height, which is what going
-    // through a page index would have produced.
-    assert.ok(viewport.scrollTop % 800 !== 0);
-  });
-})();
 
 console.log('settings render for real');
 

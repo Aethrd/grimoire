@@ -512,6 +512,17 @@ function onScrolled() {
   state.anchor = currentAnchor();
   state.page = Math.round(viewport.scrollTop / viewportHeight());
   if (state.chapterIndex !== previous) estimateTotals();
+
+  /* Scrolling is reading.
+   *
+   * This is the only thing that moves the text in scroll mode -- taps toggle
+   * the chrome and nothing else -- so without it nothing recorded progress
+   * there at all: no time, no pages, no words, and the book stayed Unread
+   * however far you got through it. countPage only counts ground not already
+   * covered, so calling it on every scroll settle costs nothing.
+   */
+  countPage();
+
   save();
   onChange(state);
 }
@@ -646,8 +657,11 @@ export function turn(delta) {
   const pages = Number.isFinite(state.pageCount) ? state.pageCount : 1;
   const next = state.page + delta;
   if (!Number.isFinite(next) || next < 0 || next >= pages) return false;
-  countPage();
+  // Counted after the move, not before it. Measuring first meant every turn
+  // recorded the position it was leaving, so the first turn of a session
+  // counted nothing and the last was never counted at all.
   show(next);
+  countPage();
   return true;
 }
 
@@ -706,6 +720,7 @@ export function hasPrevChapter() { return state.chapterIndex > 0; }
 
 export async function nextChapter() {
   if (!hasNextChapter()) return false;
+  noteReading();
   countPage();
   // In endless mode the next chapter may already be below; scroll to it
   // rather than tearing the view down and rebuilding it.
@@ -722,6 +737,7 @@ export async function nextChapter() {
 
 export async function prevChapter(toEnd = false) {
   if (!hasPrevChapter()) return false;
+  noteReading();
   countPage();
   if (isScroll() && state.loaded.includes(state.chapterIndex - 1)) {
     const section = sectionFor(state.chapterIndex - 1);
@@ -871,6 +887,19 @@ function startSession() {
  * went up for doing nothing. Only ground you have not already covered this
  * session counts.
  */
+/**
+ * This is being read, not merely looked at.
+ *
+ * Separate from counting pages because moving by chapter is plainly reading
+ * even though it credits no pages -- jumping to chapter five does not mean
+ * chapters one to four were read.
+ */
+function noteReading() {
+  if (!session || session.marked || !state.book) return;
+  session.marked = true;
+  store.markRead(state.book.id);
+}
+
 function countPage() {
   if (!session) return;
   const now = Date.now();
@@ -881,6 +910,8 @@ function countPage() {
 
   const reached = pageInBook();
   if (reached <= session.furthest) return;
+
+  noteReading();
 
   const advanced = reached - session.furthest;
   session.furthest = reached;

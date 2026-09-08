@@ -207,9 +207,9 @@ t('the continue card follows the last book opened', () => {
   const filter = library.slice(library.indexOf('const candidates'), library.indexOf('.sort('));
   assert.ok(!/percent/.test(filter),
     'a book you opened but did not page through is still excluded');
-  assert.match(library, /b\.lastReadAt && !\['finished', 'dropped', 'onHold'\]/);
+  assert.match(library, /openedAt\(b\) && !\['finished', 'dropped', 'onHold'\]\.includes\(statusOf\(b\)\)/);
   // And opening a book records that it was opened.
-  assert.match(app, /book\.lastReadAt = Date\.now\(\)/);
+  assert.match(app, /book\.lastOpenedAt = Date\.now\(\)/);
 });
 
 t('translated titles reach the tile and the continue card', () => {
@@ -367,7 +367,7 @@ t('a half-imported book is neither shown nor kept', () => {
   // before its chapters do. A hard kill in the middle used to leave that row
   // on the shelf as a book with nothing in it.
   const library = read('app/src/main/assets/www/js/library.js');
-  assert.match(library, /!b\.importing && \(!b\.inVault/);
+  assert.match(library, /!b\.importing && !b\.transient/);
   assert.match(library, /export async function sweepUnfinishedImports/);
   assert.match(app, /await library\.sweepUnfinishedImports\(\)/);
   // And a failure during parse cleans up after itself rather than waiting
@@ -518,6 +518,36 @@ t('a bundle asks which edition to open', () => {
 t('a long title on the continue card wraps instead of being cut', () => {
   assert.match(rule('.continue-title'), /line-clamp: 2/);
   assert.ok(!/white-space: nowrap/.test(rule('.continue-title')));
+});
+
+t('opening records a different thing from reading', () => {
+  const store = read('app/src/main/assets/www/js/store.js');
+  // The position save marks the book opened, not read.
+  assert.match(store, /book\.lastOpenedAt = Date\.now\(\)/);
+  assert.match(store, /export async function markRead/);
+  // Only real progress marks it read, and only once a session.
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /function noteReading/);
+  assert.match(reader, /store\.markRead\(state\.book\.id\)/);
+  // Continue still follows what was opened, which is where you were.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /b\.lastOpenedAt \|\| b\.lastReadAt/);
+});
+
+t('a file opened from elsewhere is read, not collected', () => {
+  // Opening something to look at it should not quietly add it to a library.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /transient = false/);
+  assert.match(library, /!b\.importing && !b\.transient/);
+  assert.match(app, /handleFiles\(\[new File\(\[bytes\], name\)\], \{ transient: true \}\)/);
+  // Closing the reader forgets it, rather than leaving it until a restart.
+  assert.match(app, /async function forgetTransientBook/);
+  assert.match(app, /await forgetTransientBook\(\)/);
+  // And it says it is passing through, with a way to make it stay.
+  assert.ok(html.includes('id="keep-book"'));
+  assert.match(app, /delete book\.transient/);
+  // Anything a crash leaves behind is swept.
+  assert.match(library, /b\.importing \|\| b\.transient/);
 });
 
 console.log('settings');

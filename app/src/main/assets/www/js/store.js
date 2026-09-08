@@ -283,7 +283,11 @@ export async function flushPosition() {
   await put('positions', row);
   const book = await get('books', row.bookId);
   if (book) {
-    book.lastReadAt = Date.now();
+    /* Opened, not read. Saving a position happens the moment a book is
+       displayed, so setting lastReadAt here marked everything you glanced at
+       as Reading. Progress is recorded by markRead, which the reader calls
+       only when a page has actually been turned. */
+    book.lastOpenedAt = Date.now();
     book.percent = row.percent;
     if (row.percent >= 0.999) book.finishedAt = book.finishedAt || Date.now();
     await put('books', book);
@@ -298,6 +302,15 @@ export async function flushPosition() {
 export function dayKey(ts = Date.now()) {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Someone has actually read some of this, not merely opened it. */
+export async function markRead(bookId) {
+  const book = await get('books', bookId);
+  if (!book) return;
+  book.lastReadAt = Date.now();
+  book.lastOpenedAt = book.lastReadAt;
+  await put('books', book);
 }
 
 export async function recordEvent({ bookId, activeMs, pages, words, lang }) {
