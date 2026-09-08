@@ -242,6 +242,43 @@ function pickImage(onPicked) {
   input.click();
 }
 
+
+/**
+ * Offer a file to be saved.
+ *
+ * A WebView has no download handling of its own: no DownloadListener means an
+ * <a download> click is simply ignored, which is why these buttons appeared
+ * to do nothing. The native side writes the file to the app's cache and opens
+ * the share sheet, where it can be saved or sent anywhere. The anchor stays
+ * as the fallback for running this in an ordinary browser.
+ */
+/** FileReader rather than Blob.text(), which needs Chrome 76. */
+function readText(file) {
+  if (typeof file.text === 'function') return file.text();
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error);
+    fr.readAsText(file);
+  });
+}
+
+function offerDownload(name, mimeType, text) {
+  if (window.GrimoireNative?.saveText) {
+    if (window.GrimoireNative.saveText(name, mimeType, text)) return true;
+    toast('That file could not be saved', 5000);
+    return false;
+  }
+
+  const url = URL.createObjectURL(new Blob([text], { type: mimeType }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return true;
+}
+
 /* ── SCR-10 Language ──────────────────────────────────────────────────── */
 
 export async function openLanguage(host) {
@@ -706,11 +743,8 @@ export async function openStats() {
   exportBtn.textContent = 'Export the reading log as JSON';
   exportBtn.onclick = () => {
     // Everything is computed locally; the log belongs to the reader.
-    const blob = new Blob([JSON.stringify(log, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'grimoire-reading-log.json'; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    offerDownload('grimoire-reading-log.json', 'application/json',
+      JSON.stringify(log, null, 2));
   };
   body.appendChild(exportBtn);
 }
@@ -864,15 +898,64 @@ export async function openVault(onVaultChange, host) {
       app has no network permission, so nothing is uploaded and nothing can be.
       Export is here so leaving is easy, not because anything is stored
       elsewhere.</p>`;
+  /* A backup is everything except the books.
+   *
+   * The text and pictures are not in it on purpose -- they are gigabytes, and
+   * they already exist as the files they came from. What cannot be re-created
+   * is what you did afterwards, which is exactly what this holds. */
+  const backupBtn = document.createElement('button');
+  backupBtn.className = 'btn primary block';
+  backupBtn.textContent = 'Back up everything but the books';
+  backupBtn.onclick = async () => {
+    const backup = await store.exportBackup();
+    offerDownload(`grimoire-backup-${store.dayKey()}.json`, 'application/json',
+      JSON.stringify(backup, null, 2));
+  };
+  data.appendChild(backupBtn);
+
+  const restoreBtn = document.createElement('button');
+  restoreBtn.className = 'btn ghost block';
+  restoreBtn.style.marginTop = '8px';
+  restoreBtn.textContent = 'Restore from a backup';
+  restoreBtn.onclick = () => {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = 'application/json,.json';
+    picker.onchange = async () => {
+      const file = picker.files?.[0];
+      if (!file) return;
+      try {
+        const report = await store.importBackup(JSON.parse(await readText(file)));
+        // Said plainly, including what could not be matched: a backup restored
+        // before the books are back is half a restore, and should say so.
+        toast(report.missing
+          ? `${report.books} books restored · ${report.missing} not on the shelf yet — import the files, then restore again`
+          : `${report.books} books, ${report.marks} marks and ${report.events} sessions restored`, 8000);
+        onVaultChange?.();
+        openVault(onVaultChange, body);
+      } catch (error) {
+        toast(error.message || 'That backup could not be read', 6000);
+      }
+    };
+    picker.click();
+  };
+  data.appendChild(restoreBtn);
+
+  const note = document.createElement('p');
+  note.className = 'muted';
+  note.style.cssText = 'font-size:12px;line-height:1.55;margin:10px 0 0';
+  note.textContent = 'Books are matched by file name and size, so import the '
+    + 'same files first and then restore: folders, statuses, bundles, bookmarks, '
+    + 'your place in each book and the reading log all come back.';
+  data.appendChild(note);
+
   const exportBtn = document.createElement('button');
   exportBtn.className = 'btn ghost block';
-  exportBtn.textContent = 'Export settings as JSON';
+  exportBtn.style.marginTop = '14px';
+  exportBtn.textContent = 'Export settings only';
   exportBtn.onclick = async () => {
-    const blob = new Blob([JSON.stringify(await store.settings(), null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'grimoire-settings.json'; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    offerDownload('grimoire-settings.json', 'application/json',
+      JSON.stringify(await store.settings(), null, 2));
   };
   data.appendChild(exportBtn);
   body.appendChild(data);

@@ -322,3 +322,143 @@ export async function recordEvent({ bookId, activeMs, pages, words, lang }) {
     at: Date.now(),
   });
 }
+
+
+/* ── backup ───────────────────────────────────────────────────────────────
+ *
+ * Everything except the books themselves.
+ *
+ * The text and pictures are not here on purpose: they are tens of gigabytes
+ * for a shelf this size, and they already exist as the files they were
+ * imported from. What cannot be re-imported is everything you did afterwards
+ * -- the folders, the statuses, the bundles, where you were in each book,
+ * every bookmark, and the reading log. That is what this carries.
+ *
+ * Books are matched on re-import by fingerprint, which is the file's name and
+ * size, so importing the same files again puts it all back.
+ */
+
+const BACKUP_VERSION = 1;
+
+/** Fields worth keeping. Everything else is derived from the file itself. */
+const BOOK_FIELDS = [
+  'title', 'author', 'series', 'seriesIndex', 'lang', 'folder', 'status',
+  'tags', 'inVault', 'percent', 'addedAt', 'lastReadAt', 'lastOpenedAt',
+  'finishedAt', 'coverBytes',
+];
+
+export async function exportBackup() {
+  const books = await all('books');
+  const byId = new Map(books.map((b) => [b.id, b]));
+
+  return {
+    format: 'grimoire-backup',
+    version: BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    settings: await settings(),
+    views: await all('views'),
+    events: await all('events'),
+    layout: await all('layout'),
+
+    books: books
+      .filter((b) => !b.importing && !b.transient && b.fingerprint)
+      .map((book) => {
+        const kept = { fingerprint: book.fingerprint };
+        for (const field of BOOK_FIELDS) {
+          if (book[field] !== undefined) kept[field] = book[field];
+        }
+        // Bundles are ids, which will not survive a re-import. Recorded as
+        // the leader's fingerprint instead, which will.
+        const leader = book.bundleId ? byId.get(book.bundleId) : null;
+        if (leader?.fingerprint) kept.bundleLeader = leader.fingerprint;
+        return kept;
+      }),
+
+    positions: (await all('positions'))
+      .map((p) => ({ ...p, fingerprint: byId.get(p.bookId)?.fingerprint }))
+      .filter((p) => p.fingerprint),
+
+    marks: (await all('marks'))
+      .map((m) => ({ ...m, fingerprint: byId.get(m.bookId)?.fingerprint }))
+      .filter((m) => m.fingerprint),
+  };
+}
+
+/**
+ * Put a backup back.
+ *
+ * Additive: books already present are updated, books not present are noted
+ * and skipped rather than invented. Importing the files first and the backup
+ * second is the order that restores everything; the other way round still
+ * works for settings and the reading log.
+ */
+export async function importBackup(data) {
+  if (data?.format !== 'grimoire-backup') {
+    throw new Error('That is not a Grimoire backup file.');
+  }
+  if (data.version > BACKUP_VERSION) {
+    throw new Error('That backup was made by a newer version of the app.');
+  }
+
+  const report = { settings: false, books: 0, missing: 0, marks: 0, events: 0 };
+
+  if (data.settings) {
+    // Merged over the defaults, so a backup from an older version does not
+    // remove settings it had never heard of.
+    cache = Object.assign({}, DEFAULT_SETTINGS, data.settings);
+    await put('settings', { key: 'app', value: cache });
+    report.settings = true;
+  }
+
+  for (const view of data.views || []) await put('views', view);
+  for (const row of data.layout || []) await put('layout', row);
+
+  const books = await all('books');
+  const byFingerprint = new Map(books.map((b) => [b.fingerprint, b]));
+
+  for (const saved of data.books || []) {
+    const book = byFingerprint.get(saved.fingerprint);
+    if (!book) { report.missing += 1; continue; }
+    for (const field of BOOK_FIELDS) {
+      if (saved[field] !== undefined) book[field] = saved[field];
+    }
+    await put('books', book);
+    report.books += 1;
+  }
+
+  // A second pass: a bundle's leader may not have existed on the first.
+  for (const saved of data.books || []) {
+    if (!saved.bundleLeader) continue;
+    const book = byFingerprint.get(saved.fingerprint);
+    const leader = byFingerprint.get(saved.bundleLeader);
+    if (!book || !leader) continue;
+    book.bundleId = leader.id;
+    await put('books', book);
+  }
+
+  for (const position of data.positions || []) {
+    const book = byFingerprint.get(position.fingerprint);
+    if (!book) continue;
+    const { fingerprint, ...row } = position;
+    await put('positions', { ...row, bookId: book.id });
+  }
+
+  for (const mark of data.marks || []) {
+    const book = byFingerprint.get(mark.fingerprint);
+    if (!book) continue;
+    const { fingerprint, id, ...row } = mark;
+    await add('marks', { ...row, bookId: book.id });
+    report.marks += 1;
+  }
+
+  // The log is keyed by book too, but a reading history is worth keeping even
+  // for books no longer on the shelf.
+  for (const event of data.events || []) {
+    const { id, ...row } = event;
+    const book = books.find((b) => b.id === event.bookId);
+    await add('events', { ...row, bookId: book ? book.id : null });
+    report.events += 1;
+  }
+
+  return report;
+}

@@ -550,6 +550,48 @@ t('a file opened from elsewhere is read, not collected', () => {
   assert.match(library, /b\.importing \|\| b\.transient/);
 });
 
+t('exports go through the native side, not an anchor', () => {
+  // A WebView has no download handling: no DownloadListener means an
+  // <a download> click is ignored outright, so both export buttons did
+  // nothing at all.
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /function offerDownload/);
+  assert.match(panels, /window\.GrimoireNative\?\.saveText/);
+  // Both buttons use it, and neither builds its own anchor any more.
+  // Its definition plus every caller: the reading log, the settings export,
+  // and the full backup.
+  assert.equal((panels.match(/offerDownload\(/g) || []).length, 4);
+  assert.ok(!/a\.download = 'grimoire/.test(panels), 'an export still relies on an anchor');
+  // A failure says so rather than looking like a dead button again.
+  assert.match(panels, /That file could not be saved/);
+
+  const java = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
+  assert.match(java, /public boolean saveText/);
+  // A name is a name, not a path: the page cannot write outside the one
+  // directory the provider exposes.
+  assert.match(java, /new File\(name == null \? "export\.txt" : name\)\.getName\(\)/);
+
+  const manifest = read('app/src/main/AndroidManifest.xml');
+  assert.match(manifest, /androidx\.core\.content\.FileProvider/);
+  assert.match(manifest, /android:exported="false"/);
+  const paths = read('app/src/main/res/xml/file_paths.xml');
+  assert.match(paths, /<cache-path name="exports" path="exports\/" \/>/);
+  // One directory inside the cache, and nothing else.
+  assert.ok(!/<external-path|<root-path|<files-path/.test(paths));
+});
+
+t('a backup can be restored, not only written', () => {
+  // An export with no way back in is a file you keep and never use.
+  const store = read('app/src/main/assets/www/js/store.js');
+  assert.match(store, /export async function exportBackup/);
+  assert.match(store, /export async function importBackup/);
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /Restore from a backup/);
+  assert.match(panels, /store\.importBackup/);
+  // And it says what could not be matched rather than reporting success.
+  assert.match(panels, /not on the shelf yet/);
+});
+
 console.log('settings');
 
 t('settings is a screen with panes, reachable from the bar', () => {

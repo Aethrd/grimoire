@@ -71,5 +71,25 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
+
+        <!--
+          Exports are written to the app's own cache and handed out through
+          the share sheet. A WebView has no download handling of its own, so
+          without this the export buttons did nothing at all.
+
+          Nothing outside the app is readable through it: the paths below are
+          one directory inside the cache, and access is granted per file, for
+          one share, by the receiving app only.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
 </manifest>

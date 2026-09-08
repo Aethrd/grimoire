@@ -226,4 +226,68 @@ await t('a keyed cache reuses a URL until the data changes', async () => {
   assert.equal(cache.size, 0);
 });
 
+console.log('backup');
+
+await t('a backup carries everything except the books', async () => {
+  // The text and pictures are gigabytes and already exist as the files they
+  // came from. What cannot be re-created is what you did afterwards.
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const a = await store.add('books', { title: 'A', fingerprint: 'a:1', addedAt: 1, folder: 'Fic', status: 'onHold' });
+  const b = await store.add('books', { title: 'B', fingerprint: 'b:2', addedAt: 2 });
+  for (const id of [a, b]) {
+    const book = await store.get('books', id);
+    book.bundleId = a;
+    await store.put('books', book);
+  }
+  await store.put('chapters', { bookId: a, index: 0, title: 'One', html: '<p>secret</p>', words: 1 });
+  await store.put('positions', { bookId: a, chapterIndex: 12, anchor: 340, percent: 0.4 });
+  await store.add('marks', { bookId: a, kind: 'bookmark', chapterIndex: 12, anchor: 340 });
+
+  const backup = await store.exportBackup();
+  assert.equal(backup.format, 'grimoire-backup');
+  assert.equal(backup.books.length, 2);
+  assert.ok(!JSON.stringify(backup).includes('secret'), 'chapter text is in the backup');
+  // Bundles are ids, which do not survive a re-import; the leader is recorded
+  // by fingerprint instead.
+  assert.equal(backup.books.find((x) => x.fingerprint === 'b:2').bundleLeader, 'a:1');
+});
+
+await t('restoring matches books by file, not by id', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const backup = await store.exportBackup();
+
+  for (const book of await store.all('books')) await store.deleteBook(book.id);
+  // The same files imported again, with new ids.
+  const a = await store.add('books', { title: 'A', fingerprint: 'a:1', addedAt: 9 });
+  const b = await store.add('books', { title: 'B', fingerprint: 'b:2', addedAt: 9 });
+
+  const report = await store.importBackup(JSON.parse(JSON.stringify(backup)));
+  assert.equal(report.books, 2);
+  assert.equal(report.missing, 0);
+
+  const restored = await store.get('books', a);
+  assert.equal(restored.folder, 'Fic');
+  assert.equal(restored.status, 'onHold');
+  assert.equal((await store.get('books', b)).bundleId, a, 'the bundle was not rebuilt');
+  assert.equal((await store.get('positions', a)).chapterIndex, 12);
+});
+
+await t('a book not back on the shelf is reported, not invented', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const report = await store.importBackup({
+    format: 'grimoire-backup', version: 1,
+    books: [{ fingerprint: 'not-here:1', folder: 'Ghost' }],
+  });
+  assert.equal(report.books, 0);
+  assert.equal(report.missing, 1);
+  assert.ok(!(await store.all('books')).some((x) => x.folder === 'Ghost'));
+});
+
+await t('something that is not a backup is refused', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  await assert.rejects(store.importBackup({ hello: true }), /not a Grimoire backup/);
+  await assert.rejects(
+    store.importBackup({ format: 'grimoire-backup', version: 99 }), /newer version/);
+});
+
 console.log(`\n${pass} assertions passed`);
