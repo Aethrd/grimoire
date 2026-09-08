@@ -137,6 +137,9 @@ const LABELS = {
 
 export async function openLayout(bookId) {
   const layout = await store.layoutFor(bookId);
+  // Reading mode lives here rather than in the layout: it applies to every
+  // book, not to the one in front of you.
+  const settings = await store.settings();
   const body = el('layout-body');
   body.innerHTML = '';
 
@@ -149,12 +152,12 @@ export async function openLayout(bookId) {
   for (const [value, label] of [['paged', 'Paged'], ['scroll', 'Scroll']]) {
     const button = document.createElement('button');
     button.textContent = label;
-    button.setAttribute('aria-pressed', String(layout.mode === value));
+    button.setAttribute('aria-pressed', String(settings.readingMode === value));
     button.onclick = async () => {
-      const next = await store.saveLayout(bookId, { mode: value });
-      reader.applyLayout(next);
-      // Switching rebuilds the view; the anchor is what carries the place
-      // across, so you land on the same sentence either way.
+      // Saved by setMode, and applied everywhere: choosing how to read is a
+      // habit, not a property of the book in front of you. Switching rebuilds
+      // the view; the anchor carries the place across, so you land on the
+      // same sentence either way.
       await reader.setMode(value);
       openLayout(bookId);
     };
@@ -163,7 +166,7 @@ export async function openLayout(bookId) {
   modeField.appendChild(modeSeg);
   body.appendChild(modeField);
 
-  if (layout.mode === 'scroll') {
+  if (settings.readingMode === 'scroll') {
     const endless = document.createElement('div');
     endless.className = 'row';
     endless.innerHTML = `<div class="row-text"><b>Endless scroll</b>
@@ -171,12 +174,10 @@ export async function openLayout(bookId) {
       Chapters load as you reach them and are dropped again once well behind you.</small></div>`;
     const sw = document.createElement('button');
     sw.className = 'switch';
-    sw.setAttribute('aria-pressed', String(layout.endless !== false));
+    sw.setAttribute('aria-pressed', String(settings.endlessScroll !== false));
     sw.onclick = async () => {
       const on = sw.getAttribute('aria-pressed') !== 'true';
       sw.setAttribute('aria-pressed', String(on));
-      const next = await store.saveLayout(bookId, { endless: on });
-      reader.applyLayout(next);
       reader.setEndless(on);
     };
     endless.appendChild(sw);

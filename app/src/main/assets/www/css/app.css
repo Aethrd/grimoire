@@ -91,6 +91,7 @@ html, body {
   background: transparent; color: var(--text);
   font-family: var(--font-ui); font-size: 14px;
   overscroll-behavior: none;
+  /* Chrome and controls are not text to be selected; the book is. */
   -webkit-user-select: none; user-select: none;
 }
 
@@ -402,6 +403,29 @@ section.block > h2 { margin-top: 18px; }
   content: ""; display: block; width: 38%; height: 1px;
   margin: 0 auto 2.5em; background: var(--divider);
 }
+/* The one place text is text: selectable, with the system's own long-press
+   menu on it -- copy, translate, web search, whatever the phone offers.
+   Everything else in the app stays unselectable, because chrome and controls
+   are not writing. */
+.page-flow {
+  -webkit-user-select: text; user-select: text;
+  -webkit-touch-callout: default;
+}
+/* Two things inside the flow that are not the book's words.
+
+   The label the app adds above a machine-translated chapter is the app
+   talking, not the author, and should no more be selectable than the header
+   is. Illustrations would otherwise offer the system's image menu -- save,
+   share, search this image -- which is not what a long press in a book is
+   for. */
+.page-flow .chapter::before { -webkit-user-select: none; user-select: none; }
+.page-flow img, .page-flow figure {
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Selection highlight in the reader's own accent rather than the default. */
+.page-flow ::selection { background: var(--accent-300); color: var(--accent-900); }
 .page-flow p { margin: 0 0 var(--read-para); text-indent: var(--read-indent); }
 .page-flow p:first-of-type { text-indent: 0; }
 .page-flow h1, .page-flow h2, .page-flow h3 {
@@ -424,7 +448,13 @@ section.block > h2 { margin-top: 18px; }
 /* In scroll mode the layer covered the scrollable area and swallowed every
    drag, so the text could not be scrolled at all. Taps are picked up from the
    host instead -- see wireReader. */
-[data-mode="scroll"] .tap-layer { pointer-events: none; }
+/* The layer never takes touches, in either mode.
+   It sat over the text, so a long press landed on it instead of on the words
+   -- and Android's Copy, Translate and Web search never appeared. Taps are
+   recognised from the host below it and only when the finger neither moved
+   nor lingered, which is exactly what distinguishes a page turn from the
+   start of a selection. */
+.tap-layer { pointer-events: none; }
 .tap-zone { height: 100%; }
 .tap-zone[data-tap="back"], .tap-zone[data-tap="forward"] { width: var(--tap-zone, 18%); }
 .tap-zone[data-tap="chrome"] { flex: 1; }

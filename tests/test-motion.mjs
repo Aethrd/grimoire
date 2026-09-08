@@ -23,15 +23,22 @@ const t = (name, fn) => { fn(); console.log('  ok  ' + name); pass++; };
 console.log('reading mode');
 
 t('paged is the default, endless is on for when scroll is chosen', () => {
-  assert.equal(store.DEFAULT_LAYOUT.mode, 'paged');
-  assert.equal(store.DEFAULT_LAYOUT.endless, true);
+  assert.equal(store.DEFAULT_SETTINGS.readingMode, 'paged');
+  assert.equal(store.DEFAULT_SETTINGS.endlessScroll, true);
 });
 
-t('mode and endless are per-book layout, so they inherit and reset', () => {
-  // Living in DEFAULT_LAYOUT means they go through layoutFor()/saveLayout(),
-  // which already handles per-book override and Reset restoring inheritance.
-  assert.ok('mode' in store.DEFAULT_LAYOUT);
-  assert.ok('endless' in store.DEFAULT_LAYOUT);
+t('how you read is a setting, not a property of one book', () => {
+  // It used to live in the per-book layout, where choosing scroll on one book
+  // left every other one paged -- which reads as the app forgetting.
+  assert.ok(!('mode' in store.DEFAULT_LAYOUT), 'reading mode is back in the layout');
+  assert.ok(!('endless' in store.DEFAULT_LAYOUT));
+
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /store\.saveSettings\(\{ readingMode: mode \}\)/);
+  assert.match(reader, /store\.saveSettings\(\{ endlessScroll: on \}\)/);
+  // An older install still carrying it in a layout row is honoured once, so
+  // nobody loses the mode they had.
+  assert.match(reader, /settings\?\.readingMode \|\| layout\.mode \|\| 'paged'/);
 });
 
 t('the reader exposes both switches', () => {
@@ -146,12 +153,13 @@ t('several language packs can be fetched in one go', () => {
 
 t('scroll mode can actually be scrolled', () => {
   // The tap layer covered the scrollable area and swallowed every drag, so
-  // the text could not be moved at all.
-  assert.match(css, /\[data-mode="scroll"\] \.tap-layer \{ pointer-events: none; \}/);
+  // the text could not be moved at all. It takes no touches now, in either
+  // mode -- which is also what lets a long press reach the words.
+  assert.match(css, /\.tap-layer \{ pointer-events: none; \}/);
   const app = read('app/src/main/assets/www/js/app.js');
-  // Taps are recognised from the host instead, and only when the finger did
-  // not travel -- anything else is a scroll.
-  assert.match(app, /Scroll mode taps/);
+  // Taps are read from the host instead, and only when the finger did not
+  // travel -- anything else is a scroll or a selection.
+  assert.match(app, /Taps, in both modes/);
   assert.match(app, /moved \|\| Date\.now\(\) - tapAt > 400/);
 });
 
@@ -165,41 +173,46 @@ t('dragging the rail does not fight endless loading', () => {
   assert.match(reader, /Math\.min\(1, viewport\.clientHeight \/ viewport\.scrollHeight\)/);
 });
 
-t('a tap in scroll mode does nothing but toggle chrome', () => {
-  // No page turn, no chapter change, anywhere on the screen. Both were being
-  // triggered by accident while reading.
+t('the overlay never takes a touch, so text can be selected', () => {
+  // It sat over the words, so a long press landed on it and Android's Copy,
+  // Translate and Web search never appeared.
+  assert.match(css, /\.tap-layer \{ pointer-events: none; \}/);
+  assert.match(css, /\.page-flow \{\n  -webkit-user-select: text; user-select: text;/);
+  assert.match(css, /-webkit-touch-callout: default/);
+});
+
+t('only the book\u2019s own words can be selected', () => {
+  // One rule turns selection on, and it is on the container that holds
+  // nothing but chapters. Everything else -- the header, the position line,
+  // the copy row, every other screen -- inherits the app-wide `none`.
+  const enabling = [...css.matchAll(/([^{}]+)\{[^}]*user-select:\s*text/g)]
+    .map((m) => m[1].trim().split('\n').pop().trim());
+  assert.deepEqual(enabling, ['.page-flow'],
+    `selection is enabled somewhere else: ${enabling.join(', ')}`);
+
+  // And two things inside the flow that are not the author's words: the label
+  // the app puts above a translated chapter, and illustrations, which would
+  // otherwise offer the system's image menu.
+  assert.match(css, /\.page-flow \.chapter::before \{ -webkit-user-select: none/);
+  assert.match(css, /\.page-flow img, \.page-flow figure \{/);
+  assert.match(css, /-webkit-touch-callout: none/);
+});
+
+t('a tap is a finger that neither moved nor lingered', () => {
+  // Which is exactly what separates a page turn from the start of a
+  // selection, and it is read from the host rather than the overlay.
   const app = read('app/src/main/assets/www/js/app.js');
-  // Bounded by the block itself: el('chapter-prev') also appears earlier, in
-  // paintReader, which made this slice run backwards and match nothing.
-  const start = app.indexOf('/* Scroll mode taps.');
-  const taps = app.slice(start, app.indexOf("el('chapter-prev').onclick", start));
+  const taps = app.slice(app.indexOf('/* Taps, in both modes.'),
+    app.indexOf('// Swipe, independently'));
+  assert.match(taps, /moved \|\| Date\.now\(\) - tapAt > 400/);
+  // And a tap that only dismisses an existing selection is not a turn either.
+  assert.match(taps, /getSelection\?\.\(\)\.isCollapsed/);
   assert.match(taps, /reader\.cycleChrome\(\)/);
-  assert.ok(!/reader\.turn\(/.test(taps), 'a scroll-mode tap can still turn a page');
-  assert.ok(!/Chapter\(/.test(taps), 'a scroll-mode tap can still change chapter');
-});
 
-t('no tap or swipe crosses a chapter, in either mode', () => {
-  // Turning a whole chapter is a far larger movement than a page. Sharing a
-  // gesture with the page turn means doing the larger one by accident every
-  // time a chapter ends.
-  const reader = read('app/src/main/assets/www/js/reader.js');
-  const turn = reader.slice(reader.indexOf('export function turn'), reader.indexOf('export function goToPage'));
-  assert.ok(!/Chapter\(/.test(turn), 'turn() still reaches for a chapter somewhere');
-  // It reports the refusal rather than looking like a missed tap.
-  assert.match(turn, /return false/);
-  const app = read('app/src/main/assets/www/js/app.js');
-  assert.match(app, /if \(!reader\.turn\(/);
-  assert.match(app, /function atChapterEdge/);
-  // Said once, not on every attempt at the end of a chapter.
-  assert.match(app, /Date\.now\(\) - edgeToldAt < 2500/);
-});
-
-t('an unmeasured page count cannot let a turn through', () => {
-  // NaN fails every comparison silently, so a chapter that never measured
-  // would slip straight past the check meant to stop it.
-  const reader = read('app/src/main/assets/www/js/reader.js');
-  assert.match(reader, /Number\.isFinite\(state\.pageCount\)/);
-  assert.match(reader, /Number\.isFinite\(count\)/);
+  // A swipe is the same shape as dragging out a selection, so it stands down
+  // for one too -- otherwise the page turns out from under the selection.
+  const swipe = app.slice(app.indexOf('// Swipe, independently'), app.indexOf("el('chapter-prev').onclick"));
+  assert.match(swipe, /getSelection\?\.\(\)\.isCollapsed/);
 });
 
 t('turn() still refuses to change chapter in scroll mode', () => {

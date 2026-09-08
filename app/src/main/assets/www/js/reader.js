@@ -89,6 +89,7 @@ const isScroll = () => state.mode === 'scroll';
 
 export async function setMode(mode) {
   if (mode === state.mode) return;
+  await store.saveSettings({ readingMode: mode });
   const anchor = state.anchor;
   const chapter = state.chapterIndex;
   state.mode = mode;
@@ -101,6 +102,7 @@ export async function setMode(mode) {
 
 export function setEndless(on) {
   state.endless = on;
+  store.saveSettings({ endlessScroll: on });
   if (isScroll() && on) extendIfNeeded();
 }
 
@@ -324,7 +326,7 @@ export async function open(bookId, opts = {}) {
   const images = await store.byIndex('images', 'bookId', bookId);
   state.images = new Map(images.filter((i) => i.blob).map((i) => [i.href, i.blob]));
   state.layout = await store.layoutFor(bookId);
-  applyLayout(state.layout);
+  applyLayout(state.layout, await store.settings());
 
   const saved = await store.get('positions', bookId);
   const chapterIndex = opts.chapter ?? saved?.chapterIndex ?? 0;
@@ -567,7 +569,7 @@ export function percent() {
 
 /* ── layout override ──────────────────────────────────────────────────── */
 
-export function applyLayout(layout) {
+export function applyLayout(layout, settings) {
   state.layout = layout;
   const root = document.documentElement.style;
   root.setProperty('--read-size', `${layout.size}px`);
@@ -582,9 +584,14 @@ export function applyLayout(layout) {
   if (layout.ink) root.setProperty('--read-ink', layout.ink);
   else root.removeProperty('--read-ink');
 
-  state.endless = layout.endless !== false;
-  if (layout.mode && layout.mode !== state.mode) {
-    state.mode = layout.mode;
+  /* Reading mode comes from the settings, not the book. An older install may
+     still carry it in a per-book layout row; that is honoured once so nobody
+     loses the mode they had, and the setting takes over from then on. */
+  const mode = settings?.readingMode || layout.mode || 'paged';
+  state.endless = settings ? settings.endlessScroll !== false : layout.endless !== false;
+
+  if (mode !== state.mode) {
+    state.mode = mode;
     viewport.classList.toggle('scrolling', isScroll());
     flow.classList.toggle('scrolling', isScroll());
   }

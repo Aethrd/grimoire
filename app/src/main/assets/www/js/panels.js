@@ -1055,14 +1055,14 @@ async function renderLayoutPane(body) {
   for (const [value, label] of [['paged', 'Paged'], ['scroll', 'Scroll']]) {
     const button = document.createElement('button');
     button.textContent = label;
-    button.setAttribute('aria-pressed', String(layout.mode === value));
-    button.onclick = async () => { await store.saveLayout(0, { mode: value }); renderSettings(); };
+    button.setAttribute('aria-pressed', String(settings.readingMode === value));
+    button.onclick = async () => { await store.saveSettings({ readingMode: value }); renderSettings(); };
     seg.appendChild(button);
   }
   body.appendChild(seg);
 
   body.appendChild(row('Endless scroll', 'Run into the next chapter instead of stopping',
-    toggle(layout.endless !== false, (on) => store.saveLayout(0, { endless: on }))));
+    toggle(settings.endlessScroll !== false, (on) => store.saveSettings({ endlessScroll: on }))));
 
   const shelf = document.createElement('section');
   shelf.className = 'block';

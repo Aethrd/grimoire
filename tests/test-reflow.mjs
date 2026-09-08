@@ -18,6 +18,39 @@ window.URL.revokeObjectURL = globalThis.URL.revokeObjectURL = () => {};
 let pass = 0;
 const t = async (name, fn) => { await fn(); console.log('  ok  ' + name); pass++; };
 
+await (async () => {
+  /* The mode has to outlast the book it was chosen on. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const reader = await import(
+    `${new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href}?modes`);
+
+  const make = async (title) => {
+    const id = await store.add('books', { title, fingerprint: title, addedAt: 1 });
+    await store.put('chapters', { bookId: id, index: 0, title: 'One', html: '<p>x</p>', words: 5 });
+    return id;
+  };
+
+  await t('a mode chosen on one book applies to the next', async () => {
+    const a = await make('First');
+    const b = await make('Second');
+    reader.init({ onChange() {} });
+
+    await reader.open(a);
+    assert.equal(reader.state.mode, 'paged');
+
+    await reader.setMode('scroll');
+    assert.equal((await store.settings()).readingMode, 'scroll', 'the choice was not saved');
+
+    // The book it was never chosen on.
+    await reader.open(b);
+    assert.equal(reader.state.mode, 'scroll');
+
+    // And still there on returning to the first.
+    await reader.open(a);
+    assert.equal(reader.state.mode, 'scroll');
+  });
+})();
+
 console.log('what counts as reading');
 
 await (async () => {

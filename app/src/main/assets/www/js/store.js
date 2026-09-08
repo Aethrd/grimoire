@@ -196,6 +196,15 @@ export const DEFAULT_SETTINGS = {
   translateTitles: false,
   translateChapters: true,
   translateBody: false,
+  /* How you read, not how one book is set.
+   *
+   * Paged or scrolling is a habit rather than a property of a particular
+   * book, so it lives with the settings and applies everywhere. It used to
+   * sit in the per-book layout, where choosing it on one book left every
+   * other one unchanged -- which reads as the app forgetting. */
+  readingMode: 'paged',
+  endlessScroll: true,
+
   translateTarget: 'EN-GB',
   streakPages: 10,
   streakMinutes: 10,
@@ -222,8 +231,6 @@ export async function saveSettings(patch) {
 }
 
 export const DEFAULT_LAYOUT = {
-  mode: 'paged',     // 'paged' | 'scroll'
-  endless: true,     // scroll mode: run on into the next chapter
   face: 'Newsreader',
   size: 17,          // 13–30
   leading: 1.62,     // 1.1–2.6

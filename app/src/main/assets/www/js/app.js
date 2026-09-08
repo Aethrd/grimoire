@@ -810,49 +810,19 @@ function atChapterEdge(direction) {
 function wireReader() {
   reader.init({ onChange: paintReader });
 
-  const layer = el('tap-layer');
-  for (const zone of layer.children) {
-    zone.addEventListener('click', () => {
-      const action = zone.dataset.tap;
-      if (action === 'chrome') { reader.cycleChrome(); paintReader(); return; }
-      if (!reader.turn(action === 'forward' ? 1 : -1)) {
-        atChapterEdge(action === 'forward' ? 1 : -1);
-      }
-    });
-  }
-
-  // Swipe, independently toggleable from side taps in settings.
-  let startX = 0, startY = 0, startAt = 0;
+  // Shared by the tap and swipe handlers below.
   const host = el('page-host');
-  host.addEventListener('touchstart', (e) => {
-    startX = e.touches[0].clientX; startY = e.touches[0].clientY; startAt = Date.now();
-  }, { passive: true });
-  host.addEventListener('touchend', async (e) => {
-    // Scroll mode already has a gesture for moving through the text, and
-    // hijacking horizontal swipes on top of it fights the scroller.
-    if (reader.state.mode === 'scroll') return;
-    const settings = await store.settings();
-    if (!settings.turnBySwipe) return;
-    const dx = e.changedTouches[0].clientX - startX;
-    const dy = e.changedTouches[0].clientY - startY;
-    if (Date.now() - startAt > 600) return;
-    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
-    if (!reader.turn(dx < 0 ? 1 : -1)) atChapterEdge(dx < 0 ? 1 : -1);
-  }, { passive: true });
-
-  /* Scroll mode taps.
+  /* Taps, in both modes.
    *
-   * A tap does one thing here: show or hide the chrome. Nothing turns a page
-   * and nothing changes chapter, anywhere on the screen -- in scroll mode the
-   * way to move through the text is to scroll it, and the way to change
-   * chapter is the button that says so. Taps that were doing either were
-   * being triggered by accident while reading.
-   *
-   * The tap layer is inert in this mode (it covered the scrollable area and
-   * swallowed every drag), so this is recognised here, and only when the
-   * finger did not travel.
+   * The invisible zone overlay used to take these, which meant it also took
+   * long presses -- so a press on a word landed on the overlay and Android's
+   * Copy, Translate and Web search never came up. The layer is inert now and
+   * the touch is read here instead: a tap is a finger that neither moved nor
+   * lingered, and anything else is left alone for the system to make a
+   * selection out of.
    */
   let tapX = 0, tapY = 0, tapAt = 0, moved = false;
+
   host.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1) { moved = true; return; }
     tapX = e.touches[0].clientX;
@@ -860,14 +830,57 @@ function wireReader() {
     tapAt = Date.now();
     moved = false;
   }, { passive: true });
+
   host.addEventListener('touchmove', (e) => {
     if (Math.abs(e.touches[0].clientX - tapX) > 8
       || Math.abs(e.touches[0].clientY - tapY) > 8) moved = true;
   }, { passive: true });
-  host.addEventListener('touchend', () => {
-    if (reader.state.mode !== 'scroll' || moved || Date.now() - tapAt > 400) return;
-    reader.cycleChrome();
-    paintReader();
+
+  host.addEventListener('touchend', async (e) => {
+    // A press long enough to be a selection is not a page turn. 400ms is
+    // comfortably under Android's own long-press threshold, so the two never
+    // both fire.
+    if (moved || Date.now() - tapAt > 400) return;
+    // Nor is a tap that dismisses a selection the reader already has.
+    if (!window.getSelection?.().isCollapsed) return;
+
+    const settings = await store.settings();
+    const box = host.getBoundingClientRect();
+    const fraction = (e.changedTouches[0].clientX - box.left) / box.width;
+    const middle = fraction > settings.tapZone && fraction < 1 - settings.tapZone;
+
+    if (middle) {
+      reader.cycleChrome();
+      paintReader();
+      return;
+    }
+    // Scroll mode moves by a screen; paged mode by a page. Neither crosses
+    // into another chapter.
+    if (!settings.turnBySideTap) return;
+    const direction = fraction <= settings.tapZone ? -1 : 1;
+    if (!reader.turn(direction)) atChapterEdge(direction);
+  }, { passive: true });
+
+  // Swipe, independently toggleable from side taps in settings.
+  let startX = 0, startY = 0, startAt = 0;
+  host.addEventListener('touchstart', (e) => {
+    startX = e.touches[0].clientX; startY = e.touches[0].clientY; startAt = Date.now();
+  }, { passive: true });
+  host.addEventListener('touchend', async (e) => {
+    // Scroll mode already has a gesture for moving through the text, and
+    // hijacking horizontal swipes on top of it fights the scroller.
+    if (reader.state.mode === 'scroll') return;
+    // Dragging out a selection is a long horizontal movement over the text,
+    // which is exactly the shape of a swipe. Turning the page out from under
+    // it would make selecting anything impossible.
+    if (!window.getSelection?.().isCollapsed) return;
+    const settings = await store.settings();
+    if (!settings.turnBySwipe) return;
+    const dx = e.changedTouches[0].clientX - startX;
+    const dy = e.changedTouches[0].clientY - startY;
+    if (Date.now() - startAt > 600) return;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+    if (!reader.turn(dx < 0 ? 1 : -1)) atChapterEdge(dx < 0 ? 1 : -1);
   }, { passive: true });
 
   el('chapter-prev').onclick = async () => {
