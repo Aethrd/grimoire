@@ -200,6 +200,47 @@ t('only the book\u2019s own words can be selected', () => {
   assert.match(css, /-webkit-touch-callout: none/);
 });
 
+t('the end of a chapter is reachable without the buttons', () => {
+  /* Asked for both ways at different times, and both are right: a tap must
+   * not turn a whole chapter by accident, and reaching the end should not
+   * mean hunting for a button. Asking twice keeps them apart -- the second
+   * tap is a page turn that happens to land on nothing, not a decision. */
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /edgeDirection === direction && Date\.now\(\) - edgeToldAt < 4000/);
+  assert.match(app, /tap again to carry on/);
+  assert.match(app, /await reader\.nextChapter\(\)/);
+  // And it can be set to either extreme for anyone who wants one.
+  const store = read('app/src/main/assets/www/js/store.js');
+  assert.match(store, /chapterOnEdge: 'confirm'/);
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /Carry straight on/);
+  assert.match(panels, /Only the buttons/);
+});
+
+t('pictures can be fitted more than one way', () => {
+  // A page of prose and a page of comic want different things from the same
+  // rule, and a scan of a two-page spread wants a third.
+  for (const mode of ['fit', 'fill', 'stretch', 'original', 'wide']) {
+    assert.ok(css.includes(`[data-images="${mode}"]`), `no rule for ${mode}`);
+  }
+  // Only fit neither crops nor distorts, so it is the default.
+  const store = read('app/src/main/assets/www/js/store.js');
+  assert.match(store, /imageFit: 'fit'/);
+  // Rotation needs to know which pictures are wider than they are tall.
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /classList\.toggle\('landscape'/);
+});
+
+t('the body carries every setting the stylesheet reads', () => {
+  // These were set from the reader and the settings panes but never from the
+  // theme, so a fresh launch had none of them until a pane was opened.
+  const theme = read('app/src/main/assets/www/js/theme.js');
+  for (const key of ['marks', 'images', 'focus', 'keepParagraphs']) {
+    assert.match(theme, new RegExp(`dataset\\.${key} =`), `${key} is not applied at launch`);
+  }
+  assert.match(theme, /--mark-opacity/);
+});
+
 t('a tap is a finger that neither moved nor lingered', () => {
   // Which is exactly what separates a page turn from the start of a
   // selection, and it is read from the host rather than the overlay.

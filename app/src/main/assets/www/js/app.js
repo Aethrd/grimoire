@@ -812,14 +812,41 @@ async function jumpToImage(image) {
  * is indistinguishable from a missed tap. Said once, not on every attempt.
  */
 let edgeToldAt = 0;
-function atChapterEdge(direction) {
-  if (Date.now() - edgeToldAt < 2500) return;
-  edgeToldAt = Date.now();
+let edgeDirection = 0;
+
+async function atChapterEdge(direction) {
   const more = direction > 0 ? reader.hasNextChapter() : reader.hasPrevChapter();
-  const which = direction > 0 ? 'next' : 'previous';
-  toast(more
-    ? `End of the chapter — use ${direction > 0 ? 'Ch \u203a' : '\u2039 Ch'} for the ${which} one`
-    : `That is the ${direction > 0 ? 'last' : 'first'} chapter`);
+  if (!more) {
+    toast(`That is the ${direction > 0 ? 'last' : 'first'} chapter`);
+    return;
+  }
+
+  const how = (await store.settings()).chapterOnEdge || 'confirm';
+  if (how === 'buttons') {
+    if (Date.now() - edgeToldAt > 2500) {
+      edgeToldAt = Date.now();
+      toast(`End of the chapter — use ${direction > 0 ? 'Ch \u203a' : '\u2039 Ch'} to carry on`);
+    }
+    return;
+  }
+
+  // A second tap the same way, soon after the first, is the confirmation.
+  const asked = how === 'immediate'
+    || (edgeDirection === direction && Date.now() - edgeToldAt < 4000);
+
+  if (!asked) {
+    edgeToldAt = Date.now();
+    edgeDirection = direction;
+    toast(direction > 0 ? 'End of the chapter — tap again to carry on'
+      : 'Start of the chapter — tap again to go back', 4000);
+    return;
+  }
+
+  edgeToldAt = 0;
+  edgeDirection = 0;
+  if (direction > 0) await reader.nextChapter();
+  else await reader.prevChapter(true);
+  paintReader();
 }
 
 /* ── annotating ───────────────────────────────────────────────────────────
@@ -1198,7 +1225,7 @@ function wireReader() {
     // into another chapter.
     if (!settings.turnBySideTap) return;
     const direction = fraction <= settings.tapZone ? -1 : 1;
-    if (!reader.turn(direction)) atChapterEdge(direction);
+    if (!reader.turn(direction)) await atChapterEdge(direction);
   }, { passive: true });
 
   // Swipe, independently toggleable from side taps in settings.
@@ -1220,7 +1247,7 @@ function wireReader() {
     const dy = e.changedTouches[0].clientY - startY;
     if (Date.now() - startAt > 600) return;
     if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
-    if (!reader.turn(dx < 0 ? 1 : -1)) atChapterEdge(dx < 0 ? 1 : -1);
+    if (!reader.turn(dx < 0 ? 1 : -1)) await atChapterEdge(dx < 0 ? 1 : -1);
   }, { passive: true });
 
   el('chapter-prev').onclick = async () => {

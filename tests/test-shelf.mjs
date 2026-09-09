@@ -639,6 +639,25 @@ t('the averages hold up when reading happens elsewhere', () => {
   assert.match(reader, /elsewhere: true/);
 });
 
+t('the import log names the books, not just the total', () => {
+  // An average hides the thing worth knowing: four minutes might be a hundred
+  // books at two seconds each or one book at three minutes, and only one of
+  // those is worth doing anything about.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /const perBook = \[\]/);
+  for (const field of ['bytes', 'chapters', 'images', 'words', 'writeMs']) {
+    assert.ok(library.includes(`${field}:`), `no ${field} recorded`);
+  }
+  // Slowest first, since that is where any further work belongs.
+  assert.match(library, /perBook\.sort\(\(a, b\) => b\.ms - a\.ms\)/);
+  // Kept as a history, so a change can be judged against what came before.
+  assert.match(library, /importHistory/);
+  const store = read('app/src/main/assets/www/js/store.js');
+  assert.match(store, /imports: \(await settings\(\)\)\.importHistory/);
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /Slowest/);
+});
+
 t('an import reports how long it took and where it went', () => {
   // A benchmark on a desktop is not evidence about a phone: jsdom parses XML
   // in JavaScript where a WebView uses Blink's native parser, so any figure

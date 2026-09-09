@@ -990,6 +990,29 @@ export async function openVault(onVaultChange, host) {
       facts.appendChild(cell);
     }
     timing.appendChild(facts);
+
+    /* The slowest books, named.
+     *
+     * An average hides the thing worth knowing: four minutes might be a
+     * hundred books at two seconds each or one book at three minutes, and
+     * only one of those is worth doing anything about. */
+    if (last.perBook?.length) {
+      const list = document.createElement('div');
+      list.style.marginTop = '10px';
+      list.innerHTML = '<p class="eyebrow">Slowest</p>';
+      for (const book of last.perBook.slice(0, 5)) {
+        const row = document.createElement('div');
+        row.className = 'list-row';
+        row.style.pointerEvents = 'none';
+        const size = book.bytes ? `${(book.bytes / 1048576).toFixed(1)}MB · ` : '';
+        row.innerHTML = `<span class="body"><b>${escape(book.name)}</b>`
+          + `<small>${(book.ms / 1000).toFixed(1)}s · ${size}`
+          + `${book.chapters} chapters · ${book.images} pictures</small></span>`;
+        list.appendChild(row);
+      }
+      timing.appendChild(list);
+    }
+
     body.appendChild(timing);
   }
 
@@ -1252,6 +1275,52 @@ async function renderBehaviourPane(body) {
   }
   guides.appendChild(focus);
   body.appendChild(guides);
+
+  const ends = document.createElement('section');
+  ends.className = 'block';
+  ends.innerHTML = `<h2>At the end of a chapter</h2>
+    <p class="muted" style="font-size:12px;line-height:1.55">
+      A chapter is a much bigger jump than a page, so a tap does not make one
+      by accident.</p>`;
+  for (const [value, label, note] of [
+    ['confirm', 'Tap again to carry on', 'One tap says the chapter has ended, the next moves'],
+    ['immediate', 'Carry straight on', 'A tap at the end goes to the next chapter'],
+    ['buttons', 'Only the buttons', 'Taps never change chapter'],
+  ]) {
+    const option = document.createElement('button');
+    option.className = 'list-row';
+    option.innerHTML = `<span class="body"><b>${escape(label)}</b><small>${escape(note)}</small></span>`;
+    option.setAttribute('aria-pressed', String((settings.chapterOnEdge || 'confirm') === value));
+    option.onclick = async () => { await store.saveSettings({ chapterOnEdge: value }); renderSettings(); };
+    ends.appendChild(option);
+  }
+  body.appendChild(ends);
+
+  const pictures = document.createElement('section');
+  pictures.className = 'block';
+  pictures.innerHTML = `<h2>Pictures</h2>
+    <p class="muted" style="font-size:12px;line-height:1.55">
+      How illustrations and comic pages are fitted. Only Fit leaves a picture
+      both uncropped and undistorted.</p>`;
+  for (const [value, label, note] of [
+    ['fit', 'Fit', 'The whole picture, never taller than the page'],
+    ['fill', 'Fill', 'Full width, cropped top and bottom'],
+    ['stretch', 'Stretch', 'Fills the space exactly, distorting to do it'],
+    ['original', 'Original size', 'However large it is, scrollable sideways'],
+    ['wide', 'Turn wide pages', 'Rotates a spread wider than it is tall'],
+  ]) {
+    const option = document.createElement('button');
+    option.className = 'list-row';
+    option.innerHTML = `<span class="body"><b>${escape(label)}</b><small>${escape(note)}</small></span>`;
+    option.setAttribute('aria-pressed', String((settings.imageFit || 'fit') === value));
+    option.onclick = async () => {
+      await store.saveSettings({ imageFit: value });
+      document.body.dataset.images = value;
+      renderSettings();
+    };
+    pictures.appendChild(option);
+  }
+  body.appendChild(pictures);
 
   const pages = document.createElement('section');
   pages.className = 'block';

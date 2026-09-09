@@ -325,8 +325,17 @@ function hydrateImages(section, index) {
   sectionPools.set(index, urls);
   for (const img of section.querySelectorAll('img[data-img]')) {
     const url = urls.url(state.images.get(img.getAttribute('data-img')));
-    if (url) img.src = url;
-    else img.remove();
+    if (url) {
+      img.src = url;
+      /* Marked once it has loaded, so the two-page-spread mode has something
+         to act on. Measured here rather than at import: the cost belongs on
+         the page that actually shows the picture. */
+      img.addEventListener('load', () => {
+        img.classList.toggle('landscape', img.naturalWidth > img.naturalHeight * 1.2);
+      }, { once: true });
+    } else {
+      img.remove();
+    }
   }
 }
 

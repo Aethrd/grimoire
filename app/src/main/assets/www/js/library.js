@@ -253,6 +253,15 @@ export async function importFiles(files, { onProgress, onDone, transient = false
    */
   const started = Date.now();
   const spent = { read: 0, parse: 0, write: 0 };
+  /* One line per book.
+   *
+   * Averages hide the thing worth knowing. A shelf that imports in four
+   * minutes might be a hundred books at two seconds each or one book at three
+   * minutes, and only one of those is worth optimising. Size, chapter count
+   * and picture count are recorded beside the time so the outliers can be
+   * recognised rather than guessed at.
+   */
+  const perBook = [];
   const results = { added: 0, failed: [], folders: new Set() };
 
   // Archives are flattened first, so the loop below never has to know whether
@@ -315,6 +324,7 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       const readAt = performance.now();
       const file = entry.file || new File([await entry.read()], name);
       spent.read += performance.now() - readAt;
+      const bookAt = performance.now();
 
       /* The book row is created first so images can be written as they are
          extracted rather than piling up in memory. A heavily illustrated book
@@ -334,7 +344,7 @@ export async function importFiles(files, { onProgress, onDone, transient = false
           if (buffered.length) await store.putAll('images', buffered.splice(0));
         };
 
-        const parseAt = performance.now();
+      const parseAt = performance.now();
         parsed = await parse(file, (p) =>
           onProgress?.(`Parsing ${name}`, (i + p) / queue.length, i, queue.length), {
           onImage: async (record) => {
@@ -385,7 +395,19 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       // minutes.
       const writeAt = performance.now();
       await store.putAll('chapters', parsed.chapters.map((c) => ({ bookId, ...c })));
-      spent.write += performance.now() - writeAt;
+      const writeMs = performance.now() - writeAt;
+      spent.write += writeMs;
+
+      perBook.push({
+        name,
+        format: parsed.format || null,
+        bytes: file.size,
+        chapters: parsed.chapters.length,
+        images: parsed.imageCount || 0,
+        words: parsed.words || 0,
+        ms: Math.round(performance.now() - bookAt),
+        writeMs: Math.round(writeMs),
+      });
       results.added += 1;
     } catch (error) {
       results.failed.push({ name, reason: error.message || 'Could not be parsed' });
@@ -398,12 +420,28 @@ export async function importFiles(files, { onProgress, onDone, transient = false
   // Kept so one import can be compared with the next, which is the only way
   // to tell whether a change to the importer actually helped.
   if (results.added) {
+    // Kept as a short history rather than only the latest, so a change to the
+    // importer can be judged against what came before it.
+    const settings = await store.settings();
+    const history = [...(settings.importHistory || [])].slice(-9);
+    history.push({
+      at: Date.now(),
+      books: results.added,
+      ms: results.elapsedMs,
+      spent: { ...spent },
+      slowest: perBook.slice(0, 3),
+    });
+
     await store.saveSettings({
+      importHistory: history,
       lastImport: {
         at: Date.now(),
         books: results.added,
         ms: results.elapsedMs,
         spent,
+        // Slowest first: the top of this list is where any further work
+        // belongs, and the rest is context for judging it.
+        perBook: perBook.sort((a, b) => b.ms - a.ms).slice(0, 40),
       },
     });
   }

@@ -211,6 +211,20 @@ export const DEFAULT_SETTINGS = {
   markColour: 'yellow',
   markOpacity: 0.35,
   markDensity: 'full',      // full | markers | hidden
+
+  /* How pictures are fitted to the page. Fit is the only one that neither
+     crops nor distorts, so it is the default. */
+  imageFit: 'fit',          // fit | fill | stretch | original | wide
+
+  /* What a forward tap does once a chapter has run out.
+   *
+   * Turning a whole chapter is a much larger movement than a page, and
+   * sharing one gesture with the page turn means doing the larger one by
+   * accident every time a chapter ends. Asking for it twice keeps the two
+   * apart without making the buttons the only way through — the second tap
+   * is a page turn that happens to land on nothing, not a decision.
+   */
+  chapterOnEdge: 'confirm', // confirm | immediate | buttons
   mergeMarks: true,         // two marks that touch become one
 
   /* Guides. Both are off by default: they help a great deal with dense
@@ -422,6 +436,9 @@ export async function exportBackup() {
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     settings: await settings(),
+    // Kept out of the settings blob as well, so an export is a record of how
+    // imports have actually behaved rather than only the most recent one.
+    imports: (await settings()).importHistory || [],
     views: await all('views'),
     events: await all('events'),
     layout: await all('layout'),

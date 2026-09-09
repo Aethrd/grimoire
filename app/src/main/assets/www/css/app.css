@@ -442,6 +442,43 @@ section.block > h2 { margin-top: 18px; }
 .page-flow h2 { font-size: 1.25em; }
 .page-flow h3 { font-size: 1.1em; }
 .page-flow img { max-width: 100%; height: auto; display: block; margin: 1em auto; }
+
+/* ── how pictures are fitted ─────────────────────────────────────────────
+   A page of prose and a page of comic want different things from the same
+   rule, and a scan of a two-page spread wants a third. */
+
+/* Fit: the whole picture, never taller than the page. The default, because
+   it is the only one that never crops and never distorts. */
+[data-images="fit"] .page-flow img { max-height: 88vh; object-fit: contain; }
+
+/* Fill: as wide as the column, cropped top and bottom to a comfortable
+   height. Suits comics, where the margins are usually empty anyway. */
+[data-images="fill"] .page-flow img {
+  width: 100%; height: 80vh; object-fit: cover;
+}
+
+/* Stretch: fills the space exactly, distorting to do it. Asked for often
+   enough by people reading scans with uneven trim to be worth having, and
+   labelled honestly so nobody chooses it by accident. */
+[data-images="stretch"] .page-flow img {
+  width: 100%; height: 80vh; object-fit: fill;
+}
+
+/* Original: whatever size the picture actually is, scrollable sideways if it
+   overflows rather than shrunk to fit. */
+[data-images="original"] .page-flow img {
+  max-width: none; max-height: none; width: auto; height: auto;
+}
+[data-images="original"] .page-flow { overflow-x: auto; }
+
+/* Wide: rotate a picture wider than it is tall, for a two-page spread read on
+   a phone held upright. */
+[data-images="wide"] .page-flow img { max-height: 88vh; object-fit: contain; }
+[data-images="wide"] .page-flow img.landscape {
+  transform: rotate(90deg);
+  max-height: none; max-width: 88vh;
+  margin: 2em auto;
+}
 .page-flow blockquote { margin: 1em 0; padding-left: 1em;
                         border-left: 2px solid var(--accent-400); }
 .page-flow hr { border: 0; border-top: 1px solid var(--divider); margin: 1.5em 0; }
