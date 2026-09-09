@@ -165,9 +165,15 @@ book with no value to the top of the shelf.
 chapter and produces nothing an import needs: the word count and the list of
 pictures both come out of the markup as text for a fifth of that. The source
 is kept as it came and sanitised on the way to the page instead, where 1.6ms
-is invisible. Measured on a 200-chapter novel, import went from 10.7ms a
-chapter to 0.8ms — the sanitiser did not go anywhere, it just runs when a
-chapter is actually opened.
+is invisible. The sanitiser did not go anywhere; it runs when a chapter is actually opened.
+
+**Those figures are from a desktop and overstate the gain on a phone.** jsdom
+parses XML in JavaScript, where a WebView uses Blink's native parser, so the
+cost being removed is several times smaller on the device than any measurement
+taken in the test harness. The app therefore times its own imports: the
+elapsed time is reported when one finishes, and Settings → Vault breaks the
+last one into reading, parsing and writing. Those are the numbers to judge a
+change by.
 
 Keeping the source rather than the sanitised HTML costs about **14% more
 storage** — attributes and stylesheets that the sanitiser would have dropped.

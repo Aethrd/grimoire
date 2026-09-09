@@ -963,6 +963,36 @@ export async function openVault(onVaultChange, host) {
    * The text and pictures are not in it on purpose -- they are gigabytes, and
    * they already exist as the files they came from. What cannot be re-created
    * is what you did afterwards, which is exactly what this holds. */
+  /* Where the last import's time went.
+   *
+   * Reading, parsing and writing are the three things an import does, and
+   * which of them dominates is a question about the phone rather than about
+   * the code -- so it is answered by the phone. */
+  const last = settings.lastImport;
+  if (last?.books) {
+    const timing = document.createElement('section');
+    timing.className = 'block';
+    const seconds = last.ms / 1000;
+    const share = (ms) => `${Math.round((ms / last.ms) * 100)}%`;
+    timing.innerHTML = `<h2>Last import</h2>
+      <p class="muted" style="font-size:12px;line-height:1.55">
+        ${last.books} book${last.books === 1 ? '' : 's'} in ${seconds.toFixed(0)}s
+        — ${(seconds / last.books).toFixed(1)}s each.</p>`;
+    const facts = document.createElement('div');
+    facts.className = 'facts';
+    for (const [label, ms] of [
+      ['Reading the file', last.spent?.read || 0],
+      ['Parsing', last.spent?.parse || 0],
+      ['Writing to storage', last.spent?.write || 0],
+    ]) {
+      const cell = document.createElement('div');
+      cell.innerHTML = `<b>${escape(label)}</b><small>${(ms / 1000).toFixed(1)}s · ${share(ms)}</small>`;
+      facts.appendChild(cell);
+    }
+    timing.appendChild(facts);
+    body.appendChild(timing);
+  }
+
   const backupBtn = document.createElement('button');
   backupBtn.className = 'btn primary block';
   backupBtn.textContent = 'Back up everything but the books';

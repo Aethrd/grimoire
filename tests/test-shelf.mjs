@@ -539,7 +539,7 @@ t('a file opened from elsewhere is read, not collected', () => {
   const library = read('app/src/main/assets/www/js/library.js');
   assert.match(library, /transient = false/);
   assert.match(library, /!b\.importing && !b\.transient/);
-  assert.match(app, /handleFiles\(\[new File\(\[bytes\], name\)\], \{ transient: true \}\)/);
+  assert.match(app, /handleFiles\(\[file\], \{ transient: true \}\)/);
   // Closing the reader forgets it, rather than leaving it until a restart.
   assert.match(app, /async function forgetTransientBook/);
   assert.match(app, /await forgetTransientBook\(\)/);
@@ -614,6 +614,7 @@ t('a file opened from outside waits for the reader to be ready', () => {
   // And a file too big for the bridge says so rather than failing blankly.
   assert.match(bridge, /"TOO_LARGE"/);
   assert.match(app, /too large to open this way/);
+  assert.ok(!/public String readContentUri/.test(bridge), 'the blocking read is still there');
 });
 
 t('the heat map is drawn from words, not pages', () => {
@@ -637,6 +638,24 @@ t('the averages hold up when reading happens elsewhere', () => {
   const reader = read('app/src/main/assets/www/js/reader.js');
   assert.match(reader, /async function recordCopiedChapter/);
   assert.match(reader, /elsewhere: true/);
+});
+
+t('an import reports how long it took and where it went', () => {
+  // A benchmark on a desktop is not evidence about a phone: jsdom parses XML
+  // in JavaScript where a WebView uses Blink's native parser, so any figure
+  // measured here overstates what parsing costs on the device. The only
+  // numbers worth trusting are the ones the phone takes itself.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /const spent = \{ read: 0, parse: 0, write: 0 \}/);
+  assert.match(library, /results\.elapsedMs = Date\.now\(\) - started/);
+  // Kept, so one import can be compared with the next.
+  assert.match(library, /lastImport:/);
+  assert.match(app, /s a book/);
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /Last import/);
+  for (const phase of ['Reading the file', 'Parsing', 'Writing to storage']) {
+    assert.ok(panels.includes(phase), `no ${phase} figure`);
+  }
 });
 
 console.log('settings');

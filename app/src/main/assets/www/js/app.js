@@ -679,9 +679,15 @@ async function handleFiles(files, { transient = false } = {}) {
     toast(`${results.added} added · ${results.failed[0].name}: ${results.failed[0].reason}`, 6000);
   } else {
     const folders = results.folders?.size || 0;
+    const seconds = (results.elapsedMs || 0) / 1000;
+    const each = results.added ? seconds / results.added : 0;
+    // The time is part of the result. Without it there is no way to tell
+    // whether a change to the importer helped, and no way to say where the
+    // time actually went on a real phone.
+    const took = seconds > 2 ? ` · ${seconds.toFixed(0)}s, ${each.toFixed(1)}s a book` : '';
     toast(folders
-      ? `${results.added} book${results.added === 1 ? '' : 's'} added across ${folders} folder${folders === 1 ? '' : 's'}`
-      : `${results.added} book${results.added === 1 ? '' : 's'} added`);
+      ? `${results.added} book${results.added === 1 ? '' : 's'} added across ${folders} folder${folders === 1 ? '' : 's'}${took}`
+      : `${results.added} book${results.added === 1 ? '' : 's'} added${took}`, 6000);
   }
 
   return results;
@@ -1405,7 +1411,52 @@ function wireChrome() {
 
 /* ── the shell's two hooks ────────────────────────────────────────────── */
 
+/* Files handed over from elsewhere arrive asynchronously.
+ *
+ * Reading one used to be a blocking call that returned the whole file as
+ * base64, so the app sat frozen for as long as it took. */
+const pendingFiles = new Map();
+
+function readHandedFile(uri) {
+  return new Promise((resolve, reject) => {
+    const native = window.GrimoireNative?.readContentUri;
+    if (!native) return reject(new Error('This build cannot open files from elsewhere'));
+    const id = `f${Date.now()}`;
+    const timer = setTimeout(() => {
+      pendingFiles.delete(id);
+      reject(new Error('Reading that file took too long'));
+    }, 120000);
+    pendingFiles.set(id, { resolve, reject, timer });
+    try { native(id, uri); } catch (error) { pendingFiles.delete(id); reject(error); }
+  });
+}
+
+/**
+ * A name the importer can work out a format from.
+ *
+ * Some providers hand over a name with no extension at all. The first bytes
+ * say what the file is well enough to get it as far as the parser, which will
+ * give a proper reason if it is something else.
+ */
+function nameWithFormat(name, bytes) {
+  if (/\.[a-z0-9]{2,5}$/i.test(name)) return name;
+  const head = String.fromCharCode(...bytes.slice(0, 4));
+  if (head.startsWith('%PDF')) return `${name}.pdf`;
+  if (head.startsWith('PK')) return `${name}.epub`;   // EPUB and CBZ are both zips
+  return `${name}.txt`;
+}
+
 window.Grimoire = {
+  /** Called from Java to settle a file read. */
+  settleFile(id, ok, payload) {
+    const entry = pendingFiles.get(id);
+    if (!entry) return;
+    pendingFiles.delete(id);
+    clearTimeout(entry.timer);
+    if (ok) entry.resolve(payload);
+    else entry.reject(new Error(payload));
+  },
+
   /** Called from Java to settle an async bridge call. Not a reader API. */
   settle: translate.settle,
 
@@ -1435,17 +1486,33 @@ window.Grimoire = {
    * something to look at it should not quietly add it to a library.
    */
   async openExternalBook(contentUri) {
-    const base64 = window.GrimoireNative?.readContentUri?.(contentUri);
-    if (base64 === 'TOO_LARGE') {
-      return toast('That file is too large to open this way. Import it instead — '
-        + 'the shelf reads it straight from disk.', 8000);
+    let base64;
+    try {
+      base64 = await readHandedFile(contentUri);
+    } catch (error) {
+      return toast(error.message === 'TOO_LARGE'
+        ? 'That file is too large to open this way. Import it instead — the shelf '
+          + 'reads it straight from disk.'
+        : error.message || 'That file could not be read', 8000);
     }
-    if (!base64) return toast('That file could not be read');
-    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-    const name = decodeURIComponent(contentUri.split('/').pop() || 'book.epub');
 
-    const results = await handleFiles([new File([bytes], name)], { transient: true });
-    if (!results?.added) return;
+    // The provider knows the real name; a content:// URI's last segment is a
+    // document id, and taking it for a filename left the reader with no
+    // extension to go on and nothing to say about why it gave up.
+    const name = window.GrimoireNative?.displayName?.(contentUri)
+      || decodeURIComponent(contentUri.split('/').pop() || '')
+      || 'book';
+
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const file = new File([bytes], nameWithFormat(name, bytes));
+
+    const results = await handleFiles([file], { transient: true });
+    if (!results?.added) {
+      // Never silent: this is the point at which the app had simply done
+      // nothing, with no way to tell whether it had even received the file.
+      const why = results?.failed?.[0]?.reason;
+      return toast(why ? `${name}: ${why}` : `${name} could not be opened`, 8000);
+    }
 
     const passing = (await store.all('books'))
       .filter((b) => b.transient)

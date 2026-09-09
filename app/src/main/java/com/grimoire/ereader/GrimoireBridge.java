@@ -3,10 +3,17 @@ package com.grimoire.ereader;
 import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
+import android.database.Cursor;
+import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.util.Log;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
+
+import org.json.JSONObject;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import androidx.core.content.FileProvider;
 
@@ -29,6 +36,8 @@ import java.io.InputStream;
 public class GrimoireBridge {
 
     private static final String TAG = "GrimoireBridge";
+
+    private final ExecutorService io = Executors.newSingleThreadExecutor();
 
     private final Activity activity;
     private final WebView webView;
@@ -105,34 +114,86 @@ public class GrimoireBridge {
         }
     }
 
+    /**
+     * The name the file actually has.
+     *
+     * A content:// URI's last path segment is a document id -- "msf:1234" or
+     * an encoded tree path -- not a filename. Taking it for one meant the
+     * reader saw no extension, could not tell what the file was, and refused
+     * it. The provider knows the real name; it only has to be asked.
+     */
     @JavascriptInterface
-    public String readContentUri(String uriString) {
+    public String displayName(String uriString) {
         try {
             Uri uri = Uri.parse(uriString);
-            if (!"content".equals(uri.getScheme())) return null;
-            try (InputStream in = activity.getContentResolver().openInputStream(uri)) {
-                if (in == null) return null;
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                byte[] buf = new byte[16 * 1024];
-                int n;
-                long total = 0;
-                while ((n = in.read(buf)) != -1) {
-                    total += n;
-                    // Base64 across the bridge costs a third again on top, so
-                    // this is a real ceiling rather than a formality. Reported
-                    // as its own answer so the reader can say what went wrong
-                    // instead of "could not be read".
-                    if (total > 96L * 1024 * 1024) return "TOO_LARGE";
-                    out.write(buf, 0, n);
+            try (Cursor cursor = activity.getContentResolver()
+                    .query(uri, new String[] { OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    String name = cursor.getString(0);
+                    if (name != null && !name.isEmpty()) return name;
                 }
-                return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
             }
         } catch (Exception e) {
-            return null;
+            Log.w(TAG, "Could not read the name of " + uriString, e);
         }
+        return null;
     }
 
-    /** Stop the screen dimming while someone is mid-chapter. */
+    /**
+     * Read a file handed to the app from elsewhere.
+     *
+     * Asynchronous, because this used to be a blocking call returning the
+     * whole file as base64: JavaScript sat waiting for it and the app looked
+     * frozen for as long as the read took.
+     */
+    @JavascriptInterface
+    public void readContentUri(final String requestId, final String uriString) {
+        io.execute(() -> {
+            try {
+                Uri uri = Uri.parse(uriString);
+                if (!"content".equals(uri.getScheme()) && !"file".equals(uri.getScheme())) {
+                    settle(requestId, false, "That is not a file this app can open.");
+                    return;
+                }
+                try (InputStream in = activity.getContentResolver().openInputStream(uri)) {
+                    if (in == null) {
+                        settle(requestId, false, "That file could not be opened.");
+                        return;
+                    }
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    byte[] buf = new byte[64 * 1024];
+                    int n;
+                    long total = 0;
+                    while ((n = in.read(buf)) != -1) {
+                        total += n;
+                        // Base64 across the bridge costs a third again on top,
+                        // so this is a real ceiling rather than a formality.
+                        if (total > MAX_HANDOFF_BYTES) {
+                            settle(requestId, false, "TOO_LARGE");
+                            return;
+                        }
+                        out.write(buf, 0, n);
+                    }
+                    settle(requestId, true, Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP));
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Could not read " + uriString, e);
+                settle(requestId, false, "That file could not be read.");
+            }
+        });
+    }
+
+    private static final long MAX_HANDOFF_BYTES = 96L * 1024 * 1024;
+
+    /** Answers an asynchronous call, the same way the translation bridge does. */
+    private void settle(String requestId, boolean ok, String payload) {
+        final String js = "window.Grimoire && window.Grimoire.settleFile("
+                + JSONObject.quote(requestId) + "," + ok + "," + JSONObject.quote(payload) + ")";
+        activity.runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
+    }
+
     @JavascriptInterface
     public void keepScreenOn(final boolean on) {
         activity.runOnUiThread(() -> {

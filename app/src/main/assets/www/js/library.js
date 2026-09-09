@@ -243,6 +243,16 @@ export function sortSummary(keys) {
  *   add it to someone's library.
  */
 export async function importFiles(files, { onProgress, onDone, transient = false } = {}) {
+  /* Timed, in phases.
+   *
+   * Judging an import from a benchmark on a desktop was a mistake: jsdom
+   * parses XML in JavaScript where a WebView uses Blink's native parser, so
+   * the cost of parsing is far smaller on a phone than any measurement taken
+   * here suggests. The only numbers worth trusting come off the device, so
+   * the app takes them itself.
+   */
+  const started = Date.now();
+  const spent = { read: 0, parse: 0, write: 0 };
   const results = { added: 0, failed: [], folders: new Set() };
 
   // Archives are flattened first, so the loop below never has to know whether
@@ -302,7 +312,9 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       if (existing) continue;
 
       // Extracted only now, and only this one.
+      const readAt = performance.now();
       const file = entry.file || new File([await entry.read()], name);
+      spent.read += performance.now() - readAt;
 
       /* The book row is created first so images can be written as they are
          extracted rather than piling up in memory. A heavily illustrated book
@@ -322,6 +334,7 @@ export async function importFiles(files, { onProgress, onDone, transient = false
           if (buffered.length) await store.putAll('images', buffered.splice(0));
         };
 
+        const parseAt = performance.now();
         parsed = await parse(file, (p) =>
           onProgress?.(`Parsing ${name}`, (i + p) / queue.length, i, queue.length), {
           onImage: async (record) => {
@@ -332,6 +345,7 @@ export async function importFiles(files, { onProgress, onDone, transient = false
           },
         });
         await flush();
+        spent.parse += performance.now() - parseAt;
       } catch (error) {
         // No half-imported book left on the shelf.
         await store.deleteBook(bookId).catch(() => {});
@@ -369,11 +383,29 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       // One transaction rather than one per chapter: a long book has hundreds
       // of them, and a transaction apiece is what made importing a shelf take
       // minutes.
+      const writeAt = performance.now();
       await store.putAll('chapters', parsed.chapters.map((c) => ({ bookId, ...c })));
+      spent.write += performance.now() - writeAt;
       results.added += 1;
     } catch (error) {
       results.failed.push({ name, reason: error.message || 'Could not be parsed' });
     }
+  }
+
+  results.elapsedMs = Date.now() - started;
+  results.spent = spent;
+
+  // Kept so one import can be compared with the next, which is the only way
+  // to tell whether a change to the importer actually helped.
+  if (results.added) {
+    await store.saveSettings({
+      lastImport: {
+        at: Date.now(),
+        books: results.added,
+        ms: results.elapsedMs,
+        spent,
+      },
+    });
   }
 
   onDone?.(results);
