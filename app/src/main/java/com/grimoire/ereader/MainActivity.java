@@ -5,6 +5,9 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
+import java.io.InputStream;
+
+import org.json.JSONObject;
 import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
@@ -42,7 +45,10 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
 
     /** A file handed over before the page was ready to take it. */
+    private GrimoireBridge bridge;
     private String pendingUri;
+    private final java.util.concurrent.ExecutorService staging =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
     private boolean readerReady;
     private WebViewAssetLoader assetLoader;
     private boolean contentReady = false;
@@ -86,6 +92,16 @@ public class MainActivity extends AppCompatActivity {
         assetLoader = new WebViewAssetLoader.Builder()
                 .setDomain("appassets.androidplatform.net")
                 .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+                /* Files handed over from elsewhere are served, not passed.
+                 *
+                 * They used to cross the JavaScript bridge as base64, which
+                 * holds the whole file three times over at the peak -- the
+                 * bytes, the string built from them, and the array decoded
+                 * back out of it. A book of any size died of that. Staged on
+                 * disk and fetched over this origin, it streams instead, and
+                 * the size ceiling goes away with it. */
+                .addPathHandler("/handoff/",
+                        new WebViewAssetLoader.InternalStoragePathHandler(this, handoffDir(this)))
                 .build();
 
         webView = new WebView(this);
@@ -128,7 +144,8 @@ public class MainActivity extends AppCompatActivity {
         }
 
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
-        webView.addJavascriptInterface(new GrimoireBridge(this, webView), "GrimoireNative");
+        bridge = new GrimoireBridge(this, webView);
+        webView.addJavascriptInterface(bridge, "GrimoireNative");
         // Kept in its own object because it is the only thing in the app that
         // touches the network, and it should be obvious where that boundary is.
         webView.addJavascriptInterface(new TranslateBridge(this, webView), "GrimoireTranslate");
@@ -247,6 +264,13 @@ public class MainActivity extends AppCompatActivity {
         webView.evaluateJavascript(js, null);
     }
 
+    /** Where a file handed over from elsewhere is staged before it is read. */
+    static java.io.File handoffDir(android.content.Context context) {
+        java.io.File dir = new java.io.File(context.getFilesDir(), "handoff");
+        if (!dir.exists() && !dir.mkdirs()) Log.w(TAG, "Could not make the handoff directory");
+        return dir;
+    }
+
     private void installBackHandler() {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
@@ -314,11 +338,42 @@ public class MainActivity extends AppCompatActivity {
 
     private void deliverPendingUri() {
         if (!readerReady || pendingUri == null) return;
-        final String uri = pendingUri.replace("\\", "\\\\").replace("'", "\\'");
+        final Uri uri = Uri.parse(pendingUri);
         pendingUri = null;
-        runOnUiThread(() -> webView.evaluateJavascript(
-                "window.Grimoire && window.Grimoire.openExternalBook "
-                        + "&& window.Grimoire.openExternalBook('" + uri + "')", null));
+
+        /* Copied to disk on a background thread, in fixed-size pieces, so a
+         * large book costs a buffer rather than its own length in memory. */
+        staging.execute(() -> {
+            String name = bridge != null ? bridge.displayName(uri.toString()) : null;
+            if (name == null || name.isEmpty()) name = "book";
+            final String safe = name.replaceAll("[^A-Za-z0-9._\\- ]", "_");
+
+            java.io.File target = new java.io.File(handoffDir(this), safe);
+            try (InputStream in = getContentResolver().openInputStream(uri);
+                 java.io.OutputStream out = new java.io.FileOutputStream(target)) {
+                if (in == null) throw new java.io.IOException("nothing to read");
+                byte[] buffer = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
+            } catch (Throwable e) {
+                Log.w(TAG, "Could not stage " + uri, e);
+                //noinspection ResultOfMethodCallIgnored
+                target.delete();
+                tellReader("window.Grimoire.handoffFailed("
+                        + JSONObject.quote("That file could not be read") + ")");
+                return;
+            }
+
+            tellReader("window.Grimoire.openExternalBook("
+                    + JSONObject.quote(ORIGIN + "/handoff/" + Uri.encode(safe))
+                    + "," + JSONObject.quote(safe) + ")");
+        });
+    }
+
+    private void tellReader(String call) {
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript("window.Grimoire && " + call, null);
+        });
     }
 
     @Override

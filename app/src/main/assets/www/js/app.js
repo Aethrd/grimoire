@@ -6,6 +6,7 @@ import * as reader from './reader.js';
 import * as library from './library.js';
 import * as screens from './screens.js';
 import * as panels from './panels.js';
+import { nameWithFormat } from './parse.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
 
@@ -1415,65 +1416,15 @@ function wireChrome() {
 
 /* ── the shell's two hooks ────────────────────────────────────────────── */
 
-/* Files handed over from elsewhere arrive asynchronously.
- *
- * Reading one used to be a blocking call that returned the whole file as
- * base64, so the app sat frozen for as long as it took. */
-const pendingFiles = new Map();
-
-function readHandedFile(uri) {
-  return new Promise((resolve, reject) => {
-    const bridge = window.GrimoireNative;
-    if (!bridge?.readContentUri) {
-      return reject(new Error('This build cannot open files from elsewhere'));
-    }
-
-    const id = `f${Date.now()}`;
-    const timer = setTimeout(() => {
-      pendingFiles.delete(id);
-      reject(new Error('Reading that file took too long'));
-    }, 120000);
-    pendingFiles.set(id, { resolve, reject, timer });
-
-    try {
-      /* Called on the bridge object, never through a reference taken off it.
-       * An injected method pulled out into a variable loses the object it
-       * belongs to, and Android refuses it: "Java bridge method can't be
-       * invoked on a non-injected object". */
-      bridge.readContentUri(id, uri);
-    } catch (error) {
-      pendingFiles.delete(id);
-      clearTimeout(timer);
-      reject(error);
-    }
-  });
-}
-
 /**
  * A name the importer can work out a format from.
  *
  * Some providers hand over a name with no extension at all. The first bytes
  * say what the file is well enough to get it as far as the parser, which will
- * give a proper reason if it is something else.
+ * give a proper reason if it turns out to be something else. Only those bytes
+ * are read, not the file.
  */
-function nameWithFormat(name, bytes) {
-  if (/\.[a-z0-9]{2,5}$/i.test(name)) return name;
-  const head = String.fromCharCode(...bytes.slice(0, 4));
-  if (head.startsWith('%PDF')) return `${name}.pdf`;
-  if (head.startsWith('PK')) return `${name}.epub`;   // EPUB and CBZ are both zips
-  return `${name}.txt`;
-}
-
 window.Grimoire = {
-  /** Called from Java to settle a file read. */
-  settleFile(id, ok, payload) {
-    const entry = pendingFiles.get(id);
-    if (!entry) return;
-    pendingFiles.delete(id);
-    clearTimeout(entry.timer);
-    if (ok) entry.resolve(payload);
-    else entry.reject(new Error(payload));
-  },
 
   /** Called from Java to settle an async bridge call. Not a reader API. */
   settle: translate.settle,
@@ -1503,36 +1454,41 @@ window.Grimoire = {
    * it turns out to be worth keeping, which is the right way round -- opening
    * something to look at it should not quietly add it to a library.
    */
-  async openExternalBook(contentUri) {
-    /* Says so the moment the file arrives.
-     *
-     * Without this there is no way to tell a file that never reached the app
-     * from one that reached it and failed — which are entirely different
-     * problems with entirely different fixes, and both look like nothing
-     * happening. */
+  /** The staging step could not even copy the file. */
+  handoffFailed(reason) {
+    toast(reason || 'That file could not be read', 8000);
+  },
+
+  /**
+   * A file handed over from elsewhere on the phone.
+   *
+   * It arrives as a URL rather than as its bytes. Passing it through the
+   * JavaScript bridge as base64 meant holding the whole thing three times
+   * over — the bytes, the string built from them, and the array decoded back
+   * out of it — which is why anything of a normal size for this library was
+   * refused, and why it killed the app before that.
+   *
+   * Read, not collected: it is opened straight away and never joins the
+   * shelf. "Keep in library" is there for when it turns out to be worth
+   * keeping, which is the right way round.
+   */
+  async openExternalBook(url, name) {
     toast('Opening…', 2000);
 
-    let base64;
+    let file;
     try {
-      base64 = await readHandedFile(contentUri);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`the file could not be fetched (${response.status})`);
+      const blob = await response.blob();
+      file = new File([blob], await nameWithFormat(name || 'book', blob));
     } catch (error) {
-      return toast(error.message === 'TOO_LARGE'
-        ? 'That file is too large to open this way. Import it instead — the shelf '
-          + 'reads it straight from disk.'
-        : error.message || 'That file could not be read', 8000);
+      return toast(error.message || 'That file could not be read', 8000);
     }
 
-    // The provider knows the real name; a content:// URI's last segment is a
-    // document id, and taking it for a filename left the reader with no
-    // extension to go on and nothing to say about why it gave up.
-    const name = window.GrimoireNative?.displayName?.(contentUri)
-      || decodeURIComponent(contentUri.split('/').pop() || '')
-      || 'book';
-
-    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-    const file = new File([bytes], nameWithFormat(name, bytes));
-
     const results = await handleFiles([file], { transient: true });
+    // The copy has served its purpose either way.
+    window.GrimoireNative?.clearHandoff?.();
+
     if (!results?.added) {
       // Never silent: this is the point at which the app had simply done
       // nothing, with no way to tell whether it had even received the file.

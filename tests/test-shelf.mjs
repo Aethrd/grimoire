@@ -611,10 +611,9 @@ t('a file opened from outside waits for the reader to be ready', () => {
   const bridge = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
   assert.match(bridge, /public void ready\(\)/);
   assert.match(app, /window\.GrimoireNative\?\.ready\?\.\(\)/);
-  // And a file too big for the bridge says so rather than failing blankly.
-  assert.match(bridge, /"TOO_LARGE"/);
-  assert.match(app, /too large to open this way/);
-  assert.ok(!/public String readContentUri/.test(bridge), 'the blocking read is still there');
+  // A staging failure is reported rather than leaving the app silent.
+  assert.match(main, /handoffFailed/);
+  assert.match(app, /handoffFailed\(reason\)/);
 });
 
 t('the heat map is drawn from words, not pages', () => {

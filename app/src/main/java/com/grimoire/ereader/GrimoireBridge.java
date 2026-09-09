@@ -167,87 +167,22 @@ public class GrimoireBridge {
     }
 
     /**
-     * Read a file handed to the app from elsewhere.
+     * Throw away the staged copy of a file handed over from elsewhere.
      *
-     * Asynchronous, because this used to be a blocking call returning the
-     * whole file as base64: JavaScript sat waiting for it and the app looked
-     * frozen for as long as the read took.
+     * Called once the reader has taken what it needs. The copy exists only to
+     * be fetched over the asset origin, and a book-sized file left in private
+     * storage for no reason is a book-sized file wasted.
      */
     @JavascriptInterface
-    public void readContentUri(final String requestId, final String uriString) {
+    public void clearHandoff() {
         io.execute(() -> {
-            try {
-                Uri uri = Uri.parse(uriString);
-
-                // Asked before reading. The provider usually knows the size,
-                // and refusing up front costs nothing where reading to find
-                // out costs everything.
-                long declared = declaredSize(uri);
-                if (declared > MAX_HANDOFF_BYTES) {
-                    settle(requestId, false, "TOO_LARGE");
-                    return;
-                }
-
-                if (!"content".equals(uri.getScheme()) && !"file".equals(uri.getScheme())) {
-                    settle(requestId, false, "That is not a file this app can open.");
-                    return;
-                }
-                try (InputStream in = activity.getContentResolver().openInputStream(uri)) {
-                    if (in == null) {
-                        settle(requestId, false, "That file could not be opened.");
-                        return;
-                    }
-                    ByteArrayOutputStream out = new ByteArrayOutputStream();
-                    byte[] buf = new byte[64 * 1024];
-                    int n;
-                    long total = 0;
-                    while ((n = in.read(buf)) != -1) {
-                        total += n;
-                        // Base64 across the bridge costs a third again on top,
-                        // so this is a real ceiling rather than a formality.
-                        if (total > MAX_HANDOFF_BYTES) {
-                            settle(requestId, false, "TOO_LARGE");
-                            return;
-                        }
-                        out.write(buf, 0, n);
-                    }
-                    settle(requestId, true, Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP));
-                }
-            } catch (OutOfMemoryError e) {
-                // An Error, not an Exception: left uncaught it takes the whole
-                // process down rather than this one read.
-                Log.w(TAG, "Ran out of memory reading " + uriString, e);
-                settle(requestId, false, "TOO_LARGE");
-            } catch (Throwable e) {
-                Log.w(TAG, "Could not read " + uriString, e);
-                settle(requestId, false, "That file could not be read.");
+            java.io.File[] staged = MainActivity.handoffDir(activity).listFiles();
+            if (staged == null) return;
+            for (java.io.File file : staged) {
+                if (!file.delete()) Log.w(TAG, "Could not clear " + file.getName());
             }
         });
     }
-
-    /** What the provider says the file's size is, or -1 if it will not say. */
-    private long declaredSize(Uri uri) {
-        try (Cursor cursor = activity.getContentResolver()
-                .query(uri, new String[] { OpenableColumns.SIZE }, null, null, null)) {
-            if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) {
-                return cursor.getLong(0);
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Could not measure " + uri, e);
-        }
-        return -1;
-    }
-
-    /* Deliberately well below what the phone could hold.
-     *
-     * A file crossing this bridge is held three times over at the peak: the
-     * bytes read out of the provider, the base64 string built from them, and
-     * the array JavaScript decodes it back into. Ninety-six megabytes of book
-     * therefore meant well over two hundred in flight, and the read thread
-     * died of it -- taking the process with it, which from the outside looked
-     * like the app opening and immediately going away again.
-     */
-    private static final long MAX_HANDOFF_BYTES = 32L * 1024 * 1024;
 
     /** Answers an asynchronous call, the same way the translation bridge does. */
     private void settle(String requestId, boolean ok, String payload) {

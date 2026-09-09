@@ -776,3 +776,47 @@ export function chapterHtml(chapter) {
   const { html } = readChapter(body, (src) => resolve(chapter.base || '', src));
   return html;
 }
+
+
+/**
+ * A filename the importer can work out a format from.
+ *
+ * Some providers hand a file over with no extension at all, and the first
+ * bytes only get so far: an EPUB and a comic archive are both zips, so
+ * guessing from the magic number alone turns every unnamed comic into a
+ * broken EPUB. The archive's own directory says which it is, and reading a
+ * directory is cheap — it is the tail of the file, not the file.
+ */
+export async function nameWithFormat(name, blob) {
+  if (/\.[a-z0-9]{2,5}$/i.test(name)) return name;
+
+  const head = new Uint8Array(await firstBytes(blob, 4));
+  const magic = String.fromCharCode(...head);
+
+  if (magic.startsWith('%PDF')) return `${name}.pdf`;
+
+  if (magic.startsWith('PK')) {
+    const zip = await openArchive(blob).catch(() => null);
+    if (zip?.has('META-INF/container.xml')) return `${name}.epub`;
+    // Every entry a picture is a comic; anything else is best offered to the
+    // EPUB reader, which explains itself when it cannot cope.
+    const names = zip?.names() || [];
+    const pictures = names.filter((n) => /\.(jpe?g|png|gif|webp|avif)$/i.test(n));
+    if (names.length && pictures.length === names.length) return `${name}.cbz`;
+    return `${name}.epub`;
+  }
+
+  return `${name}.txt`;
+}
+
+/** The opening bytes of a blob, without depending on Blob.arrayBuffer. */
+function firstBytes(blob, count) {
+  const slice = blob.slice(0, count);
+  if (typeof slice.arrayBuffer === 'function') return slice.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(slice);
+  });
+}
