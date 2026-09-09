@@ -290,16 +290,14 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        // The grant travels with the intent and is not persistable unless the
-        // sender said so; taking it where offered means a handover survives
-        // the reader being rebuilt behind it.
-        try {
-            final int flags = intent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
-            if (flags != 0) grantUriPermission(getPackageName(), data, flags);
-        } catch (Exception e) {
-            Log.w(TAG, "Could not hold on to permission for " + data, e);
-        }
-
+        /* No grant is taken here.
+         *
+         * The read permission travels with the intent and already applies to
+         * this process, and the file is read straight away rather than kept
+         * for later -- so granting anything to ourselves bought nothing. It
+         * also had to be handed a computed flag, which lint rejects outright:
+         * grantUriPermission takes one of a fixed set of constants.
+         */
         pendingUri = data.toString();
         // Delivered when the reader says it is ready, not after a guessed
         // delay. Opening a file from elsewhere is always a cold start, and
