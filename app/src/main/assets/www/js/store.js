@@ -381,8 +381,37 @@ const BACKUP_VERSION = 1;
 const BOOK_FIELDS = [
   'title', 'author', 'series', 'seriesIndex', 'lang', 'folder', 'status',
   'tags', 'inVault', 'percent', 'addedAt', 'lastReadAt', 'lastOpenedAt',
-  'finishedAt', 'coverBytes',
+  'finishedAt', 'coverBytes', 'coverCustom',
 ];
+
+/**
+ * A cover picked by hand, small enough to carry in a backup.
+ *
+ * Returns null rather than throwing on anything it cannot read. A cover that
+ * will not encode is a cover lost; a backup that throws part-way through is
+ * everything lost, which is not a trade worth making.
+ */
+function readAsDataUrl(blob) {
+  return new Promise((resolve) => {
+    try {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function dataUrlToBlob(url) {
+  const [head, data] = String(url).split(',');
+  const type = /:(.*?);/.exec(head)?.[1] || 'image/webp';
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
 
 export async function exportBackup() {
   const books = await all('books');
@@ -411,6 +440,21 @@ export async function exportBackup() {
         return kept;
       }),
 
+    /* Covers chosen by hand.
+     *
+     * The rest of a book comes back by re-importing the file, but a cover
+     * someone went and found does not — it exists nowhere else. They are
+     * capped at a thousand pixels on import, so carrying them costs little,
+     * and only the replaced ones are carried.
+     */
+    covers: await Promise.all(books
+      .filter((b) => b.coverCustom && b.fingerprint
+        && typeof b.coverBlob?.type === 'string' && b.coverBlob.size > 0)
+      .map(async (b) => ({
+        fingerprint: b.fingerprint,
+        dataUrl: await readAsDataUrl(b.coverBlob),
+      }))).then((list) => list.filter((c) => c.dataUrl)),
+
     positions: (await all('positions'))
       .map((p) => ({ ...p, fingerprint: byId.get(p.bookId)?.fingerprint }))
       .filter((p) => p.fingerprint),
@@ -437,7 +481,7 @@ export async function importBackup(data) {
     throw new Error('That backup was made by a newer version of the app.');
   }
 
-  const report = { settings: false, books: 0, missing: 0, marks: 0, events: 0 };
+  const report = { settings: false, books: 0, missing: 0, marks: 0, events: 0, covers: 0 };
 
   if (data.settings) {
     // Merged over the defaults, so a backup from an older version does not
@@ -471,6 +515,21 @@ export async function importBackup(data) {
     if (!book || !leader) continue;
     book.bundleId = leader.id;
     await put('books', book);
+  }
+
+  for (const cover of data.covers || []) {
+    const book = byFingerprint.get(cover.fingerprint);
+    if (!book || !cover.dataUrl) continue;
+    try {
+      const blob = dataUrlToBlob(cover.dataUrl);
+      book.coverBlob = blob;
+      book.coverBytes = blob.size;
+      book.coverCustom = true;
+      await put('books', book);
+      report.covers = (report.covers || 0) + 1;
+    } catch {
+      // A cover that will not decode is not worth failing a restore over.
+    }
   }
 
   for (const position of data.positions || []) {

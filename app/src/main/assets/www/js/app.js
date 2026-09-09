@@ -499,6 +499,10 @@ async function openDetails(book) {
     if (newCover !== undefined) {
       book.coverBlob = newCover;
       book.coverBytes = newCover?.size ?? null;
+      // Marked as chosen rather than found in the file. A cover taken from
+      // the book comes back on its own when the book is imported again; one
+      // picked by hand does not, so the backup has to carry it.
+      book.coverCustom = !!newCover;
     }
     if (pickedStatus !== undefined) {
       if (pickedStatus === null) delete book.status;
@@ -1500,6 +1504,14 @@ window.Grimoire = {
    * something to look at it should not quietly add it to a library.
    */
   async openExternalBook(contentUri) {
+    /* Says so the moment the file arrives.
+     *
+     * Without this there is no way to tell a file that never reached the app
+     * from one that reached it and failed — which are entirely different
+     * problems with entirely different fixes, and both look like nothing
+     * happening. */
+    toast('Opening…', 2000);
+
     let base64;
     try {
       base64 = await readHandedFile(contentUri);

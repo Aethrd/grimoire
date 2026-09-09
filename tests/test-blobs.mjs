@@ -272,6 +272,47 @@ await t('restoring matches books by file, not by id', async () => {
   assert.equal((await store.get('positions', a)).chapterIndex, 12);
 });
 
+await t('a cover chosen by hand is carried in the backup', async () => {
+  // The rest of a book comes back by re-importing the file. A cover someone
+  // went and found does not -- it exists nowhere else.
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const id = await store.add('books', {
+    title: 'Replaced', fingerprint: 'cover:1', addedAt: 1, coverBytes: 8, coverCustom: true,
+  });
+
+  const report = await store.importBackup({
+    format: 'grimoire-backup', version: 1,
+    covers: [{ fingerprint: 'cover:1', dataUrl: 'data:image/webp;base64,AQIDBAUGBwg=' }],
+  });
+  assert.equal(report.covers, 1);
+
+  const restored = await store.get('books', id);
+  assert.equal(restored.coverBytes, 8);
+  assert.equal(restored.coverCustom, true);
+  // Not the Blob's own type: this test database does not round-trip a Blob,
+  // it hands back a plain object. The size recorded on the book is the thing
+  // that survives here, and it comes from the decoded picture.
+  assert.ok(restored.coverBlob);
+});
+
+await t('an unreadable cover costs the cover, not the backup', async () => {
+  // A backup that throws part-way through is everything lost, which is not a
+  // trade worth making for one picture.
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  await store.add('books', {
+    title: 'Broken cover', fingerprint: 'cover:2', addedAt: 1,
+    coverCustom: true, coverBlob: { notABlob: true },
+  });
+  const backup = await store.exportBackup();
+  assert.ok(Array.isArray(backup.covers), 'the export gave up');
+
+  const report = await store.importBackup({
+    format: 'grimoire-backup', version: 1,
+    covers: [{ fingerprint: 'cover:2', dataUrl: 'not a data url at all' }],
+  });
+  assert.equal(report.covers, 0);
+});
+
 await t('a book not back on the shelf is reported, not invented', async () => {
   const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
   const report = await store.importBackup({

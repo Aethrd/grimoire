@@ -285,7 +285,21 @@ public class MainActivity extends AppCompatActivity {
         } else if (Intent.ACTION_SEND.equals(intent.getAction())) {
             data = intent.getParcelableExtra(Intent.EXTRA_STREAM);
         }
-        if (data == null) return;
+        if (data == null) {
+            Log.w(TAG, "A view intent arrived with no file on it: " + intent.getAction());
+            return;
+        }
+
+        // The grant travels with the intent and is not persistable unless the
+        // sender said so; taking it where offered means a handover survives
+        // the reader being rebuilt behind it.
+        try {
+            final int flags = intent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+            if (flags != 0) grantUriPermission(getPackageName(), data, flags);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not hold on to permission for " + data, e);
+        }
+
         pendingUri = data.toString();
         // Delivered when the reader says it is ready, not after a guessed
         // delay. Opening a file from elsewhere is always a cold start, and

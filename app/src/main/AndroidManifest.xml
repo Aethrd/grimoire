@@ -33,10 +33,16 @@
         android:hardwareAccelerated="true"
         android:theme="@style/Theme.Grimoire.Splash">
 
+        <!-- singleTop, not singleTask. A singleTask activity is moved into a
+             task of its own, so a file manager handing over a book launches
+             it somewhere else and is left showing its own screen — which
+             looks exactly like the app declining to open the file. singleTop
+             keeps the handover in the caller's task and still reuses an
+             instance already on top. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTask"
+            android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density|fontScale|smallestScreenSize">
 
