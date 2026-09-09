@@ -993,6 +993,26 @@ export async function openVault(onVaultChange, host) {
     body.appendChild(timing);
   }
 
+  /* The last crash, kept so it can be read rather than guessed at. */
+  if (settings.lastCrash) {
+    const crash = document.createElement('section');
+    crash.className = 'block';
+    crash.innerHTML = '<h2>Last crash</h2>';
+    const pre = document.createElement('pre');
+    pre.style.cssText = 'white-space:pre-wrap;font-size:11px;line-height:1.45;'
+      + 'max-height:220px;overflow:auto;margin:0 0 8px;color:var(--muted);'
+      + '-webkit-user-select:text;user-select:text';
+    pre.textContent = settings.lastCrash;
+    crash.appendChild(pre);
+
+    const clear = document.createElement('button');
+    clear.className = 'btn ghost block';
+    clear.textContent = 'Clear this report';
+    clear.onclick = async () => { await store.saveSettings({ lastCrash: null }); renderSettings(); };
+    crash.appendChild(clear);
+    body.appendChild(crash);
+  }
+
   const backupBtn = document.createElement('button');
   backupBtn.className = 'btn primary block';
   backupBtn.textContent = 'Back up everything but the books';

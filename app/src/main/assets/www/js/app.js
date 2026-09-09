@@ -1567,6 +1567,18 @@ async function boot() {
   wireDesk();
   refreshGuides();
 
+  /* If the app died last time, say so.
+   *
+   * A crash takes the process with it, so from the outside the app simply
+   * goes away and whatever launched it comes back -- indistinguishable from
+   * it refusing to do anything. The reason is kept and reported here. */
+  const crash = window.GrimoireNative?.lastCrash?.();
+  if (crash) {
+    await store.saveSettings({ lastCrash: crash });
+    const line = crash.split('\n').find((l) => /Exception|Error/.test(l)) || 'an error';
+    toast(`The app stopped unexpectedly last time: ${line.trim().slice(0, 90)}`, 10000);
+  }
+
   // Anything handed to the app from elsewhere has been waiting for this.
   window.GrimoireNative?.ready?.();
   panels.onSettingsChange(() => panels.openSettings(refreshShelf));
