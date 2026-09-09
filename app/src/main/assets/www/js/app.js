@@ -1419,15 +1419,29 @@ const pendingFiles = new Map();
 
 function readHandedFile(uri) {
   return new Promise((resolve, reject) => {
-    const native = window.GrimoireNative?.readContentUri;
-    if (!native) return reject(new Error('This build cannot open files from elsewhere'));
+    const bridge = window.GrimoireNative;
+    if (!bridge?.readContentUri) {
+      return reject(new Error('This build cannot open files from elsewhere'));
+    }
+
     const id = `f${Date.now()}`;
     const timer = setTimeout(() => {
       pendingFiles.delete(id);
       reject(new Error('Reading that file took too long'));
     }, 120000);
     pendingFiles.set(id, { resolve, reject, timer });
-    try { native(id, uri); } catch (error) { pendingFiles.delete(id); reject(error); }
+
+    try {
+      /* Called on the bridge object, never through a reference taken off it.
+       * An injected method pulled out into a variable loses the object it
+       * belongs to, and Android refuses it: "Java bridge method can't be
+       * invoked on a non-injected object". */
+      bridge.readContentUri(id, uri);
+    } catch (error) {
+      pendingFiles.delete(id);
+      clearTimeout(timer);
+      reject(error);
+    }
   });
 }
 

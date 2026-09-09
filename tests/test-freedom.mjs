@@ -130,4 +130,22 @@ t('the DeepL key never crosses the bridge', () => {
   assert.ok(!/getKey|readKey/.test(js), 'the page tries to read the key back');
 });
 
+console.log('bridge calls');
+
+t('no bridge method is ever called detached from its object', () => {
+  /* An injected method pulled out into a variable loses the object it belongs
+   * to, and Android refuses it at the point of call:
+   *   "Java bridge method can't be invoked on a non-injected object"
+   * Nothing in the test harness can catch that -- a stubbed bridge is an
+   * ordinary object and works either way -- so it is caught by reading. */
+  const offenders = [];
+  for (const file of ['app.js', 'panels.js', 'screens.js', 'translate.js', 'reader.js']) {
+    const source = read(`app/src/main/assets/www/js/${file}`);
+    const pattern = /(?:const|let|var)\s+\w+\s*=\s*window\.Grimoire\w*\??\.\w+\s*;/g;
+    for (const match of source.match(pattern) || []) offenders.push(`${file}: ${match}`);
+  }
+  assert.deepEqual(offenders, [],
+    `a bridge method is held in a variable instead of being called on its object:\n${offenders.join('\n')}`);
+});
+
 console.log(`\n${pass} assertions passed`);
