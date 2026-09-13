@@ -494,6 +494,16 @@ export async function loadChapter(index, anchor = 0) {
 
   // Images decode asynchronously and change the layout when they land, so
   // wait for them before measuring or the page count is wrong on arrival.
+  /* Shown before the pictures arrive.
+   *
+   * Waiting for every image to load before painting anything meant the whole
+   * reader -- title, position, chapter buttons, the keep-in-library button --
+   * stayed blank until they had, and a single slow or broken picture held it
+   * for the full timeout. The text is already in the document at this point;
+   * only the page count needs the pictures, and that is settled below.
+   */
+  onChange(state);
+
   await imagesSettled();
   relayout();
   estimateTotals();
@@ -577,6 +587,16 @@ export async function toggleTranslation() {
   hydrateImages(section, chapter.index);
   flow.replaceChildren(section);
   state.loaded = [chapter.index];
+
+  /* Shown before the pictures arrive.
+   *
+   * Waiting for every image to load before painting anything meant the whole
+   * reader -- title, position, chapter buttons, the keep-in-library button --
+   * stayed blank until they had, and a single slow or broken picture held it
+   * for the full timeout. The text is already in the document at this point;
+   * only the page count needs the pictures, and that is settled below.
+   */
+  onChange(state);
 
   await imagesSettled();
   relayout();

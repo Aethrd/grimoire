@@ -284,12 +284,19 @@ export async function openReel(bookId, onJump) {
   // here instead, once, and written back.
   const unmeasured = images.filter((i) => i.blob && !i.width);
   if (unmeasured.length) {
+    // One picture that will not decode should cost its own thumbnail, not the
+    // reel: every image is measured before any is drawn.
     for (const image of unmeasured) {
-      const dims = await measure(image.blob);
-      image.width = dims.width;
-      image.height = dims.height;
+      try {
+        const dims = await measure(image.blob);
+        image.width = dims.width;
+        image.height = dims.height;
+      } catch {
+        image.width = 0;
+        image.height = 0;
+      }
     }
-    await store.putAll('images', unmeasured);
+    await store.putAll('images', unmeasured).catch(() => {});
   }
   const stills = images.filter((i) => !i.animated).length;
 
@@ -311,10 +318,16 @@ export async function openReel(bookId, onJump) {
   grid.innerHTML = '<div class="reel-grid"></div>';
   const inner = grid.firstElementChild;
 
-  // The threshold hides decorative rules and spacer pixels rather than
-  // padding the reel with things nobody wants to look at.
+  /* The threshold hides decorative rules and spacer pixels rather than
+     padding the reel with things nobody wants to look at.
+     It applies only to pictures whose size is known. One that could not be
+     measured -- an unusual format, a decoder that gave up -- has a size of
+     zero, which is below every threshold, and it was being dropped from the
+     reel entirely. A real picture shown at an unknown size is a far better
+     outcome than "No images in this book". */
   const visible = images.filter((image) => {
-    if (Math.max(image.width, image.height) < settings.imageThreshold) return false;
+    const known = Math.max(image.width || 0, image.height || 0);
+    if (known > 0 && known < settings.imageThreshold) return false;
     if (reelFilter === 'still') return !image.animated;
     if (reelFilter === 'animated') return image.animated;
     return true;

@@ -103,9 +103,25 @@ export function urlCache() {
 export function measure(blob) {
   return new Promise((resolve) => {
     if (!blob) return resolve({ width: 0, height: 0 });
+
+    let settled = false;
     const url = URL.createObjectURL(blob);
     const img = new Image();
-    const done = (dims) => { URL.revokeObjectURL(url); resolve(dims); };
+    const done = (dims) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      URL.revokeObjectURL(url);
+      resolve(dims);
+    };
+
+    /* Bounded. A picture in a format the decoder does not know fires neither
+     * load nor error, and the promise would then never settle -- which left
+     * the whole picture reel blank rather than short one thumbnail, because
+     * every image is measured before any is drawn. Unmeasured is a size of
+     * zero, not a reel that never appears. */
+    const timer = setTimeout(() => done({ width: 0, height: 0 }), 4000);
+
     img.onload = () => done({ width: img.naturalWidth, height: img.naturalHeight });
     img.onerror = () => done({ width: 0, height: 0 });
     img.src = url;

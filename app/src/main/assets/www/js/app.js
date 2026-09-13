@@ -36,7 +36,10 @@ async function show(name, { replace = false } = {}) {
   if (current === 'reader' && name !== 'reader') {
     if (desk) await closeDesk({ returnHome: false });
     await reader.pauseSession();
-    await forgetTransientBook();
+    // Only when leaving the book, not when stepping into one of its own
+    // screens: the index, the picture reel and the rest all leave the reader
+    // and coming back is the whole point of them.
+    if (!BESIDE_THE_BOOK.has(name)) await forgetTransientBook();
   }
 
   // Recorded before the change, or it is simply the screen just arrived at --
@@ -132,6 +135,15 @@ function back() {
  * who opened a file to glance at it should not find it still taking up space
  * days later because the app was never restarted.
  */
+/* Screens that belong to the book being read.
+ *
+ * Going to one of these is not leaving the book. Treating it as leaving meant
+ * a book that was only passing through -- opened from a file manager and not
+ * yet kept -- was deleted the moment its index or picture reel was opened,
+ * and both came up empty because the book had just been thrown away.
+ */
+const BESIDE_THE_BOOK = new Set(['toc', 'reel', 'find', 'layout', 'settings', 'marks']);
+
 async function forgetTransientBook() {
   const book = reader.state.book;
   if (!book?.transient) return;

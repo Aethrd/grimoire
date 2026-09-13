@@ -798,9 +798,20 @@ export async function nameWithFormat(name, blob) {
   if (magic.startsWith('PK')) {
     const zip = await openArchive(blob).catch(() => null);
     if (zip?.has('META-INF/container.xml')) return `${name}.epub`;
+
+    const names = (zip?.names() || []).filter((n) => !n.startsWith('__MACOSX/'));
+
+    /* A zip holding books is a container, not a book.
+     *
+     * Called an EPUB it goes to the EPUB reader, which finds no container.xml
+     * and refuses the whole thing -- so a folder of volumes zipped together,
+     * which is how a serial usually arrives, could not be opened at all.
+     * Named for what it is, the importer unpacks it instead.
+     */
+    if (names.some((n) => /\.(epub|cbz|pdf|txt|md|html?|fb2)$/i.test(n))) return `${name}.zip`;
+
     // Every entry a picture is a comic; anything else is best offered to the
     // EPUB reader, which explains itself when it cannot cope.
-    const names = zip?.names() || [];
     const pictures = names.filter((n) => /\.(jpe?g|png|gif|webp|avif)$/i.test(n));
     if (names.length && pictures.length === names.length) return `${name}.cbz`;
     return `${name}.epub`;
