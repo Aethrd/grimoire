@@ -152,7 +152,11 @@ function withoutMotion(fn) {
 }
 
 function show(page, { animate = true } = {}) {
-  state.page = Math.max(0, Math.min(page, state.pageCount - 1));
+  // A page count that has not measured yet would otherwise clamp every
+  // arrival to "the last page" of a one-page chapter.
+  const pages = Number.isFinite(state.pageCount) && state.pageCount > 0
+    ? state.pageCount : 1;
+  state.page = Math.max(0, Math.min(Number.isFinite(page) ? page : 0, pages - 1));
 
   if (isScroll()) {
     viewport.scrollTo({
@@ -931,6 +935,17 @@ export async function nextChapter() {
     return true;
   }
   await loadChapter(state.chapterIndex + 1, 0);
+
+  /* Stated, not measured.
+   *
+   * loadChapter works out the page from where the anchor's rectangle lands,
+   * which depends on the column layout having settled. Arriving at a fresh
+   * chapter it sometimes has not, and a measurement that comes back too large
+   * is clamped to the last page -- so going forward landed at the end of the
+   * new chapter instead of its beginning. The first page of a chapter you
+   * have just moved forward into needs no measuring: it is the first page.
+   */
+  if (!isScroll()) show(0, { animate: false });
   return true;
 }
 
@@ -946,7 +961,9 @@ export async function prevChapter(toEnd = false) {
     return true;
   }
   await loadChapter(state.chapterIndex - 1, 0);
-  if (toEnd && !isScroll()) show(state.pageCount - 1, { animate: false });
+  // Going back lands at the end of the previous chapter, which is where you
+  // were reading; going back by button lands at its start.
+  if (!isScroll()) show(toEnd ? state.pageCount - 1 : 0, { animate: false });
   return true;
 }
 
@@ -1377,4 +1394,4 @@ function repaintChapter() {
 
   relayout();
   show(pageAtAnchor(anchor, chapter.index), { animate: false });
-}
+    }
