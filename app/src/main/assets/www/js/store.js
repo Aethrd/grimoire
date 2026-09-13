@@ -556,20 +556,43 @@ export async function importBackup(data) {
     await put('positions', { ...row, bookId: book.id });
   }
 
+  /* Restoring twice must not leave two of everything.
+   *
+   * Marks and log entries were added outright, so a second restore -- after a
+   * failed one, or simply to be sure -- doubled every bookmark and every
+   * reading session. Both carry enough to recognise themselves: a mark is
+   * where it sits in a book, and a session is when it happened.
+   */
+  const markSeen = new Set((await all('marks'))
+    .map((m) => `${m.bookId}:${m.kind}:${m.chapterIndex}:${m.anchor}`));
+
   for (const mark of data.marks || []) {
     const book = byFingerprint.get(mark.fingerprint);
     if (!book) continue;
     const { fingerprint, id, ...row } = mark;
+
+    const signature = `${book.id}:${row.kind}:${row.chapterIndex}:${row.anchor}`;
+    if (markSeen.has(signature)) continue;
+    markSeen.add(signature);
+
     await add('marks', { ...row, bookId: book.id });
     report.marks += 1;
   }
 
   // The log is keyed by book too, but a reading history is worth keeping even
   // for books no longer on the shelf.
+  const eventSeen = new Set((await all('events')).map((e) => `${e.bookId}:${e.at}`));
+
   for (const event of data.events || []) {
     const { id, ...row } = event;
     const book = books.find((b) => b.id === event.bookId);
-    await add('events', { ...row, bookId: book ? book.id : null });
+    const bookId = book ? book.id : null;
+
+    const signature = `${bookId}:${row.at}`;
+    if (eventSeen.has(signature)) continue;
+    eventSeen.add(signature);
+
+    await add('events', { ...row, bookId });
     report.events += 1;
   }
 

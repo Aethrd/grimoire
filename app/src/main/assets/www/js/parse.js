@@ -64,14 +64,16 @@ export const FORMATS = {
   epub: 'EPUB', cbz: 'CBZ', cbr: 'CBR', txt: 'TXT', md: 'MD',
   html: 'HTML', htm: 'HTML', xhtml: 'HTML', fb2: 'FB2', zip: 'ZIP',
   pdf: 'PDF', docx: 'DOCX', mobi: 'MOBI', azw3: 'AZW3', rtf: 'RTF',
+  mht: 'MHT', mhtml: 'MHT',
 };
 
 /** Formats with a working parser today. The rest are refused with a reason. */
-export const SUPPORTED = new Set(['EPUB', 'PDF', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2']);
+export const SUPPORTED = new Set(['EPUB', 'PDF', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2', 'MHT']);
 
 /** Book formats that can live inside an archive. ZIP is not one of them:
  *  nested archives are refused rather than recursed into. */
-export const ARCHIVE_CONTENTS = new Set(['EPUB', 'PDF', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2']);
+export const ARCHIVE_CONTENTS =
+  new Set(['EPUB', 'PDF', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2', 'MHT']);
 
 export const UNSUPPORTED_REASON = {
   DOCX: 'DOCX is OOXML in a zip. Readable with JSZip, but the styling model is a project of its own.',
@@ -85,6 +87,67 @@ export function formatOf(name) {
   const ext = name.split('.').pop().toLowerCase();
   return FORMATS[ext] || 'UNKNOWN';
 }
+
+/**
+ * A saved web page as a chapter.
+ *
+ * Web novels are commonly kept this way -- one file per chapter, saved
+ * straight from the browser. The file carries the whole page, so the site has
+ * to be stripped off the story before it is worth reading; mht.js does that,
+ * and this turns what is left into the same shape every other format produces.
+ */
+async function parseMht(file, onProgress, { onImage } = {}) {
+  const { readMht } = await import('./mht.js');
+  const page = readMht(await readText(file), stripExtension(file.name));
+
+  const images = [];
+  let order = 0;
+  const resolveImage = (src) => {
+    // The markup refers to a picture by the address it had on the web; the
+    // file carries it under that same address, or under a content id.
+    const blob = page.images.get(src)
+      || page.images.get(src.replace(/^about:blank/, ''))
+      || page.images.get(`cid:${src.replace(/^cid:/, '')}`);
+    if (!blob) return null;
+
+    const href = `mht/${order}-${src.split('/').pop().split('?')[0] || 'image'}`;
+    const record = {
+      href, blob, order: order++, chapterIndex: 0,
+      animated: /\.gif($|\?)/i.test(src),
+      width: 0, height: 0,
+    };
+    if (onImage) onImage(record);
+    else images.push(record);
+    return href;
+  };
+
+  const { html, text } = readChapter(page.body, resolveImage);
+  onProgress?.(1);
+
+  if (!text.trim() && !images.length) {
+    throw new Error('Nothing readable was found in that saved page.');
+  }
+
+  return {
+    title: page.title,
+    author: null,
+    lang: null,
+    format: 'MHT',
+    chapters: [{
+      index: 0,
+      title: page.title,
+      fromToc: false,
+      html,
+      words: countWords(text, null),
+    }],
+    words: countWords(text, null),
+    images,
+    imageCount: order,
+    coverBlob: null,
+  };
+}
+
+const stripExtension = (name) => String(name).replace(/\.[a-z0-9]{2,5}$/i, '');
 
 /* ── shared helpers ───────────────────────────────────────────────────── */
 
@@ -731,6 +794,7 @@ export async function parse(file, onProgress, options = {}) {
     // should never pay for it.
     : format === 'PDF' ? await (await import('./pdf.js')).parsePdf(file, onProgress)
     : format === 'CBZ' ? await parseCbz(file, onProgress, options)
+    : format === 'MHT' ? await parseMht(file, onProgress, options)
     : await parseText(file);
 
   result.format = SUPPORTED.has(format) ? format : 'TXT';
@@ -808,7 +872,7 @@ export async function nameWithFormat(name, blob) {
      * which is how a serial usually arrives, could not be opened at all.
      * Named for what it is, the importer unpacks it instead.
      */
-    if (names.some((n) => /\.(epub|cbz|pdf|txt|md|html?|fb2)$/i.test(n))) return `${name}.zip`;
+    if (names.some((n) => /\.(epub|cbz|pdf|txt|md|html?|fb2|mht(ml)?)$/i.test(n))) return `${name}.zip`;
 
     // Every entry a picture is a comic; anything else is best offered to the
     // EPUB reader, which explains itself when it cannot cope.

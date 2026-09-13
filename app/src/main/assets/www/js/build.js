@@ -36,10 +36,30 @@ export const naturalOrder = (a, b) => String(a || '').localeCompare(String(b || 
  * part would join it to itself. Its contents become parts instead, so what is
  * listed is what will actually be joined.
  */
+const IS_PICTURE = /\.(jpe?g|png|gif|webp|avif|bmp)$/i;
+
 export async function add(files, onProgress) {
   const found = [];
 
-  for (const file of files) {
+  /* Loose pictures are one chapter, not one chapter each.
+   *
+   * Manga and manhwa are downloaded as a folder of numbered images, and a
+   * hundred and eighty separate parts is not a workshop anyone can use. They
+   * are pages: gathered into a single part, in the order they are numbered.
+   */
+  const pictures = [...files].filter((f) => IS_PICTURE.test(f.name));
+  const rest = [...files].filter((f) => !IS_PICTURE.test(f.name));
+
+  if (pictures.length) {
+    pictures.sort((a, b) => naturalOrder(a.name, b.name));
+    found.push({
+      name: commonName(pictures.map((p) => p.name)) || 'Pictures',
+      pictures,
+      size: pictures.reduce((n, p) => n + (p.size || 0), 0),
+    });
+  }
+
+  for (const file of rest) {
     const named = await nameWithFormat(file.name || 'book', file);
     const format = formatOf(named);
 
@@ -49,10 +69,29 @@ export async function add(files, onProgress) {
           onProgress?.(`Opening ${name}`, fraction));
         if (archive.comic) {
           found.push({ file, name: named, from: null });
-        } else {
-          for (const book of archive.books) {
-            found.push({ read: book.read, name: book.name, from: file.name, size: book.size });
-          }
+          continue;
+        }
+
+        /* A zip of saved pages is one volume, not two hundred parts.
+         *
+         * Web novels arrive that way -- a folder of .mht chapters, zipped.
+         * Listing each as its own part would make the workshop unusable and
+         * say nothing useful: they are chapters, and their order inside the
+         * archive is the order they were written in. */
+        const everyOneAPage = archive.books.length > 1
+          && archive.books.every((b) => /\.mht(ml)?$/i.test(b.name));
+
+        if (everyOneAPage) {
+          found.push({
+            name: file.name,
+            pages: [...archive.books].sort((a, b) => naturalOrder(a.name, b.name)),
+            size: archive.books.reduce((n, b) => n + (b.size || 0), 0),
+          });
+          continue;
+        }
+
+        for (const book of archive.books) {
+          found.push({ read: book.read, name: book.name, from: file.name, size: book.size });
         }
         continue;
       } catch (error) {
@@ -93,6 +132,14 @@ export function clear() {
 /** What a part is, said plainly enough to spot the odd one out. */
 export function describe(part) {
   if (part.error) return `Could not be opened — ${part.error}`;
+  if (part.pictures) {
+    const size = part.size ? ` · ${(part.size / 1048576).toFixed(1)}MB` : '';
+    return `${part.pictures.length} pages${size}`;
+  }
+  if (part.pages) {
+    const size = part.size ? ` · ${(part.size / 1048576).toFixed(1)}MB` : '';
+    return `${part.pages.length} saved pages${size}`;
+  }
   const format = formatOf(part.name);
   const reason = UNSUPPORTED_REASON?.[format];
   if (reason) return reason;
@@ -134,9 +181,15 @@ export async function build({ title, onProgress } = {}) {
 
     let parsed;
     try {
-      const file = part.file || new File([await part.read()], part.name);
-      parsed = await parse(file, (fraction) =>
-        onProgress?.(`Reading ${part.name}`, (at + fraction) / parts.length, at, parts.length));
+      parsed = part.pictures
+        ? await readPictures(part)
+        : part.pages
+        ? await readPages(part, (fraction) =>
+          onProgress?.(`Reading ${part.name}`, (at + fraction) / parts.length, at, parts.length))
+        : await parse(
+          part.file || new File([await part.read()], part.name),
+          (fraction) =>
+            onProgress?.(`Reading ${part.name}`, (at + fraction) / parts.length, at, parts.length));
     } catch (error) {
       // One part that will not open should cost that part, not the build.
       failed.push({ name: part.name, reason: error.message });
@@ -195,6 +248,91 @@ export async function build({ title, onProgress } = {}) {
 /** Point already-resolved picture references at their prefixed copies. */
 function reKeyImages(html, prefix) {
   return html.replace(/data-img="([^"]*)"/g, (_, href) => `data-img="${prefix}${href}"`);
+}
+
+/**
+ * A chapter made of loose pictures.
+ *
+ * Manga and manhwa arrive as a folder of numbered images. They are one
+ * chapter of pages, in the order they are numbered -- which is not the order
+ * a file system gives them, since page 10 sorts before page 2.
+ */
+async function readPictures(part) {
+  const images = part.pictures.map((file, at) => ({
+    href: `page${String(at + 1).padStart(4, '0')}-${file.name}`,
+    blob: file,
+    order: at,
+    chapterIndex: 0,
+    animated: /\.gif$/i.test(file.name),
+    width: 0,
+    height: 0,
+  }));
+
+  const html = images
+    .map((image) => `<img data-img="${image.href}" alt=""/>`)
+    .join('\n');
+
+  return {
+    title: part.name,
+    chapters: [{ index: 0, title: part.name, fromToc: false, html, words: 0 }],
+    images,
+    imageCount: images.length,
+    words: 0,
+    coverBlob: part.pictures[0] || null,
+    format: 'CBZ',
+  };
+}
+
+/**
+ * A volume made of saved pages.
+ *
+ * Each page is one chapter, read in the order the pages are named. They are
+ * parsed one at a time and their pictures gathered as they go, so a volume of
+ * three hundred chapters costs one chapter's memory rather than three
+ * hundred.
+ */
+async function readPages(part, onProgress) {
+  const chapters = [];
+  const images = [];
+  let order = 0;
+
+  for (const [at, page] of part.pages.entries()) {
+    let parsed;
+    try {
+      parsed = await parse(new File([await page.read()], page.name));
+    } catch {
+      // A page that will not read costs that chapter, not the volume.
+      continue;
+    }
+
+    for (const chapter of parsed.chapters) {
+      chapters.push({ ...chapter, index: chapters.length });
+    }
+    for (const image of parsed.images || []) {
+      // Re-keyed per page, because every saved page names its pictures by the
+      // address they had on the site and two chapters of one novel share them.
+      images.push({ ...image, href: `page${at}/${image.href}`, order: order++ });
+    }
+    // The same re-keying has to reach the markup, which already resolved them.
+    const written = chapters.slice(-parsed.chapters.length);
+    for (const chapter of written) {
+      chapter.html = (chapter.html || '').replace(
+        /data-img="([^"]*)"/g, (_, href) => `data-img="page${at}/${href}"`);
+    }
+    onProgress?.((at + 1) / part.pages.length);
+  }
+
+  if (!chapters.length) throw new Error('None of those saved pages could be read.');
+
+  return {
+    title: stripExtension(part.name),
+    chapters,
+    images,
+    imageCount: images.length,
+    words: chapters.reduce((n, c) => n + (c.words || 0), 0),
+    coverBlob: null,
+    format: 'MHT',
+  };
 }
 
 const stripExtension = (name) => String(name).replace(/\.[a-z0-9]{2,5}$/i, '');

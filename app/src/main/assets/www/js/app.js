@@ -1403,7 +1403,8 @@ function wireWorkshop() {
     const picker = document.createElement('input');
     picker.type = 'file';
     picker.multiple = true;
-    picker.accept = '.epub,.cbz,.zip,.pdf,.txt,.md,.html,.htm,.fb2';
+    // Pictures too: manga and manhwa arrive as a folder of numbered images.
+    picker.accept = '.epub,.cbz,.zip,.pdf,.txt,.md,.html,.htm,.fb2,.mht,.mhtml,.jpg,.jpeg,.png,.gif,.webp,.avif,.bmp,image/*';
     picker.onchange = async () => {
       const files = [...(picker.files || [])];
       if (!files.length) return;

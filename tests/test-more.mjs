@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import JSZip from 'jszip';
 import { boot } from './harness.mjs';
 const window = await boot();
@@ -61,5 +62,77 @@ await t('drops images', () => assert.ok(!/blob:/.test(text) && !/<img/.test(text
 await t('keeps paragraph breaks', () => assert.equal(text.split('\n\n').length, 3));
 await t('normalises runs of whitespace', () => assert.match(text, /The harbour kept accounts/));
 await t('keeps the heading as its own block', () => assert.ok(text.startsWith('Salt and Tide')));
+
+
+
+console.log('saved web pages');
+
+const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').toString('base64');
+const savedPage = (n) => [
+  'MIME-Version: 1.0',
+  'Content-Type: multipart/related; boundary="----B"',
+  '', '------B',
+  'Content-Type: text/html; charset="utf-8"',
+  'Content-Transfer-Encoding: quoted-printable',
+  'Content-Location: https://site.example/ch' + n,
+  '',
+  `<html><head><title>Chapter ${n} - Witch City | NovelSite</title></head><body>`,
+  '<nav class=3D"site-nav"><a href=3D"/">Home</a></nav>',
+  '<header class=3D"banner">NovelSite</header>',
+  `<article><h1>Chapter ${n}: The Gate</h1>`,
+  '<p>She had walked the wall a hundred times, and never once seen the gate =',
+  'open from the inside.</p>',
+  '<img src=3D"https://site.example/img/plate.png"/></article>',
+  '<div class=3D"comments"><p>first!!</p></div>',
+  '<div id=3D"recommendations"><a>Other novels</a></div>',
+  '<footer>Copyright NovelSite</footer>',
+  '</body></html>',
+  '', '------B',
+  'Content-Type: image/png',
+  'Content-Transfer-Encoding: base64',
+  'Content-Location: https://site.example/img/plate.png',
+  '', png, '', '------B--',
+].join('\r\n');
+
+await t('a saved page reads as a chapter', async () => {
+  const result = await parse.parse(new File([savedPage(12)], 'Chapter 12.mht'));
+  assert.equal(result.format, 'MHT');
+  assert.equal(result.chapters.length, 1);
+  // The page's own heading, not the site's title bar.
+  assert.equal(result.title, 'Chapter 12: The Gate');
+  assert.ok(result.words > 10);
+});
+
+await t('the site is stripped off the story', async () => {
+  // A saved page carries the header, the navigation, the comments and
+  // whatever else was on screen, and none of it is the book.
+  const result = await parse.parse(new File([savedPage(12)], 'Chapter 12.mht'));
+  const html = parse.chapterHtml(result.chapters[0]);
+
+  assert.match(html, /never once seen the gate/);
+  assert.ok(!/Home<\/a>/.test(html), 'the navigation survived');
+  assert.ok(!/first!!/.test(html), 'the comments survived');
+  assert.ok(!/Other novels/.test(html), 'the recommendations survived');
+  assert.ok(!/Copyright NovelSite/.test(html), 'the footer survived');
+});
+
+await t('pictures saved inside the page are kept', async () => {
+  // They are referred to by the address they had on the web, and the file
+  // carries them under that same address.
+  const result = await parse.parse(new File([savedPage(12)], 'Chapter 12.mht'));
+  assert.equal(result.imageCount, 1);
+  assert.match(parse.chapterHtml(result.chapters[0]), /data-img=/);
+  assert.ok(result.images[0].blob.size > 0);
+});
+
+await t('both spellings of the extension are read', async () => {
+  // "mhtml?" is "mhtm" with an optional "l" — it never matches ".mht", which
+  // is the commoner of the two.
+  assert.equal(parse.formatOf('a.mht'), 'MHT');
+  assert.equal(parse.formatOf('a.mhtml'), 'MHT');
+  const source = fs.readFileSync(
+    new URL('../app/src/main/assets/www/js/build.js', import.meta.url), 'utf8');
+  assert.ok(!/mhtml\?/.test(source), 'the pattern still cannot match .mht');
+});
 
 console.log(`\n${pass} assertions passed`);

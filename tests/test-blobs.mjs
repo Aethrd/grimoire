@@ -521,6 +521,78 @@ await t('a mix of files becomes one book, in the order shown', async () => {
     'a chapter points at a picture that is not there');
 });
 
+await t('loose pictures become one chapter of pages', async () => {
+  // Manga and manhwa are downloaded as a folder of numbered images. A hundred
+  // and eighty separate parts is not a workshop anyone can use.
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const pages = [1, 2, 10, 11].map((n) => new File([png], `Ch 5 page ${n}.png`));
+
+  build.clear();
+  await build.add([
+    ...pages,
+    new File([fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url))],
+      'Volume 2.epub'),
+  ]);
+
+  // One part for the pictures, one for the book.
+  assert.equal(build.contents().length, 2);
+  assert.equal(build.contents()[0].pictures.length, 4);
+  assert.match(build.describe(build.contents()[0]), /4 pages/);
+
+  const { book } = await build.build({ title: 'Manhwa' });
+  const images = await store.byIndex('images', 'bookId', book.id);
+
+  // Numbered order, which is not the order a file system gives them: page 10
+  // sorts before page 2.
+  const order = images.map((i) => i.href).filter((h) => h.includes('Ch 5'));
+  assert.deepEqual(order.map((h) => h.split(' page ').pop()),
+    ['1.png', '2.png', '10.png', '11.png']);
+
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id))
+    .sort((a, b) => a.index - b.index);
+  const refs = chapters.flatMap((c) =>
+    [...parse.chapterHtml(c).matchAll(/data-img="([^"]*)"/g)].map((m) => m[1]));
+  assert.ok(refs.every((r) => images.some((i) => i.href === r)));
+  // The first page stands in as the cover.
+  assert.ok(book.coverBlob);
+});
+
+await t('restoring a backup twice does not double anything', async () => {
+  /* Marks and log entries were added outright, so a second restore -- after a
+   * failed one, or simply to be sure -- doubled every bookmark and every
+   * reading session. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+
+  await library.importFiles([new File(
+    [fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url))],
+    'Twice.epub')], {});
+  const book = (await store.all('books')).find((b) => b.fingerprint?.startsWith('Twice'));
+
+  await store.add('marks', { bookId: book.id, kind: 'bookmark', chapterIndex: 1, anchor: 10, at: 1 });
+  await store.recordEvent({ bookId: book.id, words: 500, chapters: 1 });
+
+  const backup = await store.exportBackup();
+  const marksBefore = (await store.all('marks')).length;
+  const eventsBefore = (await store.all('events')).length;
+
+  for (let round = 0; round < 3; round++) {
+    await store.importBackup(JSON.parse(JSON.stringify(backup)));
+  }
+
+  assert.equal((await store.all('marks')).length, marksBefore);
+  assert.equal((await store.all('events')).length, eventsBefore);
+
+  // A mark that really is new still comes back.
+  for (const mark of await store.all('marks')) await store.del('marks', mark.id);
+  await store.importBackup(JSON.parse(JSON.stringify(backup)));
+  assert.equal((await store.all('marks')).length, marksBefore);
+});
+
 await t('building needs more than one part', async () => {
   const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
   build.clear();

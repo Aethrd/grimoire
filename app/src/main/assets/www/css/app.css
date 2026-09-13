@@ -61,6 +61,7 @@
   --read-align: left;
   --read-indent: 0;
   --read-face: var(--font-body);
+  --tabbar-h: 56px;
   --read-ink: var(--text);
 }
 
@@ -602,6 +603,16 @@ section.block > h2 { margin-top: 18px; }
            padding-bottom: calc(var(--safe-bottom) + 10px);
            border-top: 1px solid var(--divider); background: var(--surface); }
 
+/* A footer on a tab screen has the tab bar sitting over it.
+   Every other screen with one -- search, the reel -- is reached from inside a
+   book, where the bar is hidden, so this only shows up on a screen that is
+   itself a tab: the button was drawn underneath the bar and could not be
+   pressed. */
+[data-screen="workshop"] .stepper {
+  padding-bottom: 10px;
+  margin-bottom: calc(var(--safe-bottom) + var(--tabbar-h));
+}
+
 /* ── reel ─────────────────────────────────────────────────────────────── */
 
 .reel-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
@@ -654,6 +665,7 @@ section.block > h2 { margin-top: 18px; }
 /* ── tab bar ──────────────────────────────────────────────────────────── */
 
 .tabbar { position: fixed; left: 0; right: 0; bottom: 0; display: flex;
+          min-height: var(--tabbar-h); box-sizing: content-box;
           background: var(--surface); border-top: 1px solid var(--divider);
           padding-bottom: var(--safe-bottom); z-index: 20; }
 .tabbar button { flex: 1; display: grid; place-items: center; gap: 2px;

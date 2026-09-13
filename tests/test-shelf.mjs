@@ -524,6 +524,15 @@ t('building is a tool, not a shelf action', () => {
   assert.match(app, /were still on the shelf/);
 });
 
+t('the build button is not under the tab bar', () => {
+  // Every other screen with a footer is reached from inside a book, where the
+  // bar is hidden. On a screen that is itself a tab the button was drawn
+  // underneath it and could not be pressed.
+  assert.match(css, /\[data-screen="workshop"\] \.stepper \{/);
+  assert.match(css, /margin-bottom: calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\)\)/);
+  assert.match(css, /--tabbar-h:/);
+});
+
 t('the workshop shows the order and lets it be changed', () => {
   // Order is the whole point of a serial, so it is shown and movable rather
   // than inferred and hoped for.
