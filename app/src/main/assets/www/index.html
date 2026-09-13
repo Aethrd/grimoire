@@ -337,6 +337,10 @@
     <svg viewBox="0 0 24 24"><path d="M4 8h13v12H4z"/><path d="M7 5h13v12"/></svg>
     <span>Bundle</span>
   </button>
+  <button data-act="merge">
+    <svg viewBox="0 0 24 24"><path d="M7 4v6a4 4 0 004 4h6"/><path d="M17 4v6a4 4 0 01-4 4H7"/><path d="M15 11l2 3 2-3"/></svg>
+    <span>Join</span>
+  </button>
   <button data-act="details">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
     <span>Details</span>
@@ -368,6 +372,24 @@
     <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
       <button class="btn ghost" id="folder-cancel">Cancel</button>
       <button class="btn primary" id="folder-create">Create &amp; move</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-scrim" id="merge-sheet" hidden>
+  <div class="sheet">
+    <p class="eyebrow">Join into one book</p>
+    <div id="merge-list"></div>
+    <label class="field"><span>Called</span>
+      <input class="query" id="merge-title" type="text" autocomplete="off">
+    </label>
+    <p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 10px">
+      The volumes stay on the shelf. The new book has one spine, one place in
+      it and one percentage.
+    </p>
+    <div class="sheet-actions" style="border:0;background:none;padding:0">
+      <button class="btn ghost" id="merge-cancel">Cancel</button>
+      <button class="btn primary" id="merge-go">Join</button>
     </div>
   </div>
 </div>

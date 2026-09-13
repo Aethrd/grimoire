@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { boot } from './harness.mjs';
+
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 
 const window = await boot();
 window.URL.createObjectURL = globalThis.URL.createObjectURL = () => 'blob:x';
@@ -187,6 +193,52 @@ await (async () => {
     assert.equal(document.body.dataset.marks, 'hidden');
     assert.equal((await store.settings()).markDensity, 'hidden');
     await reader.setMarkDensity('full');
+  });
+})();
+
+await (async () => {
+  /* Arriving at a chapter is not a measurement.
+   *
+   * loadChapter worked the page out from where the anchor's rectangle landed,
+   * which needs the column layout to have settled. On arrival it sometimes
+   * has not, and a result that comes back too large is clamped to the last
+   * page -- so going forward landed at the end of the new chapter. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const reader = await import(
+    `${new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href}?arrival`);
+
+  const id = await store.add('books', { title: 'Arrival', fingerprint: 'arr', addedAt: 1 });
+  for (let i = 0; i < 4; i++) {
+    await store.put('chapters', {
+      bookId: id, index: i, title: `Ch ${i}`, words: 100,
+      html: `<p>Chapter ${i} says something.</p>`.repeat(20),
+    });
+  }
+
+  reader.init({ onChange() {} });
+  await reader.open(id);
+
+  await t('moving forward lands on the first page of the next chapter', async () => {
+    await reader.setMode('paged');
+    await reader.goTo({ chapter: 1, anchor: 0 });
+
+    // The state a chapter is in before its layout has settled: a page count
+    // left over from somewhere else.
+    reader.state.pageCount = 9;
+    reader.goToPage(8);
+    assert.equal(reader.state.page, 8);
+
+    await reader.nextChapter();
+    assert.equal(reader.state.chapterIndex, 2);
+    assert.equal(reader.state.page, 0, 'it arrived somewhere other than the beginning');
+  });
+
+  await t('a page that never measured cannot clamp to "the last page"', () => {
+    // Math.min(page, pageCount - 1) with a count of zero puts every arrival
+    // at -1, and with NaN it puts it anywhere at all.
+    const source = read('app/src/main/assets/www/js/reader.js');
+    assert.match(source, /Number\.isFinite\(state\.pageCount\) && state\.pageCount > 0/);
+    assert.match(source, /Number\.isFinite\(page\) \? page : 0/);
   });
 })();
 

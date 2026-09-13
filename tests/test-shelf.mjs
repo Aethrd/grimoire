@@ -71,7 +71,8 @@ t('actions are labelled, not a row of bare glyphs', () => {
   // not acceptable when that is a possible outcome.
   const grid = html.slice(html.indexOf('id="select-actions"'), html.indexOf('id="confirm-bar"'));
   const acts = [...grid.matchAll(/data-act="(\w+)"/g)].map((m) => m[1]);
-  assert.deepEqual(acts, ['open', 'folder', 'status', 'bundle', 'details', 'vault', 'delete']);
+  assert.deepEqual(acts,
+    ['open', 'folder', 'status', 'bundle', 'merge', 'details', 'vault', 'delete']);
   // Every one carries a text label beside its icon.
   assert.equal((grid.match(/<span>/g) || []).length, acts.length);
   assert.ok(html.includes('id="select-all"') && html.includes('id="select-cancel"'));

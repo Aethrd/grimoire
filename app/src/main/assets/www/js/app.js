@@ -279,6 +279,8 @@ function wireSelection() {
 
     status: () => openStatusSheet(),
 
+    merge: () => openMergeSheet(),
+
     /* Bundling is one action that reads both ways: several books become a
        bundle, and a bundle already selected comes apart. Two buttons for
        something that is its own opposite is one too many. */
@@ -350,6 +352,11 @@ function wireSelection() {
 
   el('details-sheet').onclick = (e) => {
     if (e.target === el('details-sheet')) el('details-sheet').hidden = true;
+  };
+
+  el('merge-cancel').onclick = () => { el('merge-sheet').hidden = true; };
+  el('merge-sheet').onclick = (e) => {
+    if (e.target === el('merge-sheet')) el('merge-sheet').hidden = true;
   };
 
   el('bundle-cancel').onclick = () => { el('bundle-sheet').hidden = true; };
@@ -549,6 +556,79 @@ function openBundleSheet(members) {
   }
 
   el('bundle-sheet').hidden = false;
+}
+
+/**
+ * Join several volumes into one book.
+ *
+ * Shown in the order they will be joined, natural-sorted so volume 2 comes
+ * before volume 10 — which plain text sorting gets backwards, and which is
+ * the whole difference between a readable serial and a shuffled one.
+ */
+async function openMergeSheet() {
+  const books = await selectedBooks();
+  if (books.length < 2) return toast('Pick two or more books to join');
+
+  const ordered = [...books].sort((a, b) => library.naturalOrder(a.title, b.title));
+
+  const list = el('merge-list');
+  list.innerHTML = '';
+  ordered.forEach((book, at) => {
+    const row = document.createElement('div');
+    row.className = 'list-row';
+    row.style.pointerEvents = 'none';
+    row.innerHTML = `<span class="body"><b>${at + 1}. ${escapeText(library.displayTitle(book))}</b></span>`;
+    list.appendChild(row);
+  });
+
+  // A sensible name, from what the volumes have in common.
+  el('merge-title').value = commonTitle(ordered.map((b) => b.title)) || ordered[0].title;
+
+  el('merge-go').onclick = async () => {
+    el('merge-sheet').hidden = true;
+    const panel = el('import-progress');
+    panel.hidden = false;
+    try {
+      const made = await library.mergeBooks(ordered.map((b) => b.id), {
+        title: el('merge-title').value.trim() || ordered[0].title,
+        onProgress: (message, fraction) => {
+          el('import-label').textContent = message;
+          el('import-bar').style.width = `${Math.round(fraction * 100)}%`;
+        },
+      });
+      clearSelection();
+      await refreshShelf();
+      toast(`Joined into “${made.title}” — ${made.chapters} chapters`, 6000);
+    } catch (error) {
+      toast(error.message || 'Those books could not be joined', 6000);
+    } finally {
+      panel.hidden = true;
+    }
+  };
+
+  el('merge-sheet').hidden = false;
+}
+
+/**
+ * What a set of titles have in common, as a name for the whole.
+ *
+ * "Witch City Vol. 1" and "Witch City Vol. 2" should suggest "Witch City"
+ * rather than the first one's full name.
+ */
+function commonTitle(titles) {
+  if (!titles.length) return null;
+  const words = titles.map((t) => String(t).split(/\s+/));
+  const shared = [];
+  for (let i = 0; i < words[0].length; i++) {
+    const word = words[0][i];
+    if (!words.every((w) => w[i] === word)) break;
+    shared.push(word);
+  }
+  // Trailing "Vol." or "Volume" belongs to the part that differs.
+  while (shared.length && /^(vol\.?|volume|part|book|#|-|—)$/i.test(shared[shared.length - 1])) {
+    shared.pop();
+  }
+  return shared.join(' ').trim() || null;
 }
 
 async function openStatusSheet() {
@@ -1458,6 +1538,7 @@ window.Grimoire = {
 
   /** Return true to swallow the back gesture. */
   onBack() {
+    if (!el('merge-sheet').hidden) { el('merge-sheet').hidden = true; return true; }
     if (!el('bundle-sheet').hidden) { el('bundle-sheet').hidden = true; return true; }
     if (!el('status-sheet').hidden) { el('status-sheet').hidden = true; return true; }
     if (!el('folder-sheet').hidden) { el('folder-sheet').hidden = true; return true; }

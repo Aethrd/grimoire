@@ -1394,4 +1394,4 @@ function repaintChapter() {
 
   relayout();
   show(pageAtAnchor(anchor, chapter.index), { animate: false });
-    }
+}

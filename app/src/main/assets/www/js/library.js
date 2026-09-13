@@ -781,3 +781,119 @@ export async function initVaultGate() {
   vaultUnlocked = !settings.vaultPassphrase;
   return vaultUnlocked;
 }
+
+
+/* ── merging ──────────────────────────────────────────────────────────────
+ *
+ * Several volumes read as one book.
+ *
+ * A serial arrives as a folder of files -- volume 1, volume 2, volume 10 --
+ * and reading it means opening each in turn, losing your place at every
+ * boundary and seeing progress reset to nothing twelve times over. Bundling
+ * groups them on the shelf; this makes them a single book with one spine, one
+ * position and one percentage.
+ *
+ * The volumes are left alone. Merging copies, so a merge that turns out badly
+ * costs a delete rather than a re-import.
+ */
+
+/** 'Volume 2' before 'Volume 10', which plain text sorting gets backwards. */
+export const naturalOrder = (a, b) => String(a || '').localeCompare(String(b || ''),
+  undefined, { numeric: true, sensitivity: 'base' });
+
+/**
+ * Build one book from several.
+ *
+ * @param ids      the books to join, in the order given
+ * @param options.title  what to call the result
+ * @param options.markVolumes  put each volume's name above its first chapter
+ */
+export async function mergeBooks(ids, { title, markVolumes = true, onProgress } = {}) {
+  const sources = [];
+  for (const id of ids) {
+    const book = await store.get('books', id);
+    if (book) sources.push(book);
+  }
+  if (sources.length < 2) throw new Error('Pick two or more books to join.');
+
+  const name = title || sources[0].title;
+  const merged = {
+    title: name,
+    author: sources.find((b) => b.author)?.author || null,
+    lang: sources[0].lang || null,
+    format: sources[0].format || null,
+    // Its own fingerprint, from what went into it: importing the volumes
+    // again should not look like a duplicate of the merged book.
+    fingerprint: `merged:${ids.join('+')}`,
+    mergedFrom: sources.map((b) => ({ id: b.id, title: b.title })),
+    coverBlob: sources[0].coverBlob || null,
+    coverBytes: sources[0].coverBytes ?? null,
+    coverCustom: !!sources[0].coverCustom,
+    folder: sources[0].folder || null,
+    addedAt: Date.now(),
+    words: 0,
+    importing: true,
+  };
+  const bookId = await store.add('books', merged);
+
+  let index = 0;
+  let words = 0;
+
+  for (let volume = 0; volume < sources.length; volume++) {
+    const source = sources[volume];
+    onProgress?.(`Joining ${source.title}`, (volume + 1) / sources.length, volume, sources.length);
+
+    /* Every path gains a per-volume prefix.
+     *
+     * Two volumes of the same serial almost always name their pictures the
+     * same way -- OEBPS/images/001.jpg in both -- so without this the second
+     * volume's pictures quietly replace the first's. Prefixing the chapter's
+     * base and the image's href by the same amount keeps them pointing at
+     * each other, since one is resolved against the other.
+     */
+    const prefix = `v${volume}/`;
+
+    const chapters = await store.byIndex('chapters', 'bookId', source.id);
+    chapters.sort((a, b) => a.index - b.index);
+
+    const rows = chapters.map((chapter, at) => ({
+      bookId,
+      index: index++,
+      title: markVolumes && at === 0 && sources.length > 1
+        ? `${source.title} — ${chapter.title}`
+        : chapter.title,
+      volume: source.title,
+      fromToc: chapter.fromToc,
+      words: chapter.words || 0,
+      base: prefix + (chapter.base || ''),
+      // Books imported before chapters kept their source hold finished markup
+      // instead, and its picture references are already resolved.
+      ...(chapter.source != null
+        ? { source: chapter.source }
+        : { html: reKeyImages(chapter.html || '', prefix) }),
+    }));
+    words += rows.reduce((n, r) => n + r.words, 0);
+    await store.putAll('chapters', rows);
+
+    const images = await store.byIndex('images', 'bookId', source.id);
+    await store.putAll('images', images.map((image) => ({
+      ...image,
+      id: undefined,
+      bookId,
+      href: prefix + image.href,
+    })));
+  }
+
+  const finished = await store.get('books', bookId);
+  finished.words = words;
+  finished.chapters = index;
+  delete finished.importing;
+  await store.put('books', finished);
+
+  return finished;
+}
+
+/** Point already-resolved picture references at their prefixed copies. */
+function reKeyImages(html, prefix) {
+  return html.replace(/data-img="([^"]*)"/g, (_, href) => `data-img="${prefix}${href}"`);
+}

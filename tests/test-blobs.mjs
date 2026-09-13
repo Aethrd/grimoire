@@ -245,7 +245,9 @@ await t('a backup carries everything except the books', async () => {
 
   const backup = await store.exportBackup();
   assert.equal(backup.format, 'grimoire-backup');
-  assert.equal(backup.books.length, 2);
+  // Its own two, not every book an earlier test left on the shelf.
+  const mine = backup.books.filter((x) => ['a:1', 'b:2'].includes(x.fingerprint));
+  assert.equal(mine.length, 2);
   assert.ok(!JSON.stringify(backup).includes('secret'), 'chapter text is in the backup');
   // Bundles are ids, which do not survive a re-import; the leader is recorded
   // by fingerprint instead.
@@ -329,6 +331,69 @@ await t('something that is not a backup is refused', async () => {
   await assert.rejects(store.importBackup({ hello: true }), /not a Grimoire backup/);
   await assert.rejects(
     store.importBackup({ format: 'grimoire-backup', version: 99 }), /newer version/);
+});
+
+console.log('joining volumes');
+
+await t('volumes sort the way they are numbered, not the way they spell', async () => {
+  // A serial arrives as volume 1, 2, 10 — and plain text sorting puts 10
+  // second, which is the difference between a readable serial and a shuffled
+  // one.
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const titles = ['Witch City Vol. 10', 'Witch City Vol. 2', 'Witch City Vol. 1'];
+  assert.deepEqual(titles.sort(library.naturalOrder),
+    ['Witch City Vol. 1', 'Witch City Vol. 2', 'Witch City Vol. 10']);
+});
+
+await t('joined volumes keep their own pictures', async () => {
+  /* Two volumes of a serial almost always name their pictures the same way —
+   * OEBPS/images/001.jpg in both — so without a per-volume prefix the second
+   * volume's pictures quietly replace the first's. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+
+  const bytes = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+  await library.importFiles([
+    new File([bytes], 'Serial Vol. 1.epub'),
+    new File([bytes], 'Serial Vol. 2.epub'),
+  ], {});
+
+  const volumes = (await store.all('books'))
+    .filter((b) => /^Serial Vol/.test(b.title || '') || /^Serial Vol/.test(b.fingerprint || ''))
+    .sort((a, b) => library.naturalOrder(a.fingerprint, b.fingerprint));
+  assert.equal(volumes.length, 2, `found ${volumes.length} volumes to join`);
+
+  const made = await library.mergeBooks(volumes.map((b) => b.id), { title: 'Serial' });
+  assert.equal(made.title, 'Serial');
+
+  const chapters = (await store.byIndex('chapters', 'bookId', made.id))
+    .sort((a, b) => a.index - b.index);
+  const images = await store.byIndex('images', 'bookId', made.id);
+
+  // Both volumes' chapters, in order, and every picture reference still
+  // pointing at a picture that exists.
+  // However many chapters a volume has, the join keeps all of both.
+  const perVolume = (await store.byIndex('chapters', 'bookId', volumes[0].id)).length;
+  assert.equal(chapters.length, perVolume * 2);
+  const refs = chapters.flatMap((c) =>
+    [...parse.chapterHtml(c).matchAll(/data-img="([^"]*)"/g)].map((m) => m[1]));
+  assert.ok(refs.length >= 2, 'the pictures went missing');
+  assert.equal(new Set(refs).size, refs.length, 'two volumes share a picture reference');
+  assert.ok(refs.every((r) => images.some((i) => i.href === r)),
+    'a chapter points at a picture that is not there');
+
+  // The volumes are left alone: a join that turns out badly costs a delete
+  // rather than a re-import.
+  assert.ok(await store.get('books', volumes[0].id));
+  assert.ok(await store.get('books', volumes[1].id));
+});
+
+await t('joining needs more than one book', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const lone = await store.add('books', { title: 'Alone', fingerprint: 'alone', addedAt: 1 });
+  await assert.rejects(library.mergeBooks([lone], {}), /two or more/);
 });
 
 console.log(`\n${pass} assertions passed`);
