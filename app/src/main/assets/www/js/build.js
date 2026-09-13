@@ -59,7 +59,11 @@ export async function add(files, onProgress) {
    * are pages: gathered into a single part, in the order they are numbered.
    */
   const pictures = identified.filter((f) => IS_PICTURE.test(f.named)).map((f) => f.file);
-  const rest = identified.filter((f) => !IS_PICTURE.test(f.named));
+  // Loose files are one group, and numbered names within it belong in
+  // numbered order: "Volume 10" after "Volume 2", not before it.
+  const rest = identified
+    .filter((f) => !IS_PICTURE.test(f.named))
+    .sort((a, b) => naturalOrder(a.named, b.named));
 
   if (pictures.length) {
     pictures.sort((a, b) => naturalOrder(a.name, b.name));
@@ -107,7 +111,7 @@ export async function add(files, onProgress) {
           continue;
         }
 
-        for (const book of archive.books) {
+        for (const book of [...archive.books].sort((a, b) => naturalOrder(a.name, b.name))) {
           found.push({ read: book.read, name: book.name, from: file.name, size: book.size });
         }
         continue;
@@ -120,9 +124,14 @@ export async function add(files, onProgress) {
     found.push({ file, name: named });
   }
 
-  // Numbered parts belong in numbered order; anything already here keeps the
-  // place it was put.
-  found.sort((a, b) => naturalOrder(a.name, b.name));
+  /* Sorted within each source, never across them.
+   *
+   * Sorting everything together by name is what made a build read Chapter 1
+   * of book one, Chapter 1 of book two, Chapter 2 of book one -- two volumes
+   * whose chapters are both numbered from one interleave perfectly. Each
+   * archive's contents are ordered among themselves when it is opened, and
+   * the sources stay in the order they were chosen.
+   */
   parts = [...parts, ...found.map((part, at) => ({ ...part, id: `${Date.now()}-${at}` }))];
   return parts;
 }

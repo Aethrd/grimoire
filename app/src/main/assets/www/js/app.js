@@ -246,7 +246,7 @@ function paintSelection() {
   // Actions that only make sense for one book, or for any book at all.
   for (const button of el('select-actions').children) {
     const act = button.dataset.act;
-    const single = act === 'open' || act === 'details';
+    const single = act === 'open' || act === 'details' || act === 'export';
     button.disabled = single ? count !== 1 : count === 0;
   }
 }
@@ -286,6 +286,15 @@ function wireSelection() {
     },
 
     folder: () => openFolderSheet(),
+
+    /* Writing a book out is a thing you do to a book, so it belongs with the
+       other things you do to a book. It was only inside the details sheet,
+       which is a long press and a scroll away -- far enough that it may as
+       well not have been there. */
+    export: async () => {
+      const [book] = await selectedBooks();
+      if (book) await exportBook(book, { share: false });
+    },
 
     details: async () => {
       const [book] = await selectedBooks();

@@ -593,6 +593,66 @@ await t('restoring a backup twice does not double anything', async () => {
   assert.equal((await store.all('marks')).length, marksBefore);
 });
 
+await t('one book finishes before the next begins', async () => {
+  /* Sorting everything added together by name is what made a build read
+   * Chapter 1 of book one, Chapter 1 of book two, Chapter 2 of book one --
+   * two volumes whose chapters are both numbered from one interleave
+   * perfectly. */
+  const JSZip = (await import('jszip')).default;
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+
+  const page = (label) => [
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/related; boundary="----B"',
+    '', '------B', 'Content-Type: text/html', '',
+    `<html><head><title>${label}</title></head><body><article><h1>${label}</h1>`
+    + '<p>Prose long enough to count as the body of a chapter here.</p></article></body></html>',
+    '', '------B--',
+  ].join('\r\n');
+
+  const volume = async (n) => {
+    const zip = new JSZip();
+    for (const chapter of [1, 2, 10]) {
+      zip.file(`Chapter ${chapter}.mht`, page(`Book ${n} Chapter ${chapter}`));
+    }
+    return new File([await zip.generateAsync({ type: 'nodebuffer' })], `Book ${n}.zip`);
+  };
+
+  build.clear();
+  await build.add([await volume(1), await volume(2)]);
+
+  const { book } = await build.build({ title: 'Two Books' });
+  const titles = (await store.byIndex('chapters', 'bookId', book.id))
+    .sort((a, b) => a.index - b.index)
+    .map((c) => c.title);
+
+  // All of book one, then all of book two — and 10 after 2 within each.
+  assert.ok(titles[0].includes('Book 1 Chapter 1'), titles[0]);
+  assert.ok(titles[1].includes('Book 1 Chapter 2'), titles[1]);
+  assert.ok(titles[2].includes('Book 1 Chapter 10'), titles[2]);
+  assert.ok(titles[3].includes('Book 2 Chapter 1'), titles[3]);
+  assert.ok(titles[5].includes('Book 2 Chapter 10'), titles[5]);
+});
+
+await t('loose volumes are numbered, and later additions go after', async () => {
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const epub = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+
+  build.clear();
+  await build.add([
+    new File([epub], 'Volume 10.epub'),
+    new File([epub], 'Volume 2.epub'),
+    new File([epub], 'Volume 1.epub'),
+  ]);
+  assert.deepEqual(build.contents().map((p) => p.name),
+    ['Volume 1.epub', 'Volume 2.epub', 'Volume 10.epub']);
+
+  // A second armful goes after the first, rather than being mixed into it.
+  await build.add([new File([epub], 'Volume 3.epub')]);
+  assert.equal(build.contents()[3].name, 'Volume 3.epub');
+});
+
 await t('a zip of pictures builds as a comic', async () => {
   // Kept under its .zip name it went to the parser as an archive, and the
   // parser refuses those outright: it expects them expanded. So every part

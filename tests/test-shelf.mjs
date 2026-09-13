@@ -72,7 +72,7 @@ t('actions are labelled, not a row of bare glyphs', () => {
   const grid = html.slice(html.indexOf('id="select-actions"'), html.indexOf('id="confirm-bar"'));
   const acts = [...grid.matchAll(/data-act="(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(acts,
-    ['open', 'folder', 'status', 'bundle', 'merge', 'details', 'vault', 'delete']);
+    ['open', 'folder', 'status', 'bundle', 'merge', 'export', 'details', 'vault', 'delete']);
   // Every one carries a text label beside its icon.
   assert.equal((grid.match(/<span>/g) || []).length, acts.length);
   assert.ok(html.includes('id="select-all"') && html.includes('id="select-cancel"'));
@@ -538,6 +538,15 @@ t('the workshop picker does not filter what it can take', () => {
   assert.match(parse, /starts\(0x89, 0x50, 0x4e, 0x47\)\) return `\$\{name\}\.png`/);
 });
 
+t('writing a book out is one of the things you do to a book', () => {
+  // It was only inside the details sheet, which is a long press and a scroll
+  // away -- far enough that it may as well not have been there.
+  assert.ok(html.includes('data-act="export"'), 'no export action');
+  assert.match(app, /export: async \(\) => \{/);
+  // One book at a time, like Open and Details.
+  assert.match(app, /act === 'open' \|\| act === 'details' \|\| act === 'export'/);
+});
+
 t('the build button is not under the tab bar', () => {
   // Every other screen with a footer is reached from inside a book, where the
   // bar is hidden. On a screen that is itself a tab the button was drawn
@@ -555,8 +564,10 @@ t('the workshop shows the order and lets it be changed', () => {
   assert.match(build, /export const naturalOrder/);
   assert.match(app, /function renderWorkshop/);
   assert.match(app, /build\.move\(part\.id, by\)/);
-  // A zip of volumes becomes its contents, not one part joined to itself.
-  assert.match(build, /for \(const book of archive\.books\)/);
+  // A zip of volumes becomes its contents, not one part joined to itself —
+  // ordered among themselves, so two books cannot interleave.
+  assert.match(build, /for \(const book of \[\.\.\.archive\.books\]\.sort/);
+  assert.ok(!/found\.sort\(/.test(build), 'everything added is sorted together again');
   // A part that will not open costs that part, not the build.
   assert.match(build, /failed\.push\(\{ name: part\.name, reason: error\.message \}\)/);
 });
