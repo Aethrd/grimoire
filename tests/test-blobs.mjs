@@ -593,6 +593,44 @@ await t('restoring a backup twice does not double anything', async () => {
   assert.equal((await store.all('marks')).length, marksBefore);
 });
 
+await t('a zip of pictures builds as a comic', async () => {
+  // Kept under its .zip name it went to the parser as an archive, and the
+  // parser refuses those outright: it expects them expanded. So every part
+  // failed and the build had nothing to show for itself.
+  const JSZip = (await import('jszip')).default;
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001', 'hex');
+  const chapter = async (n) => {
+    const zip = new JSZip();
+    for (const page of [1, 2, 10]) zip.file(`${String(page).padStart(3, '0')}.png`, png);
+    return new File([await zip.generateAsync({ type: 'nodebuffer' })], `Chapter ${n}.zip`);
+  };
+
+  build.clear();
+  await build.add([await chapter(1), await chapter(2)]);
+  // Named for what the expander decided it is, not for what it arrived as.
+  assert.deepEqual(build.contents().map((p) => p.name), ['Chapter 1.cbz', 'Chapter 2.cbz']);
+
+  const { book, failed } = await build.build({ title: 'Manga' });
+  assert.equal(failed.length, 0);
+  assert.ok(book.chapters >= 2);
+  assert.ok((await store.byIndex('images', 'bookId', book.id)).length >= 6);
+});
+
+await t('a build that fails says which part and why', async () => {
+  // "None of those parts could be read" is true and useless: every part had a
+  // reason, and throwing them away left nothing to act on.
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  build.clear();
+  await build.add([
+    new File(['not a book'], 'a.docx'),
+    new File(['also not'], 'b.docx'),
+  ]);
+  await assert.rejects(build.build({}), /a\.docx: DOCX/);
+});
+
 await t('building needs more than one part', async () => {
   const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
   build.clear();

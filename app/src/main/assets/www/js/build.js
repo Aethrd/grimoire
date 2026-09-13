@@ -78,7 +78,14 @@ export async function add(files, onProgress) {
         const archive = await expandArchive(file, (fraction, name) =>
           onProgress?.(`Opening ${name}`, fraction));
         if (archive.comic) {
-          found.push({ file, name: named, from: null });
+          /* A zip of pictures is a comic, and has to say so.
+           *
+           * Kept under its .zip name it went to the parser as an archive, and
+           * the parser refuses those outright -- it expects them expanded.
+           * Naming it for what the expander just decided it is routes it to
+           * the comic reader instead. */
+          const asComic = named.replace(/\.zip$/i, '.cbz');
+          found.push({ file: new File([file], asComic), name: asComic, from: null });
           continue;
         }
 
@@ -241,7 +248,14 @@ export async function build({ title, onProgress } = {}) {
 
   if (!index) {
     await store.deleteBook(bookId);
-    throw new Error('None of those parts could be read.');
+    /* With the reason, not without it.
+     *
+     * "None of those parts could be read" is true and useless: every part had
+     * a reason, and throwing them away left nothing to act on. */
+    const why = failed[0]?.reason;
+    throw new Error(why
+      ? `None of those parts could be read — ${failed[0].name}: ${why}`
+      : 'None of those parts could be read.');
   }
 
   const finished = await store.get('books', bookId);
