@@ -7,6 +7,8 @@ import * as library from './library.js';
 import * as screens from './screens.js';
 import * as panels from './panels.js';
 import { nameWithFormat } from './parse.js';
+import * as build from './build.js';
+import * as epub from './epub.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
 
@@ -70,6 +72,7 @@ async function enter(name) {
   switch (name) {
     case 'library': return refreshShelf();
     case 'sort': return screens.openSort();
+    case 'workshop': return renderWorkshop();
     case 'find': return screens.initFind(goToMatch, cameFrom === 'reader');
     case 'toc': return screens.openToc(goToChapter);
     case 'reel': return reader.state.book
@@ -291,7 +294,21 @@ function wireSelection() {
 
     status: () => openStatusSheet(),
 
-    merge: () => openMergeSheet(),
+    /* Only the undo lives here now.
+     *
+     * Joining books already on the shelf was the wrong shape for the job: the
+     * parts of a serial are files, and importing thirty volumes in order to
+     * join them and then delete thirty leftovers is a great deal of work to
+     * arrive where you meant to start. Building happens in the workshop, from
+     * the files themselves. Taking a built book apart still belongs here,
+     * beside the book it applies to. */
+    merge: async () => {
+      const books = await selectedBooks();
+      if (books.length === 1 && (library.wasJoined(books[0]) || books[0].builtFrom)) {
+        return splitSelected(books[0]);
+      }
+      return toast('Books are built from files in the Build tab. This takes a built book apart.', 7000);
+    },
 
     /* Bundling is one action that reads both ways: several books become a
        bundle, and a bundle already selected comes apart. Two buttons for
@@ -405,6 +422,22 @@ async function openDetails(book) {
         <button class="btn ghost" id="details-cover-clear">Remove cover</button>
       </span>
     </div>`;
+
+  const exports = document.createElement('div');
+  exports.className = 'field';
+  exports.innerHTML = '<label><span>Write out</span></label>';
+  const row = document.createElement('div');
+  row.className = 'chip-row';
+  for (const [label, share] of [['Save as EPUB', false], ['Send a copy', true]]) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.style.textTransform = 'none';
+    chip.textContent = label;
+    chip.onclick = () => exportBook(book, { share });
+    row.appendChild(chip);
+  }
+  exports.appendChild(row);
+  body.appendChild(exports);
 
   const statusField = document.createElement('div');
   statusField.className = 'field';
@@ -577,6 +610,54 @@ function openBundleSheet(members) {
  * before volume 10 — which plain text sorting gets backwards, and which is
  * the whole difference between a readable serial and a shuffled one.
  */
+/** Take a joined book apart, and say what that actually did. */
+async function splitSelected(book) {
+  try {
+    const { restored, kept } = await library.splitBook(book.id);
+    clearSelection();
+    await refreshShelf();
+    // The two cases are different enough to be worth distinguishing: usually
+    // the volumes were never gone, so nothing is rebuilt.
+    toast(restored.length
+      ? `Split back into ${restored.length + kept} volumes — ${restored.length} rebuilt`
+      : `“${book.title}” removed; its ${kept} volumes were still on the shelf`, 7000);
+  } catch (error) {
+    toast(error.message || 'That book could not be split', 6000);
+  }
+}
+
+/**
+ * Write a book out as an EPUB.
+ *
+ * Saving goes to a folder the person picks; sending hands it to whatever app
+ * will take it. Both are wanted, and only the second existed -- a backup
+ * belongs somewhere findable, not in a chat thread.
+ */
+async function exportBook(book, { share = false } = {}) {
+  const panel = el('import-progress');
+  el('import-label').textContent = `Writing ${book.title}`;
+  el('import-count').textContent = '';
+  panel.hidden = false;
+  try {
+    const { blob, name } = await epub.buildEpub(book.id, {
+      onProgress: (fraction) => {
+        el('import-bar').style.width = `${Math.round(fraction * 90)}%`;
+      },
+    });
+    await writeOut(blob, name, 'application/epub+zip', {
+      share,
+      onProgress: (fraction) => {
+        el('import-bar').style.width = `${90 + Math.round(fraction * 10)}%`;
+      },
+    });
+    if (share) toast(`${name} ready to send`, 5000);
+  } catch (error) {
+    toast(error.message || 'That book could not be written out', 6000);
+  } finally {
+    panel.hidden = true;
+  }
+}
+
 async function openMergeSheet() {
   const books = await selectedBooks();
   if (books.length < 2) return toast('Pick two or more books to join');
@@ -1265,6 +1346,114 @@ function moveGuides(clientY) {
   if (block) block.classList.add('in-focus');
 }
 
+/* ── the workshop ─────────────────────────────────────────────────────────
+ *
+ * Several files in, one book out. The order is the whole point of a serial,
+ * so it is shown and movable rather than inferred and hoped for.
+ */
+
+function renderWorkshop() {
+  const list = el('build-list');
+  const parts = build.contents();
+
+  el('build-empty').hidden = parts.length > 0;
+  el('build-foot').hidden = parts.length === 0;
+  el('build-count').textContent = parts.length
+    ? `${parts.length} part${parts.length === 1 ? '' : 's'}` : '';
+  el('build-eyebrow').textContent = parts.length
+    ? build.commonName(parts.map((p) => p.name)) || 'Join files into one'
+    : 'Join files into one';
+
+  list.innerHTML = '';
+  parts.forEach((part, at) => {
+    const row = document.createElement('div');
+    row.className = 'build-row';
+    row.innerHTML = `<span class="build-num">${at + 1}</span>`
+      + `<span class="build-what"><b>${escapeText(part.name)}</b>`
+      + `<small>${escapeText(build.describe(part))}</small></span>`;
+
+    const moves = document.createElement('div');
+    moves.className = 'build-move';
+    for (const [by, label, path] of [
+      [-1, 'Move up', 'M12 19V5M5 12l7-7 7 7'],
+      [1, 'Move down', 'M12 5v14M5 12l7 7 7-7'],
+    ]) {
+      const button = document.createElement('button');
+      button.className = 'icon-btn';
+      button.title = label;
+      button.innerHTML = `<svg viewBox="0 0 24 24"><path d="${path}"/></svg>`;
+      button.disabled = by < 0 ? at === 0 : at === parts.length - 1;
+      button.onclick = () => { build.move(part.id, by); renderWorkshop(); };
+      moves.appendChild(button);
+    }
+    const remove = document.createElement('button');
+    remove.className = 'icon-btn';
+    remove.title = 'Remove';
+    remove.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    remove.onclick = () => { build.drop(part.id); renderWorkshop(); };
+    moves.appendChild(remove);
+
+    row.appendChild(moves);
+    list.appendChild(row);
+  });
+}
+
+function wireWorkshop() {
+  el('build-add').onclick = () => {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.multiple = true;
+    picker.accept = '.epub,.cbz,.zip,.pdf,.txt,.md,.html,.htm,.fb2';
+    picker.onchange = async () => {
+      const files = [...(picker.files || [])];
+      if (!files.length) return;
+
+      const panel = el('import-progress');
+      panel.hidden = false;
+      try {
+        await build.add(files, (message, fraction) => {
+          el('import-label').textContent = message;
+          el('import-bar').style.width = `${Math.round((fraction || 0) * 100)}%`;
+        });
+      } finally {
+        panel.hidden = true;
+      }
+      renderWorkshop();
+    };
+    picker.click();
+  };
+
+  el('build-clear').onclick = () => { build.clear(); renderWorkshop(); };
+
+  el('build-go').onclick = async () => {
+    const panel = el('import-progress');
+    panel.hidden = false;
+    try {
+      const { book, failed } = await build.build({
+        title: el('build-eyebrow').textContent,
+        onProgress: (message, fraction, done, total) => {
+          el('import-label').textContent = message;
+          el('import-bar').style.width = `${Math.round(fraction * 100)}%`;
+          el('import-count').textContent = total ? `${done + 1} of ${total}` : '';
+        },
+      });
+      build.clear();
+      renderWorkshop();
+      await refreshShelf();
+      // Said with the parts that failed, not instead of them: a book short
+      // three volumes should not look like a complete one.
+      toast(failed.length
+        ? `Built “${book.title}” — ${book.chapters} chapters · ${failed.length} part${failed.length === 1 ? '' : 's'} skipped: ${failed[0].reason}`
+        : `Built “${book.title}” — ${book.chapters} chapters`, 8000);
+      await show('library');
+    } catch (error) {
+      toast(error.message || 'That could not be built', 6000);
+    } finally {
+      panel.hidden = true;
+    }
+  };
+}
+
 function wireReader() {
   reader.init({ onChange: paintReader });
 
@@ -1441,7 +1630,7 @@ function wireReader() {
 /* The three tab screens sit in a row you can swipe between, in the order the
  * bar shows them. The reader is deliberately not in this set: a horizontal
  * swipe there already means turn the page. */
-const TABS = ['library', 'folders', 'sort', 'stats', 'settings'];
+const TABS = ['library', 'folders', 'workshop', 'sort', 'stats', 'settings'];
 
 function wireSwipeBetweenTabs() {
   let startX = 0, startY = 0, startAt = 0, tracking = false;
@@ -1543,7 +1732,62 @@ function wireChrome() {
  * give a proper reason if it turns out to be something else. Only those bytes
  * are read, not the file.
  */
+/* ── writing files out ────────────────────────────────────────────────────
+ *
+ * A file is sent to the native side a few megabytes at a time.
+ *
+ * Handing it over in one piece means holding the whole thing three times over
+ * -- the bytes, the base64, and what Java decodes back out -- which is what
+ * killed the app when files came the other way. A book can be hundreds of
+ * megabytes, so it goes in pieces.
+ */
+
+const EXPORT_CHUNK = 3 * 1024 * 1024;
+
+async function writeOut(blob, name, mimeType, { share = false, onProgress } = {}) {
+  const bridge = window.GrimoireNative;
+  if (!bridge?.beginExport) {
+    // In an ordinary browser there is no native side; fall back to the
+    // download the browser already knows how to do.
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = name;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    return true;
+  }
+
+  const handle = bridge.beginExport(name);
+  if (!handle) throw new Error('There was nowhere to write the file');
+
+  for (let at = 0; at < blob.size; at += EXPORT_CHUNK) {
+    const piece = blob.slice(at, Math.min(at + EXPORT_CHUNK, blob.size));
+    const bytes = new Uint8Array(await piece.arrayBuffer());
+
+    // Built in pieces too: String.fromCharCode on a whole chunk at once
+    // overflows the argument list.
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 8192) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    }
+    if (!bridge.appendExport(handle, btoa(binary))) {
+      throw new Error('The file could not be written');
+    }
+    onProgress?.(Math.min(1, (at + EXPORT_CHUNK) / blob.size));
+    // Yields, so the progress bar paints and the app answers taps.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  bridge.finishExport(handle, mimeType, share);
+  return true;
+}
+
 window.Grimoire = {
+  /** Called from Java once a file has been written where it was asked for. */
+  exportSaved(name) { toast(`Saved ${name}`, 5000); },
+  exportFailed(reason) { toast(reason || 'That file could not be saved', 6000); },
+
 
   /** Called from Java to settle an async bridge call. Not a reader API. */
   settle: translate.settle,
@@ -1641,6 +1885,7 @@ async function boot() {
   wireSelection();
   wireAnnotations();
   wireDesk();
+  wireWorkshop();
   refreshGuides();
 
   /* If the app died last time, say so.
@@ -1659,6 +1904,7 @@ async function boot() {
   window.GrimoireNative?.ready?.();
   panels.onSettingsChange(() => panels.openSettings(refreshShelf));
   panels.onGuides(refreshGuides);
+  panels.onWrite((blob, name, type, opts) => writeOut(blob, name, type, opts));
 
 
   await refreshShelf();

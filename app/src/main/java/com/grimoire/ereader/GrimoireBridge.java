@@ -166,6 +166,70 @@ public class GrimoireBridge {
         return null;
     }
 
+    /* ── writing files out ───────────────────────────────────────────────
+     *
+     * A file is staged in pieces and then handed to the system.
+     *
+     * Sending it across in one go means holding the whole thing three times
+     * over -- the bytes, the base64 built from them, and what Java decodes
+     * back out of it -- which is what killed the app when files came the other
+     * way. So the reader sends a few megabytes at a time and this appends
+     * them to a file on disk, which costs a buffer however large the book is.
+     */
+
+    /** Start a file. Returns the name to send the pieces under. */
+    @JavascriptInterface
+    public String beginExport(String name) {
+        try {
+            File dir = new File(activity.getCacheDir(), "exports");
+            if (!dir.exists() && !dir.mkdirs()) return null;
+            String safe = new File(name == null ? "export" : name).getName();
+            File file = new File(dir, safe);
+            //noinspection ResultOfMethodCallIgnored
+            file.delete();
+            return safe;
+        } catch (Throwable e) {
+            Log.w(TAG, "Could not start an export", e);
+            return null;
+        }
+    }
+
+    /** Add a piece. Returns false if it could not be written. */
+    @JavascriptInterface
+    public boolean appendExport(String handle, String base64) {
+        try {
+            File file = new File(new File(activity.getCacheDir(), "exports"),
+                    new File(handle).getName());
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(file, true)) {
+                out.write(Base64.decode(base64, Base64.DEFAULT));
+            }
+            return true;
+        } catch (Throwable e) {
+            Log.w(TAG, "Could not add to " + handle, e);
+            return false;
+        }
+    }
+
+    /**
+     * Finish, and ask where to put it.
+     *
+     * Saving somewhere of the person's choosing, not only handing the file to
+     * whatever app will take it: a backup belongs in a folder they can find
+     * again, not in a chat thread.
+     */
+    @JavascriptInterface
+    public void finishExport(String handle, String mimeType, boolean share) {
+        final File file = new File(new File(activity.getCacheDir(), "exports"),
+                new File(handle).getName());
+        if (!file.exists()) {
+            Log.w(TAG, "Nothing staged for " + handle);
+            return;
+        }
+        if (activity instanceof MainActivity) {
+            ((MainActivity) activity).offerExport(file, mimeType, share);
+        }
+    }
+
     /**
      * Throw away the staged copy of a file handed over from elsewhere.
      *

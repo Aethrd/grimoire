@@ -389,11 +389,212 @@ await t('joined volumes keep their own pictures', async () => {
   assert.ok(await store.get('books', volumes[1].id));
 });
 
+await t('a joined book can be taken apart again', async () => {
+  // Usually the volumes are still on the shelf, because joining copies rather
+  // than consumes -- then splitting is removing the joined copy, and
+  // recreating them would leave two of everything.
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+
+  const bytes = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+  await library.importFiles([
+    new File([bytes], 'Split Vol. 1.epub'),
+    new File([bytes], 'Split Vol. 2.epub'),
+  ], {});
+  const volumes = (await store.all('books'))
+    .filter((b) => /^Split Vol/.test(b.fingerprint || ''))
+    .sort((a, b) => library.naturalOrder(a.fingerprint, b.fingerprint));
+
+  const joined = await library.mergeBooks(volumes.map((b) => b.id), { title: 'Split Serial' });
+  assert.ok(library.wasJoined(joined));
+
+  const out = await library.splitBook(joined.id);
+  assert.equal(out.kept, 2);
+  assert.equal(out.restored.length, 0, 'it rebuilt volumes that were never gone');
+  assert.equal(await store.get('books', joined.id), undefined);
+  assert.ok(await store.get('books', volumes[0].id));
+});
+
+await t('a joined book rebuilds volumes that were deleted', async () => {
+  // Every chapter still carries the volume it came from and the per-volume
+  // prefix on its paths, which is exactly what is needed to undo the join.
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+
+  const bytes = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+  await library.importFiles([
+    new File([bytes], 'Gone Vol. 1.epub'),
+    new File([bytes], 'Gone Vol. 2.epub'),
+  ], {});
+  const volumes = (await store.all('books'))
+    .filter((b) => /^Gone Vol/.test(b.fingerprint || ''))
+    .sort((a, b) => library.naturalOrder(a.fingerprint, b.fingerprint));
+
+  const joined = await library.mergeBooks(volumes.map((b) => b.id), { title: 'Gone Serial' });
+  for (const v of volumes) await store.deleteBook(v.id);
+
+  const out = await library.splitBook(joined.id);
+  assert.equal(out.restored.length, 2);
+
+  const rebuilt = (await store.all('books')).filter((b) => /^Gone Vol/.test(b.fingerprint || ''));
+  assert.equal(rebuilt.length, 2);
+
+  for (const book of rebuilt) {
+    const chapters = (await store.byIndex('chapters', 'bookId', book.id))
+      .sort((a, b) => a.index - b.index);
+    const images = await store.byIndex('images', 'bookId', book.id);
+    assert.ok(chapters.length > 0);
+    // Numbered from the beginning again, and the joined book's volume marker
+    // is gone from the first chapter's name.
+    assert.equal(chapters[0].index, 0);
+    assert.ok(!chapters[0].title.includes(' — '));
+    // And the paths no longer carry the per-volume prefix.
+    assert.ok(!(chapters[0].base || '').startsWith('v'), chapters[0].base);
+    const refs = chapters.flatMap((c) =>
+      [...parse.chapterHtml(c).matchAll(/data-img="([^"]*)"/g)].map((m) => m[1]));
+    assert.ok(refs.every((r) => images.some((i) => i.href === r)),
+      'a rebuilt chapter points at a picture that is not there');
+  }
+});
+
 await t('joining needs more than one book', async () => {
   const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
   const lone = await store.add('books', { title: 'Alone', fingerprint: 'alone', addedAt: 1 });
   await assert.rejects(library.mergeBooks([lone], {}), /two or more/);
+});
+
+console.log('the workshop');
+
+await t('a mix of files becomes one book, in the order shown', async () => {
+  const JSZip = (await import('jszip')).default;
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+
+  const epub = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+  const cbz = fs.readFileSync(new URL('./fixtures/comic.cbz', import.meta.url));
+
+  // A zip of volumes is how a serial usually arrives; its contents become
+  // parts rather than one part joined to itself.
+  const bundle = new JSZip();
+  bundle.file('Serial Vol. 2.epub', epub);
+  bundle.file('Serial Vol. 10.epub', epub);
+
+  build.clear();
+  await build.add([
+    new File([await bundle.generateAsync({ type: 'nodebuffer' })], 'volumes.zip'),
+    new File([epub], 'Serial Vol. 1.epub'),
+    new File([cbz], 'Serial colour pages.cbz'),
+  ]);
+
+  // Numbered parts in numbered order: 1, 2, 10 — not 1, 10, 2.
+  const names = build.contents().map((p) => p.name);
+  assert.equal(names.length, 4);
+  assert.deepEqual(
+    names.filter((n) => n.endsWith('.epub')),
+    ['Serial Vol. 1.epub', 'Serial Vol. 2.epub', 'Serial Vol. 10.epub']);
+  assert.equal(build.commonName(names), 'Serial');
+
+  const { book, failed } = await build.build({});
+  assert.equal(failed.length, 0);
+  assert.ok(book.chapters >= 7);
+
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id))
+    .sort((a, b) => a.index - b.index);
+  const images = await store.byIndex('images', 'bookId', book.id);
+
+  // Each part's name above its first chapter, so the seams are findable in a
+  // book that is now very long.
+  assert.equal(chapters.filter((c) => c.title.includes(' — ')).length, 4);
+
+  /* Parts of a serial name their pictures identically, so without a
+     per-part prefix the later ones quietly replace the earlier. A comic's
+     chapters arrive as finished markup with references already resolved, and
+     those need the prefix applying too. */
+  const refs = chapters.flatMap((c) =>
+    [...parse.chapterHtml(c).matchAll(/data-img="([^"]*)"/g)].map((m) => m[1]));
+  assert.ok(refs.length > 0);
+  assert.equal(new Set(refs).size, refs.length, 'two parts share a picture reference');
+  assert.ok(refs.every((r) => images.some((i) => i.href === r)),
+    'a chapter points at a picture that is not there');
+});
+
+await t('building needs more than one part', async () => {
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  build.clear();
+  await assert.rejects(build.build({}), /two or more/);
+});
+
+console.log('writing files out');
+
+await t('a book can be written back out as a real EPUB', async () => {
+  // A book built here exists only inside this app, which is fine until you
+  // want it somewhere else.
+  const JSZip = (await import('jszip')).default;
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const epub = await import(new URL('../app/src/main/assets/www/js/epub.js', import.meta.url).href);
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+
+  await library.importFiles([new File(
+    [fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url))],
+    'Written Out.epub')], {});
+  const book = (await store.all('books')).find((b) => b.fingerprint?.startsWith('Written Out'));
+
+  const { blob, name } = await epub.buildEpub(book.id);
+  assert.match(name, /\.epub$/);
+
+  const bytes = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(Buffer.from(reader.result));
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(blob);
+  });
+
+  const archive = await JSZip.loadAsync(bytes);
+  // The mimetype entry has to come first and be stored uncompressed: it is a
+  // rule about the archive rather than its contents, and a reader that checks
+  // will reject the file without it.
+  assert.equal(Object.keys(archive.files)[0], 'mimetype');
+  assert.equal(await archive.file('mimetype').async('string'), 'application/epub+zip');
+  assert.ok(archive.file('META-INF/container.xml'));
+  assert.ok(archive.file('OEBPS/nav.xhtml'));
+
+  // And it reads back: the strongest check available here is our own
+  // importer, which is the same one that reads everything else.
+  const again = await parse.parse(new File([bytes], name));
+  assert.equal(again.title, book.title);
+  assert.equal(again.chapters.length, 2);
+  assert.match(parse.chapterHtml(again.chapters[0]), /harbour kept its own accounts/);
+});
+
+await t('a picture that cannot be written costs its place, not the book', () => {
+  // A record whose data did not survive, or a blob the archive will not take.
+  const source = read('app/src/main/assets/www/js/epub.js');
+  assert.match(source, /typeof image\.blob\?\.size !== 'number'/);
+  // Leaving it unnamed is also what drops its reference from the markup, so
+  // nothing points at a picture the file does not contain.
+  assert.match(source, /if \(!target\) return ''/);
+});
+
+await t('files leave in pieces, not in one', () => {
+  // Handing a file over whole means holding it three times at the peak, which
+  // is what killed the app when files came the other way.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /const EXPORT_CHUNK/);
+  assert.match(app, /bridge\.appendExport\(handle, btoa\(binary\)\)/);
+  const bridge = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
+  assert.match(bridge, /public boolean appendExport/);
+  // Saving somewhere chosen, not only handing it to whatever app will take
+  // it: a backup belongs in a folder that can be found again.
+  const main = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(main, /ACTION_CREATE_DOCUMENT/);
+  assert.match(main, /void offerExport/);
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /Save a backup/);
+  assert.match(panels, /Send a copy/);
 });
 
 console.log(`\n${pass} assertions passed`);

@@ -287,6 +287,28 @@
   </section>
 
   <!-- SCR-11 Stats and streaks -->
+  <!-- The workshop: several files in, one book out. -->
+  <section class="screen" data-screen="workshop">
+    <header class="app-head">
+      <div class="app-head-title"><h1>Build a book</h1><p class="eyebrow" id="build-eyebrow">Join files into one</p></div>
+      <button class="btn primary" id="build-add">Add files</button>
+    </header>
+
+    <div class="scroll pad" id="build-body">
+      <p class="muted" id="build-empty" style="line-height:1.6">
+        Add the parts of a serial — volumes, chapters, image archives — and
+        they become one book, in order. Zips, comics, EPUBs and PDFs all mix.
+      </p>
+      <div id="build-list"></div>
+    </div>
+
+    <footer class="stepper" id="build-foot" hidden>
+      <button class="btn ghost" id="build-clear">Clear</button>
+      <span class="muted" id="build-count"></span>
+      <button class="btn primary" id="build-go">Build</button>
+    </footer>
+  </section>
+
   <section class="screen" data-screen="stats">
     <header class="app-head">
       <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
@@ -314,6 +336,7 @@
   <button data-go="library"><svg viewBox="0 0 24 24"><path d="M4 5h6v14H4zM14 5h6v14h-6z"/></svg><span>Shelf</span></button>
   <button data-go="folders"><svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z"/><path d="M3 7V5h6"/></svg><span>Folders</span></button>
   <button data-go="sort"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6"/></svg><span>Groups</span></button>
+  <button data-go="workshop"><svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"/><path d="M8 13h8M12 9v8"/></svg><span>Build</span></button>
   <button data-go="stats"><svg viewBox="0 0 24 24"><path d="M4 19V10M10 19V5M16 19v-6M2 19h20"/></svg><span>Stats</span></button>
   <button data-go="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
 </nav>
@@ -339,7 +362,7 @@
   </button>
   <button data-act="merge">
     <svg viewBox="0 0 24 24"><path d="M7 4v6a4 4 0 004 4h6"/><path d="M17 4v6a4 4 0 01-4 4H7"/><path d="M15 11l2 3 2-3"/></svg>
-    <span>Join</span>
+    <span>Split</span>
   </button>
   <button data-act="details">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>

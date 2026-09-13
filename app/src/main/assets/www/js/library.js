@@ -825,7 +825,9 @@ export async function mergeBooks(ids, { title, markVolumes = true, onProgress } 
     // Its own fingerprint, from what went into it: importing the volumes
     // again should not look like a duplicate of the merged book.
     fingerprint: `merged:${ids.join('+')}`,
-    mergedFrom: sources.map((b) => ({ id: b.id, title: b.title })),
+    // Fingerprints as well as ids, so splitting can tell whether a volume is
+    // still on the shelf after the ids have changed underneath it.
+    mergedFrom: sources.map((b) => ({ id: b.id, title: b.title, fingerprint: b.fingerprint })),
     coverBlob: sources[0].coverBlob || null,
     coverBytes: sources[0].coverBytes ?? null,
     coverCustom: !!sources[0].coverCustom,
@@ -896,4 +898,84 @@ export async function mergeBooks(ids, { title, markVolumes = true, onProgress } 
 /** Point already-resolved picture references at their prefixed copies. */
 function reKeyImages(html, prefix) {
   return html.replace(/data-img="([^"]*)"/g, (_, href) => `data-img="${prefix}${href}"`);
+}
+
+
+/** Whether a book was made by joining others, and so can be taken apart. */
+export const wasJoined = (book) =>
+  (Array.isArray(book?.mergedFrom) && book.mergedFrom.length > 1)
+  || (Array.isArray(book?.builtFrom) && book.builtFrom.length > 1);
+
+/**
+ * Take a joined book apart again.
+ *
+ * Two cases, and the difference matters. Usually the volumes are still on the
+ * shelf, because joining copies rather than consumes -- then splitting is
+ * simply removing the joined copy, and recreating them would leave two of
+ * everything. Where they have since been deleted, they are rebuilt out of the
+ * joined book: every chapter still carries the volume it came from and the
+ * per-volume prefix on its paths, which is exactly what is needed to undo it.
+ */
+export async function splitBook(bookId) {
+  const book = await store.get('books', bookId);
+  if (!wasJoined(book)) throw new Error('That book was not made by joining others.');
+
+  const shelf = await store.all('books');
+  const present = new Set(shelf.map((b) => b.fingerprint));
+  const missing = book.mergedFrom.filter((v) => !v.fingerprint || !present.has(v.fingerprint));
+
+  const chapters = (await store.byIndex('chapters', 'bookId', bookId))
+    .sort((a, b) => a.index - b.index);
+  const images = await store.byIndex('images', 'bookId', bookId);
+
+  const restored = [];
+  for (let volume = 0; volume < book.mergedFrom.length; volume++) {
+    const source = book.mergedFrom[volume];
+    const stillThere = source.fingerprint && present.has(source.fingerprint);
+    if (stillThere) continue;
+
+    const prefix = `v${volume}/`;
+    const mine = chapters.filter((c) => (c.base || '').startsWith(prefix));
+    if (!mine.length) continue;
+
+    const rebuilt = await store.add('books', {
+      title: source.title,
+      author: book.author || null,
+      lang: book.lang || null,
+      format: book.format || null,
+      fingerprint: source.fingerprint || `split:${bookId}:${volume}`,
+      folder: book.folder || null,
+      addedAt: Date.now(),
+      words: mine.reduce((n, c) => n + (c.words || 0), 0),
+    });
+
+    await store.putAll('chapters', mine.map((chapter, at) => ({
+      bookId: rebuilt,
+      index: at,
+      // The volume marker put on the first chapter when joining belongs to
+      // the joined book, not to the volume standing on its own again.
+      title: at === 0 ? (chapter.title.split(' — ').pop() || chapter.title) : chapter.title,
+      fromToc: chapter.fromToc,
+      words: chapter.words || 0,
+      base: (chapter.base || '').slice(prefix.length),
+      ...(chapter.source != null
+        ? { source: chapter.source }
+        : { html: unKeyImages(chapter.html || '', prefix) }),
+    })));
+
+    await store.putAll('images', images
+      .filter((image) => image.href.startsWith(prefix))
+      .map((image) => ({ ...image, id: undefined, bookId: rebuilt, href: image.href.slice(prefix.length) })));
+
+    restored.push(source.title);
+  }
+
+  await store.deleteBook(bookId);
+  return { restored, kept: book.mergedFrom.length - missing.length };
+}
+
+/** Undo the per-volume prefix on already-resolved picture references. */
+function unKeyImages(html, prefix) {
+  return html.replace(/data-img="([^"]*)"/g, (whole, href) =>
+    (href.startsWith(prefix) ? `data-img="${href.slice(prefix.length)}"` : whole));
 }

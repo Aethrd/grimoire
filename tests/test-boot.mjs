@@ -76,7 +76,7 @@ await t('navigating never leaves two screens on top of each other', async () => 
   const active = () => [...screens.querySelectorAll('[data-screen]')]
     .filter((s) => s.hasAttribute('data-active')).map((s) => s.dataset.screen);
 
-  for (const name of ['folders', 'sort', 'stats', 'settings', 'library', 'folders']) {
+  for (const name of ['folders', 'workshop', 'sort', 'stats', 'settings', 'library', 'folders']) {
     const button = [...document.getElementById('tabbar').children]
       .find((b) => b.dataset.go === name);
     button.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));

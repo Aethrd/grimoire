@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
+import java.io.File;
 import java.io.InputStream;
 
 import org.json.JSONObject;
@@ -262,6 +263,80 @@ public class MainActivity extends AppCompatActivity {
                         "window.dispatchEvent(new CustomEvent('grimoire:insets'));})();",
                 i.top / d, i.right / d, i.bottom / d, i.left / d);
         webView.evaluateJavascript(js, null);
+    }
+
+    /* ── writing files out ────────────────────────────────────────────────
+     *
+     * Either to a place the person picks, or to whatever app will take it.
+     * The first is what "export" usually means and what was missing: a backup
+     * belongs somewhere findable, not only in a share sheet.
+     */
+
+    private static final int PICK_EXPORT_TARGET = 4301;
+    private File staged;
+    private String stagedType;
+
+    void offerExport(File file, String mimeType, boolean share) {
+        runOnUiThread(() -> {
+            if (share) {
+                try {
+                    Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                            this, getPackageName() + ".files", file);
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType(mimeType);
+                    send.putExtra(Intent.EXTRA_STREAM, uri);
+                    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(send, "Send " + file.getName()));
+                } catch (Exception e) {
+                    Log.w(TAG, "Could not share " + file.getName(), e);
+                }
+                return;
+            }
+
+            staged = file;
+            stagedType = mimeType;
+            Intent create = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            create.addCategory(Intent.CATEGORY_OPENABLE);
+            create.setType(mimeType);
+            create.putExtra(Intent.EXTRA_TITLE, file.getName());
+            try {
+                startActivityForResult(create, PICK_EXPORT_TARGET);
+            } catch (Exception e) {
+                Log.w(TAG, "No document picker available", e);
+                tellReader("window.Grimoire.exportFailed("
+                        + JSONObject.quote("This phone has no file picker to save with") + ")");
+            }
+        });
+    }
+
+    @Override
+    protected void onActivityResult(int request, int result, @Nullable Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != PICK_EXPORT_TARGET) return;
+
+        final Uri target = result == RESULT_OK && data != null ? data.getData() : null;
+        final File source = staged;
+        staged = null;
+        if (target == null || source == null) return;
+
+        staging.execute(() -> {
+            try (InputStream in = new java.io.FileInputStream(source);
+                 java.io.OutputStream out = getContentResolver().openOutputStream(target)) {
+                if (out == null) throw new java.io.IOException("nowhere to write");
+                byte[] buffer = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
+                tellReader("window.Grimoire.exportSaved("
+                        + JSONObject.quote(source.getName()) + ")");
+            } catch (Throwable e) {
+                Log.w(TAG, "Could not write " + source.getName(), e);
+                tellReader("window.Grimoire.exportFailed("
+                        + JSONObject.quote("That file could not be saved") + ")");
+            } finally {
+                //noinspection ResultOfMethodCallIgnored
+                source.delete();
+            }
+        });
     }
 
     /** Where a file handed over from elsewhere is staged before it is read. */

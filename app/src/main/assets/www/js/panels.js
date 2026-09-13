@@ -1036,15 +1036,38 @@ export async function openVault(onVaultChange, host) {
     body.appendChild(crash);
   }
 
-  const backupBtn = document.createElement('button');
-  backupBtn.className = 'btn primary block';
-  backupBtn.textContent = 'Back up everything but the books';
-  backupBtn.onclick = async () => {
-    const backup = await store.exportBackup();
-    offerDownload(`grimoire-backup-${store.dayKey()}.json`, 'application/json',
-      JSON.stringify(backup, null, 2));
-  };
-  data.appendChild(backupBtn);
+  /* Two ways out, because they are different things.
+   *
+   * Saving puts the file in a folder that can be found again, which is what a
+   * backup is for. Sending hands it to whatever app will take it, which is
+   * what you want when the backup is going to another device. Only the second
+   * existed, and a backup living in a chat thread is not a backup. */
+  const backupRow = document.createElement('div');
+  backupRow.style.cssText = 'display:flex;gap:8px';
+  for (const [label, share, primary] of [
+    ['Save a backup', false, true],
+    ['Send a copy', true, false],
+  ]) {
+    const button = document.createElement('button');
+    button.className = `btn ${primary ? 'primary' : 'ghost'}`;
+    button.style.flex = '1';
+    button.textContent = label;
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        const backup = await store.exportBackup();
+        await onWriteOut?.(
+          new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }),
+          `grimoire-backup-${store.dayKey()}.json`, 'application/json', { share });
+      } catch (error) {
+        toast(error.message || 'That backup could not be written', 6000);
+      } finally {
+        button.disabled = false;
+      }
+    };
+    backupRow.appendChild(button);
+  }
+  data.appendChild(backupRow);
 
   const restoreBtn = document.createElement('button');
   restoreBtn.className = 'btn ghost block';
@@ -1212,6 +1235,10 @@ async function renderLayoutPane(body) {
   shelf.appendChild(cols);
   body.appendChild(shelf);
 }
+
+let onWriteOut = null;
+/** How a file leaves the app; supplied by the shell, which owns the bridge. */
+export function onWrite(fn) { onWriteOut = fn; }
 
 let onGuidesChange = null;
 /** The reader re-reads the guide settings when they change. */

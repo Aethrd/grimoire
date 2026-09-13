@@ -509,6 +509,35 @@ t('bundling is one action that reads both ways', () => {
   assert.ok(html.includes('data-act="bundle"'));
 });
 
+t('building is a tool, not a shelf action', () => {
+  /* Joining books already on the shelf was the wrong shape for the job: the
+   * parts of a serial are files, and importing thirty volumes in order to
+   * join them and delete thirty leftovers is a lot of work to arrive where
+   * you meant to start. */
+  assert.ok(html.includes('data-go="workshop"'), 'the workshop has no way in');
+  assert.ok(html.includes('data-screen="workshop"'));
+  assert.match(app, /const TABS = \[.*'workshop'/);
+  // Taking a built book apart still belongs beside the book.
+  assert.match(app, /return splitSelected\(books\[0\]\)/);
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /export async function splitBook/);
+  assert.match(app, /were still on the shelf/);
+});
+
+t('the workshop shows the order and lets it be changed', () => {
+  // Order is the whole point of a serial, so it is shown and movable rather
+  // than inferred and hoped for.
+  const build = read('app/src/main/assets/www/js/build.js');
+  assert.match(build, /export function move/);
+  assert.match(build, /export const naturalOrder/);
+  assert.match(app, /function renderWorkshop/);
+  assert.match(app, /build\.move\(part\.id, by\)/);
+  // A zip of volumes becomes its contents, not one part joined to itself.
+  assert.match(build, /for \(const book of archive\.books\)/);
+  // A part that will not open costs that part, not the build.
+  assert.match(build, /failed\.push\(\{ name: part\.name, reason: error\.message \}\)/);
+});
+
 t('a bundle asks which edition to open', () => {
   assert.match(app, /if \(book\.bundle\) return openBundleSheet/);
   // Language and format are what actually tell two editions apart.
@@ -559,9 +588,10 @@ t('exports go through the native side, not an anchor', () => {
   assert.match(panels, /function offerDownload/);
   assert.match(panels, /window\.GrimoireNative\?\.saveText/);
   // Both buttons use it, and neither builds its own anchor any more.
-  // Its definition plus every caller: the reading log, the settings export,
-  // and the full backup.
-  assert.equal((panels.match(/offerDownload\(/g) || []).length, 4);
+  // Its definition plus its callers: the reading log and the settings export.
+  // The full backup goes out through the file writer instead, which can save
+  // to a folder rather than only share.
+  assert.equal((panels.match(/offerDownload\(/g) || []).length, 3);
   assert.ok(!/a\.download = 'grimoire/.test(panels), 'an export still relies on an anchor');
   // A failure says so rather than looking like a dead button again.
   assert.match(panels, /That file could not be saved/);
@@ -682,7 +712,7 @@ console.log('settings');
 t('settings is a screen with panes, reachable from the bar', () => {
   assert.match(html, /data-screen="settings"/);
   assert.match(html, /data-go="settings"/);
-  assert.match(app, /TABS = \['library', 'folders', 'sort', 'stats', 'settings'\]/);
+  assert.match(app, /TABS = \['library', 'folders', 'workshop', 'sort', 'stats', 'settings'\]/);
 });
 
 t('the settings strip is labelled', () => {
