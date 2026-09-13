@@ -859,6 +859,26 @@ export async function nameWithFormat(name, blob) {
 
   if (magic.startsWith('%PDF')) return `${name}.pdf`;
 
+  /* Pictures, by their first bytes.
+   *
+   * Now that the workshop accepts anything, a picture can arrive with no
+   * extension at all -- plenty of downloaders name them by id. Without this
+   * it would be offered to the text reader and refused.
+   */
+  const bytes = new Uint8Array(await firstBytes(blob, 12));
+  const starts = (...values) => values.every((v, i) => bytes[i] === v);
+  if (starts(0x89, 0x50, 0x4e, 0x47)) return `${name}.png`;
+  if (starts(0xff, 0xd8, 0xff)) return `${name}.jpg`;
+  if (starts(0x47, 0x49, 0x46, 0x38)) return `${name}.gif`;
+  if (starts(0x52, 0x49, 0x46, 0x46) && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP') {
+    return `${name}.webp`;
+  }
+
+  // A saved web page is a MIME message, and says so in its first lines.
+  if (/^(from|mime-version|content-type|snapshot-content-location):/im.test(magicText(bytes))) {
+    return `${name}.mht`;
+  }
+
   if (magic.startsWith('PK')) {
     const zip = await openArchive(blob).catch(() => null);
     if (zip?.has('META-INF/container.xml')) return `${name}.epub`;
@@ -883,6 +903,8 @@ export async function nameWithFormat(name, blob) {
 
   return `${name}.txt`;
 }
+
+const magicText = (bytes) => String.fromCharCode(...bytes);
 
 /** The opening bytes of a blob, without depending on Blob.arrayBuffer. */
 function firstBytes(blob, count) {

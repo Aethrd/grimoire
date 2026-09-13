@@ -41,14 +41,25 @@ const IS_PICTURE = /\.(jpe?g|png|gif|webp|avif|bmp)$/i;
 export async function add(files, onProgress) {
   const found = [];
 
+  /* Every file is identified before anything is decided about it.
+   *
+   * The picker accepts anything, so a file may arrive with no extension or a
+   * misleading one. What it actually is comes from its first bytes, and that
+   * answer is what the rest of this works from.
+   */
+  const identified = [];
+  for (const file of files) {
+    identified.push({ file, named: await nameWithFormat(file.name || 'file', file) });
+  }
+
   /* Loose pictures are one chapter, not one chapter each.
    *
    * Manga and manhwa are downloaded as a folder of numbered images, and a
    * hundred and eighty separate parts is not a workshop anyone can use. They
    * are pages: gathered into a single part, in the order they are numbered.
    */
-  const pictures = [...files].filter((f) => IS_PICTURE.test(f.name));
-  const rest = [...files].filter((f) => !IS_PICTURE.test(f.name));
+  const pictures = identified.filter((f) => IS_PICTURE.test(f.named)).map((f) => f.file);
+  const rest = identified.filter((f) => !IS_PICTURE.test(f.named));
 
   if (pictures.length) {
     pictures.sort((a, b) => naturalOrder(a.name, b.name));
@@ -59,8 +70,7 @@ export async function add(files, onProgress) {
     });
   }
 
-  for (const file of rest) {
-    const named = await nameWithFormat(file.name || 'book', file);
+  for (const { file, named } of rest) {
     const format = formatOf(named);
 
     if (format === 'ZIP') {

@@ -524,6 +524,20 @@ t('building is a tool, not a shelf action', () => {
   assert.match(app, /were still on the shelf/);
 });
 
+t('the workshop picker does not filter what it can take', () => {
+  /* Android builds the picker from the MIME types in the accept list and
+   * drops extensions it cannot map to one. A wildcard like image/* then
+   * narrows the whole picker to images, which is why zips could not be chosen
+   * once pictures were added. */
+  const picker = app.slice(app.indexOf("picker.multiple = true"));
+  assert.match(picker.slice(0, 1200), /picker\.accept = '\*\/\*'/);
+  // What a file is comes from its first bytes, not from what it is called.
+  const build = read('app/src/main/assets/www/js/build.js');
+  assert.match(build, /named: await nameWithFormat\(file\.name \|\| 'file', file\)/);
+  const parse = read('app/src/main/assets/www/js/parse.js');
+  assert.match(parse, /starts\(0x89, 0x50, 0x4e, 0x47\)\) return `\$\{name\}\.png`/);
+});
+
 t('the build button is not under the tab bar', () => {
   // Every other screen with a footer is reached from inside a book, where the
   // bar is hidden. On a screen that is itself a tab the button was drawn

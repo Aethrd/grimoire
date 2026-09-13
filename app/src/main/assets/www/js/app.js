@@ -1403,8 +1403,19 @@ function wireWorkshop() {
     const picker = document.createElement('input');
     picker.type = 'file';
     picker.multiple = true;
-    // Pictures too: manga and manhwa arrive as a folder of numbered images.
-    picker.accept = '.epub,.cbz,.zip,.pdf,.txt,.md,.html,.htm,.fb2,.mht,.mhtml,.jpg,.jpeg,.png,.gif,.webp,.avif,.bmp,image/*';
+    /* Anything at all.
+     *
+     * Android builds the picker from the MIME types in this list and drops
+     * extensions it cannot map to one. A wildcard like image/* then narrows
+     * the whole picker to images, which is why zips could not be chosen once
+     * pictures were added -- and .mht has no agreed type at all, so most file
+     * managers report it as something unrecognisable either way.
+     *
+     * The workshop takes whatever it is given and works out what each file is
+     * by looking inside it, so there is nothing for a filter to usefully do
+     * except get in the way.
+     */
+    picker.accept = '*/*';
     picker.onchange = async () => {
       const files = [...(picker.files || [])];
       if (!files.length) return;
