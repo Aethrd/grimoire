@@ -1222,3 +1222,12 @@ section.block > h2 { margin-top: 18px; }
                      color: var(--muted); }
 .build-move button:disabled { opacity: .3; }
 .build-move svg { width: 16px; height: 16px; }
+
+
+/* A volume heading in the picture reel. The reel of a book built from a dozen
+   volumes is otherwise one undifferentiated strip. */
+.reel-volume {
+  margin: 16px 0 8px; font-family: var(--font-heading); font-weight: 700;
+  font-size: 13px; letter-spacing: .01em; color: var(--muted);
+}
+.reel-volume:first-child { margin-top: 0; }

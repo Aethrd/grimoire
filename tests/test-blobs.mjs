@@ -691,10 +691,69 @@ await t('a build that fails says which part and why', async () => {
   await assert.rejects(build.build({}), /a\.docx: DOCX/);
 });
 
-await t('building needs more than one part', async () => {
+await t('the reel is organised by volume, not by chapter number', async () => {
+  /* The question anyone asks of a reel is "what was in volume four", not
+   * "what was in chapter ninety-one". */
+  const JSZip = (await import('jszip')).default;
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001', 'hex');
+  const volume = async (n) => {
+    const zip = new JSZip();
+    for (const page of [1, 2, 3]) zip.file(`${page}.png`, png);
+    return new File([await zip.generateAsync({ type: 'nodebuffer' })], `Volume ${n}.zip`);
+  };
+
+  build.clear();
+  await build.add([await volume(1), await volume(2), await volume(3)]);
+  const { book } = await build.build({ title: 'Manhwa' });
+
+  const images = (await store.byIndex('images', 'bookId', book.id))
+    .sort((a, b) => a.order - b.order);
+
+  // Each picture knows which volume it came from.
+  assert.deepEqual([...new Set(images.map((i) => i.volume))],
+    ['Volume 1', 'Volume 2', 'Volume 3']);
+
+  /* And they are numbered across the whole book. Each part numbers its own
+     from zero, and left that way the reel sorts them into one interleaved
+     run: the first picture of every volume, then the second of every one. */
+  assert.deepEqual(images.map((i) => i.volume.slice(-1)),
+    ['1', '1', '1', '2', '2', '2', '3', '3', '3']);
+
+  // The chapter a picture belongs to counts from where its volume starts, so
+  // jumping from one lands in the right chapter.
+  assert.deepEqual([...new Set(images.map((i) => i.chapterIndex))], [0, 1, 2]);
+});
+
+await t('a single part is a book too', async () => {
+  // A zip of one volume's pages is a whole book, and the two-part minimum
+  // turned the commonest case away at the door.
+  const JSZip = (await import('jszip')).default;
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001', 'hex');
+  const zip = new JSZip();
+  for (const page of [1, 2, 3]) zip.file(`${page}.png`, png);
+
+  build.clear();
+  await build.add([new File([await zip.generateAsync({ type: 'nodebuffer' })], 'Chapter 5.zip')]);
+  assert.equal(build.contents().length, 1);
+
+  const { book } = await build.build({});
+  assert.ok(book.chapters >= 1);
+  // No seam label, because with one part there is no seam.
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const first = (await store.byIndex('chapters', 'bookId', book.id))
+    .sort((a, b) => a.index - b.index)[0];
+  assert.ok(!first.title.includes(' — '), first.title);
+});
+
+await t('building needs something to build from', async () => {
   const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
   build.clear();
-  await assert.rejects(build.build({}), /two or more/);
+  await assert.rejects(build.build({}), /Add something/);
 });
 
 console.log('writing files out');

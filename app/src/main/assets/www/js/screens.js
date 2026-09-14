@@ -270,6 +270,8 @@ export async function openLayout(bookId) {
 /* ── SCR-06 Image reel ────────────────────────────────────────────────── */
 
 let reelFilter = 'all';
+/** The volume the reel is narrowed to, or null for every one of them. */
+let reelVolume = null;
 
 /* The reel rebuilds wholesale on every filter change, so its URLs are
    released and re-minted with it. */
@@ -284,23 +286,44 @@ export async function openReel(bookId, onJump) {
   // here instead, once, and written back.
   const unmeasured = images.filter((i) => i.blob && !i.width);
   if (unmeasured.length) {
-    // One picture that will not decode should cost its own thumbnail, not the
-    // reel: every image is measured before any is drawn.
-    for (const image of unmeasured) {
-      try {
-        const dims = await measure(image.blob);
-        image.width = dims.width;
-        image.height = dims.height;
-      } catch {
-        image.width = 0;
-        image.height = 0;
-      }
+    /* Measured several at a time, not one after another.
+     *
+     * Each measurement gives up after a few seconds if a picture will not
+     * decode, and taken in turn that is a few seconds *each* -- a book with
+     * two hundred illustrations could sit there for minutes before drawing
+     * anything. In parallel the wait is the slowest picture rather than the
+     * sum of them all.
+     *
+     * One that will not decode still costs its own thumbnail and no more.
+     */
+    const AT_ONCE = 8;
+    for (let at = 0; at < unmeasured.length; at += AT_ONCE) {
+      await Promise.all(unmeasured.slice(at, at + AT_ONCE).map(async (image) => {
+        try {
+          const dims = await measure(image.blob);
+          image.width = dims.width;
+          image.height = dims.height;
+        } catch {
+          image.width = 0;
+          image.height = 0;
+        }
+      }));
     }
     await store.putAll('images', unmeasured).catch(() => {});
   }
   const stills = images.filter((i) => !i.animated).length;
 
   el('reel-counts').textContent = `${stills} stills · ${images.length - stills} animated`;
+
+  /* Volumes first, chapters second.
+   *
+   * A book built from a dozen volumes has hundreds of pictures, and running
+   * them together in one strip is the same as not sorting them at all: the
+   * question anyone asks of a reel is "what was in volume four", not "what
+   * was in chapter ninety-one". Where a book has volumes they lead; where it
+   * has none, nothing is lost, because there is only one group.
+   */
+  const volumes = [...new Set(images.map((i) => i.volume).filter(Boolean))];
 
   const filters = el('reel-filters');
   filters.innerHTML = '';
@@ -311,6 +334,22 @@ export async function openReel(bookId, onJump) {
     chip.setAttribute('aria-pressed', String(reelFilter === key));
     chip.onclick = () => { reelFilter = key; openReel(bookId, onJump); };
     filters.appendChild(chip);
+  }
+
+  // One chip per volume, so a long book can be narrowed to the part wanted.
+  if (volumes.length > 1) {
+    for (const volume of volumes) {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.textContent = volume;
+      chip.style.textTransform = 'none';
+      chip.setAttribute('aria-pressed', String(reelVolume === volume));
+      chip.onclick = () => {
+        reelVolume = reelVolume === volume ? null : volume;
+        openReel(bookId, onJump);
+      };
+      filters.appendChild(chip);
+    }
   }
 
   const grid = el('reel-grid');
@@ -328,6 +367,7 @@ export async function openReel(bookId, onJump) {
   const visible = images.filter((image) => {
     const known = Math.max(image.width || 0, image.height || 0);
     if (known > 0 && known < settings.imageThreshold) return false;
+    if (reelVolume && image.volume !== reelVolume) return false;
     if (reelFilter === 'still') return !image.animated;
     if (reelFilter === 'animated') return image.animated;
     return true;
@@ -338,17 +378,41 @@ export async function openReel(bookId, onJump) {
     return;
   }
 
+  /* Laid out under volume headings where a book has them.
+     A heading per volume, and the pictures of that volume beneath it, answers
+     "what was in volume four" at a glance -- which is the question a reel is
+     opened to answer. */
+  let heading = null;
+  let strip = inner;
+
   for (const image of visible) {
     const url = reelUrls.url(image.blob);
     if (!url) continue;   // imported before blobs were stored; nothing to show
+
+    if (volumes.length > 1 && image.volume && image.volume !== heading) {
+      heading = image.volume;
+      const label = document.createElement('h2');
+      label.className = 'reel-volume';
+      label.textContent = heading;
+      grid.appendChild(label);
+      strip = document.createElement('div');
+      strip.className = 'reel-grid';
+      grid.appendChild(strip);
+    }
+
     const figure = document.createElement('figure');
     figure.className = 'reel-item';
+    // The chapter is named rather than numbered where a name is to hand: "Ch.
+    // 91" means nothing in a book of a dozen volumes.
+    const where = image.volume
+      ? `${image.volume} · ch. ${image.chapterIndex + 1}`
+      : `Ch. ${image.chapterIndex + 1}`;
     figure.innerHTML = `
       ${image.animated ? '<span class="gif">GIF</span>' : ''}
       <img src="${url}" alt="" loading="lazy">
-      <figcaption>Ch. ${image.chapterIndex + 1} · ${image.width}×${image.height}</figcaption>`;
+      <figcaption>${escape(where)} · ${image.width}×${image.height}</figcaption>`;
     figure.querySelector('img').onclick = () => viewer(url, image, () => onJump(image));
-    inner.appendChild(figure);
+    strip.appendChild(figure);
   }
 }
 

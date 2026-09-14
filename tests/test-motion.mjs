@@ -371,6 +371,20 @@ t('a chapter does not wait forever for a picture', () => {
   assert.match(fn.slice(0, 900), /setTimeout\(res, 3000\)/);
 });
 
+t('the reel measures several pictures at once', () => {
+  // Each measurement gives up after a few seconds if a picture will not
+  // decode, and taken in turn that is a few seconds each -- a book with two
+  // hundred illustrations would sit there for minutes before drawing
+  // anything.
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /const AT_ONCE = 8/);
+  assert.match(screens, /await Promise\.all\(unmeasured\.slice/);
+  // Volumes lead the reel where a book has them.
+  assert.match(screens, /new Set\(images\.map\(\(i\) => i\.volume\)\.filter\(Boolean\)\)/);
+  assert.match(screens, /reelVolume && image\.volume !== reelVolume/);
+  assert.match(css, /\.reel-volume \{/);
+});
+
 console.log('settings render for real');
 
 // jsdom now has a working IndexedDB, so the panes can actually be rendered

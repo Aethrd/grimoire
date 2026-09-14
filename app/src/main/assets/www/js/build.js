@@ -184,7 +184,14 @@ export function describe(part) {
  * prefix the later ones quietly replace the earlier.
  */
 export async function build({ title, onProgress } = {}) {
-  if (parts.length < 2) throw new Error('Add two or more parts to build a book.');
+  /* One part is a book too.
+   *
+   * A zip of a volume's saved pages, or a folder of a chapter's images, is a
+   * whole book on its own -- and the two-part minimum turned the commonest
+   * case away at the door. Joining several is what the workshop is for, not
+   * what it requires.
+   */
+  if (!parts.length) throw new Error('Add something to build from.');
 
   const name = title || commonName(parts.map((p) => p.name)) || 'Built book';
   const bookId = await store.add('books', {
@@ -198,6 +205,10 @@ export async function build({ title, onProgress } = {}) {
 
   let index = 0;
   let words = 0;
+  // Pictures are numbered across the whole book. Each part numbers its own
+  // from zero, and left that way the reel sorts them into one interleaved
+  // run: the first picture of every volume, then the second of every volume.
+  let picture = 0;
   let cover = null;
   const failed = [];
 
@@ -223,6 +234,11 @@ export async function build({ title, onProgress } = {}) {
     }
 
     const prefix = `p${at}/`;
+    // Where this part's chapters begin in the finished book. Its pictures
+    // number their chapters from zero, as every part does, and left that way
+    // they all claim to belong to the opening chapters of the book.
+    const base = index;
+    const volume = stripExtension(part.name);
     if (!cover && parsed.coverBlob) cover = parsed.coverBlob;
 
     await store.putAll('chapters', parsed.chapters.map((chapter, n) => ({
@@ -230,8 +246,13 @@ export async function build({ title, onProgress } = {}) {
       index: index++,
       // The part's name above its first chapter, so the seams are findable in
       // a book that is now thousands of chapters long.
-      title: n === 0 ? `${stripExtension(part.name)} — ${chapter.title}` : chapter.title,
-      volume: stripExtension(part.name),
+      /* The part's name above its first chapter marks the seam between one
+         part and the next. With a single part there is no seam, and the label
+         would just repeat the book's own title on its first chapter. */
+      title: n === 0 && parts.length > 1
+        ? `${stripExtension(part.name)} — ${chapter.title}`
+        : chapter.title,
+      volume,
       fromToc: chapter.fromToc,
       words: chapter.words || 0,
       base: prefix + (chapter.base || ''),
@@ -250,7 +271,13 @@ export async function build({ title, onProgress } = {}) {
       await store.putAll('images', parsed.images.map((image) => ({
         ...image,
         bookId,
+        order: picture++,
         href: prefix + image.href,
+        // Counted from where this part starts, and stamped with the part it
+        // came from, so the reel can group by volume and jumping from a
+        // picture lands in the chapter it actually belongs to.
+        chapterIndex: base + (image.chapterIndex || 0),
+        volume,
       })));
     }
   }
@@ -344,7 +371,13 @@ async function readPages(part, onProgress) {
     for (const image of parsed.images || []) {
       // Re-keyed per page, because every saved page names its pictures by the
       // address they had on the site and two chapters of one novel share them.
-      images.push({ ...image, href: `page${at}/${image.href}`, order: order++ });
+      // The chapter is the page's own place in the volume, not zero.
+      images.push({
+        ...image,
+        href: `page${at}/${image.href}`,
+        order: order++,
+        chapterIndex: chapters.length - parsed.chapters.length,
+      });
     }
     // The same re-keying has to reach the markup, which already resolved them.
     const written = chapters.slice(-parsed.chapters.length);
