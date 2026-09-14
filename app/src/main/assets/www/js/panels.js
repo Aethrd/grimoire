@@ -1327,19 +1327,20 @@ async function renderBehaviourPane(body) {
   pictures.className = 'block';
   pictures.innerHTML = `<h2>Pictures</h2>
     <p class="muted" style="font-size:12px;line-height:1.55">
-      How illustrations and comic pages are fitted. Only Fit leaves a picture
-      both uncropped and undistorted.</p>`;
+      How illustrations and comic pages are fitted. Only Fit screen leaves a
+      picture both uncropped and undistorted.</p>`;
   for (const [value, label, note] of [
-    ['fit', 'Fit', 'The whole picture, never taller than the page'],
-    ['fill', 'Fill', 'Full width, cropped top and bottom'],
+    ['screen', 'Fit screen', 'The whole page, nothing cropped or distorted'],
+    ['width', 'Fit width', 'As wide as the screen; a tall page runs on below'],
+    ['height', 'Fit height', 'As tall as the screen; a wide page runs off the side'],
     ['stretch', 'Stretch', 'Fills the space exactly, distorting to do it'],
-    ['original', 'Original size', 'However large it is, scrollable sideways'],
-    ['wide', 'Turn wide pages', 'Rotates a spread wider than it is tall'],
+    ['original', 'Original size', 'However large it is, scrollable'],
+    ['smart', 'Smart fit', 'Width for tall strips, height for wide spreads'],
   ]) {
     const option = document.createElement('button');
     option.className = 'list-row';
     option.innerHTML = `<span class="body"><b>${escape(label)}</b><small>${escape(note)}</small></span>`;
-    option.setAttribute('aria-pressed', String((settings.imageFit || 'fit') === value));
+    option.setAttribute('aria-pressed', String((settings.imageFit || 'screen') === value));
     option.onclick = async () => {
       await store.saveSettings({ imageFit: value });
       document.body.dataset.images = value;
@@ -1362,7 +1363,17 @@ async function renderBehaviourPane(body) {
   body.appendChild(pages);
 
 
-  body.innerHTML = '<h2>Page turning</h2>';
+  /* Appended, not assigned.
+   *
+   * This was `body.innerHTML = ...`, which threw away everything added above
+   * it -- annotations, reading guides, what happens at the end of a chapter,
+   * how pictures are fitted, page breaks. All of it was built and then wiped
+   * a line later, so none of those settings has ever been visible in the app.
+   */
+  const turning = document.createElement('h2');
+  turning.textContent = 'Page turning';
+  body.appendChild(turning);
+
   body.appendChild(row('Tap the sides', 'Left and right edges turn the page',
     toggle(settings.turnBySideTap, (on) => store.saveSettings({ turnBySideTap: on }))));
   body.appendChild(row('Swipe', 'Horizontal swipe turns the page. Off in scroll mode regardless.',

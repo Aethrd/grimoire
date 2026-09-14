@@ -31,9 +31,22 @@ const mediaFor = (name) => MEDIA[String(name).split('.').pop().toLowerCase()] ||
  * @param onProgress  called with a fraction, because a long book is a lot of
  *   files and a silent wait is indistinguishable from a hang.
  */
-export async function buildEpub(bookId, { onProgress } = {}) {
-  const book = await store.get('books', bookId);
-  if (!book) throw new Error('That book is no longer in the library.');
+export async function buildEpub(bookId, { onProgress, title, author } = {}) {
+  const stored = await store.get('books', bookId);
+  if (!stored) throw new Error('That book is no longer in the library.');
+
+  /* What goes inside the file, not just what it is called.
+   *
+   * Renaming the file on disk leaves the book still calling itself whatever
+   * it called itself before, and every other reader shows that name rather
+   * than the one on the file. The title written here is the one that
+   * travels.
+   */
+  const book = {
+    ...stored,
+    title: (title ?? stored.title) || 'Untitled',
+    author: author ?? stored.author,
+  };
 
   const chapters = (await store.byIndex('chapters', 'bookId', bookId))
     .sort((a, b) => a.index - b.index);

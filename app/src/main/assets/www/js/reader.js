@@ -352,8 +352,14 @@ function hydrateImages(section, index) {
       /* Marked once it has loaded, so the two-page-spread mode has something
          to act on. Measured here rather than at import: the cost belongs on
          the page that actually shows the picture. */
+      /* The shape of a picture is only known once it has loaded, and the
+         smart fitting needs it: a tall strip wants the width, a wide spread
+         wants the height, and anything near square is fitted whole. */
       img.addEventListener('load', () => {
-        img.classList.toggle('landscape', img.naturalWidth > img.naturalHeight * 1.2);
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        img.classList.toggle('landscape', w > h * 1.2);
+        img.classList.toggle('tall', h > w * 1.4);
       }, { once: true });
     } else {
       img.remove();

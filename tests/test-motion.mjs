@@ -222,15 +222,17 @@ t('the end of a chapter is reachable without the buttons', () => {
 t('pictures can be fitted more than one way', () => {
   // A page of prose and a page of comic want different things from the same
   // rule, and a scan of a two-page spread wants a third.
-  for (const mode of ['fit', 'fill', 'stretch', 'original', 'wide']) {
+  for (const mode of ['screen', 'width', 'height', 'stretch', 'original', 'smart']) {
     assert.ok(css.includes(`[data-images="${mode}"]`), `no rule for ${mode}`);
   }
-  // Only fit neither crops nor distorts, so it is the default.
+  // Fit screen neither crops nor distorts, so it is the default.
   const store = read('app/src/main/assets/www/js/store.js');
-  assert.match(store, /imageFit: 'fit'/);
-  // Rotation needs to know which pictures are wider than they are tall.
+  assert.match(store, /imageFit: 'screen'/);
+  // Smart fitting needs the shape of each picture, which is only known once
+  // it has loaded.
   const reader = read('app/src/main/assets/www/js/reader.js');
   assert.match(reader, /classList\.toggle\('landscape'/);
+  assert.match(reader, /classList\.toggle\('tall'/);
 });
 
 t('the body carries every setting the stylesheet reads', () => {
@@ -414,6 +416,14 @@ t('the behaviour pane renders its controls', async () => {
   // Not an empty pane pretending to be a feature.
   assert.ok(behaviourPane.length > 300, `behaviour pane was ${behaviourPane.length} chars`);
   assert.match(behaviourPane, /Tap the sides/);
+});
+
+t('every picture fitting is offered, drawn not just defined', () => {
+  /* A rule in the stylesheet with no way to choose it is not a feature. */
+  for (const label of ['Fit screen', 'Fit width', 'Fit height', 'Stretch',
+    'Original size', 'Smart fit']) {
+    assert.ok(behaviourPane.includes(label), `${label} is not offered`);
+  }
 });
 
 console.log('settings panes update in place');

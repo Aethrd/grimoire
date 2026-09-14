@@ -214,7 +214,8 @@ export const DEFAULT_SETTINGS = {
 
   /* How pictures are fitted to the page. Fit is the only one that neither
      crops nor distorts, so it is the default. */
-  imageFit: 'fit',          // fit | fill | stretch | original | wide
+  // screen | width | height | stretch | original | smart
+  imageFit: 'screen',
 
   /* What a forward tap does once a chapter has run out.
    *

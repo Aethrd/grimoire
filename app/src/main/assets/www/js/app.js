@@ -269,10 +269,22 @@ function wireSelection() {
   el('select-cancel').onclick = () => clearSelection();
 
   el('select-all').onclick = async () => {
-    const books = (await store.all('books')).filter((b) => !b.inVault || library.vaultUnlocked);
+    /* Everything on the shelf as it stands, not everything you own.
+     *
+     * Filtered to a folder, "select all" that reaches past the filter is a
+     * trap: what it selects is not what is in front of you, and the next
+     * thing pressed -- move, delete -- happens to books you cannot see.
+     */
+    const books = (await store.all('books')).filter((book) =>
+      (!book.inVault || library.vaultUnlocked)
+      && !book.importing && !book.transient
+      && (!activeFolder || book.folder === activeFolder));
+
     // A second press clears, so the same button undoes itself.
-    if (selection.size === books.length) selection.clear();
+    const all = books.every((book) => selection.has(book.id));
+    if (all) for (const book of books) selection.delete(book.id);
     else for (const book of books) selection.add(book.id);
+
     paintSelection();
     refreshShelf();
   };
@@ -293,7 +305,7 @@ function wireSelection() {
        well not have been there. */
     export: async () => {
       const [book] = await selectedBooks();
-      if (book) await exportBook(book, { share: false });
+      if (book) askAboutExport(book);
     },
 
     details: async () => {
@@ -392,6 +404,11 @@ function wireSelection() {
     if (e.target === el('details-sheet')) el('details-sheet').hidden = true;
   };
 
+  el('export-cancel').onclick = () => { el('export-sheet').hidden = true; };
+  el('export-sheet').onclick = (e) => {
+    if (e.target === el('export-sheet')) el('export-sheet').hidden = true;
+  };
+
   el('merge-cancel').onclick = () => { el('merge-sheet').hidden = true; };
   el('merge-sheet').onclick = (e) => {
     if (e.target === el('merge-sheet')) el('merge-sheet').hidden = true;
@@ -442,7 +459,7 @@ async function openDetails(book) {
     chip.className = 'chip';
     chip.style.textTransform = 'none';
     chip.textContent = label;
-    chip.onclick = () => exportBook(book, { share });
+    chip.onclick = () => { close(); askAboutExport(book); };
     row.appendChild(chip);
   }
   exports.appendChild(row);
@@ -642,24 +659,55 @@ async function splitSelected(book) {
  * will take it. Both are wanted, and only the second existed -- a backup
  * belongs somewhere findable, not in a chat thread.
  */
-async function exportBook(book, { share = false } = {}) {
+/** Ask what the book should be called before writing it out. */
+function askAboutExport(book) {
+  el('export-title').value = library.displayTitle(book);
+  el('export-author').value = book.author || '';
+  el('export-file').value = `${epub.safeName(library.displayTitle(book))}.epub`;
+
+  // A title typed here is what the book will be called; the file name follows
+  // along unless it has been changed by hand.
+  let fileTouched = false;
+  el('export-file').oninput = () => { fileTouched = true; };
+  el('export-title').oninput = () => {
+    if (!fileTouched) el('export-file').value = `${epub.safeName(el('export-title').value)}.epub`;
+  };
+
+  const go = (share) => () => {
+    el('export-sheet').hidden = true;
+    exportBook(book, {
+      share,
+      title: el('export-title').value.trim() || book.title,
+      author: el('export-author').value.trim() || null,
+      filename: el('export-file').value.trim(),
+    });
+  };
+  el('export-save').onclick = go(false);
+  el('export-send').onclick = go(true);
+  el('export-sheet').hidden = false;
+}
+
+async function exportBook(book, { share = false, title, author, filename } = {}) {
   const panel = el('import-progress');
   el('import-label').textContent = `Writing ${book.title}`;
   el('import-count').textContent = '';
   panel.hidden = false;
   try {
     const { blob, name } = await epub.buildEpub(book.id, {
+      title,
+      author,
       onProgress: (fraction) => {
         el('import-bar').style.width = `${Math.round(fraction * 90)}%`;
       },
     });
-    await writeOut(blob, name, 'application/epub+zip', {
+    const saveAs = filename && /\.epub$/i.test(filename) ? filename : name;
+    await writeOut(blob, saveAs, 'application/epub+zip', {
       share,
       onProgress: (fraction) => {
         el('import-bar').style.width = `${90 + Math.round(fraction * 10)}%`;
       },
     });
-    if (share) toast(`${name} ready to send`, 5000);
+    if (share) toast(`${saveAs} ready to send`, 5000);
   } catch (error) {
     toast(error.message || 'That book could not be written out', 6000);
   } finally {
@@ -1314,6 +1362,22 @@ function wireDesk() {
   };
 }
 
+/**
+ * How much of each edge turns the page, as a fraction of the width.
+ *
+ * This setting used to be a percentage and is now a fraction, and an install
+ * from before the change still has the old number in it. Compared against a
+ * fraction, 26 is never exceeded -- so the middle of the screen was never the
+ * middle, and every tap anywhere turned the page. Read either way now.
+ */
+function sideZone(value) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return 0.18;
+  const fraction = raw > 1 ? raw / 100 : raw;
+  // Never so wide that there is no middle left to tap.
+  return Math.min(0.35, Math.max(0.05, fraction));
+}
+
 /* ── reading guides ───────────────────────────────────────────────────────
  *
  * A band that follows the line being read, and a dimming of everything but
@@ -1361,6 +1425,22 @@ function moveGuides(clientY) {
  * so it is shown and movable rather than inferred and hoped for.
  */
 
+/**
+ * Shorten a long name from the middle, keeping both ends.
+ *
+ * The end of a filename is where the volume number lives, and cutting there
+ * leaves a list of parts that all read the same: ordering them becomes
+ * guesswork. Names short enough to fit are left alone.
+ */
+function shortenMiddle(name, limit = 64) {
+  const text = String(name);
+  if (text.length <= limit) return text;
+  // Weighted towards the end, where the volume number almost always is.
+  const head = Math.ceil((limit - 1) * 0.38);
+  const tail = limit - 1 - head;
+  return `${text.slice(0, head)}…${text.slice(-tail)}`;
+}
+
 function renderWorkshop() {
   const list = el('build-list');
   const parts = build.contents();
@@ -1378,7 +1458,7 @@ function renderWorkshop() {
     const row = document.createElement('div');
     row.className = 'build-row';
     row.innerHTML = `<span class="build-num">${at + 1}</span>`
-      + `<span class="build-what"><b>${escapeText(part.name)}</b>`
+      + `<span class="build-what"><b>${escapeText(shortenMiddle(part.name))}</b>`
       + `<small>${escapeText(build.describe(part))}</small></span>`;
 
     const moves = document.createElement('div');
@@ -1515,8 +1595,11 @@ function wireReader() {
 
     const settings = await store.settings();
     const box = host.getBoundingClientRect();
+    if (box.width <= 0) return;
+
+    const zone = sideZone(settings.tapZone);
     const fraction = (e.changedTouches[0].clientX - box.left) / box.width;
-    const middle = fraction > settings.tapZone && fraction < 1 - settings.tapZone;
+    const middle = fraction > zone && fraction < 1 - zone;
 
     if (middle) {
       reader.cycleChrome();
@@ -1526,7 +1609,7 @@ function wireReader() {
     // Scroll mode moves by a screen; paged mode by a page. Neither crosses
     // into another chapter.
     if (!settings.turnBySideTap) return;
-    const direction = fraction <= settings.tapZone ? -1 : 1;
+    const direction = fraction <= zone ? -1 : 1;
     if (!reader.turn(direction)) await atChapterEdge(direction);
   }, { passive: true });
 
@@ -1815,6 +1898,7 @@ window.Grimoire = {
 
   /** Return true to swallow the back gesture. */
   onBack() {
+    if (!el('export-sheet').hidden) { el('export-sheet').hidden = true; return true; }
     if (!el('merge-sheet').hidden) { el('merge-sheet').hidden = true; return true; }
     if (!el('bundle-sheet').hidden) { el('bundle-sheet').hidden = true; return true; }
     if (!el('status-sheet').hidden) { el('status-sheet').hidden = true; return true; }

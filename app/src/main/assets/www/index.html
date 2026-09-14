@@ -403,6 +403,30 @@
   </div>
 </div>
 
+<div class="sheet-scrim" id="export-sheet" hidden>
+  <div class="sheet">
+    <p class="eyebrow">Write out as EPUB</p>
+    <label class="field"><span>Title, inside the file</span>
+      <input class="query" id="export-title" type="text" autocomplete="off">
+    </label>
+    <label class="field"><span>Author</span>
+      <input class="query" id="export-author" type="text" autocomplete="off">
+    </label>
+    <label class="field"><span>File name</span>
+      <input class="query" id="export-file" type="text" autocomplete="off">
+    </label>
+    <p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 10px">
+      The title and author are written into the book itself, so another reader
+      shows them too. The file name is only what it is called on disk.
+    </p>
+    <div class="sheet-actions" style="border:0;background:none;padding:0">
+      <button class="btn ghost" id="export-cancel">Cancel</button>
+      <button class="btn ghost" id="export-send">Send</button>
+      <button class="btn primary" id="export-save">Save</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-scrim" id="merge-sheet" hidden>
   <div class="sheet">
     <p class="eyebrow">Join into one book</p>

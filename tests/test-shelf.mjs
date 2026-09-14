@@ -559,6 +559,48 @@ t('writing a book out is one of the things you do to a book', () => {
   assert.match(app, /act === 'open' \|\| act === 'details' \|\| act === 'export'/);
 });
 
+t('a settings pane does not wipe what it has already built', () => {
+  /* This was `body.innerHTML = '<h2>Page turning</h2>'` partway down the
+   * behaviour pane, which threw away everything appended above it --
+   * annotations, reading guides, chapter ends, pictures, page breaks. All of
+   * it was built and then discarded a line later, so none of those settings
+   * had ever been visible. */
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  const pane = panels.slice(panels.indexOf('async function renderBehaviourPane'));
+  // Comments describing the bug are not the bug.
+  const code = pane.slice(0, pane.indexOf('\n}'))
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
+  assert.ok(!/body\.innerHTML\s*=/.test(code),
+    'the pane assigns innerHTML partway through and loses what came before');
+});
+
+t('select all means all of what is shown', () => {
+  // Filtered to a folder, a "select all" that reaches past the filter is a
+  // trap: the next thing pressed happens to books you cannot see.
+  assert.match(app, /!activeFolder \|\| book\.folder === activeFolder/);
+  assert.match(app, /!book\.importing && !book\.transient/);
+});
+
+t('the tap zone is read whichever way it was stored', () => {
+  // The setting used to be a percentage and is now a fraction. Compared
+  // against a fraction, 26 is never exceeded -- so the middle of the screen
+  // was never the middle, and every tap anywhere turned the page.
+  assert.match(app, /function sideZone/);
+  assert.match(app, /raw > 1 \? raw \/ 100 : raw/);
+  assert.match(app, /Math\.min\(0\.35, Math\.max\(0\.05, fraction\)\)/);
+});
+
+t('an exported book carries the title it was given', () => {
+  // Renaming the file leaves the book still calling itself whatever it called
+  // itself before, and every other reader shows that name.
+  const epub = read('app/src/main/assets/www/js/epub.js');
+  assert.match(epub, /title: \(title \?\? stored\.title\)/);
+  assert.match(app, /function askAboutExport/);
+  assert.ok(html.includes('id="export-title"'));
+  assert.ok(html.includes('id="export-file"'));
+});
+
 t('the build button is not under the tab bar', () => {
   // Every other screen with a footer is reached from inside a book, where the
   // bar is hidden. On a screen that is itself a tab the button was drawn
