@@ -134,13 +134,31 @@ function relayout() {
     state.pageCount = Math.max(1, Math.ceil(viewport.scrollHeight / viewportHeight()));
     return;
   }
-  const gap = pageWidth() - contentWidth();
-  flow.style.columnWidth = `${contentWidth()}px`;
+  const width = contentWidth();
+
+  /* A page cannot be measured while there is nothing to measure.
+   *
+   * Showing or hiding the chrome re-flows the text, and for a frame or two
+   * during that the flow has no width. Measured then, a chapter of forty
+   * pages comes back as one -- and the position, being clamped to what exists,
+   * lands on page one. That is why a tap in the middle of the screen sent the
+   * reader back to the beginning: not a lost position, a lost measurement.
+   *
+   * Keeping the previous count until there is something to measure is right
+   * either way. It is still correct if the width has not really changed, and
+   * the next re-flow corrects it if it has.
+   */
+  if (width <= 0) return;
+
+  const gap = pageWidth() - width;
+  flow.style.columnWidth = `${width}px`;
   flow.style.columnGap = `${gap}px`;
   // n columns measure n*w + (n-1)*gap, so invert that rather than dividing.
   const total = flow.scrollWidth + gap;
-  const count = Math.round(total / (contentWidth() + gap));
-  state.pageCount = Number.isFinite(count) ? Math.max(1, count) : 1;
+  if (total <= 0) return;
+
+  const count = Math.round(total / (width + gap));
+  if (Number.isFinite(count) && count > 0) state.pageCount = count;
 }
 
 /** Suppress the turn animation around a jump that is not a page turn. */
@@ -436,9 +454,19 @@ function anchorOffset(anchor, chapterIndex = state.chapterIndex) {
 }
 
 /** Which page shows a given offset in a given chapter. */
+/**
+ * Which page an offset is on, or null if that cannot be measured.
+ *
+ * Null rather than zero, and the difference matters a great deal. Every
+ * caller used to take "could not measure" as "page one", so anything that
+ * re-flowed the page and then asked again -- showing the chrome, hiding it,
+ * a change of type size -- sent the reader back to the start of the chapter
+ * whenever the measurement did not come back. A tap in the middle of the
+ * screen does exactly that, every time.
+ */
 function pageAtAnchor(anchor, chapterIndex = state.chapterIndex) {
   const section = sectionFor(chapterIndex);
-  if (!section) return 0;
+  if (!section) return null;
   for (const entry of textNodes(section)) {
     if (anchor >= entry.start && anchor <= entry.start + entry.length) {
       const range = rangeAt(entry, anchor - entry.start);
@@ -451,7 +479,7 @@ function pageAtAnchor(anchor, chapterIndex = state.chapterIndex) {
       }
     }
   }
-  return 0;
+  return null;
 }
 
 /* ── loading ──────────────────────────────────────────────────────────── */
@@ -507,7 +535,9 @@ export async function loadChapter(index, anchor = 0) {
   await imagesSettled();
   relayout();
   estimateTotals();
-  show(pageAtAnchor(anchor), { animate: false });
+  // A chapter being opened does begin at its start when nothing can be
+  // measured; a re-flow of the chapter already open does not.
+  show(pageAtAnchor(anchor) ?? 0, { animate: false });
   if (isScroll()) extendIfNeeded();
 }
 
@@ -806,7 +836,9 @@ export function repaginate() {
   requestAnimationFrame(() => {
     relayout();
     estimateTotals();
-    show(pageAtAnchor(anchor, chapter), { animate: false });
+    // Staying put is the right answer when the measurement fails: the text
+    // has not moved, only the chrome around it.
+    show(pageAtAnchor(anchor, chapter) ?? state.page, { animate: false });
     keepPassageWhole(anchor, chapter);
   });
 }
@@ -846,7 +878,7 @@ function keepPassageWhole(anchor, chapterIndex) {
   // One correction, not a loop: re-flowing to fix a break can create another,
   // and chasing it would be a good way to never stop.
   relayout();
-  show(pageAtAnchor(anchor, chapterIndex), { animate: false });
+  show(pageAtAnchor(anchor, chapterIndex) ?? state.page, { animate: false });
 }
 
 /* ── navigation ───────────────────────────────────────────────────────── */
@@ -1369,7 +1401,7 @@ export async function stepToMark(fromId, delta) {
   if (next.chapterIndex !== state.chapterIndex) {
     await loadChapter(next.chapterIndex, next.anchor);
   } else {
-    show(pageAtAnchor(next.anchor, next.chapterIndex), { animate: false });
+    show(pageAtAnchor(next.anchor, next.chapterIndex) ?? state.page, { animate: false });
   }
   return next;
 }
@@ -1413,5 +1445,6 @@ function repaintChapter() {
   else flow.replaceChildren(section);
 
   relayout();
-  show(pageAtAnchor(anchor, chapter.index), { animate: false });
+  // Repainting in place: the marks changed, the position did not.
+  show(pageAtAnchor(anchor, chapter.index) ?? state.page, { animate: false });
 }

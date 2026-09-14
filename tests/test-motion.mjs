@@ -85,7 +85,9 @@ t('page turns animate but re-flows do not', () => {
   const js = read('app/src/main/assets/www/js/reader.js');
   assert.match(js, /withoutMotion/);
   // Every jump that is not a turn must go through it.
-  assert.match(js, /show\(pageAtAnchor\(anchor, chapter\), \{ animate: false \}\)/);
+  // Staying put when the measurement fails, rather than reading "could not
+  // measure" as "the beginning".
+  assert.match(js, /show\(pageAtAnchor\(anchor, chapter\) \?\? state\.page, \{ animate: false \}\)/);
 });
 
 t('the text itself never animates', () => {

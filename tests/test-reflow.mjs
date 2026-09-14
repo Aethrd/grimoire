@@ -242,6 +242,54 @@ await (async () => {
   });
 })();
 
+await (async () => {
+  /* Showing or hiding the chrome re-flows the text, and for a frame or two
+   * the flow has no width. Measured then, a chapter of forty pages comes back
+   * as one, and the position -- clamped to what exists -- lands on page one.
+   * A tap in the middle of the screen did that every time. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const reader = await import(
+    `${new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href}?chrome`);
+
+  const id = await store.add('books', { title: 'Chrome', fingerprint: 'chr', addedAt: 1 });
+  for (let i = 0; i < 3; i++) {
+    await store.put('chapters', {
+      bookId: id, index: i, title: `Ch ${i}`, words: 400,
+      html: Array.from({ length: 40 }, (_, p) => `<p>Chapter ${i} paragraph ${p}.</p>`).join(''),
+    });
+  }
+
+  reader.init({ onChange() {} });
+  await reader.open(id);
+
+  await t('toggling the chrome does not move the reader', async () => {
+    await reader.setMode('paged');
+    // A measured page count, and nothing measurable afterwards — which is the
+    // state a page is in while the chrome animates.
+    reader.state.pageCount = 12;
+    reader.goToPage(7);
+    assert.equal(reader.state.page, 7);
+
+    for (let tap = 0; tap < 3; tap++) {
+      reader.cycleChrome();
+      await new Promise((r) => setTimeout(r, 200));
+      assert.equal(reader.state.page, 7, `a tap moved the reader to page ${reader.state.page}`);
+      assert.equal(reader.state.pageCount, 12, 'the page count was thrown away');
+    }
+  });
+
+  await t('an unmeasurable page is not page one', () => {
+    // Null rather than zero, and the difference is the whole bug: every
+    // caller took "could not measure" as "the beginning".
+    const source = read('app/src/main/assets/www/js/reader.js');
+    assert.match(source, /function pageAtAnchor[\s\S]{0,900}return null;/);
+    assert.match(source, /pageAtAnchor\(anchor, chapter\) \?\? state\.page/);
+    // A chapter being opened does start at its beginning; a re-flow does not.
+    assert.match(source, /pageAtAnchor\(anchor\) \?\? 0/);
+    assert.match(source, /if \(width <= 0\) return;/);
+  });
+})();
+
 console.log('what counts as reading');
 
 await (async () => {
