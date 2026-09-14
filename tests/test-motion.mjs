@@ -432,6 +432,17 @@ t('anything offered as a choice is big enough to press', () => {
   assert.match(ruleFor('.list-row'), /min-height: 48px/);
 });
 
+t('sideways scrolling does not fight the page turn', () => {
+  // A paged layout is columns moved by a transform, and a scroller on the
+  // same element competes with it: the flow shifts a little instead of the
+  // page moving, and a tap meant for the middle lands on a surface that has
+  // moved under it.
+  for (const mode of ['height', 'original', 'smart']) {
+    assert.ok(css.includes(`[data-mode="scroll"][data-images="${mode}"] .page-flow { overflow-x: auto; }`),
+      `${mode} scrolls sideways in paged mode too`);
+  }
+});
+
 t('picture fitting is reachable from the book, not only from settings', () => {
   // It is a decision made while looking at a page -- this volume is a scan of
   // a spread, that one is a long strip -- and a setting three screens away

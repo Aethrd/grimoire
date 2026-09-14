@@ -93,6 +93,8 @@ const isScroll = () => state.mode === 'scroll';
 export async function setMode(mode) {
   if (mode === state.mode) return;
   await store.saveSettings({ readingMode: mode });
+  // The stylesheet needs to know before anything is drawn in the new mode.
+  document.body.dataset.mode = mode;
   const anchor = state.anchor;
   const chapter = state.chapterIndex;
   state.mode = mode;
@@ -509,6 +511,20 @@ export async function open(bookId, opts = {}) {
 
   await reloadMarks();
   await loadChapter(chapterIndex, anchor);
+
+  /* A chapter of pictures has no text to anchor to.
+   *
+   * Position is kept as a character offset into the chapter, which is exactly
+   * right for prose and meaningless for a comic: every page is offset zero,
+   * so a book of pictures always reopened at its first page however far
+   * through it you were. The page number is saved alongside and is the only
+   * thing that carries here.
+   */
+  if (opts.chapter == null && saved && !chapterHasText()) {
+    const page = Number(saved.page);
+    if (Number.isFinite(page) && page > 0) show(page, { animate: false });
+  }
+
   startSession();
   loadChapterNames();     // not awaited: the book opens now, names follow
   return book;
@@ -745,20 +761,47 @@ function onScrolled() {
  * re-derived whenever a chapter is opened, so the number converges as someone
  * reads rather than being wrong in a fixed way.
  */
+/** Whether the chapter on screen is words or pictures. */
+function chapterHasText() {
+  const section = sectionFor(state.chapterIndex);
+  if (!section) return true;
+  return (section.textContent || '').trim().length > 0;
+}
+
+/** How many pictures a chapter holds, for books that are made of them. */
+function picturesIn(chapter) {
+  const html = chapter.html || chapter.source || '';
+  return (html.match(/<img\b/gi) || []).length;
+}
+
 function estimateTotals() {
   const current = state.chapters.find((c) => c.index === state.chapterIndex);
   const measured = isScroll()
     ? Math.max(1, Math.ceil((sectionFor(state.chapterIndex)?.getBoundingClientRect().height || 0) / viewportHeight()))
     : state.pageCount;
+  /* A book of pictures is measured in pictures.
+   *
+   * The estimate works from word counts, and a comic has none -- so every
+   * chapter counted as one page, the total came to less than the page already
+   * being read, and the percentage saturated at a hundred before the first
+   * page was turned. Counting pictures gives the same shape of answer for a
+   * book that has no words in it.
+   */
+  const byWords = state.chapters.some((c) => (c.words || 0) > 0);
   const density = current && current.words ? current.words / measured : 280;
 
   let running = 0;
   state.pagesBefore = [];
   for (const chapter of state.chapters) {
     state.pagesBefore[chapter.index] = running;
-    running += chapter.index === state.chapterIndex
-      ? measured
-      : Math.max(1, Math.round((chapter.words || 0) / density) || 1);
+
+    if (chapter.index === state.chapterIndex) {
+      running += measured;
+      continue;
+    }
+    running += byWords
+      ? Math.max(1, Math.round((chapter.words || 0) / density) || 1)
+      : Math.max(1, picturesIn(chapter));
   }
   state.totalPages = Math.max(1, running);
 }
@@ -807,6 +850,15 @@ export function applyLayout(layout, settings) {
     viewport.classList.toggle('scrolling', isScroll());
     flow.classList.toggle('scrolling', isScroll());
   }
+
+  /* Set here, not only when the reader repaints.
+   *
+   * The stylesheet keeps pictures inside the column in paged mode, and it can
+   * only do that if it knows which mode it is in. Before the first paint the
+   * attribute was missing, so a picture wider than the column was free to
+   * overflow -- and be clipped away to nothing.
+   */
+  document.body.dataset.mode = state.mode;
 }
 
 /** Re-flow at the current anchor, so the reader never jumps. */

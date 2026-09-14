@@ -290,6 +290,111 @@ await (async () => {
   });
 })();
 
+await (async () => {
+  /* Position is kept as a character offset into the chapter, which is right
+   * for prose and meaningless for a comic: every page is offset zero, so a
+   * book of pictures always reopened at its first page however far through it
+   * you were. */
+  const JSZip = (await import('jszip')).default;
+  globalThis.JSZip = JSZip;
+  window.JSZip = JSZip;
+
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const reader = await import(
+    `${new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href}?pictures`);
+
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001', 'hex');
+  const chapter = async (n) => {
+    const zip = new JSZip();
+    for (let page = 1; page <= 8; page++) {
+      zip.file(`${String(page).padStart(3, '0')}.png`, png);
+    }
+    return new File([await zip.generateAsync({ type: 'nodebuffer' })], `Chapter ${n}.zip`);
+  };
+
+  build.clear();
+  await build.add([await chapter(1), await chapter(2), await chapter(3)]);
+  const { book } = await build.build({ title: 'Pictures' });
+
+  reader.init({ onChange() {} });
+
+  await t('a book of pictures is measured in pictures', async () => {
+    /* The estimate works from word counts, and a comic has none -- so every
+     * chapter counted as one page, the total came to less than the page being
+     * read, and the percentage saturated at a hundred before the first page
+     * was turned. */
+    await reader.open(book.id);
+    assert.ok(reader.state.totalPages > 3,
+      `a three-chapter comic totalled ${reader.state.totalPages} pages`);
+    assert.ok(reader.percent() < 0.5, `it opened at ${Math.round(reader.percent() * 100)}%`);
+  });
+
+  await t('a book of pictures reopens where it was left', async () => {
+    await reader.goTo({ chapter: 1, anchor: 0 });
+    reader.state.pageCount = 8;
+    reader.goToPage(5);
+    await new Promise((r) => setTimeout(r, 150));
+    await reader.pauseSession();
+
+    const saved = await store.get('positions', book.id);
+    assert.equal(saved.chapterIndex, 1);
+    assert.equal(saved.page, 5);
+
+    await reader.open(book.id);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(reader.state.chapterIndex, 1);
+    assert.equal(reader.state.page, 5, `it reopened on page ${reader.state.page}`);
+  });
+})();
+
+await (async () => {
+  /* A page is one column of a fixed width and the viewport clips what leaves
+   * it. Fit height, Original and Smart all allow a picture to be wider than
+   * that -- the point of them, and fine in scroll mode where the flow can
+   * scroll sideways. In paged mode the overflow is cut off and the picture
+   * disappears entirely rather than partly, so the mode looks broken. */
+  const css = fs.readFileSync(
+    new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
+
+  const style = document.createElement('style');
+  style.textContent = css;
+  document.head.appendChild(style);
+
+  const picture = document.createElement('img');
+  document.getElementById('page-flow').appendChild(picture);
+
+  const fitted = (mode, fit, className = '') => {
+    document.body.dataset.mode = mode;
+    document.body.dataset.images = fit;
+    picture.className = className;
+    const computed = window.getComputedStyle(picture);
+    return { maxWidth: computed.maxWidth, maxHeight: computed.maxHeight };
+  };
+
+  await t('no picture can escape the page in paged mode', () => {
+    for (const fit of ['screen', 'width', 'height', 'stretch', 'original', 'smart']) {
+      const { maxWidth, maxHeight } = fitted('paged', fit);
+      assert.equal(maxWidth, '100%', `${fit} lets a picture out of the column`);
+      assert.equal(maxHeight, '88vh', `${fit} lets a picture past the screen`);
+    }
+    // Including the shapes smart fitting singles out.
+    for (const shape of ['landscape', 'tall']) {
+      assert.equal(fitted('paged', 'smart', shape).maxWidth, '100%', shape);
+    }
+  });
+
+  await t('scroll mode still lets a picture run off the side', () => {
+    // Which is what makes Fit height and Original worth having.
+    for (const fit of ['height', 'original']) {
+      assert.equal(fitted('scroll', fit).maxWidth, 'none', fit);
+    }
+  });
+
+  style.remove();
+  picture.remove();
+})();
+
 console.log('what counts as reading');
 
 await (async () => {
