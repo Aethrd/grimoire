@@ -177,7 +177,11 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .chip { flex: none; padding: 6px 11px; border: 1px solid var(--divider);
         font-family: var(--font-heading); font-weight: 600; font-size: 11px;
         letter-spacing: .04em; text-transform: uppercase;
-        border-radius: var(--radius-sm); }
+        border-radius: var(--radius-sm);
+        /* A chip is 23px tall at this padding, which is half what a finger
+           needs. The box grows without the text moving, so nothing is
+           redrawn -- only made reachable. */
+        min-height: 40px; display: inline-flex; align-items: center; }
 .chip[aria-pressed="true"] { background: var(--accent); color: var(--on-accent);
                              border-color: var(--accent); }
 .chip.dashed { border-style: dashed; color: var(--muted); }
@@ -244,7 +248,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .seg { display: flex; border: 1px solid var(--hairline); border-radius: var(--radius-md);
        overflow: hidden; }
 .seg button { flex: 1; padding: 9px 6px; font-size: 12px; font-family: var(--font-heading);
-              font-weight: 600; border-right: 1px solid var(--hairline); }
+              font-weight: 600; border-right: 1px solid var(--hairline);
+              min-height: 42px; }
 .seg button:last-child { border-right: 0; }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 
@@ -565,7 +570,7 @@ section.block > h2 { margin-top: 18px; }
 
 .list-row { display: flex; align-items: flex-start; gap: 10px; width: 100%;
             padding: 13px 16px; border-bottom: 1px solid var(--divider);
-            text-align: left; }
+            text-align: left; min-height: 48px; }
 .list-row.current { background: var(--accent-100);
                     box-shadow: inset 3px 0 0 var(--accent); }
 .list-row .lead { flex: none; width: 26px; font-size: 11px; color: var(--muted);

@@ -167,6 +167,39 @@ export async function openLayout(bookId) {
   modeField.appendChild(modeSeg);
   body.appendChild(modeField);
 
+  /* How pictures are fitted, here as well as in settings.
+   *
+   * It is a decision made while looking at a page -- this volume is a scan of
+   * a two-page spread, that one is a long strip -- and a setting three screens
+   * away from the page is a setting nobody finds. */
+  const picturesField = document.createElement('div');
+  picturesField.className = 'field';
+  picturesField.innerHTML = '<label><span>Pictures</span></label>';
+  const pictureRow = document.createElement('div');
+  pictureRow.className = 'chip-row wrap';
+  for (const [value, label] of [
+    ['screen', 'Fit screen'],
+    ['width', 'Fit width'],
+    ['height', 'Fit height'],
+    ['stretch', 'Stretch'],
+    ['original', 'Original'],
+    ['smart', 'Smart'],
+  ]) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.style.textTransform = 'none';
+    chip.textContent = label;
+    chip.setAttribute('aria-pressed', String((settings.imageFit || 'screen') === value));
+    chip.onclick = async () => {
+      await store.saveSettings({ imageFit: value });
+      document.body.dataset.images = value;
+      openLayout(bookId);
+    };
+    pictureRow.appendChild(chip);
+  }
+  picturesField.appendChild(pictureRow);
+  body.appendChild(picturesField);
+
   if (settings.readingMode === 'scroll') {
     const endless = document.createElement('div');
     endless.className = 'row';

@@ -418,6 +418,32 @@ t('the behaviour pane renders its controls', async () => {
   assert.match(behaviourPane, /Tap the sides/);
 });
 
+t('anything offered as a choice is big enough to press', () => {
+  /* A chip is 23px tall at its own padding, which is half what a finger
+   * needs. Finding an option and being unable to hit it is the same as the
+   * option not being there. */
+  const ruleFor = (selector) => {
+    const at = css.indexOf(`${selector} {`);
+    assert.ok(at > -1, `no rule for ${selector}`);
+    return css.slice(at, css.indexOf('}', at));
+  };
+  assert.match(ruleFor('.chip'), /min-height: 40px/);
+  assert.match(ruleFor('.seg button'), /min-height: 42px/);
+  assert.match(ruleFor('.list-row'), /min-height: 48px/);
+});
+
+t('picture fitting is reachable from the book, not only from settings', () => {
+  // It is a decision made while looking at a page -- this volume is a scan of
+  // a spread, that one is a long strip -- and a setting three screens away
+  // from the page is a setting nobody finds.
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  const layout = screens.slice(screens.indexOf('export async function openLayout'));
+  for (const label of ['Fit screen', 'Fit width', 'Fit height', 'Stretch', 'Original', 'Smart']) {
+    assert.ok(layout.includes(`'${label}'`), `${label} is not in the layout sheet`);
+  }
+  assert.match(layout, /store\.saveSettings\(\{ imageFit: value \}\)/);
+});
+
 t('every picture fitting is offered, drawn not just defined', () => {
   /* A rule in the stylesheet with no way to choose it is not a feature. */
   for (const label of ['Fit screen', 'Fit width', 'Fit height', 'Stretch',
