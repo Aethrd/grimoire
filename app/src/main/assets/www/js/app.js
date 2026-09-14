@@ -404,6 +404,11 @@ function wireSelection() {
     if (e.target === el('details-sheet')) el('details-sheet').hidden = true;
   };
 
+  el('folder-actions-cancel').onclick = () => { el('folder-actions').hidden = true; };
+  el('folder-actions').onclick = (e) => {
+    if (e.target === el('folder-actions')) el('folder-actions').hidden = true;
+  };
+
   el('export-cancel').onclick = () => { el('export-sheet').hidden = true; };
   el('export-sheet').onclick = (e) => {
     if (e.target === el('export-sheet')) el('export-sheet').hidden = true;
@@ -779,6 +784,78 @@ function commonTitle(titles) {
     shared.pop();
   }
   return shared.join(' ').trim() || null;
+}
+
+/**
+ * What can be done to a whole folder.
+ *
+ * Two of these are ordinary and one is not, so they are not presented as
+ * three equal choices: deleting says how many books it will destroy, and asks
+ * again before it does.
+ */
+async function openFolderActions(folder, label, count) {
+  const sheet = el('folder-actions');
+  el('folder-actions-name').textContent = `${label} · ${count} book${count === 1 ? '' : 's'}`;
+
+  const list = el('folder-actions-list');
+  list.innerHTML = '';
+
+  const choice = (text, note, run) => {
+    const button = document.createElement('button');
+    button.innerHTML = `<span>${escapeText(text)}</span><span>${escapeText(note || '')}</span>`;
+    button.onclick = run;
+    list.appendChild(button);
+    return button;
+  };
+
+  choice('Open it', 'Filter the shelf to this folder', () => {
+    sheet.hidden = true;
+    openFolder(folder);
+  });
+
+  choice('Take the books out', 'They stay in the library, unfiled', async () => {
+    sheet.hidden = true;
+    const books = (await store.all('books')).filter((b) => (b.folder || '') === folder);
+    for (const book of books) {
+      delete book.folder;
+      await store.put('books', book);
+    }
+    if (activeFolder === folder) await openFolder(null);
+    await refreshShelf();
+    await panels.openFolders(openFolder);
+    toast(`${books.length} book${books.length === 1 ? '' : 's'} taken out of “${label}”`);
+  });
+
+  const remove = choice(`Delete all ${count}`, 'The books themselves, permanently', async () => {
+    // Asked twice, because there is no undo and a folder can hold a lot.
+    remove.innerHTML = `<span>Really delete ${count} book${count === 1 ? '' : 's'}?</span>`
+      + '<span>Tap again</span>';
+    remove.onclick = async () => {
+      sheet.hidden = true;
+      const books = (await store.all('books')).filter((b) => (b.folder || '') === folder);
+
+      const panel = el('import-progress');
+      el('import-label').textContent = `Deleting ${label}`;
+      panel.hidden = false;
+      try {
+        for (const [at, book] of books.entries()) {
+          await store.deleteBook(book.id);
+          el('import-bar').style.width = `${Math.round(((at + 1) / books.length) * 100)}%`;
+          el('import-count').textContent = `${at + 1} of ${books.length}`;
+        }
+      } finally {
+        panel.hidden = true;
+      }
+
+      if (activeFolder === folder) await openFolder(null);
+      await refreshShelf();
+      await panels.openFolders(openFolder);
+      toast(`${books.length} book${books.length === 1 ? '' : 's'} deleted`);
+    };
+  });
+  remove.classList.add('danger');
+
+  sheet.hidden = false;
 }
 
 async function openStatusSheet() {
@@ -1914,6 +1991,7 @@ window.Grimoire = {
 
   /** Return true to swallow the back gesture. */
   onBack() {
+    if (!el('folder-actions').hidden) { el('folder-actions').hidden = true; return true; }
     if (!el('export-sheet').hidden) { el('export-sheet').hidden = true; return true; }
     if (!el('merge-sheet').hidden) { el('merge-sheet').hidden = true; return true; }
     if (!el('bundle-sheet').hidden) { el('bundle-sheet').hidden = true; return true; }
@@ -2026,6 +2104,7 @@ async function boot() {
   panels.onSettingsChange(() => panels.openSettings(refreshShelf));
   panels.onGuides(refreshGuides);
   panels.onWrite((blob, name, type, opts) => writeOut(blob, name, type, opts));
+  panels.onFolderMenu(openFolderActions);
 
 
   await refreshShelf();

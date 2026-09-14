@@ -1286,3 +1286,12 @@ body[data-mode="paged"] .page-flow img.tall {
   font-size: 13px; letter-spacing: .01em; color: var(--muted);
 }
 .reel-volume:first-child { margin-top: 0; }
+
+
+/* A folder and what can be done with it, on one line. */
+.folder-row { display: flex; align-items: stretch; }
+.folder-row .list-row { flex: 1; min-width: 0; }
+.folder-row .folder-more { flex: none; width: 44px; align-self: center;
+                           color: var(--muted); }
+/* The one choice in that sheet that cannot be undone. */
+.sheet-list button.danger span:first-child { color: #c0553f; font-weight: 700; }

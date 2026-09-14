@@ -575,6 +575,27 @@ t('a settings pane does not wipe what it has already built', () => {
     'the pane assigns innerHTML partway through and loses what came before');
 });
 
+t('a folder can be emptied or deleted as a folder', () => {
+  /* It could always be done by filtering the shelf and selecting everything,
+   * which is three steps and a chance for the filter not to be what you
+   * thought. A folder knows what is in it. */
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /export function onFolderMenu/);
+  assert.match(panels, /onFolderActions\?\.\(folder, label, count\)/);
+  assert.match(app, /async function openFolderActions/);
+  assert.ok(html.includes('id="folder-actions"'));
+
+  // Taking the books out is not the same as destroying them, and both are
+  // offered rather than only the dangerous one.
+  assert.match(app, /Take the books out/);
+  assert.match(app, /delete book\.folder/);
+
+  // Deleting says how many and asks again, because there is no undo.
+  assert.match(app, /Delete all \$\{count\}/);
+  assert.match(app, /Really delete \$\{count\} book/);
+  assert.match(app, /remove\.classList\.add\('danger'\)/);
+});
+
 t('select all means all of what is shown', () => {
   // Filtered to a folder, a "select all" that reaches past the filter is a
   // trap: the next thing pressed happens to books you cannot see.

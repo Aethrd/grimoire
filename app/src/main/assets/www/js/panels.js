@@ -1422,6 +1422,10 @@ export function onSettingsChange(fn) { renderSettings = fn; }
  * Every folder in use, with counts. Tapping one filters the shelf to it.
  */
 
+let onFolderActions = null;
+/** What the shell offers for a whole folder; it owns deleting. */
+export function onFolderMenu(fn) { onFolderActions = fn; }
+
 export async function openFolders(onOpenFolder) {
   const books = await store.all('books');
   const visible = books.filter((b) => !b.inVault || vaultUnlocked);
@@ -1438,12 +1442,35 @@ export async function openFolders(onOpenFolder) {
     `${counts.size} folder${counts.size === 1 ? '' : 's'} · ${visible.length} books`;
 
   const entry = (label, count, folder, note) => {
+    const row = document.createElement('div');
+    row.className = 'folder-row';
+
     const button = document.createElement('button');
     button.className = 'list-row';
     button.innerHTML = `<span class="body"><b>${escape(label)}</b>${
       note ? `<small>${escape(note)}</small>` : ''}</span><span class="trail">${count}</span>`;
     button.onclick = () => onOpenFolder(folder);
-    list.appendChild(button);
+    row.appendChild(button);
+
+    /* Emptying a folder is a folder's business, not a selection's.
+     *
+     * It could always be done by filtering the shelf and selecting
+     * everything, which is three steps and a chance to have the filter not be
+     * what you thought. A folder knows what is in it. */
+    if (folder !== null) {
+      const more = document.createElement('button');
+      more.className = 'icon-btn folder-more';
+      more.title = `What to do with ${label}`;
+      more.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6"/>'
+        + '<circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>';
+      more.onclick = (event) => {
+        event.stopPropagation();
+        onFolderActions?.(folder, label, count);
+      };
+      row.appendChild(more);
+    }
+
+    list.appendChild(row);
   };
 
   entry('All books', visible.length, null, 'Everything, unfiltered');
