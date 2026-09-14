@@ -272,12 +272,29 @@ export async function openLayout(bookId) {
 let reelFilter = 'all';
 /** The volume the reel is narrowed to, or null for every one of them. */
 let reelVolume = null;
+/** Which book the reel is currently showing, so a change of book resets it. */
+let reelBook = null;
 
 /* The reel rebuilds wholesale on every filter change, so its URLs are
    released and re-minted with it. */
 const reelUrls = pool();
 
 export async function openReel(bookId, onJump) {
+  /* A different book starts afresh.
+   *
+   * The grid element outlives the pictures in it, so it kept whatever offset
+   * the last book left behind -- open the reel a long way into one book and
+   * then in another, and you land at that same depth in a reel that may not
+   * even be that long. The filters were kept too, so a volume chosen in one
+   * book could leave the next one looking empty.
+   */
+  const changedBook = reelBook !== bookId;
+  if (changedBook) {
+    reelBook = bookId;
+    reelVolume = null;
+    reelFilter = 'all';
+  }
+
   const settings = await store.settings();
   const images = (await store.byIndex('images', 'bookId', bookId)).sort((a, b) => a.order - b.order);
 
@@ -384,6 +401,10 @@ export async function openReel(bookId, onJump) {
      opened to answer. */
   let heading = null;
   let strip = inner;
+  let first = null;
+  let atReading = null;
+  // Where the reader is, when the reel is of the book being read.
+  const readingAt = reader.state.book?.id === bookId ? reader.state.chapterIndex : 0;
 
   for (const image of visible) {
     const url = reelUrls.url(image.blob);
@@ -412,7 +433,22 @@ export async function openReel(bookId, onJump) {
       <img src="${url}" alt="" loading="lazy">
       <figcaption>${escape(where)} · ${image.width}×${image.height}</figcaption>`;
     figure.querySelector('img').onclick = () => viewer(url, image, () => onJump(image));
+    if (!first) first = figure;
+    if (!atReading && image.chapterIndex >= readingAt) atReading = figure;
     strip.appendChild(figure);
+  }
+
+  /* Opened at the part of the book being read.
+   *
+   * Per-book by definition, and the place you actually want: a reel that
+   * opens at picture one when you are three volumes in is no more use than
+   * one that opens at someone else's position.
+   */
+  if (changedBook || !grid.scrollTop) {
+    const target = atReading || first;
+    grid.scrollTop = target
+      ? Math.max(0, target.offsetTop - grid.clientHeight / 3)
+      : 0;
   }
 }
 
