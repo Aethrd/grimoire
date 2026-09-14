@@ -675,10 +675,45 @@ const MAX_ENTRY_BYTES = 512 * 1024 * 1024;
  * .zip. The distinction cannot be made from the extension, so it is made from
  * the contents: any recognisable book file inside means it is a container.
  */
+/* Files that come along with a download and are not the thing downloaded.
+ *
+ * A folder of scanned pages almost always has one of these in it -- a readme,
+ * a credits file, the scanlation group's note. They are plain text, and plain
+ * text is a format this reader can open, so a single readme.txt was enough to
+ * make an archive of six hundred images look like an archive containing one
+ * book: the readme. Building it produced exactly that.
+ */
+const INCIDENTAL = /^(read ?me|readme|licen[cs]e|copying|credits?|info|notes?|desc(ription)?|changelog|source|links?|urls?)\b/i;
+const INCIDENTAL_KIND = /\.(nfo|url|json|xml|ini|db|log|sfv|md5|torrent)$/i;
+
+function isIncidental(name) {
+  const leaf = String(name).split('/').pop();
+  return INCIDENTAL.test(leaf) || INCIDENTAL_KIND.test(leaf);
+}
+
+/**
+ * Whether an archive is a comic rather than a container of books.
+ *
+ * Judged on what the archive is mostly made of, not on whether a single
+ * readable file can be found in it. One text file beside six hundred pages
+ * does not make a library.
+ */
+/** What an archive is: 'comic' for pages, 'books' for a container. */
+export function classifyArchive(entries) {
+  return looksLikeComic(entries) ? 'comic' : 'books';
+}
+
 function looksLikeComic(entries) {
-  const books = entries.filter((e) => ARCHIVE_CONTENTS.has(formatOf(e.name)));
+  const pictures = entries.filter((e) => /\.(jpe?g|png|gif|webp|avif)$/i.test(e.name));
+  if (!pictures.length) return false;
+
+  const books = entries.filter((e) =>
+    ARCHIVE_CONTENTS.has(formatOf(e.name)) && !isIncidental(e.name));
   if (books.length) return false;
-  return entries.some((e) => /\.(jpe?g|png|gif|webp|avif)$/i.test(e.name));
+
+  // Pictures have to be the substance of it, not an illustration or two
+  // among a pile of something else.
+  return pictures.length >= (entries.length - pictures.length);
 }
 
 /**
@@ -733,7 +768,8 @@ export async function expandArchive(file, onProgress) {
 
   if (looksLikeComic(entries)) return { comic: true, books: [] };
 
-  const books = entries.filter((e) => ARCHIVE_CONTENTS.has(formatOf(e.name)));
+  const books = entries.filter((e) =>
+    ARCHIVE_CONTENTS.has(formatOf(e.name)) && !isIncidental(e.name));
   if (!books.length) {
     const nested = entries.some((e) => /\.zip$/i.test(e.name));
     throw new Error(nested
@@ -894,10 +930,11 @@ export async function nameWithFormat(name, blob) {
      */
     if (names.some((n) => /\.(epub|cbz|pdf|txt|md|html?|fb2|mht(ml)?)$/i.test(n))) return `${name}.zip`;
 
-    // Every entry a picture is a comic; anything else is best offered to the
-    // EPUB reader, which explains itself when it cannot cope.
+    // Mostly pictures is a comic. Requiring every last entry to be one meant
+    // a readme alongside the pages was enough to rule it out.
     const pictures = names.filter((n) => /\.(jpe?g|png|gif|webp|avif)$/i.test(n));
-    if (names.length && pictures.length === names.length) return `${name}.cbz`;
+    const others = names.filter((n) => !/\.(jpe?g|png|gif|webp|avif)$/i.test(n) && !isIncidental(n));
+    if (pictures.length && pictures.length >= others.length) return `${name}.cbz`;
     return `${name}.epub`;
   }
 

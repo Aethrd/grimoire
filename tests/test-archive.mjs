@@ -130,6 +130,27 @@ await t('parse() refuses a container rather than guessing', async () => {
   await assert.rejects(parse.parse(file), /expandArchive/);
 });
 
+t('a readme does not turn a folder of pages into a library', () => {
+  /* Plain text is a format this reader can open, so one readme.txt beside six
+   * hundred images was enough to make the archive look like a container
+   * holding a single book -- the readme. Building it produced exactly that. */
+  const pages = Array.from({ length: 20 }, (_, i) => ({ name: `${i + 1}.png` }));
+
+  assert.equal(parse.classifyArchive([...pages, { name: 'readme.txt' }]), 'comic');
+  assert.equal(parse.classifyArchive([...pages, { name: 'Credits.txt' }, { name: 'info.nfo' }]), 'comic');
+
+  // A real library is still a library.
+  assert.equal(parse.classifyArchive([
+    { name: 'Volume 1.epub' }, { name: 'Volume 2.epub' }, { name: 'readme.txt' },
+  ]), 'books');
+
+  // And a couple of illustrations among a pile of text is not a comic.
+  assert.equal(parse.classifyArchive([
+    { name: 'cover.png' }, { name: 'Volume 1.txt' }, { name: 'Volume 2.txt' },
+    { name: 'Volume 3.txt' }, { name: 'Volume 4.txt' },
+  ]), 'books');
+});
+
 console.log('extracted content');
 
 await t('books are extracted one at a time, not all at once', async () => {
