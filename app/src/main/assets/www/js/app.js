@@ -1435,9 +1435,25 @@ function moveGuides(clientY) {
 function shortenMiddle(name, limit = 64) {
   const text = String(name);
   if (text.length <= limit) return text;
-  // Weighted towards the end, where the volume number almost always is.
-  const head = Math.ceil((limit - 1) * 0.38);
-  const tail = limit - 1 - head;
+
+  /* The cut is placed around the last number, not at a fixed midpoint.
+   *
+   * Which part a file is is almost always a number, and a blind middle cut
+   * lands wherever it lands -- "Volume 14" came back as "lume 14", which is
+   * worse than useless in a list being put in order. Finding the last run of
+   * digits and keeping everything from a little before it onwards means the
+   * part that identifies the file always survives.
+   */
+  const lastNumber = text.search(/\d+(?!.*\d)/);
+  const fromNumber = lastNumber === -1 ? 0 : text.length - lastNumber;
+
+  const MIN_HEAD = 12;
+  // Enough lead-in to bring the word before the number with it: "14" alone
+  // is ambiguous where "Volume 14" is not.
+  const wanted = Math.max(Math.floor((limit - 1) * 0.55), fromNumber + 10);
+  const tail = Math.min(wanted, limit - 1 - MIN_HEAD);
+  const head = limit - 1 - tail;
+
   return `${text.slice(0, head)}…${text.slice(-tail)}`;
 }
 

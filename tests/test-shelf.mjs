@@ -610,6 +610,44 @@ t('the build button is not under the tab bar', () => {
   assert.match(css, /--tabbar-h:/);
 });
 
+t('a long part name keeps the end that identifies it', () => {
+  /* The end of a filename is where the volume number lives. Cutting there
+   * leaves a list of parts that all read the same, and ordering them becomes
+   * guesswork. */
+  const at = app.indexOf('function shortenMiddle');
+  assert.ok(at > -1);
+  const shortenMiddle = eval(`(${app.slice(at, app.indexOf('function renderWorkshop')).trim()})`);
+
+  /* The cut is placed around the last number, not at a fixed midpoint. A
+   * blind middle cut turned "Volume 14" into "lume 14", which is worse than
+   * useless in a list being put in order. */
+  for (const [name, keep] of [
+    ['That Time I Got Reincarnated as a Slime - Volume 14 (Complete Fan Translation).epub', 'Volume 14'],
+    ['[Group] Solo Leveling - Chapter 0142 [Digital] [Cleaned+Redrawn].zip', 'Chapter 0142'],
+    ["Omniscient Reader's Viewpoint - Side Story 03 - The Final Chapter of the Epilogue.epub", 'Story 03'],
+  ]) {
+    const short = shortenMiddle(name);
+    assert.ok(short.length <= 64, `${short.length} characters`);
+    assert.ok(short.includes(keep), `"${keep}" was cut out of: ${short}`);
+    // The extension survives too, since that is what says how it will be read.
+    assert.ok(short.endsWith(name.slice(name.lastIndexOf('.'))));
+  }
+
+  // A name with no number in it is still shortened, just not around one.
+  const plain = shortenMiddle('A Book With No Number In Its Name At All Whatsoever Really Truly None.epub');
+  assert.ok(plain.length <= 64);
+  assert.ok(plain.startsWith('A Book With'));
+
+  // A name that fits is left exactly as it is.
+  assert.equal(shortenMiddle('Vol 3.epub'), 'Vol 3.epub');
+
+  /* And the clamp has to allow what the shortening kept: at roughly thirty
+   * characters to a line in this row, two lines would clip the tail the
+   * shortening deliberately preserved. */
+  const rule = css.slice(css.indexOf('.build-what b {'), css.indexOf('.build-what small'));
+  assert.match(rule, /line-clamp: 3/);
+});
+
 t('the workshop shows the order and lets it be changed', () => {
   // Order is the whole point of a serial, so it is shown and movable rather
   // than inferred and hoped for.

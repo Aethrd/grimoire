@@ -1234,7 +1234,12 @@ section.block > h2 { margin-top: 18px; }
      ends in the same ellipsis -- "Reincarnated as a Slime Volume…" says
      nothing about which volume it is. */
   white-space: normal; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  /* Three lines, not two.
+     The name is already shortened to 64 characters before it gets here, and
+     a row this narrow -- a number, the name, three buttons -- fits roughly
+     thirty characters to a line. Two lines would clip the last few
+     characters, which are exactly the ones the shortening kept. */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
   overflow: hidden;
 }
 .build-what small { display: block; font-size: 11px; color: var(--muted); }
