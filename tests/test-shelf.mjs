@@ -376,6 +376,18 @@ t('a half-imported book is neither shown nor kept', () => {
   assert.match(library, /await store\.deleteBook\(bookId\)\.catch/);
 });
 
+t('the picture reel opens where you are, not where the last book was', () => {
+  // The grid element outlives the pictures in it, so it kept whatever offset
+  // the last book left behind -- and the filters were kept too, so a volume
+  // chosen in one book could leave the next one looking empty.
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /const changedBook = reelBook !== bookId/);
+  assert.match(screens, /reelVolume = null;\n    reelFilter = 'all';/);
+  // Opened at the part being read, which is per-book by definition.
+  assert.match(screens, /image\.chapterIndex >= readingAt/);
+  assert.match(screens, /target\.offsetTop - grid\.clientHeight \/ 3/);
+});
+
 t('the index opens where you are, not where the last book was', () => {
   // The list is rebuilt on every open but the container is not, so it kept
   // whatever offset the previous book left behind: open the index on chapter
