@@ -1611,6 +1611,54 @@ async function openDivide(book) {
   await show('divide');
 }
 
+/**
+ * Place cuts for an even division into a given number of parts.
+ *
+ * A starting point, not an answer: almost no book divides evenly, and the
+ * cuts can be moved one piece at a time afterwards. Getting from "nothing" to
+ * "roughly right" by tapping through three hundred gaps is not reasonable.
+ */
+function divideInto(parts, total) {
+  divideCuts = new Set();
+  for (let n = 1; n < parts; n++) {
+    divideCuts.add(Math.round((total * n) / parts));
+  }
+  // Rounding can land two cuts on the same place in a very short book.
+  divideCuts = new Set([...divideCuts].filter((at) => at > 0 && at < total));
+}
+
+function renderIntoChips(total) {
+  const row = el('divide-into');
+  row.innerHTML = '';
+
+  /* Offered up to whatever the book can actually be divided into, so a
+     six-page volume does not suggest making ten parts of it. */
+  const most = Math.min(8, total);
+  for (let parts = 2; parts <= most; parts++) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.textContent = `${parts}`;
+    chip.title = `Into ${parts} parts`;
+    chip.setAttribute('aria-pressed', String(divideCuts.size === parts - 1 && evenlyCut(parts, total)));
+    chip.onclick = () => { divideInto(parts, total); renderDivide(); };
+    row.appendChild(chip);
+  }
+
+  const label = document.createElement('span');
+  label.className = 'muted';
+  label.style.cssText = 'font-size:11px;align-self:center;margin-left:4px';
+  label.textContent = 'even parts, then move the cuts';
+  row.appendChild(label);
+}
+
+/** Whether the cuts are still where an even division would have put them. */
+function evenlyCut(parts, total) {
+  for (let n = 1; n < parts; n++) {
+    if (!divideCuts.has(Math.round((total * n) / parts))) return false;
+  }
+  return true;
+}
+
 function renderDivide() {
   if (!dividing) return;
   const { book, chapters, units } = dividing;
@@ -1623,6 +1671,7 @@ function renderDivide() {
   const noun = units ? (pages ? 'pages' : 'sections') : 'chapters';
 
   el('divide-of').textContent = `${library.displayTitle(book)} · ${rows.length} ${noun}`;
+  renderIntoChips(rows.length);
 
   /* Which part each chapter is going to end up in.
    *
@@ -1687,25 +1736,75 @@ function cutControl(at) {
 
   if (!divideCuts.has(at)) return cut;
 
-  /* What this cut actually separates.
+  /* What this cut separates, and a way to move it.
    *
    * Shown only once a cut is placed: a preview under every gap would bury the
-   * chapter list it is meant to explain. */
+   * list it is meant to explain. */
   const holder = document.createElement('div');
   holder.appendChild(cut);
 
+  const preview = document.createElement('div');
+  preview.className = 'divide-preview';
+  holder.appendChild(preview);
+
+  const total = (dividing.units || dividing.chapters).length;
+
+  /* A slider, because a cut can be anywhere.
+   *
+   * Stepping one piece at a time is fine for a book of twelve chapters and
+   * hopeless for a volume of three hundred pages. Dragging shows each
+   * position as it passes, and only the one it is let go on is kept -- so
+   * finding the right place costs one gesture rather than two hundred taps.
+   */
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.className = 'divide-slider';
+  // Never onto a neighbouring cut, which would silently merge two into one.
+  const others = [...divideCuts].filter((n) => n !== at).sort((a, b) => a - b);
+  slider.min = String(Math.max(1, (others.filter((n) => n < at).pop() ?? 0) + 1));
+  slider.max = String(Math.min(total - 1, (others.find((n) => n > at) ?? total) - 1));
+  slider.value = String(at);
+  slider.setAttribute('aria-label', 'Where this cut falls');
+
+  fillPreview(preview, at, at);
+
+  slider.oninput = () => {
+    // Drawn as it moves, but not committed: the list above renumbers itself
+    // on release rather than on every pixel.
+    fillPreview(preview, Number(slider.value), at);
+  };
+  slider.onchange = () => {
+    const to = Number(slider.value);
+    if (to === at || divideCuts.has(to)) return;
+    divideCuts.delete(at);
+    divideCuts.add(to);
+    renderDivide();
+  };
+
+  preview.appendChild(slider);
+  return holder;
+}
+
+/**
+ * Fill a cut's preview for a position.
+ *
+ * @param at       the position being shown, which during a drag is not yet
+ *                 the position the cut is actually at
+ * @param committed  where the cut currently sits, for working out which part
+ *                 of the division is being changed
+ */
+function fillPreview(preview, at, committed) {
+  const total = (dividing.units || dividing.chapters).length;
   const look = dividing.units
     ? library.previewUnitCut(dividing.units, at)
     : library.previewCut(dividing.chapters, at);
-  const preview = document.createElement('div');
-  preview.className = 'divide-preview';
 
   const side = (label, chapterName, words, href) => {
     const block = document.createElement('div');
     block.innerHTML = `<em>${escapeText(label)} ${escapeText(chapterName || '')}</em>`;
 
     /* A page, where there is one. For a comic the picture is the whole
-       content of the chapter, and a title is no substitute for seeing it. */
+       content, and a title is no substitute for seeing it. */
     const blob = href ? dividing.pictures.get(href) : null;
     if (blob) {
       const img = document.createElement('img');
@@ -1725,30 +1824,26 @@ function cutControl(at) {
   pair.className = look.endsPicture || look.beginsPicture ? 'divide-pair pages' : 'divide-pair';
   pair.appendChild(side('Ends', look.endsAt, look.endsWith, look.endsPicture));
   pair.appendChild(side('Next part opens', look.beginsAt, look.beginsWith, look.beginsPicture));
-  preview.appendChild(pair);
 
-  holder.appendChild(preview);
-  return holder;
+  // What the division would be if the cut were let go here.
+  const candidate = new Set([...divideCuts].filter((n) => n !== committed));
+  candidate.add(at);
+  const sizes = partSizes(total, candidate);
+  const which = [...candidate].sort((a, b) => a - b).indexOf(at);
+
+  const where = document.createElement('p');
+  where.className = 'divide-where';
+  where.textContent = `${sizes[which]} then ${sizes[which + 1]}`;
+
+  const slider = preview.querySelector('.divide-slider');
+  preview.innerHTML = '';
+  preview.appendChild(pair);
+  preview.appendChild(where);
+  if (slider) preview.appendChild(slider);
 }
 
 function wireDivide() {
   el('divide-clear').onclick = () => { divideCuts.clear(); renderDivide(); };
-
-  el('divide-every').onclick = () => {
-    // The commonest division by far is "every so many chapters", and placing
-    // forty cuts by hand is not a thing anyone should have to do.
-    const total = (dividing?.units || dividing?.chapters || []).length;
-    // Cycles through the usual sizes rather than asking for a number: on a
-    // phone, tapping through four choices beats typing one.
-    const sizes = [5, 10, 20, 50].filter((n) => n < total);
-    if (!sizes.length) return toast('Not enough chapters to divide evenly');
-    const next = sizes[(sizes.indexOf(lastEvery) + 1) % sizes.length];
-    lastEvery = next;
-    divideCuts = new Set();
-    for (let at = next; at < total; at += next) divideCuts.add(at);
-    renderDivide();
-    toast(`Every ${next} chapters`);
-  };
 
   el('divide-go').onclick = async () => {
     if (!dividing || !divideCuts.size) return;

@@ -1312,6 +1312,31 @@ body[data-mode="paged"] .page-flow img.tall {
 .divide-chapter small { flex: none; color: var(--muted); font-size: 11px; }
 
 .divide-cut { display: block; width: 100%; text-align: left; padding: 6px 0; }
+
+/* Moving a cut.
+   An even division is a starting point; almost nothing is actually even, and
+   stepping one piece at a time is hopeless in a volume of three hundred
+   pages. */
+.divide-where { margin: 8px 0 2px; text-align: center; font-size: 11px;
+                font-family: var(--font-heading); font-weight: 700;
+                letter-spacing: .04em; color: var(--accent-ink); }
+
+.divide-slider { -webkit-appearance: none; appearance: none; width: 100%;
+                 height: 34px; background: none; margin: 0; }
+.divide-slider::-webkit-slider-runnable-track {
+  height: 3px; border-radius: 2px; background: var(--divider);
+}
+.divide-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 26px; height: 26px; margin-top: -12px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--surface);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
+}
+.divide-slider::-moz-range-track { height: 3px; border-radius: 2px; background: var(--divider); }
+.divide-slider::-moz-range-thumb {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--surface);
+}
 .divide-cut-line { display: flex; align-items: center; gap: 8px; color: var(--muted);
                    font-family: var(--font-heading); font-size: 10px; font-weight: 700;
                    letter-spacing: .08em; text-transform: uppercase; }

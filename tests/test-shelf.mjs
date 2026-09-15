@@ -574,6 +574,34 @@ t('dividing shows what each cut separates', () => {
   assert.match(app, /if \(current === 'divide' && name !== 'divide'\) dividePages\.release\(\)/);
   assert.match(css, /\.divide-pair\.pages \{ grid-template-columns: 1fr 1fr; \}/);
 
+  /* Into a number of parts, not in fixed lumps of five or ten.
+   *
+   * "Every 10 chapters" cannot make two uneven halves, which is the ordinary
+   * case: a book whose first part is longer than its second. */
+  assert.match(app, /function divideInto/);
+  assert.match(app, /divideCuts\.add\(Math\.round\(\(total \* n\) \/ parts\)\)/);
+  assert.match(app, /const most = Math\.min\(8, total\)/);
+  assert.ok(!/divide-every/.test(app), 'the fixed sizes are still there');
+
+  /* Every cut is dragged rather than stepped.
+   *
+   * Stepping one piece at a time is fine for twelve chapters and hopeless for
+   * three hundred pages. */
+  assert.match(app, /slider\.type = 'range'/);
+  assert.match(app, /slider\.oninput = \(\) => \{/);
+  assert.match(app, /slider\.onchange = \(\) => \{/);
+
+  // Drawn as it moves, committed only when let go: the list above renumbers
+  // itself on release rather than on every pixel.
+  assert.match(app, /fillPreview\(preview, Number\(slider\.value\), at\)/);
+
+  // And never onto a neighbouring cut, which would merge two into one.
+  assert.match(app, /others\.filter\(\(n\) => n < at\)\.pop\(\)/);
+  assert.match(app, /others\.find\(\(n\) => n > at\)/);
+
+  // It says what the position would give, in parts rather than indexes.
+  assert.match(app, /\$\{sizes\[which\]\} then \$\{sizes\[which \+ 1\]\}/);
+
   /* "4 parts" says nothing about whether they are 4, 4, 4, 3 or 1, 9, 2, 3 --
    * which is the whole question when the cuts are placed by hand. */
   assert.match(app, /function partSizes/);
@@ -581,8 +609,9 @@ t('dividing shows what each cut separates', () => {
   // And every chapter says which part it will land in.
   assert.match(app, /class="divide-part"/);
 
-  // Every so many chapters, without typing a number on a phone.
-  assert.match(app, /const sizes = \[5, 10, 20, 50\]/);
+  // The part count is offered as a number of parts, capped at what the book
+  // can actually be divided into.
+  assert.match(app, /for \(let parts = 2; parts <= most; parts\+\+\)/);
   // And it is reached from the same action that undoes a join.
   assert.match(app, /return openDivide\(book\)/);
 });
