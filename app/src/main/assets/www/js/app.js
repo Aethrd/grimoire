@@ -1607,22 +1607,45 @@ function renderDivide() {
 
   el('divide-of').textContent = `${library.displayTitle(book)} · ${chapters.length} chapters`;
 
+  /* Which part each chapter is going to end up in.
+   *
+   * Cuts can be placed anywhere and in any number, so the parts are rarely
+   * the same size -- and a list of chapters with a few lines drawn through it
+   * does not show what you have actually made. A part number against every
+   * chapter does. */
+  let part = 1;
+
   chapters.forEach((chapter, at) => {
     // A cut sits between two chapters, so one is offered above every chapter
     // except the first.
-    if (at > 0) body.appendChild(cutControl(at));
+    if (at > 0) {
+      if (divideCuts.has(at)) part += 1;
+      body.appendChild(cutControl(at));
+    }
 
     const row = document.createElement('div');
     row.className = 'divide-chapter';
-    row.innerHTML = `<b>${escapeText(chapter.title)}</b>`
+    row.innerHTML = `<span class="divide-part">${divideCuts.size ? part : ''}</span>`
+      + `<b>${escapeText(chapter.title)}</b>`
       + `<small>${chapter.words ? `${chapter.words} words` : 'pictures'}</small>`;
     body.appendChild(row);
   });
 
-  const parts = divideCuts.size + 1;
+  /* The shape of the division, in the footer.
+   *
+   * "4 parts" says nothing about whether they are 4, 4, 4, 3 or 1, 9, 2, 3 --
+   * which is the whole question when the cuts are placed by hand. */
+  const sizes = partSizes(chapters.length, divideCuts);
   el('divide-count').textContent = divideCuts.size
-    ? `${parts} parts` : 'Tap between chapters';
+    ? `${sizes.length} parts · ${sizes.join(', ')} chapters`
+    : 'Tap between chapters to cut';
   el('divide-go').disabled = divideCuts.size === 0;
+}
+
+/** How many chapters each part would hold, in order. */
+function partSizes(total, cuts) {
+  const bounds = [0, ...[...cuts].sort((a, b) => a - b), total];
+  return bounds.slice(1).map((end, i) => end - bounds[i]);
 }
 
 function cutControl(at) {

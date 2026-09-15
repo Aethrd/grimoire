@@ -567,6 +567,13 @@ t('dividing shows what each cut separates', () => {
   assert.match(app, /if \(current === 'divide' && name !== 'divide'\) dividePages\.release\(\)/);
   assert.match(css, /\.divide-pair\.pages \{ grid-template-columns: 1fr 1fr; \}/);
 
+  /* "4 parts" says nothing about whether they are 4, 4, 4, 3 or 1, 9, 2, 3 --
+   * which is the whole question when the cuts are placed by hand. */
+  assert.match(app, /function partSizes/);
+  assert.match(app, /\$\{sizes\.length\} parts · \$\{sizes\.join\(', '\)\} chapters/);
+  // And every chapter says which part it will land in.
+  assert.match(app, /class="divide-part"/);
+
   // Every so many chapters, without typing a number on a phone.
   assert.match(app, /const sizes = \[5, 10, 20, 50\]/);
   // And it is reached from the same action that undoes a join.

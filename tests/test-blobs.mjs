@@ -887,6 +887,31 @@ await t('a cut in prose still shows the words', async () => {
   assert.equal(look.endsPicture, null);
 });
 
+await t('parts can be any size, not only equal ones', async () => {
+  /* Cuts are placed one at a time and anywhere; dividing evenly is a
+   * shortcut, not the mechanism. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+
+  const id = await store.add('books', { title: 'Uneven', fingerprint: 'uneven', addedAt: 1 });
+  for (let i = 0; i < 15; i++) {
+    await store.put('chapters', {
+      bookId: id, index: i, title: `Chapter ${i + 1}`, words: 100, html: '<p>x</p>',
+    });
+  }
+
+  const made = await library.fragmentBook(id, [1, 10, 12], { name: 'Uneven' });
+  assert.deepEqual(made.map((m) => m.chapters), [1, 9, 2, 3]);
+
+  // Out of order and with duplicates, since the interface is a set of taps.
+  const again = await library.fragmentBook(id, [12, 1, 12, 10], { name: 'Again' });
+  assert.deepEqual(again.map((m) => m.chapters), [1, 9, 2, 3]);
+
+  // A cut at the very end still makes a part of one.
+  const late = await library.fragmentBook(id, [14], { name: 'Late' });
+  assert.deepEqual(late.map((m) => m.chapters), [14, 1]);
+});
+
 await t('dividing needs somewhere to divide', async () => {
   const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);

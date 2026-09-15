@@ -1305,6 +1305,10 @@ body[data-mode="paged"] .page-flow img.tall {
                   border-bottom: 1px solid var(--hairline); }
 .divide-chapter b { flex: 1; min-width: 0; font-size: 13px; font-weight: 500;
                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Which part a chapter will land in. Blank until there is more than one. */
+.divide-part { flex: none; width: 20px; text-align: center;
+               font-family: var(--font-heading); font-weight: 700; font-size: 10px;
+               color: var(--accent-ink); }
 .divide-chapter small { flex: none; color: var(--muted); font-size: 11px; }
 
 .divide-cut { display: block; width: 100%; text-align: left; padding: 6px 0; }
