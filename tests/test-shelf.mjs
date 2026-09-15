@@ -550,13 +550,29 @@ t('the workshop picker does not filter what it can take', () => {
   assert.match(parse, /starts\(0x89, 0x50, 0x4e, 0x47\)\) return `\$\{name\}\.png`/);
 });
 
+t('several books write out as one archive', () => {
+  /* Saving them individually would mean the system file picker opening once
+   * per book -- for a shelf of twenty, twenty decisions about where things
+   * go. One archive is one decision and unpacks into the same files. */
+  assert.match(app, /async function exportMany/);
+  assert.match(app, /if \(books\.length === 1\) return askAboutExport/);
+  // Export is no longer a one-book-only action.
+  assert.ok(!/act === 'export'/.test(app.slice(app.indexOf('const single ='), app.indexOf('const single =') + 120)),
+    'export is still restricted to a single book');
+  // Two books of the same name would otherwise replace each other.
+  assert.match(app, /while \(bundle\.file\(entry\)\)/);
+  // And one that will not write costs that book, not the batch.
+  assert.match(app, /failed\.push\(\{ title: library\.displayTitle\(book\)/);
+});
+
 t('writing a book out is one of the things you do to a book', () => {
   // It was only inside the details sheet, which is a long press and a scroll
   // away -- far enough that it may as well not have been there.
   assert.ok(html.includes('data-act="export"'), 'no export action');
   assert.match(app, /export: async \(\) => \{/);
-  // One book at a time, like Open and Details.
-  assert.match(app, /act === 'open' \|\| act === 'details' \|\| act === 'export'/);
+  // Several at a time now: one book opens the naming sheet, more than one
+  // writes an archive.
+  assert.match(app, /if \(books\.length === 1\) return askAboutExport\(books\[0\]\)/);
 });
 
 t('a settings pane does not wipe what it has already built', () => {

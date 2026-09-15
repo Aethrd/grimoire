@@ -246,7 +246,7 @@ function paintSelection() {
   // Actions that only make sense for one book, or for any book at all.
   for (const button of el('select-actions').children) {
     const act = button.dataset.act;
-    const single = act === 'open' || act === 'details' || act === 'export';
+    const single = act === 'open' || act === 'details';
     button.disabled = single ? count !== 1 : count === 0;
   }
 }
@@ -304,8 +304,10 @@ function wireSelection() {
        which is a long press and a scroll away -- far enough that it may as
        well not have been there. */
     export: async () => {
-      const [book] = await selectedBooks();
-      if (book) askAboutExport(book);
+      const books = await selectedBooks();
+      if (!books.length) return;
+      if (books.length === 1) return askAboutExport(books[0]);
+      return exportMany(books);
     },
 
     details: async () => {
@@ -664,6 +666,67 @@ async function splitSelected(book) {
  * will take it. Both are wanted, and only the second existed -- a backup
  * belongs somewhere findable, not in a chat thread.
  */
+/**
+ * Write several books out at once, as one file.
+ *
+ * Saving them individually would mean the system file picker opening once per
+ * book, which for a shelf of twenty is twenty decisions to make about where
+ * things go. One archive is one decision, and unpacks into the same files.
+ */
+async function exportMany(books) {
+  const panel = el('import-progress');
+  el('import-label').textContent = `Writing ${books.length} books`;
+  panel.hidden = false;
+
+  const bundle = new JSZip();
+  const failed = [];
+
+  try {
+    for (const [at, book] of books.entries()) {
+      el('import-count').textContent = `${at + 1} of ${books.length}`;
+      el('import-label').textContent = `Writing ${library.displayTitle(book)}`;
+      try {
+        const { blob, name } = await epub.buildEpub(book.id, {
+          onProgress: (fraction) => {
+            const done = (at + fraction) / books.length;
+            el('import-bar').style.width = `${Math.round(done * 90)}%`;
+          },
+        });
+        // Two books of the same name would otherwise replace each other.
+        let entry = name;
+        let n = 2;
+        while (bundle.file(entry)) entry = name.replace(/\.epub$/i, ` (${n++}).epub`);
+        bundle.file(entry, blob);
+      } catch (error) {
+        // One book that will not write costs that book, not the batch.
+        failed.push({ title: library.displayTitle(book), reason: error.message });
+      }
+    }
+
+    if (!bundle.file(/.*/).length) {
+      throw new Error(failed[0] ? `${failed[0].title}: ${failed[0].reason}` : 'Nothing could be written');
+    }
+
+    const archive = await bundle.generateAsync({ type: 'blob', mimeType: 'application/zip' });
+    await writeOut(archive, `${epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books')}.zip`,
+      'application/zip', {
+        onProgress: (fraction) => {
+          el('import-bar').style.width = `${90 + Math.round(fraction * 10)}%`;
+        },
+      });
+
+    clearSelection();
+    await refreshShelf();
+    toast(failed.length
+      ? `${books.length - failed.length} written · ${failed.length} skipped — ${failed[0].title}: ${failed[0].reason}`
+      : `${books.length} books written out`, 7000);
+  } catch (error) {
+    toast(error.message || 'Those books could not be written out', 6000);
+  } finally {
+    panel.hidden = true;
+  }
+}
+
 /** Ask what the book should be called before writing it out. */
 function askAboutExport(book) {
   el('export-title').value = library.displayTitle(book);
