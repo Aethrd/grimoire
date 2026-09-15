@@ -717,13 +717,30 @@ t('an exported book carries the title it was given', () => {
   assert.ok(html.includes('id="export-file"'));
 });
 
-t('the build button is not under the tab bar', () => {
-  // Every other screen with a footer is reached from inside a book, where the
-  // bar is hidden. On a screen that is itself a tab the button was drawn
-  // underneath it and could not be pressed.
-  assert.match(css, /\[data-screen="workshop"\] \.stepper \{/);
-  assert.match(css, /margin-bottom: calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\)\)/);
+t('no footer button sits under the tab bar', () => {
+  /* The bar is fixed over the bottom of every screen except the reader. I had
+   * assumed a footer only appeared on screens reached from inside a book,
+   * where the bar is hidden -- it is not, and search, the workshop and
+   * dividing all had their buttons drawn underneath it. */
+  const stepper = css.slice(css.indexOf('.stepper {'), css.indexOf('body[data-view="reader"] .stepper'));
+  assert.match(stepper, /margin-bottom: calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\)\)/);
   assert.match(css, /--tabbar-h:/);
+
+  // The reader hides the bar, so its footer keeps the space instead.
+  assert.match(css, /body\[data-view="reader"\] \.stepper \{[\s\S]*?margin-bottom: 0;/);
+
+  // And it is one rule for every screen, not one screen at a time.
+  assert.ok(!/\[data-screen="\w+"\] \.stepper/.test(css),
+    'a footer is being fixed screen by screen again');
+});
+
+t('dividing says how it is done', () => {
+  // None of it is obvious from an unmarked list: cuts are placed by tapping
+  // between rows, and a placed cut can then be dragged.
+  assert.match(app, /tap between \$\{noun\} to place a cut/);
+  assert.match(app, /Drag a cut to move it/);
+  assert.match(app, /＋ cut here/);
+  assert.match(app, /Cut here — drag to move/);
 });
 
 t('a long part name keeps the end that identifies it', () => {

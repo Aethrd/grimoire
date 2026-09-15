@@ -643,17 +643,21 @@ body[data-mode="paged"] .page-flow img.tall {
 
 .stepper { flex: none; display: flex; align-items: center;
            justify-content: space-between; gap: 8px; padding: 10px 16px;
-           padding-bottom: calc(var(--safe-bottom) + 10px);
-           border-top: 1px solid var(--divider); background: var(--surface); }
+           border-top: 1px solid var(--divider); background: var(--surface);
 
-/* A footer on a tab screen has the tab bar sitting over it.
-   Every other screen with one -- search, the reel -- is reached from inside a
-   book, where the bar is hidden, so this only shows up on a screen that is
-   itself a tab: the button was drawn underneath the bar and could not be
-   pressed. */
-[data-screen="workshop"] .stepper {
-  padding-bottom: 10px;
-  margin-bottom: calc(var(--safe-bottom) + var(--tabbar-h));
+           /* Clear of the tab bar, which is fixed over the bottom of every
+              screen except the reader. I had assumed a footer only appeared
+              on screens reached from inside a book, where the bar is hidden;
+              it is not, and every one of them -- search, the workshop,
+              dividing -- had its buttons drawn underneath the bar and could
+              not be pressed. */
+           padding-bottom: 10px;
+           margin-bottom: calc(var(--safe-bottom) + var(--tabbar-h)); }
+
+/* In the reader the bar is hidden, so the footer keeps the space instead. */
+body[data-view="reader"] .stepper {
+  margin-bottom: 0;
+  padding-bottom: calc(var(--safe-bottom) + 10px);
 }
 
 /* ── reel ─────────────────────────────────────────────────────────────── */
@@ -1311,7 +1315,8 @@ body[data-mode="paged"] .page-flow img.tall {
                color: var(--accent-ink); }
 .divide-chapter small { flex: none; color: var(--muted); font-size: 11px; }
 
-.divide-cut { display: block; width: 100%; text-align: left; padding: 6px 0; }
+.divide-cut { display: block; width: 100%; text-align: left; padding: 6px 0;
+              min-height: 40px; }
 
 /* Moving a cut.
    An even division is a starting point; almost nothing is actually even, and

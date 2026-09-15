@@ -1712,7 +1712,7 @@ function renderIntoChips(total) {
   const label = document.createElement('span');
   label.className = 'muted';
   label.style.cssText = 'font-size:11px;align-self:center;margin-left:4px';
-  label.textContent = 'even parts, then move the cuts';
+  label.textContent = 'parts';
   row.appendChild(label);
 }
 
@@ -1740,6 +1740,17 @@ function renderDivide() {
 
   el('divide-of').textContent = `${library.displayTitle(book)} · ${rows.length} ${noun}`;
   renderIntoChips(rows.length);
+
+  /* Said once, at the top, because none of it is obvious from an unmarked
+     list: cuts are placed by tapping between rows, and a placed cut can then
+     be dragged. */
+  const how = document.createElement('p');
+  how.className = 'muted';
+  how.style.cssText = 'font-size:12px;line-height:1.5;margin:0 0 10px';
+  how.textContent = divideCuts.size
+    ? 'Drag a cut to move it, or tap between rows to add another.'
+    : `Choose a number of parts above, or tap between ${noun} to place a cut.`;
+  body.appendChild(how);
 
   /* Which part each chapter is going to end up in.
    *
@@ -1796,7 +1807,7 @@ function cutControl(at) {
   cut.className = 'divide-cut';
   cut.setAttribute('aria-pressed', String(divideCuts.has(at)));
   cut.innerHTML = `<span class="divide-cut-line">${
-    divideCuts.has(at) ? 'Cut here' : 'Cut'}</span>`;
+    divideCuts.has(at) ? 'Cut here — drag to move' : '＋ cut here'}</span>`;
 
   cut.onclick = () => {
     if (divideCuts.has(at)) divideCuts.delete(at);
