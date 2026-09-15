@@ -2,7 +2,7 @@
 
 import * as store from './store.js';
 import { urlCache } from './blobs.js';
-import { parse, formatOf, expandArchive, SUPPORTED, UNSUPPORTED_REASON } from './parse.js';
+import { parse, formatOf, expandArchive, chapterHtml, countWords, SUPPORTED, UNSUPPORTED_REASON } from './parse.js';
 import * as translate from './translate.js';
 
 const el = (id) => document.getElementById(id);
@@ -1126,6 +1126,143 @@ export async function fragmentBook(bookId, cuts, { name, onProgress } = {}) {
       })));
 
     made.push({ id: partId, title, chapters: mine.length });
+  }
+
+  return made;
+}
+
+
+/* ── dividing inside a chapter ────────────────────────────────────────────
+ *
+ * A book does not have to arrive in chapters. A comic volume is usually one
+ * archive of three hundred pages, and a scraped novel is often one long
+ * chapter -- and neither can be divided at a chapter boundary, because there
+ * are none.
+ *
+ * So where there is a single chapter, the pieces it is made of become the
+ * things to cut between: the pages of a comic, the paragraphs of prose. Both
+ * are top-level blocks in the chapter's own markup, so one mechanism covers
+ * them.
+ */
+
+/**
+ * The blocks a chapter is made of.
+ *
+ * @returns [{ html, text, picture }] in order, where picture is the href of
+ *   an illustration when the block is one.
+ */
+export function unitsOf(html) {
+  const doc = DOMP.parseFromString(`<body>${html || ''}</body>`, 'text/html');
+  const body = doc.body;
+  const units = [];
+
+  for (const node of [...body.children]) {
+    const picture = node.tagName === 'IMG'
+      ? node.getAttribute('data-img')
+      : node.querySelector?.('img[data-img]')?.getAttribute('data-img') || null;
+
+    units.push({
+      html: node.outerHTML,
+      text: (node.textContent || '').replace(/\s+/g, ' ').trim(),
+      picture,
+    });
+  }
+  return units;
+}
+
+const DOMP = new DOMParser();
+
+/** What a cut inside a chapter separates. */
+export function previewUnitCut(units, at, words = 22) {
+  const before = units[at - 1];
+  const after = units[at];
+  const say = (unit, end) => {
+    if (!unit) return null;
+    if (!unit.text) return null;
+    const parts = unit.text.split(/\s+/);
+    return end
+      ? `…${parts.slice(-words).join(' ')}`
+      : `${parts.slice(0, words).join(' ')}…`;
+  };
+  return {
+    endsWith: say(before, true),
+    beginsWith: say(after, false),
+    endsAt: before?.picture ? 'page' : null,
+    beginsAt: after?.picture ? 'page' : null,
+    endsPicture: before?.picture || null,
+    beginsPicture: after?.picture || null,
+  };
+}
+
+/**
+ * Divide a book whose content is one chapter.
+ *
+ * Each part keeps the blocks between two cuts, and the pictures those blocks
+ * refer to -- filtered rather than copied wholesale, or every part would
+ * carry the whole volume's artwork.
+ */
+export async function fragmentChapter(bookId, cuts, { name, onProgress } = {}) {
+  const book = await store.get('books', bookId);
+  if (!book) throw new Error('That book is no longer in the library.');
+
+  const chapters = (await store.byIndex('chapters', 'bookId', bookId))
+    .sort((a, b) => a.index - b.index);
+  if (chapters.length !== 1) throw new Error('That book already has chapters to divide at.');
+
+  const chapter = chapters[0];
+  const units = unitsOf(chapterHtml(chapter));
+  if (units.length < 2) throw new Error('There is nothing in that chapter to divide.');
+
+  const points = [...new Set(cuts.map(Number).filter((n) => n > 0 && n < units.length))]
+    .sort((a, b) => a - b);
+  if (!points.length) throw new Error('Choose at least one place to divide it.');
+
+  const images = await store.byIndex('images', 'bookId', bookId);
+  const byHref = new Map(images.map((image) => [image.href, image]));
+  const bounds = [0, ...points, units.length];
+  const made = [];
+
+  for (let part = 0; part < bounds.length - 1; part++) {
+    const mine = units.slice(bounds[part], bounds[part + 1]);
+    onProgress?.(`Part ${part + 1}`, (part + 1) / (bounds.length - 1));
+
+    const title = `${name || book.title} — ${part + 1}`;
+    const words = countWords(mine.map((u) => u.text).join(' '), book.lang);
+
+    const partId = await store.add('books', {
+      title,
+      author: book.author || null,
+      lang: book.lang || null,
+      format: book.format || null,
+      folder: book.folder || null,
+      fingerprint: `part:${bookId}:${part}`,
+      dividedFrom: { id: bookId, title: book.title, part: part + 1, of: bounds.length - 1 },
+      addedAt: Date.now() + part,
+      words,
+      chapters: 1,
+      coverBlob: part === 0 ? book.coverBlob || null : null,
+      coverBytes: part === 0 ? book.coverBytes ?? null : null,
+    });
+
+    await store.put('chapters', {
+      bookId: partId,
+      index: 0,
+      title,
+      fromToc: false,
+      words,
+      html: mine.map((u) => u.html).join('\n'),
+    });
+
+    // Only the pictures these blocks actually use.
+    const used = mine.map((u) => u.picture).filter(Boolean);
+    await store.putAll('images', used
+      .map((href, order) => {
+        const image = byHref.get(href);
+        return image ? { ...image, id: undefined, bookId: partId, order, chapterIndex: 0 } : null;
+      })
+      .filter(Boolean));
+
+    made.push({ id: partId, title, units: mine.length, pictures: used.length });
   }
 
   return made;

@@ -560,6 +560,13 @@ t('dividing shows what each cut separates', () => {
   assert.match(app, /function cutControl/);
   assert.match(app, /if \(!divideCuts\.has\(at\)\) return cut;/);
   assert.match(app, /library\.previewCut\(dividing\.chapters, at\)/);
+  // A book of one chapter is divided by what is inside it instead.
+  assert.match(app, /if \(chapters\.length === 1\) \{/);
+  assert.match(app, /library\.unitsOf\(chapterHtml\(chapters\[0\]\)\)/);
+  assert.match(app, /dividing\.units \? library\.fragmentChapter : library\.fragmentBook/);
+  // And says what it is cutting between, since it is no longer chapters.
+  assert.match(app, /const noun = units \? \(pages \? 'pages' : 'sections'\) : 'chapters'/);
+
   // A comic shows its pages rather than its chapter names, and the
   // thumbnails are released when the screen is left.
   assert.match(app, /dividing\.pictures\.get\(href\)/);
@@ -570,7 +577,7 @@ t('dividing shows what each cut separates', () => {
   /* "4 parts" says nothing about whether they are 4, 4, 4, 3 or 1, 9, 2, 3 --
    * which is the whole question when the cuts are placed by hand. */
   assert.match(app, /function partSizes/);
-  assert.match(app, /\$\{sizes\.length\} parts · \$\{sizes\.join\(', '\)\} chapters/);
+  assert.match(app, /\$\{sizes\.length\} parts · \$\{sizes\.join\(', '\)\} \$\{noun\}/);
   // And every chapter says which part it will land in.
   assert.match(app, /class="divide-part"/);
 

@@ -912,12 +912,70 @@ await t('parts can be any size, not only equal ones', async () => {
   assert.deepEqual(late.map((m) => m.chapters), [14, 1]);
 });
 
+await t('a book of one chapter is divided by what is in it', async () => {
+  /* A comic volume is usually one archive of three hundred pages and a
+   * scraped novel is often one long chapter. Neither can be cut at a chapter
+   * boundary, because there are none. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+
+  const id = await store.add('books', { title: 'Volume', fingerprint: 'vol-one', addedAt: 1 });
+  const pages = Array.from({ length: 6 }, (_, i) => `<img data-img="p${i + 1}.png" alt=""/>`).join('');
+  await store.put('chapters', { bookId: id, index: 0, title: 'Volume', words: 0, html: pages });
+  for (let i = 0; i < 6; i++) {
+    await store.put('images', {
+      bookId: id, href: `p${i + 1}.png`, order: i, chapterIndex: 0, blob: new Blob([`x${i}`]),
+    });
+  }
+
+  const units = library.unitsOf(pages);
+  assert.equal(units.length, 6);
+  assert.ok(units.every((u) => u.picture), 'the pages were not recognised');
+
+  // The cut shows the pages on either side of it, as it does between chapters.
+  const look = library.previewUnitCut(units, 3);
+  assert.equal(look.endsPicture, 'p3.png');
+  assert.equal(look.beginsPicture, 'p4.png');
+
+  const made = await library.fragmentChapter(id, [2, 4], { name: 'Volume' });
+  assert.deepEqual(made.map((m) => m.units), [2, 2, 2]);
+
+  /* Each part carries only the pictures its own pages use -- copying them all
+   * would give every part the whole volume's artwork. */
+  const first = await store.byIndex('images', 'bookId', made[0].id);
+  assert.deepEqual(first.map((i) => i.href), ['p1.png', 'p2.png']);
+  assert.equal((await store.byIndex('images', 'bookId', made[2].id)).length, 2);
+});
+
+await t('one long chapter of prose divides at its paragraphs', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+
+  const id = await store.add('books', { title: 'Long', fingerprint: 'long-one', addedAt: 1 });
+  await store.put('chapters', {
+    bookId: id, index: 0, title: 'Long', words: 40,
+    html: Array.from({ length: 5 },
+      (_, i) => `<p>Paragraph ${i + 1} says something worth reading about.</p>`).join(''),
+  });
+
+  const made = await library.fragmentChapter(id, [2], { name: 'Long' });
+  assert.deepEqual(made.map((m) => m.units), [2, 3]);
+
+  // The words go with them, so progress and percentages still mean something.
+  const part = (await store.byIndex('chapters', 'bookId', made[0].id))[0];
+  assert.ok(part.words > 0);
+  assert.match(part.html, /Paragraph 1/);
+  assert.ok(!/Paragraph 3/.test(part.html), 'a part kept text belonging to the next');
+});
+
 await t('dividing needs somewhere to divide', async () => {
   const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
   const id = await store.add('books', { title: 'Lone', fingerprint: 'lone', addedAt: 1 });
   await store.put('chapters', { bookId: id, index: 0, title: 'Only', words: 5, html: '<p>x</p>' });
+  // One chapter holding one block: there is genuinely nowhere to cut.
   await assert.rejects(library.fragmentBook(id, [1], {}), /only one chapter/);
+  await assert.rejects(library.fragmentChapter(id, [1], {}), /nothing in that chapter/);
 });
 
 await t('building needs something to build from', async () => {

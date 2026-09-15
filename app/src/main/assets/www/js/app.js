@@ -6,7 +6,7 @@ import * as reader from './reader.js';
 import * as library from './library.js';
 import * as screens from './screens.js';
 import * as panels from './panels.js';
-import { nameWithFormat } from './parse.js';
+import { nameWithFormat, chapterHtml } from './parse.js';
 import * as build from './build.js';
 import * as epub from './epub.js';
 import * as translate from './translate.js';
@@ -1586,26 +1586,43 @@ const dividePages = blobs.urlCache();
 async function openDivide(book) {
   const chapters = (await store.byIndex('chapters', 'bookId', book.id))
     .sort((a, b) => a.index - b.index);
-
-  if (chapters.length < 2) return toast('That book has only one chapter');
+  if (!chapters.length) return toast('That book has nothing in it');
 
   // The pages themselves, so a cut in a comic can be looked at rather than
   // read about.
   const images = await store.byIndex('images', 'bookId', book.id);
   const pictures = new Map(images.filter((i) => i.blob).map((i) => [i.href, i.blob]));
 
-  dividing = { book, chapters, pictures };
+  /* A book does not have to arrive in chapters.
+   *
+   * A comic volume is usually one archive of three hundred pages and a
+   * scraped novel is often one long chapter -- neither can be cut at a
+   * chapter boundary because there are none. Where there is one chapter, its
+   * own pieces become the things to cut between.
+   */
+  if (chapters.length === 1) {
+    const units = library.unitsOf(chapterHtml(chapters[0]));
+    if (units.length < 2) return toast('There is nothing in that book to divide');
+    dividing = { book, chapters, pictures, units };
+  } else {
+    dividing = { book, chapters, pictures, units: null };
+  }
   divideCuts = new Set();
   await show('divide');
 }
 
 function renderDivide() {
   if (!dividing) return;
-  const { book, chapters } = dividing;
+  const { book, chapters, units } = dividing;
   const body = el('divide-body');
   body.innerHTML = '';
 
-  el('divide-of').textContent = `${library.displayTitle(book)} · ${chapters.length} chapters`;
+  // What is being cut between: chapters, or the pieces of the only chapter.
+  const rows = units || chapters;
+  const pages = !!units && units.every((u) => u.picture);
+  const noun = units ? (pages ? 'pages' : 'sections') : 'chapters';
+
+  el('divide-of').textContent = `${library.displayTitle(book)} · ${rows.length} ${noun}`;
 
   /* Which part each chapter is going to end up in.
    *
@@ -1615,30 +1632,37 @@ function renderDivide() {
    * chapter does. */
   let part = 1;
 
-  chapters.forEach((chapter, at) => {
-    // A cut sits between two chapters, so one is offered above every chapter
+  rows.forEach((row, at) => {
+    // A cut sits between two of them, so one is offered above every row
     // except the first.
     if (at > 0) {
       if (divideCuts.has(at)) part += 1;
       body.appendChild(cutControl(at));
     }
 
-    const row = document.createElement('div');
-    row.className = 'divide-chapter';
-    row.innerHTML = `<span class="divide-part">${divideCuts.size ? part : ''}</span>`
-      + `<b>${escapeText(chapter.title)}</b>`
-      + `<small>${chapter.words ? `${chapter.words} words` : 'pictures'}</small>`;
-    body.appendChild(row);
+    const line = document.createElement('div');
+    line.className = 'divide-chapter';
+
+    const label = units
+      ? (row.picture ? `Page ${at + 1}` : (row.text.slice(0, 60) || `Section ${at + 1}`))
+      : row.title;
+    const note = units
+      ? (row.picture ? '' : `${row.text.split(/\s+/).filter(Boolean).length} words`)
+      : (row.words ? `${row.words} words` : 'pictures');
+
+    line.innerHTML = `<span class="divide-part">${divideCuts.size ? part : ''}</span>`
+      + `<b>${escapeText(label)}</b><small>${escapeText(note)}</small>`;
+    body.appendChild(line);
   });
 
   /* The shape of the division, in the footer.
    *
    * "4 parts" says nothing about whether they are 4, 4, 4, 3 or 1, 9, 2, 3 --
    * which is the whole question when the cuts are placed by hand. */
-  const sizes = partSizes(chapters.length, divideCuts);
+  const sizes = partSizes(rows.length, divideCuts);
   el('divide-count').textContent = divideCuts.size
-    ? `${sizes.length} parts · ${sizes.join(', ')} chapters`
-    : 'Tap between chapters to cut';
+    ? `${sizes.length} parts · ${sizes.join(', ')} ${noun}`
+    : `Tap between ${noun} to cut`;
   el('divide-go').disabled = divideCuts.size === 0;
 }
 
@@ -1670,7 +1694,9 @@ function cutControl(at) {
   const holder = document.createElement('div');
   holder.appendChild(cut);
 
-  const look = library.previewCut(dividing.chapters, at);
+  const look = dividing.units
+    ? library.previewUnitCut(dividing.units, at)
+    : library.previewCut(dividing.chapters, at);
   const preview = document.createElement('div');
   preview.className = 'divide-preview';
 
@@ -1711,7 +1737,7 @@ function wireDivide() {
   el('divide-every').onclick = () => {
     // The commonest division by far is "every so many chapters", and placing
     // forty cuts by hand is not a thing anyone should have to do.
-    const total = dividing?.chapters.length || 0;
+    const total = (dividing?.units || dividing?.chapters || []).length;
     // Cycles through the usual sizes rather than asking for a number: on a
     // phone, tapping through four choices beats typing one.
     const sizes = [5, 10, 20, 50].filter((n) => n < total);
@@ -1729,7 +1755,8 @@ function wireDivide() {
     const panel = el('import-progress');
     panel.hidden = false;
     try {
-      const made = await library.fragmentBook(dividing.book.id, [...divideCuts], {
+      const divide = dividing.units ? library.fragmentChapter : library.fragmentBook;
+      const made = await divide(dividing.book.id, [...divideCuts], {
         name: library.displayTitle(dividing.book),
         onProgress: (label, fraction) => {
           el('import-label').textContent = label;
