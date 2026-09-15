@@ -337,7 +337,11 @@ function wireSelection() {
       const books = await selectedBooks();
       if (books.length !== 1) return toast('Choose one book to take apart');
       const [book] = books;
-      if (library.wasJoined(book) || book.builtFrom) return splitSelected(book);
+
+      /* A book that was built can be taken apart two different ways, and
+       * choosing for the reader was wrong: it went straight to undoing the
+       * join, so a built comic could never be divided at all. */
+      if (library.wasJoined(book) || book.builtFrom) return offerTakeApart(book);
       return openDivide(book);
     },
 
@@ -651,6 +655,35 @@ function openBundleSheet(members) {
  * before volume 10 — which plain text sorting gets backwards, and which is
  * the whole difference between a readable serial and a shuffled one.
  */
+/**
+ * Which way to take a built book apart.
+ *
+ * Undoing the join gives back what it was made from. Dividing cuts it
+ * wherever you like, which is a different thing entirely -- and the one that
+ * was unreachable.
+ */
+function offerTakeApart(book) {
+  const sheet = el('folder-actions');
+  el('folder-actions-name').textContent = library.displayTitle(book);
+
+  const list = el('folder-actions-list');
+  list.innerHTML = '';
+
+  const choice = (text, note, run) => {
+    const button = document.createElement('button');
+    button.innerHTML = `<span>${escapeText(text)}</span><span>${escapeText(note)}</span>`;
+    button.onclick = () => { sheet.hidden = true; run(); };
+    list.appendChild(button);
+  };
+
+  const from = book.builtFrom?.length || book.mergedFrom?.length || 0;
+  choice('Undo the join', `Back into ${from} parts`, () => splitSelected(book));
+  choice('Divide at chapters', 'Cut wherever you choose', () => openDivide(book, 'chapters'));
+  choice('Divide at pages', 'Ignore the chapter boundaries', () => openDivide(book, 'pages'));
+
+  sheet.hidden = false;
+}
+
 /** Take a joined book apart, and say what that actually did. */
 async function splitSelected(book) {
   try {
@@ -1583,7 +1616,10 @@ let divideCuts = new Set();
 /* Thumbnails live only as long as the screen does. */
 const dividePages = blobs.urlCache();
 
-async function openDivide(book) {
+/** Which of the two ways of cutting is being used: 'chapters' or 'pages'. */
+let divideMode = 'chapters';
+
+async function openDivide(book, mode) {
   const chapters = (await store.byIndex('chapters', 'bookId', book.id))
     .sort((a, b) => a.index - b.index);
   if (!chapters.length) return toast('That book has nothing in it');
@@ -1593,20 +1629,23 @@ async function openDivide(book) {
   const images = await store.byIndex('images', 'bookId', book.id);
   const pictures = new Map(images.filter((i) => i.blob).map((i) => [i.href, i.blob]));
 
-  /* A book does not have to arrive in chapters.
+  /* Two ways of cutting, and a comic wants both.
    *
-   * A comic volume is usually one archive of three hundred pages and a
-   * scraped novel is often one long chapter -- neither can be cut at a
-   * chapter boundary because there are none. Where there is one chapter, its
-   * own pieces become the things to cut between.
+   * At chapter boundaries, which is how it was put together, and at any page,
+   * which is how volumes actually fall. A book of one chapter has no
+   * boundaries to use, so it only has the second.
    */
-  if (chapters.length === 1) {
-    const units = library.unitsOf(chapterHtml(chapters[0]));
-    if (units.length < 2) return toast('There is nothing in that book to divide');
-    dividing = { book, chapters, pictures, units };
-  } else {
-    dividing = { book, chapters, pictures, units: null };
-  }
+  const pages = library.pagesOf(chapters);
+  const canCutChapters = chapters.length > 1;
+  const canCutPages = pages.length > 1;
+
+  if (!canCutChapters && !canCutPages) return toast('There is nothing in that book to divide');
+
+  divideMode = mode || (canCutChapters ? 'chapters' : 'pages');
+  if (divideMode === 'chapters' && !canCutChapters) divideMode = 'pages';
+  if (divideMode === 'pages' && !canCutPages) divideMode = 'chapters';
+
+  dividing = { book, chapters, pictures, pages, canCutChapters, canCutPages };
   divideCuts = new Set();
   await show('divide');
 }
@@ -1625,6 +1664,32 @@ function divideInto(parts, total) {
   }
   // Rounding can land two cuts on the same place in a very short book.
   divideCuts = new Set([...divideCuts].filter((at) => at > 0 && at < total));
+}
+
+/** The two ways of cutting, offered only where both are possible. */
+function renderModeChips() {
+  const row = el('divide-mode');
+  row.innerHTML = '';
+  if (!dividing.canCutChapters || !dividing.canCutPages) {
+    row.hidden = true;
+    return;
+  }
+  row.hidden = false;
+
+  for (const [mode, label] of [['chapters', 'By chapter'], ['pages', 'By page']]) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.textContent = label;
+    chip.setAttribute('aria-pressed', String(divideMode === mode));
+    chip.onclick = () => {
+      if (divideMode === mode) return;
+      divideMode = mode;
+      // Cuts are positions in one list or the other; they do not carry over.
+      divideCuts = new Set();
+      renderDivide();
+    };
+    row.appendChild(chip);
+  }
 }
 
 function renderIntoChips(total) {
@@ -1661,14 +1726,17 @@ function evenlyCut(parts, total) {
 
 function renderDivide() {
   if (!dividing) return;
-  const { book, chapters, units } = dividing;
+  const { book, chapters } = dividing;
   const body = el('divide-body');
   body.innerHTML = '';
 
-  // What is being cut between: chapters, or the pieces of the only chapter.
+  // What is being cut between: whole chapters, or the pages inside them.
+  const units = divideMode === 'pages' ? dividing.pages : null;
   const rows = units || chapters;
-  const pages = !!units && units.every((u) => u.picture);
-  const noun = units ? (pages ? 'pages' : 'sections') : 'chapters';
+  const allPictures = !!units && units.every((u) => u.picture);
+  const noun = units ? (allPictures ? 'pages' : 'sections') : 'chapters';
+
+  renderModeChips();
 
   el('divide-of').textContent = `${library.displayTitle(book)} · ${rows.length} ${noun}`;
   renderIntoChips(rows.length);
@@ -1693,7 +1761,9 @@ function renderDivide() {
     line.className = 'divide-chapter';
 
     const label = units
-      ? (row.picture ? `Page ${at + 1}` : (row.text.slice(0, 60) || `Section ${at + 1}`))
+      ? (row.picture
+        ? `Page ${at + 1}${row.chapterTitle ? ` · ${row.chapterTitle}` : ''}`
+        : (row.text.slice(0, 60) || `Section ${at + 1}`))
       : row.title;
     const note = units
       ? (row.picture ? '' : `${row.text.split(/\s+/).filter(Boolean).length} words`)
@@ -1747,7 +1817,7 @@ function cutControl(at) {
   preview.className = 'divide-preview';
   holder.appendChild(preview);
 
-  const total = (dividing.units || dividing.chapters).length;
+  const total = (divideMode === 'pages' ? dividing.pages : dividing.chapters).length;
 
   /* A slider, because a cut can be anywhere.
    *
@@ -1794,9 +1864,9 @@ function cutControl(at) {
  *                 of the division is being changed
  */
 function fillPreview(preview, at, committed) {
-  const total = (dividing.units || dividing.chapters).length;
-  const look = dividing.units
-    ? library.previewUnitCut(dividing.units, at)
+  const total = (divideMode === 'pages' ? dividing.pages : dividing.chapters).length;
+  const look = divideMode === 'pages'
+    ? library.previewUnitCut(dividing.pages, at)
     : library.previewCut(dividing.chapters, at);
 
   const side = (label, chapterName, words, href) => {
@@ -1850,7 +1920,7 @@ function wireDivide() {
     const panel = el('import-progress');
     panel.hidden = false;
     try {
-      const divide = dividing.units ? library.fragmentChapter : library.fragmentBook;
+      const divide = divideMode === 'pages' ? library.fragmentPages : library.fragmentBook;
       const made = await divide(dividing.book.id, [...divideCuts], {
         name: library.displayTitle(dividing.book),
         onProgress: (label, fraction) => {

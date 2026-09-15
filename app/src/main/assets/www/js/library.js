@@ -1267,3 +1267,112 @@ export async function fragmentChapter(bookId, cuts, { name, onProgress } = {}) {
 
   return made;
 }
+
+
+/**
+ * Every page of a book, in order, with the chapter it came from.
+ *
+ * A comic can be divided two ways and both are wanted: at chapter boundaries,
+ * which is how it was put together, and at any page, which is how volumes
+ * actually fall. Flattening the pages gives the second without giving up the
+ * first -- each page still knows its chapter, so the parts can be rebuilt
+ * with their chapter structure intact.
+ */
+export function pagesOf(chapters) {
+  const pages = [];
+  for (const chapter of chapters) {
+    for (const unit of unitsOf(chapterHtml(chapter))) {
+      pages.push({
+        ...unit,
+        chapterIndex: chapter.index,
+        chapterTitle: chapter.title,
+      });
+    }
+  }
+  return pages;
+}
+
+/**
+ * Divide a book at page boundaries, wherever its chapters happen to fall.
+ *
+ * A part that spans whole chapters keeps them as chapters. A cut inside a
+ * chapter splits that one and no other, so the chapter names either side stay
+ * meaningful instead of collapsing into one undifferentiated run.
+ */
+export async function fragmentPages(bookId, cuts, { name, onProgress } = {}) {
+  const book = await store.get('books', bookId);
+  if (!book) throw new Error('That book is no longer in the library.');
+
+  const chapters = (await store.byIndex('chapters', 'bookId', bookId))
+    .sort((a, b) => a.index - b.index);
+  const pages = pagesOf(chapters);
+  if (pages.length < 2) throw new Error('There is nothing in that book to divide.');
+
+  const points = [...new Set(cuts.map(Number).filter((n) => n > 0 && n < pages.length))]
+    .sort((a, b) => a - b);
+  if (!points.length) throw new Error('Choose at least one place to divide it.');
+
+  const images = await store.byIndex('images', 'bookId', bookId);
+  const byHref = new Map(images.map((image) => [image.href, image]));
+  const bounds = [0, ...points, pages.length];
+  const made = [];
+
+  for (let part = 0; part < bounds.length - 1; part++) {
+    const mine = pages.slice(bounds[part], bounds[part + 1]);
+    onProgress?.(`Part ${part + 1}`, (part + 1) / (bounds.length - 1));
+
+    // Consecutive pages from one chapter become one chapter again.
+    const grouped = [];
+    for (const page of mine) {
+      const last = grouped[grouped.length - 1];
+      if (last && last.from === page.chapterIndex) last.pages.push(page);
+      else grouped.push({ from: page.chapterIndex, title: page.chapterTitle, pages: [page] });
+    }
+
+    const title = `${name || book.title} — ${part + 1}`;
+    const words = mine.reduce((n, p) => n + countWords(p.text, book.lang), 0);
+
+    const partId = await store.add('books', {
+      title,
+      author: book.author || null,
+      lang: book.lang || null,
+      format: book.format || null,
+      folder: book.folder || null,
+      fingerprint: `part:${bookId}:${part}`,
+      dividedFrom: { id: bookId, title: book.title, part: part + 1, of: bounds.length - 1 },
+      addedAt: Date.now() + part,
+      words,
+      chapters: grouped.length,
+      coverBlob: part === 0 ? book.coverBlob || null : null,
+      coverBytes: part === 0 ? book.coverBytes ?? null : null,
+    });
+
+    await store.putAll('chapters', grouped.map((group, index) => ({
+      bookId: partId,
+      index,
+      title: group.title,
+      fromToc: false,
+      words: group.pages.reduce((n, p) => n + countWords(p.text, book.lang), 0),
+      html: group.pages.map((p) => p.html).join('\n'),
+    })));
+
+    // Only the pictures these pages use, numbered against their new chapter.
+    const carried = [];
+    grouped.forEach((group, index) => {
+      for (const page of group.pages) {
+        const image = page.picture ? byHref.get(page.picture) : null;
+        if (image) {
+          carried.push({
+            ...image, id: undefined, bookId: partId,
+            chapterIndex: index, order: carried.length,
+          });
+        }
+      }
+    });
+    await store.putAll('images', carried);
+
+    made.push({ id: partId, title, chapters: grouped.length, pages: mine.length });
+  }
+
+  return made;
+}

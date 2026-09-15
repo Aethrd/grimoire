@@ -968,6 +968,74 @@ await t('one long chapter of prose divides at its paragraphs', async () => {
   assert.ok(!/Paragraph 3/.test(part.html), 'a part kept text belonging to the next');
 });
 
+await t('an even division is a starting point, not the answer', async () => {
+  /* The case that matters: two parts where the first is longer than the
+   * second. A fixed "every 10 chapters" cannot express it at all. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+
+  const id = await store.add('books', { title: 'Lopsided', fingerprint: 'lop', addedAt: 1 });
+  for (let i = 0; i < 12; i++) {
+    await store.put('chapters', {
+      bookId: id, index: i, title: `Chapter ${i + 1}`, words: 100, html: '<p>x</p>',
+    });
+  }
+
+  // Two parts, nine and three.
+  const twoUneven = await library.fragmentBook(id, [9], { name: 'Lopsided' });
+  assert.deepEqual(twoUneven.map((m) => m.chapters), [9, 3]);
+
+  // Three parts, none of them the same size.
+  const threeUneven = await library.fragmentBook(id, [7, 8], { name: 'Lopsided' });
+  assert.deepEqual(threeUneven.map((m) => m.chapters), [7, 1, 4]);
+});
+
+await t('a comic divides at chapters and at pages', async () => {
+  /* Both are wanted: chapter boundaries are how it was put together, and any
+   * page is how volumes actually fall. */
+  const JSZip = (await import('jszip')).default;
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001', 'hex');
+  const chapter = async (n) => {
+    const zip = new JSZip();
+    for (const page of [1, 2, 3, 4]) zip.file(`${page}.png`, png);
+    return new File([await zip.generateAsync({ type: 'nodebuffer' })], `Chapter ${n}.zip`);
+  };
+
+  build.clear();
+  await build.add([await chapter(1), await chapter(2), await chapter(3)]);
+  const { book } = await build.build({ title: 'Comic' });
+
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id))
+    .sort((a, b) => a.index - b.index);
+  assert.equal(chapters.length, 3);
+
+  // Every page, in order, each knowing the chapter it came from.
+  const pages = library.pagesOf(chapters);
+  assert.equal(pages.length, 12);
+  assert.ok(pages[0].chapterTitle);
+
+  // By chapter.
+  const byChapter = await library.fragmentBook(book.id, [1], { name: 'Comic' });
+  assert.deepEqual(byChapter.map((m) => m.chapters), [1, 2]);
+
+  /* By page, with the cut falling inside chapter two. The part keeps its
+     chapter structure rather than collapsing into one undifferentiated run. */
+  const byPage = await library.fragmentPages(book.id, [6], { name: 'Comic' });
+  assert.deepEqual(byPage.map((m) => m.pages), [6, 6]);
+  assert.deepEqual(byPage.map((m) => m.chapters), [2, 2]);
+
+  // And each part carries only its own pages, numbered against its chapters.
+  for (const part of byPage) {
+    const carried = await store.byIndex('images', 'bookId', part.id);
+    assert.equal(carried.length, 6);
+    assert.deepEqual([...new Set(carried.map((i) => i.chapterIndex))].sort(), [0, 1]);
+  }
+});
+
 await t('dividing needs somewhere to divide', async () => {
   const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);

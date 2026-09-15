@@ -532,7 +532,14 @@ t('building is a tool, not a shelf action', () => {
   // Taking a book apart still belongs beside the book: a joined one comes
   // apart into what it was made from, any other is divided at chosen
   // chapters.
-  assert.match(app, /return splitSelected\(book\)/);
+  /* A built book can be taken apart two ways, and choosing for the reader was
+   * wrong: it went straight to undoing the join, so a built comic could never
+   * be divided at all. */
+  assert.match(app, /return offerTakeApart\(book\)/);
+  assert.match(app, /function offerTakeApart/);
+  assert.match(app, /Undo the join/);
+  assert.match(app, /Divide at chapters/);
+  assert.match(app, /Divide at pages/);
   assert.match(app, /return openDivide\(book\)/);
   const library = read('app/src/main/assets/www/js/library.js');
   assert.match(library, /export async function splitBook/);
@@ -560,12 +567,18 @@ t('dividing shows what each cut separates', () => {
   assert.match(app, /function cutControl/);
   assert.match(app, /if \(!divideCuts\.has\(at\)\) return cut;/);
   assert.match(app, /library\.previewCut\(dividing\.chapters, at\)/);
-  // A book of one chapter is divided by what is inside it instead.
-  assert.match(app, /if \(chapters\.length === 1\) \{/);
-  assert.match(app, /library\.unitsOf\(chapterHtml\(chapters\[0\]\)\)/);
-  assert.match(app, /dividing\.units \? library\.fragmentChapter : library\.fragmentBook/);
-  // And says what it is cutting between, since it is no longer chapters.
-  assert.match(app, /const noun = units \? \(pages \? 'pages' : 'sections'\) : 'chapters'/);
+  /* Two ways of cutting a comic, and both are wanted: at chapter boundaries,
+   * which is how it was put together, and at any page, which is how volumes
+   * actually fall. */
+  assert.match(app, /function renderModeChips/);
+  assert.match(app, /'By chapter'/);
+  assert.match(app, /'By page'/);
+  assert.match(app, /divideMode === 'pages' \? library\.fragmentPages : library\.fragmentBook/);
+  // A book of one chapter has no boundaries to use, so it only has pages.
+  assert.match(app, /if \(!dividing\.canCutChapters \|\| !dividing\.canCutPages\)/);
+  // Cuts are positions in one list or the other and do not carry across.
+  assert.match(app, /divideCuts = new Set\(\);\n      renderDivide\(\)/);
+  assert.match(app, /const noun = units \? \(allPictures \? 'pages' : 'sections'\) : 'chapters'/);
 
   // A comic shows its pages rather than its chapter names, and the
   // thumbnails are released when the screen is left.
