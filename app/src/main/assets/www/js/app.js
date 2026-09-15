@@ -1862,7 +1862,14 @@ function cutControl(at) {
     renderDivide();
   };
 
-  preview.appendChild(slider);
+  // Labelled, so it reads as a control rather than a stray line.
+  const sliderRow = document.createElement('div');
+  sliderRow.className = 'divide-slider-row';
+  const sliderLabel = document.createElement('b');
+  sliderLabel.textContent = 'Move';
+  sliderRow.appendChild(sliderLabel);
+  sliderRow.appendChild(slider);
+  preview.appendChild(sliderRow);
   return holder;
 }
 
@@ -1916,11 +1923,11 @@ function fillPreview(preview, at, committed) {
   where.className = 'divide-where';
   where.textContent = `${sizes[which]} then ${sizes[which + 1]}`;
 
-  const slider = preview.querySelector('.divide-slider');
+  const sliderRow = preview.querySelector('.divide-slider-row');
   preview.innerHTML = '';
   preview.appendChild(pair);
   preview.appendChild(where);
-  if (slider) preview.appendChild(slider);
+  if (sliderRow) preview.appendChild(sliderRow);
 }
 
 function wireDivide() {

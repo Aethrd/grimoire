@@ -1326,22 +1326,28 @@ body[data-view="reader"] .stepper {
                 font-family: var(--font-heading); font-weight: 700;
                 letter-spacing: .04em; color: var(--accent-ink); }
 
-.divide-slider { -webkit-appearance: none; appearance: none; width: 100%;
-                 height: 34px; background: none; margin: 0; }
-.divide-slider::-webkit-slider-runnable-track {
-  height: 3px; border-radius: 2px; background: var(--divider);
+/* The platform's own slider, tinted.
+ *
+ * It was drawn from scratch: appearance:none, a transparent background, and
+ * a track and thumb built entirely out of pseudo-elements. Where those do not
+ * apply -- an older WebView, a vendor build that names them differently --
+ * what is left is a transparent thirty-pixel box. The control was there and
+ * could not be seen, which is exactly what was reported.
+ *
+ * A native range input is always drawn. accent-color tints it without
+ * replacing it.
+ */
+.divide-slider {
+  width: 100%;
+  height: 40px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
 }
-.divide-slider::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none;
-  width: 26px; height: 26px; margin-top: -12px; border-radius: 50%;
-  background: var(--accent); border: 2px solid var(--surface);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
-}
-.divide-slider::-moz-range-track { height: 3px; border-radius: 2px; background: var(--divider); }
-.divide-slider::-moz-range-thumb {
-  width: 22px; height: 22px; border-radius: 50%;
-  background: var(--accent); border: 2px solid var(--surface);
-}
+
+.divide-slider-row { display: flex; align-items: center; gap: 10px; }
+.divide-slider-row b { flex: none; font-family: var(--font-heading); font-weight: 700;
+                       font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+                       color: var(--muted); }
 .divide-cut-line { display: flex; align-items: center; gap: 8px; color: var(--muted);
                    font-family: var(--font-heading); font-size: 10px; font-weight: 700;
                    letter-spacing: .08em; text-transform: uppercase; }
@@ -1367,3 +1373,30 @@ body[data-view="reader"] .stepper {
 .divide-page { display: block; width: 100%; height: auto; max-height: 220px;
                object-fit: contain; border-radius: var(--radius-sm);
                background: var(--bg); }
+
+
+/* ── pictures in grey ────────────────────────────────────────────────────
+   Colour manga read as flat when greyed, because the contrast that separated
+   edges was hue rather than brightness. Nothing spatial is lost, so it is
+   recoverable: keep the luminance honest, then put the local contrast back.
+
+   CSS grayscale() is already the luminance conversion worth having -- the
+   specification defines it with the same coefficients (0.2126 R, 0.7152 G,
+   0.0722 B), so a naive desaturation is not what happens here. */
+
+[data-grey="plain"] .page-flow img,
+[data-grey="plain"] .reel-item img { filter: grayscale(1); }
+
+/* Contrast lifted a little, because grey alone flattens a coloured page. */
+[data-grey="contrast"] .page-flow img,
+[data-grey="contrast"] .reel-item img {
+  filter: grayscale(1) contrast(1.14) brightness(1.02);
+}
+
+/* And with the edges put back. The order matters: grey first, sharpen the
+   result -- sharpening in colour exaggerates chroma noise that the greying
+   would then average away. */
+[data-grey="crisp"] .page-flow img,
+[data-grey="crisp"] .reel-item img {
+  filter: grayscale(1) contrast(1.14) brightness(1.02) url(#crisp);
+}

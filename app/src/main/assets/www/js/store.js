@@ -217,6 +217,15 @@ export const DEFAULT_SETTINGS = {
   // screen | width | height | stretch | original | smart
   imageFit: 'screen',
 
+  /* Showing colour pages in grey.
+   *
+   * off | plain | contrast | crisp. Not a saving of anything -- the file is
+   * unchanged and the original is one tap away -- but a coloured page greyed
+   * naively reads flatter than the black-and-white it was drawn as, and the
+   * contrast is recoverable.
+   */
+  greyscale: 'off',
+
   /* What a forward tap does once a chapter has run out.
    *
    * Turning a whole chapter is a much larger movement than a page, and

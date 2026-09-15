@@ -242,6 +242,11 @@ licence header is not a violation, which is why it replaced a blanket `grep`.
 
 Honest list, in rough order of how much they matter:
 
+- **Greying is CSS, not a pipeline.** Luminance and contrast are right, and
+  the sharpening is a small convolution. What is not there: local contrast
+  (CLAHE), denoising, and choosing between the colour channels for whichever
+  carries the most line detail. Those need a canvas pass per page and a cache,
+  which is a different piece of work.
 - **No optical centering.** The text block is centred by its margins rather
   than by how it looks. Doing it properly means measuring the shape of the set
   text — the ragged edge, the indents, where paragraphs fall — and the honest

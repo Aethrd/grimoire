@@ -734,6 +734,30 @@ t('no footer button sits under the tab bar', () => {
     'a footer is being fixed screen by screen again');
 });
 
+t('the slider is a real slider, not one drawn from pseudo-elements', () => {
+  /* It was appearance:none with a transparent background and a track and
+   * thumb built entirely out of pseudo-elements. Where those do not apply --
+   * an older WebView, a vendor build naming them differently -- what is left
+   * is an invisible box. The control was there and could not be seen. */
+  const rule = css.slice(css.indexOf('.divide-slider {'), css.indexOf('.divide-slider-row'));
+  assert.ok(!/appearance:\s*none/.test(rule), 'the slider is drawn from scratch again');
+  assert.match(rule, /accent-color: var\(--accent\)/);
+  // And it is labelled, so it reads as a control rather than a stray line.
+  assert.match(app, /sliderLabel\.textContent = 'Move'/);
+});
+
+t('greying a colour page is offered where the page is', () => {
+  // Whether a volume reads better in grey is a decision made looking at a
+  // page, like the fitting beside it.
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  const layout = screens.slice(screens.indexOf('export async function openLayout'));
+  assert.match(layout, /Colour pages/);
+  assert.match(layout, /store\.saveSettings\(\{ greyscale: value \}\)/);
+  // The sharpening filter has to exist for the crisp setting to mean anything.
+  assert.ok(html.includes('id="crisp"'), 'no sharpening filter');
+  assert.match(html, /feConvolveMatrix/);
+});
+
 t('dividing says how it is done', () => {
   // None of it is obvious from an unmarked list: cuts are placed by tapping
   // between rows, and a placed cut can then be dragged.

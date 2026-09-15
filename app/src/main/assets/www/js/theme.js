@@ -192,6 +192,7 @@ export function apply(settings) {
   root.setProperty('--mark-opacity', String(settings.markOpacity ?? 0.35));
   document.body.dataset.marks = settings.markDensity || 'full';
   document.body.dataset.images = settings.imageFit || 'screen';
+  document.body.dataset.grey = settings.greyscale || 'off';
   document.body.dataset.focus = settings.focusMode || 'off';
   document.body.dataset.keepParagraphs = String(!!settings.keepParagraphs);
 

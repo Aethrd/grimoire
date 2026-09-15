@@ -1350,6 +1350,33 @@ async function renderBehaviourPane(body) {
   }
   body.appendChild(pictures);
 
+  const grey = document.createElement('section');
+  grey.className = 'block';
+  grey.innerHTML = `<h2>Colour pages in grey</h2>
+    <p class="muted" style="font-size:12px;line-height:1.55">
+      A coloured page greyed plainly reads flatter than the black and white it
+      was drawn as: the contrast that separated edges was hue, not brightness.
+      The later settings put that contrast back. Nothing is changed in the
+      file.</p>`;
+  for (const [value, label, note] of [
+    ['off', 'Off', 'Pages as they are'],
+    ['plain', 'Grey', 'Luminance, nothing else'],
+    ['contrast', 'Grey, lifted', 'With the local contrast raised'],
+    ['crisp', 'Grey, crisp', 'Contrast and a mild sharpening of edges'],
+  ]) {
+    const option = document.createElement('button');
+    option.className = 'list-row';
+    option.innerHTML = `<span class="body"><b>${escape(label)}</b><small>${escape(note)}</small></span>`;
+    option.setAttribute('aria-pressed', String((settings.greyscale || 'off') === value));
+    option.onclick = async () => {
+      await store.saveSettings({ greyscale: value });
+      document.body.dataset.grey = value;
+      renderSettings();
+    };
+    grey.appendChild(option);
+  }
+  body.appendChild(grey);
+
   const pages = document.createElement('section');
   pages.className = 'block';
   pages.innerHTML = '<h2>Page breaks</h2>';

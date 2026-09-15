@@ -555,6 +555,20 @@
 <!-- Stays put while the desk is open, so a jump is never a one-way trip. -->
 <button class="desk-tab" id="desk-tab" hidden>Desk</button>
 
+<!--
+  A mild unsharp mask, for pictures shown in grey.
+  Losing colour loses the contrast that separated edges by hue, so the greyed
+  image reads softer than the original even though nothing was thrown away
+  spatially. A small amount of sharpening puts the edges back. Kept small on
+  purpose: overdoing it haloes line art and text, which is worse than soft.
+-->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="crisp" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+    <feConvolveMatrix order="3" preserveAlpha="true" divisor="1"
+                      kernelMatrix="0 -0.35 0  -0.35 2.4 -0.35  0 -0.35 0"/>
+  </filter>
+</svg>
+
 <div class="ruler" id="ruler" hidden></div>
 
 <div class="peek" id="peek" hidden>

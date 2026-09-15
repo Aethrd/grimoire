@@ -384,6 +384,34 @@ await (async () => {
     }
   });
 
+  await t('colour pages can be shown in grey, and put back', () => {
+    /* CSS grayscale() is the luminance conversion worth having: the
+     * specification defines it with the same coefficients (0.2126 R, 0.7152 G,
+     * 0.0722 B), so this is not a naive desaturation. What it does not do is
+     * replace the contrast that was carried by hue -- hence the later
+     * settings. */
+    const greyed = (mode) => {
+      document.body.dataset.grey = mode;
+      document.body.dataset.mode = 'paged';
+      document.body.dataset.images = 'screen';
+      return window.getComputedStyle(picture).filter || 'none';
+    };
+
+    assert.equal(greyed('off'), 'none');
+    assert.match(greyed('plain'), /grayscale\(1\)/);
+
+    // Contrast lifted, because grey alone flattens a coloured page.
+    assert.match(greyed('contrast'), /grayscale\(1\) contrast\(/);
+
+    /* And the edges put back, greying first: sharpening in colour exaggerates
+     * chroma noise the greying would then average away. */
+    const crisp = greyed('crisp');
+    assert.match(crisp, /^grayscale\(1\)/);
+    assert.match(crisp, /url\(#crisp\)$/);
+
+    document.body.dataset.grey = 'off';
+  });
+
   await t('scroll mode still lets a picture run off the side', () => {
     // Which is what makes Fit height and Original worth having.
     for (const fit of ['height', 'original']) {

@@ -200,6 +200,34 @@ export async function openLayout(bookId) {
   picturesField.appendChild(pictureRow);
   body.appendChild(picturesField);
 
+  /* Greying, here too. Whether a volume reads better in grey is a decision
+     made looking at a page, like the fitting above it. */
+  const greyField = document.createElement('div');
+  greyField.className = 'field';
+  greyField.innerHTML = '<label><span>Colour pages</span></label>';
+  const greyRow = document.createElement('div');
+  greyRow.className = 'chip-row wrap';
+  for (const [value, label] of [
+    ['off', 'As they are'],
+    ['plain', 'Grey'],
+    ['contrast', 'Grey, lifted'],
+    ['crisp', 'Grey, crisp'],
+  ]) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.style.textTransform = 'none';
+    chip.textContent = label;
+    chip.setAttribute('aria-pressed', String((settings.greyscale || 'off') === value));
+    chip.onclick = async () => {
+      await store.saveSettings({ greyscale: value });
+      document.body.dataset.grey = value;
+      openLayout(bookId);
+    };
+    greyRow.appendChild(chip);
+  }
+  greyField.appendChild(greyRow);
+  body.appendChild(greyField);
+
   if (settings.readingMode === 'scroll') {
     const endless = document.createElement('div');
     endless.className = 'row';
