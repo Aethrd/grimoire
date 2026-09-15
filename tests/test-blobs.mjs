@@ -785,6 +785,116 @@ await t('a built book is named when it is built', async () => {
   assert.equal(again.author, 'Someone');
 });
 
+await t('a book can be divided, and the cut is shown before it is made', async () => {
+  /* A chapter list does not tell you what a cut separates -- "Chapter 12" and
+   * "Chapter 13" look like a safe place to divide until you see that one runs
+   * straight into the other. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+
+  const id = await store.add('books', {
+    title: 'Omnibus', fingerprint: 'omnibus', addedAt: 1, words: 600,
+  });
+  for (let i = 0; i < 6; i++) {
+    await store.put('chapters', {
+      bookId: id, index: i, title: `Chapter ${i + 1}`, words: 100,
+      html: `<p>Chapter ${i + 1} opens here and runs on before it closes.</p>`,
+    });
+  }
+  // A picture belonging to a chapter in the last part.
+  await store.put('images', {
+    bookId: id, href: 'plate.png', order: 0, chapterIndex: 4, blob: new Blob(['x']),
+  });
+
+  const chapters = (await store.byIndex('chapters', 'bookId', id))
+    .sort((a, b) => a.index - b.index);
+
+  const look = library.previewCut(chapters, 3);
+  assert.equal(look.endsAt, 'Chapter 3');
+  assert.equal(look.beginsAt, 'Chapter 4');
+  assert.match(look.endsWith, /closes\.$/);
+  assert.match(look.beginsWith, /^Chapter 4 opens/);
+
+  const made = await library.fragmentBook(id, [2, 4], { name: 'Omnibus' });
+  assert.equal(made.length, 3);
+  assert.deepEqual(made.map((m) => m.chapters), [2, 2, 2]);
+
+  // Each part numbers its chapters from the beginning again.
+  for (const part of made) {
+    const mine = (await store.byIndex('chapters', 'bookId', part.id))
+      .sort((a, b) => a.index - b.index);
+    assert.equal(mine[0].index, 0);
+  }
+
+  /* Pictures follow their chapters and are renumbered against the part, or
+   * they claim to belong to a chapter the part does not have. */
+  const last = await store.byIndex('images', 'bookId', made[2].id);
+  assert.equal(last.length, 1);
+  assert.equal(last[0].chapterIndex, 0);
+  assert.equal((await store.byIndex('images', 'bookId', made[0].id)).length, 0);
+
+  // The original is left alone, as joining leaves its parts alone.
+  assert.ok(await store.get('books', id));
+});
+
+await t('a cut in a comic shows the pages, not the chapter names', async () => {
+  /* Repeating a chapter title tells you nothing about where a cut falls, and
+   * for a comic that is the only thing worth knowing. */
+  const JSZip = (await import('jszip')).default;
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001', 'hex');
+  const chapter = async (n) => {
+    const zip = new JSZip();
+    for (const page of [1, 2, 3]) zip.file(`${page}.png`, png);
+    return new File([await zip.generateAsync({ type: 'nodebuffer' })], `Chapter ${n}.zip`);
+  };
+
+  build.clear();
+  await build.add([await chapter(1), await chapter(2)]);
+  const { book } = await build.build({ title: 'Comic' });
+
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id))
+    .sort((a, b) => a.index - b.index);
+  const look = library.previewCut(chapters, 1);
+
+  // The last page before the cut and the first after it.
+  assert.ok(look.endsPicture, 'no page shown before the cut');
+  assert.ok(look.beginsPicture, 'no page shown after the cut');
+  assert.notEqual(look.endsPicture, look.beginsPicture);
+
+  // And both are pictures that actually exist, not references to nothing.
+  const stored = new Set((await store.byIndex('images', 'bookId', book.id)).map((i) => i.href));
+  assert.ok(stored.has(look.endsPicture));
+  assert.ok(stored.has(look.beginsPicture));
+});
+
+await t('a cut in prose still shows the words', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const id = await store.add('books', { title: 'Prose', fingerprint: 'prose-cut', addedAt: 1 });
+  for (let i = 0; i < 2; i++) {
+    await store.put('chapters', {
+      bookId: id, index: i, title: `Ch ${i + 1}`, words: 20,
+      html: `<p>Chapter ${i + 1} runs on for a little while and then stops.</p>`,
+    });
+  }
+  const chapters = (await store.byIndex('chapters', 'bookId', id)).sort((a, b) => a.index - b.index);
+  const look = library.previewCut(chapters, 1);
+  assert.match(look.endsWith, /then stops\.$/);
+  assert.equal(look.endsPicture, null);
+});
+
+await t('dividing needs somewhere to divide', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const id = await store.add('books', { title: 'Lone', fingerprint: 'lone', addedAt: 1 });
+  await store.put('chapters', { bookId: id, index: 0, title: 'Only', words: 5, html: '<p>x</p>' });
+  await assert.rejects(library.fragmentBook(id, [1], {}), /only one chapter/);
+});
+
 await t('building needs something to build from', async () => {
   const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
   build.clear();

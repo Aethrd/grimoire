@@ -529,8 +529,11 @@ t('building is a tool, not a shelf action', () => {
   assert.ok(html.includes('data-go="workshop"'), 'the workshop has no way in');
   assert.ok(html.includes('data-screen="workshop"'));
   assert.match(app, /const TABS = \[.*'workshop'/);
-  // Taking a built book apart still belongs beside the book.
-  assert.match(app, /return splitSelected\(books\[0\]\)/);
+  // Taking a book apart still belongs beside the book: a joined one comes
+  // apart into what it was made from, any other is divided at chosen
+  // chapters.
+  assert.match(app, /return splitSelected\(book\)/);
+  assert.match(app, /return openDivide\(book\)/);
   const library = read('app/src/main/assets/www/js/library.js');
   assert.match(library, /export async function splitBook/);
   assert.match(app, /were still on the shelf/);
@@ -548,6 +551,26 @@ t('the workshop picker does not filter what it can take', () => {
   assert.match(build, /named: await nameWithFormat\(file\.name \|\| 'file', file\)/);
   const parse = read('app/src/main/assets/www/js/parse.js');
   assert.match(parse, /starts\(0x89, 0x50, 0x4e, 0x47\)\) return `\$\{name\}\.png`/);
+});
+
+t('dividing shows what each cut separates', () => {
+  // Shown only once a cut is placed: a preview under every gap would bury the
+  // chapter list it is meant to explain.
+  assert.ok(html.includes('data-screen="divide"'));
+  assert.match(app, /function cutControl/);
+  assert.match(app, /if \(!divideCuts\.has\(at\)\) return cut;/);
+  assert.match(app, /library\.previewCut\(dividing\.chapters, at\)/);
+  // A comic shows its pages rather than its chapter names, and the
+  // thumbnails are released when the screen is left.
+  assert.match(app, /dividing\.pictures\.get\(href\)/);
+  assert.match(app, /dividePages\.url\(href, blob, blob\.size\)/);
+  assert.match(app, /if \(current === 'divide' && name !== 'divide'\) dividePages\.release\(\)/);
+  assert.match(css, /\.divide-pair\.pages \{ grid-template-columns: 1fr 1fr; \}/);
+
+  // Every so many chapters, without typing a number on a phone.
+  assert.match(app, /const sizes = \[5, 10, 20, 50\]/);
+  // And it is reached from the same action that undoes a join.
+  assert.match(app, /return openDivide\(book\)/);
 });
 
 t('several books write out as one archive', () => {

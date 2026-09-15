@@ -35,6 +35,8 @@ async function show(name, { replace = false } = {}) {
   // someone spent on the stats page as reading.
   // Await it: the stats screen reads the log the moment it opens, and an
   // unawaited flush would land just after it had rendered the old numbers.
+  if (current === 'divide' && name !== 'divide') dividePages.release();
+
   if (current === 'reader' && name !== 'reader') {
     if (desk) await closeDesk({ returnHome: false });
     await reader.pauseSession();
@@ -73,6 +75,7 @@ async function enter(name) {
     case 'library': return refreshShelf();
     case 'sort': return screens.openSort();
     case 'workshop': return renderWorkshop();
+    case 'divide': return renderDivide();
     case 'find': return screens.initFind(goToMatch, cameFrom === 'reader');
     case 'toc': return screens.openToc(goToChapter);
     case 'reel': return reader.state.book
@@ -325,12 +328,17 @@ function wireSelection() {
      * arrive where you meant to start. Building happens in the workshop, from
      * the files themselves. Taking a built book apart still belongs here,
      * beside the book it applies to. */
+    /* Taking something apart, whichever way it was put together.
+     *
+     * A book that was joined comes apart into what it was made from. Any
+     * other book can be divided at chapters you choose -- which is the same
+     * idea applied to a file that arrived as one piece. */
     merge: async () => {
       const books = await selectedBooks();
-      if (books.length === 1 && (library.wasJoined(books[0]) || books[0].builtFrom)) {
-        return splitSelected(books[0]);
-      }
-      return toast('Books are built from files in the Build tab. This takes a built book apart.', 7000);
+      if (books.length !== 1) return toast('Choose one book to take apart');
+      const [book] = books;
+      if (library.wasJoined(book) || book.builtFrom) return splitSelected(book);
+      return openDivide(book);
     },
 
     /* Bundling is one action that reads both ways: several books become a
@@ -1559,6 +1567,168 @@ function moveGuides(clientY) {
   if (block) block.classList.add('in-focus');
 }
 
+/* ── dividing a book ──────────────────────────────────────────────────────
+ *
+ * A single file often holds what are really several things: a bound set of
+ * volumes, a year of serialised chapters, an omnibus. Reading it means one
+ * enormous spine with no sense of where you are.
+ *
+ * The chapter list alone is not enough to divide it well -- "Chapter 12" and
+ * "Chapter 13" look like a safe place to cut until you see that one runs
+ * straight into the other. So every cut shows the words on each side of it.
+ */
+
+let dividing = null;      // { book, chapters, pictures }
+let divideCuts = new Set();
+/* Thumbnails live only as long as the screen does. */
+const dividePages = blobs.urlCache();
+
+async function openDivide(book) {
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id))
+    .sort((a, b) => a.index - b.index);
+
+  if (chapters.length < 2) return toast('That book has only one chapter');
+
+  // The pages themselves, so a cut in a comic can be looked at rather than
+  // read about.
+  const images = await store.byIndex('images', 'bookId', book.id);
+  const pictures = new Map(images.filter((i) => i.blob).map((i) => [i.href, i.blob]));
+
+  dividing = { book, chapters, pictures };
+  divideCuts = new Set();
+  await show('divide');
+}
+
+function renderDivide() {
+  if (!dividing) return;
+  const { book, chapters } = dividing;
+  const body = el('divide-body');
+  body.innerHTML = '';
+
+  el('divide-of').textContent = `${library.displayTitle(book)} · ${chapters.length} chapters`;
+
+  chapters.forEach((chapter, at) => {
+    // A cut sits between two chapters, so one is offered above every chapter
+    // except the first.
+    if (at > 0) body.appendChild(cutControl(at));
+
+    const row = document.createElement('div');
+    row.className = 'divide-chapter';
+    row.innerHTML = `<b>${escapeText(chapter.title)}</b>`
+      + `<small>${chapter.words ? `${chapter.words} words` : 'pictures'}</small>`;
+    body.appendChild(row);
+  });
+
+  const parts = divideCuts.size + 1;
+  el('divide-count').textContent = divideCuts.size
+    ? `${parts} parts` : 'Tap between chapters';
+  el('divide-go').disabled = divideCuts.size === 0;
+}
+
+function cutControl(at) {
+  const cut = document.createElement('button');
+  cut.className = 'divide-cut';
+  cut.setAttribute('aria-pressed', String(divideCuts.has(at)));
+  cut.innerHTML = `<span class="divide-cut-line">${
+    divideCuts.has(at) ? 'Cut here' : 'Cut'}</span>`;
+
+  cut.onclick = () => {
+    if (divideCuts.has(at)) divideCuts.delete(at);
+    else divideCuts.add(at);
+    renderDivide();
+  };
+
+  if (!divideCuts.has(at)) return cut;
+
+  /* What this cut actually separates.
+   *
+   * Shown only once a cut is placed: a preview under every gap would bury the
+   * chapter list it is meant to explain. */
+  const holder = document.createElement('div');
+  holder.appendChild(cut);
+
+  const look = library.previewCut(dividing.chapters, at);
+  const preview = document.createElement('div');
+  preview.className = 'divide-preview';
+
+  const side = (label, chapterName, words, href) => {
+    const block = document.createElement('div');
+    block.innerHTML = `<em>${escapeText(label)} ${escapeText(chapterName || '')}</em>`;
+
+    /* A page, where there is one. For a comic the picture is the whole
+       content of the chapter, and a title is no substitute for seeing it. */
+    const blob = href ? dividing.pictures.get(href) : null;
+    if (blob) {
+      const img = document.createElement('img');
+      img.className = 'divide-page';
+      img.src = dividePages.url(href, blob, blob.size);
+      img.alt = '';
+      block.appendChild(img);
+    } else {
+      const text = document.createElement('p');
+      text.textContent = words || '—';
+      block.appendChild(text);
+    }
+    return block;
+  };
+
+  const pair = document.createElement('div');
+  pair.className = look.endsPicture || look.beginsPicture ? 'divide-pair pages' : 'divide-pair';
+  pair.appendChild(side('Ends', look.endsAt, look.endsWith, look.endsPicture));
+  pair.appendChild(side('Next part opens', look.beginsAt, look.beginsWith, look.beginsPicture));
+  preview.appendChild(pair);
+
+  holder.appendChild(preview);
+  return holder;
+}
+
+function wireDivide() {
+  el('divide-clear').onclick = () => { divideCuts.clear(); renderDivide(); };
+
+  el('divide-every').onclick = () => {
+    // The commonest division by far is "every so many chapters", and placing
+    // forty cuts by hand is not a thing anyone should have to do.
+    const total = dividing?.chapters.length || 0;
+    // Cycles through the usual sizes rather than asking for a number: on a
+    // phone, tapping through four choices beats typing one.
+    const sizes = [5, 10, 20, 50].filter((n) => n < total);
+    if (!sizes.length) return toast('Not enough chapters to divide evenly');
+    const next = sizes[(sizes.indexOf(lastEvery) + 1) % sizes.length];
+    lastEvery = next;
+    divideCuts = new Set();
+    for (let at = next; at < total; at += next) divideCuts.add(at);
+    renderDivide();
+    toast(`Every ${next} chapters`);
+  };
+
+  el('divide-go').onclick = async () => {
+    if (!dividing || !divideCuts.size) return;
+    const panel = el('import-progress');
+    panel.hidden = false;
+    try {
+      const made = await library.fragmentBook(dividing.book.id, [...divideCuts], {
+        name: library.displayTitle(dividing.book),
+        onProgress: (label, fraction) => {
+          el('import-label').textContent = label;
+          el('import-bar').style.width = `${Math.round(fraction * 100)}%`;
+        },
+      });
+      dividing = null;
+      divideCuts = new Set();
+      dividePages.release();
+      await refreshShelf();
+      await show('library');
+      toast(`Divided into ${made.length} parts — the original is still here`, 7000);
+    } catch (error) {
+      toast(error.message || 'That book could not be divided', 6000);
+    } finally {
+      panel.hidden = true;
+    }
+  };
+}
+
+let lastEvery = 0;
+
 /* ── the workshop ─────────────────────────────────────────────────────────
  *
  * Several files in, one book out. The order is the whole point of a serial,
@@ -2175,6 +2345,7 @@ async function boot() {
   wireAnnotations();
   wireDesk();
   wireWorkshop();
+  wireDivide();
   refreshGuides();
 
   /* If the app died last time, say so.

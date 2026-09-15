@@ -1295,3 +1295,41 @@ body[data-mode="paged"] .page-flow img.tall {
                            color: var(--muted); }
 /* The one choice in that sheet that cannot be undone. */
 .sheet-list button.danger span:first-child { color: #c0553f; font-weight: 700; }
+
+
+/* ── dividing a book ─────────────────────────────────────────────────────
+   A chapter list does not tell you what a cut separates. The words on each
+   side of it do. */
+
+.divide-chapter { display: flex; align-items: center; gap: 10px; padding: 9px 2px;
+                  border-bottom: 1px solid var(--hairline); }
+.divide-chapter b { flex: 1; min-width: 0; font-size: 13px; font-weight: 500;
+                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.divide-chapter small { flex: none; color: var(--muted); font-size: 11px; }
+
+.divide-cut { display: block; width: 100%; text-align: left; padding: 6px 0; }
+.divide-cut-line { display: flex; align-items: center; gap: 8px; color: var(--muted);
+                   font-family: var(--font-heading); font-size: 10px; font-weight: 700;
+                   letter-spacing: .08em; text-transform: uppercase; }
+.divide-cut-line::before, .divide-cut-line::after {
+  content: ""; flex: 1; height: 1px; background: var(--hairline);
+}
+.divide-cut[aria-pressed="true"] .divide-cut-line { color: var(--accent-ink); }
+.divide-cut[aria-pressed="true"] .divide-cut-line::before,
+.divide-cut[aria-pressed="true"] .divide-cut-line::after { background: var(--accent-400); }
+
+.divide-preview { margin: 8px 0 4px; padding: 10px 12px; border-radius: var(--radius-md);
+                  background: var(--surface); border: 1px solid var(--hairline);
+                  font-size: 12px; line-height: 1.5; }
+.divide-preview p { margin: 0 0 6px; }
+.divide-preview p:last-child { margin: 0; }
+.divide-preview em { color: var(--muted); font-style: normal; font-size: 11px;
+                     display: block; margin-bottom: 2px; }
+
+/* Side by side when there are pages to look at: the last page before the cut
+   and the first after it, which for a comic is the only thing worth seeing. */
+.divide-pair { display: grid; gap: 10px; }
+.divide-pair.pages { grid-template-columns: 1fr 1fr; }
+.divide-page { display: block; width: 100%; height: auto; max-height: 220px;
+               object-fit: contain; border-radius: var(--radius-sm);
+               background: var(--bg); }

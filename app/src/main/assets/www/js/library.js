@@ -979,3 +979,154 @@ function unKeyImages(html, prefix) {
   return html.replace(/data-img="([^"]*)"/g, (whole, href) =>
     (href.startsWith(prefix) ? `data-img="${href.slice(prefix.length)}"` : whole));
 }
+
+
+/* ── dividing a book ──────────────────────────────────────────────────────
+ *
+ * The workshop joins files into one book; this is the other direction.
+ *
+ * A single file often holds what are really several things -- a bound set of
+ * volumes, a year of serialised chapters, an omnibus -- and reading it means
+ * one enormous spine with no sense of where you are. Dividing it gives each
+ * part its own place, its own progress and its own percentage.
+ *
+ * The original is left alone, as joining leaves its parts alone: a division
+ * that turns out badly costs a delete rather than a re-import.
+ */
+
+/**
+ * A few words from each side of a proposed cut.
+ *
+ * The point of showing them is that a chapter list does not tell you what a
+ * cut actually separates -- "Chapter 12" and "Chapter 13" look like a safe
+ * place to divide until you see that one runs straight into the other.
+ */
+export function previewCut(chapters, at, words = 22) {
+  const before = chapters[at - 1];
+  const after = chapters[at];
+
+  const tail = (chapter) => {
+    if (!chapter) return null;
+    const text = plainTextOf(chapter);
+    if (!text) return chapter.title || null;
+    return `…${text.split(/\s+/).slice(-words).join(' ')}`;
+  };
+  const head = (chapter) => {
+    if (!chapter) return null;
+    const text = plainTextOf(chapter);
+    if (!text) return chapter.title || null;
+    return `${text.split(/\s+/).slice(0, words).join(' ')}…`;
+  };
+
+  /* A chapter of pictures has no words to preview.
+   *
+   * Repeating its title tells you nothing about where the cut falls -- for a
+   * comic that is the only thing worth knowing. The last page before the cut
+   * and the first page after it are what a reader would actually look at.
+   */
+  return {
+    endsWith: tail(before),
+    beginsWith: head(after),
+    endsAt: before?.title || null,
+    beginsAt: after?.title || null,
+    endsPicture: lastPicture(before),
+    beginsPicture: firstPicture(after),
+    pictures: countPictures(before) + countPictures(after),
+  };
+}
+
+const PICTURE_REF = /data-img="([^"]*)"/g;
+
+function picturesOf(chapter) {
+  const markup = chapter?.html ?? chapter?.source ?? '';
+  return [...String(markup).matchAll(PICTURE_REF)].map((m) => m[1]);
+}
+
+const firstPicture = (chapter) => picturesOf(chapter)[0] || null;
+const lastPicture = (chapter) => picturesOf(chapter).slice(-1)[0] || null;
+
+const countPictures = (chapter) =>
+  ((chapter?.html || chapter?.source || '').match(/<img\b/gi) || []).length;
+
+function plainTextOf(chapter) {
+  const markup = chapter.html ?? chapter.source ?? '';
+  return String(markup)
+    .replace(/<(script|style|head|title)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&[a-z]+;|&#\d+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Divide a book at the given chapter indexes.
+ *
+ * @param cuts  indexes a part begins at; 0 is implied and ignored.
+ */
+export async function fragmentBook(bookId, cuts, { name, onProgress } = {}) {
+  const book = await store.get('books', bookId);
+  if (!book) throw new Error('That book is no longer in the library.');
+
+  const chapters = (await store.byIndex('chapters', 'bookId', bookId))
+    .sort((a, b) => a.index - b.index);
+  if (chapters.length < 2) throw new Error('That book has only one chapter.');
+
+  const points = [...new Set(cuts.map(Number).filter((n) => n > 0 && n < chapters.length))]
+    .sort((a, b) => a - b);
+  if (!points.length) throw new Error('Choose at least one place to divide it.');
+
+  const images = await store.byIndex('images', 'bookId', bookId);
+  const bounds = [0, ...points, chapters.length];
+  const made = [];
+
+  for (let part = 0; part < bounds.length - 1; part++) {
+    const from = bounds[part];
+    const to = bounds[part + 1];
+    const mine = chapters.slice(from, to);
+    onProgress?.(`Part ${part + 1}`, (part + 1) / (bounds.length - 1));
+
+    const title = `${name || book.title} — ${part + 1}`;
+    const partId = await store.add('books', {
+      title,
+      author: book.author || null,
+      lang: book.lang || null,
+      format: book.format || null,
+      folder: book.folder || null,
+      // Its own fingerprint, so re-importing the whole book later does not
+      // look like a duplicate of one of its parts.
+      fingerprint: `part:${bookId}:${part}`,
+      dividedFrom: { id: bookId, title: book.title, part: part + 1, of: bounds.length - 1 },
+      addedAt: Date.now() + part,
+      words: mine.reduce((n, c) => n + (c.words || 0), 0),
+      chapters: mine.length,
+      coverBlob: part === 0 ? book.coverBlob || null : null,
+      coverBytes: part === 0 ? book.coverBytes ?? null : null,
+    });
+
+    await store.putAll('chapters', mine.map((chapter, n) => ({
+      ...chapter,
+      id: undefined,
+      bookId: partId,
+      index: n,
+    })));
+
+    /* Pictures follow their chapters.
+     *
+     * They are numbered against the book they were in, so a picture from
+     * chapter forty has to be renumbered against a part that starts there --
+     * otherwise it claims to belong to a chapter the part does not have.
+     */
+    await store.putAll('images', images
+      .filter((image) => image.chapterIndex >= from && image.chapterIndex < to)
+      .map((image) => ({
+        ...image,
+        id: undefined,
+        bookId: partId,
+        chapterIndex: image.chapterIndex - from,
+      })));
+
+    made.push({ id: partId, title, chapters: mine.length });
+  }
+
+  return made;
+}
