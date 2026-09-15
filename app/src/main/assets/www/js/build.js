@@ -183,7 +183,7 @@ export function describe(part) {
  * two volumes of a serial name their pictures identically, and without a
  * prefix the later ones quietly replace the earlier.
  */
-export async function build({ title, onProgress } = {}) {
+export async function build({ title, author, onProgress } = {}) {
   /* One part is a book too.
    *
    * A zip of a volume's saved pages, or a folder of a chapter's images, is a
@@ -196,6 +196,10 @@ export async function build({ title, onProgress } = {}) {
   const name = title || commonName(parts.map((p) => p.name)) || 'Built book';
   const bookId = await store.add('books', {
     title: name,
+    // Set here rather than left to be corrected later: a book named at the
+    // moment it is made is named everywhere -- on the shelf, in its own
+    // metadata, and in anything written out of it afterwards.
+    author: author || null,
     fingerprint: `built:${Date.now()}`,
     addedAt: Date.now(),
     words: 0,

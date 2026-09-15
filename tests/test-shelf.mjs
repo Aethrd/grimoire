@@ -637,7 +637,10 @@ t('a long part name keeps the end that identifies it', () => {
    * guesswork. */
   const at = app.indexOf('function shortenMiddle');
   assert.ok(at > -1);
-  const shortenMiddle = eval(`(${app.slice(at, app.indexOf('function renderWorkshop')).trim()})`);
+  // To the end of the function itself, not to whatever is declared next:
+  // anything inserted between them used to end up inside the eval.
+  const ends = app.indexOf('\n}\n', at) + 2;
+  const shortenMiddle = eval(`(${app.slice(at, ends).trim()})`);
 
   /* The cut is placed around the last number, not at a fixed midpoint. A
    * blind middle cut turned "Volume 14" into "lume 14", which is worse than
@@ -667,6 +670,20 @@ t('a long part name keeps the end that identifies it', () => {
    * shortening deliberately preserved. */
   const rule = css.slice(css.indexOf('.build-what b {'), css.indexOf('.build-what small'));
   assert.match(rule, /line-clamp: 3/);
+});
+
+t('the workshop asks what the book is called', () => {
+  // A suggestion from the filenames, which improves as parts are added and
+  // stops the moment it is typed over: adding three more volumes should not
+  // throw away a name someone has already chosen.
+  assert.ok(html.includes('id="build-title"'));
+  assert.ok(html.includes('id="build-author"'));
+  assert.match(app, /if \(!buildTitleTouched\) el\('build-title'\)\.value = suggested/);
+  assert.match(app, /buildTitleTouched = el\('build-title'\)\.value\.trim\(\)\.length > 0/);
+  // Both reach the book itself.
+  const build = read('app/src/main/assets/www/js/build.js');
+  assert.match(build, /author: author \|\| null/);
+  assert.match(app, /author: el\('build-author'\)\.value\.trim\(\) \|\| undefined/);
 });
 
 t('the workshop shows the order and lets it be changed', () => {

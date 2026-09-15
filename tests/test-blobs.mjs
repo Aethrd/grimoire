@@ -750,6 +750,41 @@ await t('a single part is a book too', async () => {
   assert.ok(!first.title.includes(' — '), first.title);
 });
 
+await t('a built book is named when it is built', async () => {
+  /* Naming only at export meant the book sat on the shelf under a filename
+   * until someone thought to correct it, and anything written out before then
+   * carried that name inside it. */
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const epub = await import(new URL('../app/src/main/assets/www/js/epub.js', import.meta.url).href);
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+
+  const bytes = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+  build.clear();
+  await build.add([
+    new File([bytes], 'Named Vol. 1.epub'),
+    new File([bytes], 'Named Vol. 2.epub'),
+  ]);
+
+  const { book } = await build.build({ title: 'A Chosen Name', author: 'Someone' });
+  assert.equal(book.title, 'A Chosen Name');
+  assert.equal(book.author, 'Someone');
+
+  // And it travels: the name is in the file, not only on the shelf.
+  const { blob, name } = await epub.buildEpub(book.id);
+  assert.equal(name, 'A Chosen Name.epub');
+
+  const written = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(Buffer.from(reader.result));
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(blob);
+  });
+  const again = await parse.parse(new File([written], name));
+  assert.equal(again.title, 'A Chosen Name');
+  assert.equal(again.author, 'Someone');
+});
+
 await t('building needs something to build from', async () => {
   const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
   build.clear();

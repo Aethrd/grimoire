@@ -1534,17 +1534,29 @@ function shortenMiddle(name, limit = 64) {
   return `${text.slice(0, head)}…${text.slice(-tail)}`;
 }
 
+/** Whether the title field has been typed into, so suggestions stop. */
+let buildTitleTouched = false;
+
 function renderWorkshop() {
   const list = el('build-list');
   const parts = build.contents();
 
   el('build-empty').hidden = parts.length > 0;
+  el('build-naming').hidden = parts.length === 0;
   el('build-foot').hidden = parts.length === 0;
   el('build-count').textContent = parts.length
     ? `${parts.length} part${parts.length === 1 ? '' : 's'}` : '';
+
+  /* The suggested name follows what has been added, until it is typed over.
+   *
+   * Adding three more volumes should improve the suggestion; it should not
+   * throw away a name someone has already chosen. */
+  const suggested = parts.length
+    ? build.commonName(parts.map((p) => p.name)) || 'Built book'
+    : '';
+  if (!buildTitleTouched) el('build-title').value = suggested;
   el('build-eyebrow').textContent = parts.length
-    ? build.commonName(parts.map((p) => p.name)) || 'Join files into one'
-    : 'Join files into one';
+    ? (el('build-title').value || suggested) : 'Join files into one';
 
   list.innerHTML = '';
   parts.forEach((part, at) => {
@@ -1617,14 +1629,26 @@ function wireWorkshop() {
     picker.click();
   };
 
-  el('build-clear').onclick = () => { build.clear(); renderWorkshop(); };
+  el('build-title').oninput = () => {
+    buildTitleTouched = el('build-title').value.trim().length > 0;
+    el('build-eyebrow').textContent = el('build-title').value || 'Join files into one';
+  };
+
+  el('build-clear').onclick = () => {
+    build.clear();
+    buildTitleTouched = false;
+    el('build-title').value = '';
+    el('build-author').value = '';
+    renderWorkshop();
+  };
 
   el('build-go').onclick = async () => {
     const panel = el('import-progress');
     panel.hidden = false;
     try {
       const { book, failed } = await build.build({
-        title: el('build-eyebrow').textContent,
+        title: el('build-title').value.trim() || undefined,
+        author: el('build-author').value.trim() || undefined,
         onProgress: (message, fraction, done, total) => {
           el('import-label').textContent = message;
           el('import-bar').style.width = `${Math.round(fraction * 100)}%`;
@@ -1632,6 +1656,9 @@ function wireWorkshop() {
         },
       });
       build.clear();
+      buildTitleTouched = false;
+      el('build-title').value = '';
+      el('build-author').value = '';
       renderWorkshop();
       await refreshShelf();
       // Said with the parts that failed, not instead of them: a book short
