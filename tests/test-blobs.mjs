@@ -1095,6 +1095,68 @@ await t('a book can be written back out as a real EPUB', async () => {
   assert.match(parse.chapterHtml(again.chapters[0]), /harbour kept its own accounts/);
 });
 
+await t('a written book is compressed', async () => {
+  /* An EPUB is a zip, and a zip that stores rather than deflates is just a
+   * container: a book came out roughly the size of its own markup. The
+   * repeated per-chapter boilerplate compresses to almost nothing, which is
+   * what made a book of thousands of short chapters so much worse than one of
+   * ten long ones. */
+  const JSZip = (await import('jszip')).default;
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const epub = await import(new URL('../app/src/main/assets/www/js/epub.js', import.meta.url).href);
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+
+  // A great many short chapters: the shape that suffered most.
+  let text = '';
+  let n = 1;
+  while (text.length < 600 * 1024) {
+    text += `Chapter ${n++}\n\n`
+      + 'The wall ran on into the rain and she counted the lamps beneath it. '.repeat(12)
+      + '\n\n';
+  }
+  const source = new File([text], 'Compressed.txt');
+  await library.importFiles([source], {});
+  const book = (await store.all('books')).find((b) => b.fingerprint?.startsWith('Compressed'));
+
+  const chapters = await store.byIndex('chapters', 'bookId', book.id);
+  assert.ok(chapters.length > 100, `only ${chapters.length} chapters`);
+
+  const { blob, name } = await epub.buildEpub(book.id);
+  assert.ok(blob.size < source.size * 0.6,
+    `${blob.size} bytes out of ${source.size} in — it is not being compressed`);
+
+  const bytes = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(Buffer.from(reader.result));
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(blob);
+  });
+  const archive = await JSZip.loadAsync(bytes);
+
+  /* The mimetype entry is the exception and must stay uncompressed and
+     first, or a reader that checks will reject the file. */
+  assert.equal(Object.keys(archive.files)[0], 'mimetype');
+  assert.equal(await archive.file('mimetype').async('string'), 'application/epub+zip');
+
+  // And it is still a book, not just a smaller file.
+  const again = await parse.parse(new File([bytes], name));
+  assert.equal(again.chapters.length, chapters.length);
+  assert.match(parse.chapterHtml(again.chapters[0]), /counted the lamps/);
+});
+
+await t('pictures are stored rather than deflated again', () => {
+  /* JPEG, PNG and WebP are compressed already. Deflating them costs real time
+   * on a phone and saves a fraction of a percent, and for a comic that time
+   * is most of the export. */
+  const source = read('app/src/main/assets/www/js/epub.js');
+  assert.match(source, /const PICTURE = \{ compression: 'STORE' \}/);
+  assert.match(source, /zip\.file\(`OEBPS\/\$\{name\}`, image\.blob, PICTURE\)/);
+  assert.match(source, /zip\.file\('OEBPS\/cover\.jpg', book\.coverBlob, PICTURE\)/);
+  // While the markup says DEFLATE rather than relying on the default alone.
+  assert.match(source, /const TEXT = \{ compression: 'DEFLATE'/);
+});
+
 await t('a picture that cannot be written costs its place, not the book', () => {
   // A record whose data did not survive, or a blob the archive will not take.
   const source = read('app/src/main/assets/www/js/epub.js');

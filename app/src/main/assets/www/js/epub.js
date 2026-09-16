@@ -60,11 +60,29 @@ export async function buildEpub(bookId, { onProgress, title, author } = {}) {
    * its contents, and a reader that checks will reject the file without it. */
   zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
 
+  /* Everything else is compressed.
+   *
+   * It was not, which is why a book came out roughly the size of its own
+   * markup: an EPUB is a zip, and a zip that stores rather than deflates is
+   * just a container. Prose compresses to about a quarter, and the repeated
+   * per-chapter boilerplate -- the same fifteen lines of XHTML around every
+   * chapter -- compresses to almost nothing, which is what makes a book of
+   * two thousand short chapters so much worse than a book of ten long ones.
+   */
+  const TEXT = { compression: 'DEFLATE', compressionOptions: { level: 6 } };
+
+  /* Pictures are stored as they are.
+   *
+   * JPEG, PNG and WebP are compressed already; deflating them again costs
+   * real time on a phone and saves a fraction of a percent, and for a comic
+   * that time is most of the export. */
+  const PICTURE = { compression: 'STORE' };
+
   zip.file('META-INF/container.xml',
     '<?xml version="1.0" encoding="UTF-8"?>\n'
     + '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
     + '<rootfiles><rootfile full-path="OEBPS/content.opf" '
-    + 'media-type="application/oebps-package+xml"/></rootfiles></container>');
+    + 'media-type="application/oebps-package+xml"/></rootfiles></container>', TEXT);
 
   /* Pictures are renamed on the way out.
    *
@@ -89,7 +107,7 @@ export async function buildEpub(bookId, { onProgress, title, author } = {}) {
     const extension = String(image.href).split('.').pop().toLowerCase().slice(0, 4) || 'jpg';
     const name = `images/img${String(++at).padStart(4, '0')}.${extension}`;
     try {
-      zip.file(`OEBPS/${name}`, image.blob);
+      zip.file(`OEBPS/${name}`, image.blob, PICTURE);
       renamed.set(image.href, name);
     } catch {
       // Skipped rather than fatal, for the same reason.
@@ -114,15 +132,19 @@ export async function buildEpub(bookId, { onProgress, title, author } = {}) {
       return `<img src="../${target}" alt=""/>`;
     });
 
+    /* The namespace declared once on <html> rather than on every section,
+       and no newlines between the parts: with a chapter per scraped page this
+       boilerplate is repeated thousands of times. */
     zip.file(`OEBPS/${file}`,
-      '<?xml version="1.0" encoding="UTF-8"?>\n'
-      + '<!DOCTYPE html>\n'
-      + '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="'
-      + escapeXml(book.lang || 'en') + '">\n'
+      '<?xml version="1.0" encoding="UTF-8"?>'
+      + '<html xmlns="http://www.w3.org/1999/xhtml"'
+      + ' xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="'
+      + escapeXml(book.lang || 'en') + '">'
       + `<head><title>${escapeXml(chapter.title)}</title>`
       + '<meta charset="utf-8"/>'
-      + '<link rel="stylesheet" type="text/css" href="../style.css"/></head>\n'
-      + `<body><section epub:type="chapter" xmlns:epub="http://www.idpf.org/2007/ops">\n${body}\n</section></body>\n</html>`);
+      + '<link rel="stylesheet" type="text/css" href="../style.css"/></head>'
+      + `<body><section epub:type="chapter">${body}</section></body></html>`,
+      TEXT);
 
     manifest.push(`<item id="${id}" href="${file}" media-type="application/xhtml+xml"/>`);
     spine.push(`<itemref idref="${id}"/>`);
@@ -133,7 +155,7 @@ export async function buildEpub(bookId, { onProgress, title, author } = {}) {
   zip.file('OEBPS/style.css',
     'body { margin: 0 5%; line-height: 1.5; }\n'
     + 'h1, h2, h3 { line-height: 1.25; }\n'
-    + 'img { max-width: 100%; height: auto; }\n');
+    + 'img { max-width: 100%; height: auto; }\n', TEXT);
 
   for (const [href, name] of renamed) {
     const image = images.find((i) => i.href === href);
@@ -145,7 +167,7 @@ export async function buildEpub(bookId, { onProgress, title, author } = {}) {
 
   if (typeof book.coverBlob?.size === 'number' && book.coverBlob.size > 0) {
     try {
-      zip.file('OEBPS/cover.jpg', book.coverBlob);
+      zip.file('OEBPS/cover.jpg', book.coverBlob, PICTURE);
       manifest.push('<item id="cover" href="cover.jpg" media-type="image/jpeg" '
         + 'properties="cover-image"/>');
     } catch {
@@ -158,7 +180,7 @@ export async function buildEpub(bookId, { onProgress, title, author } = {}) {
     + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">\n'
     + '<head><title>Contents</title><meta charset="utf-8"/></head>\n'
     + `<body><nav epub:type="toc" id="toc"><h1>Contents</h1><ol>${nav.join('')}</ol></nav></body>\n`
-    + '</html>');
+    + '</html>', TEXT);
   manifest.push('<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" '
     + 'properties="nav"/>');
 
@@ -174,10 +196,16 @@ export async function buildEpub(bookId, { onProgress, title, author } = {}) {
     + '</metadata>\n'
     + `<manifest>${manifest.join('')}</manifest>\n`
     + `<spine>${spine.join('')}</spine>\n`
-    + '</package>');
+    + '</package>', TEXT);
 
   const blob = await zip.generateAsync(
-    { type: 'blob', mimeType: 'application/epub+zip' },
+    {
+      type: 'blob',
+      mimeType: 'application/epub+zip',
+      // The default for anything not told otherwise, which is all the markup.
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 },
+    },
     (state) => onProgress?.(0.95 + (state.percent / 100) * 0.05));
 
   onProgress?.(1);
