@@ -65,6 +65,75 @@ await t('keeps the heading as its own block', () => assert.ok(text.startsWith('S
 
 
 
+console.log('finding a book');
+
+const shelf = [
+  { title: 'Witch City', author: 'Kim Aera', series: 'Witch City', folder: 'Fic' },
+  { title: '마녀의 도시', author: 'Kim Aera', series: 'Witch City', folder: 'Raw' },
+  { title: 'Solo Leveling Vol. 3', author: 'Chugong', series: 'Solo Leveling', folder: 'Manhwa' },
+  { title: 'The Salt Almanac', author: 'Oyelaran', folder: 'Fic' },
+  { title: 'A City of Salt', author: 'Someone', folder: 'Fic' },
+];
+
+await t('a book is found by anything that identifies it', async () => {
+  /* Pinpointing a book is a different question from finding a sentence
+   * inside one. It used to look only at the title and the author, so a
+   * library organised into folders could not be searched by folder. */
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const titles = (query) => library.findBooks(shelf, query).map((b) => b.title);
+
+  assert.deepEqual(titles('manhwa'), ['Solo Leveling Vol. 3']);
+  assert.ok(titles('witch').includes('마녀의 도시'), 'the series was not searched');
+  assert.deepEqual(titles('chugong'), ['Solo Leveling Vol. 3']);
+});
+
+await t('the words can be typed in any order', async () => {
+  // It required them in the order given, so "almanac salt" found nothing
+  // while "salt almanac" worked.
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  assert.deepEqual(library.findBooks(shelf, 'almanac salt').map((b) => b.title),
+    ['The Salt Almanac']);
+  assert.deepEqual(library.findBooks(shelf, 'salt almanac').map((b) => b.title),
+    ['The Salt Almanac']);
+});
+
+await t('every word has to match something', async () => {
+  // Two words should narrow the answer, not widen it.
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  assert.equal(library.findBooks(shelf, 'witch chugong').length, 0);
+  assert.equal(library.findBooks(shelf, 'salt nonsense').length, 0);
+});
+
+await t('the best match comes first', async () => {
+  /* Returning them in shelf order buries the book whose title was typed
+   * under one that happens to share an author. */
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const found = library.findBooks(shelf, 'solo leveling');
+  assert.equal(found[0].title, 'Solo Leveling Vol. 3');
+
+  // A title match outranks a folder match on the same word.
+  const salt = library.findBooks([
+    { title: 'Nothing Relevant', author: 'X', folder: 'Salt' },
+    { title: 'The Salt Almanac', author: 'Y', folder: 'Fic' },
+  ], 'salt');
+  assert.equal(salt[0].title, 'The Salt Almanac');
+});
+
+await t('a result says why it is in the list', async () => {
+  // A book matched on its folder looks like a mistake beside one matched on
+  // its title, unless it says so.
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  assert.equal(library.matchedOn(shelf[2], 'manhwa'), 'folder');
+  assert.equal(library.matchedOn(shelf[0], 'witch'), 'series');
+  assert.equal(library.matchedOn(shelf[3], 'almanac'), null, 'a title match needs no explaining');
+});
+
+await t('scoping to titles ignores the rest', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  assert.equal(library.findBooks(shelf, 'manhwa', ['title', 'shown']).length, 0);
+  assert.equal(library.findBooks(shelf, 'kim', ['author']).length, 2);
+});
+
 console.log('saved web pages');
 
 const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').toString('base64');

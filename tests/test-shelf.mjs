@@ -488,9 +488,15 @@ t('a title search matches the title as shown', () => {
   // Including a translated one: searching for what is on screen should find
   // it.
   const screens = read('app/src/main/assets/www/js/screens.js');
-  assert.match(screens, /library\.displayTitle\(b\)/);
-  assert.match(screens, /if \(shelfScope === 'title'\) return titleMatches\(b\)/);
-  assert.match(screens, /if \(shelfScope === 'author'\) return authorMatches\(b\)/);
+  // The translated title shown on the shelf is searched too, now through the
+  // finder rather than inline.
+  assert.match(screens, /library\.findBooks\(books, query, only\)/);
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /shown: fold\(displayTitle\(book\)\)/);
+  // The scope narrows which fields are looked at, rather than which of two
+  // hand-written tests is run.
+  assert.match(screens, /shelfScope === 'title' \? \['title', 'shown'\]/);
+  assert.match(screens, /shelfScope === 'author' \? \['author'\]/);
 });
 
 t('chapter names are searchable inside a book', () => {

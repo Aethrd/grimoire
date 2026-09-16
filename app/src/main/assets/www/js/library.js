@@ -1376,3 +1376,108 @@ export async function fragmentPages(bookId, cuts, { name, onProgress } = {}) {
 
   return made;
 }
+
+
+/* ── finding a book ───────────────────────────────────────────────────────
+ *
+ * The shelf search exists to pinpoint a book, not to find a sentence inside
+ * one -- that is what the search inside a book is for. So it looks at
+ * everything that identifies a book on a shelf, not only its title.
+ *
+ * Three things it was getting wrong. It ignored the series and the folder, so
+ * a library organised into "Manhwa" could not be searched for manhwa. It
+ * required the words in the order they were typed, so "almanac salt" found
+ * nothing while "salt almanac" worked. And it returned matches in shelf
+ * order, which buries the book whose title you typed under one that happens
+ * to share an author.
+ */
+
+const FIELDS = [
+  ['title', 6],
+  ['shown', 6],      // the translated title, where there is one
+  ['author', 4],
+  ['series', 3],
+  ['folder', 2],
+  ['tags', 2],
+];
+
+const fold = (text) => String(text ?? '')
+  .normalize('NFKD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase();
+
+function fieldsOf(book) {
+  return {
+    title: fold(book.title),
+    shown: fold(displayTitle(book)),
+    author: fold(book.author),
+    series: fold(book.series),
+    folder: fold(book.folder),
+    tags: fold(Array.isArray(book.tags) ? book.tags.join(' ') : book.tags),
+  };
+}
+
+/**
+ * Score a book against the words typed.
+ *
+ * Every word has to match something, or the result is noise: typing two words
+ * should narrow, not widen. Where a word matches decides how well the book
+ * scores, and a word starting a field counts for more than one buried in the
+ * middle of it.
+ */
+function scoreBook(book, words, only) {
+  const fields = fieldsOf(book);
+  const wanted = only ? FIELDS.filter(([name]) => only.includes(name)) : FIELDS;
+
+  let score = 0;
+  for (const word of words) {
+    let best = 0;
+    for (const [name, weight] of wanted) {
+      const value = fields[name];
+      if (!value) continue;
+      const at = value.indexOf(word);
+      if (at === -1) continue;
+      // Starting the field, or starting a word in it, is a better match than
+      // landing in the middle of one.
+      const edge = at === 0 ? 2 : /\s|[-–—:,.]/.test(value[at - 1] || '') ? 1.5 : 1;
+      best = Math.max(best, weight * edge);
+    }
+    if (!best) return 0;          // every word must match something
+    score += best;
+  }
+
+  // The whole phrase, as typed, in the title: the strongest signal there is.
+  const phrase = words.join(' ');
+  if (fields.title.includes(phrase) || fields.shown.includes(phrase)) score += 8;
+  return score;
+}
+
+/** Which field a book matched on, so a result can say why it is there. */
+export function matchedOn(book, query, only) {
+  const words = fold(query).split(/\s+/).filter(Boolean);
+  const fields = fieldsOf(book);
+  const wanted = only ? FIELDS.filter(([name]) => only.includes(name)) : FIELDS;
+
+  for (const [name] of wanted) {
+    if (name === 'title' || name === 'shown') continue;
+    if (words.every((word) => fields[name] && fields[name].includes(word))) return name;
+  }
+  return null;
+}
+
+/**
+ * Books matching what was typed, best first.
+ *
+ * @param only  field names to search, or null for all of them
+ */
+export function findBooks(books, query, only = null) {
+  const words = fold(query).split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+
+  return books
+    .map((book) => ({ book, score: scoreBook(book, words, only) }))
+    .filter((hit) => hit.score > 0)
+    .sort((a, b) => b.score - a.score
+      || String(displayTitle(a.book)).localeCompare(String(displayTitle(b.book))))
+    .map((hit) => hit.book);
+}

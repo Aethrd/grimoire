@@ -628,29 +628,44 @@ async function runFind(query, onGoToMatch) {
     return;
   }
 
-  // No book open: search the shelf by title and author instead of the text.
+  /* No book open: find a book, which is the whole job of this search.
+   *
+   * Pinpointing a book on a shelf is a different question from finding a
+   * sentence inside one, and they want different answers. This looks at
+   * everything that identifies a book -- its title, the translated title
+   * shown on the shelf, its author, its series, its folder and its tags --
+   * and puts the best match first.
+   */
   if (!reader.state.book) {
     // The same books the shelf shows: nothing from the vault while it is
     // locked, and nothing still being imported.
     const books = (await store.all('books'))
       .filter((b) => !b.importing && (!b.inVault || vaultUnlocked));
-    // Both the book's own title and the translated one shown on the shelf:
-    // searching for what is on screen should find it.
-    const titleMatches = (b) => foldDiacritics(b.title).includes(needle)
-      || foldDiacritics(library.displayTitle(b)).includes(needle);
-    const authorMatches = (b) => foldDiacritics(b.author || '').includes(needle);
 
-    const hits = books.filter((b) => {
-      if (shelfScope === 'title') return titleMatches(b);
-      if (shelfScope === 'author') return authorMatches(b);
-      return titleMatches(b) || authorMatches(b);
-    });
-    results.innerHTML = hits.length ? '' : '<p class="muted" style="padding:20px 16px">Nothing found.</p>';
+    const only = shelfScope === 'title' ? ['title', 'shown']
+      : shelfScope === 'author' ? ['author']
+      : null;
+
+    const hits = library.findBooks(books, query, only);
+    results.innerHTML = hits.length
+      ? '' : '<p class="muted" style="padding:20px 16px">No book found.</p>';
+
     for (const book of hits) {
       const row = document.createElement('button');
       row.className = 'list-row';
+
+      /* Why this book is in the list.
+       *
+       * A result matched on its folder or its series looks like a mistake
+       * next to one matched on its title, unless it says so. */
+      const where = library.matchedOn(book, query, only);
+      const note = [
+        book.author || '',
+        where && where !== 'author' ? `in ${escape(String(book[where] ?? where))}` : '',
+      ].filter(Boolean).join(' · ');
+
       row.innerHTML = `<span class="body"><b>${escape(library.displayTitle(book))}</b>`
-        + `<small>${escape(book.author || '')}</small></span>`;
+        + `<small>${note}</small></span>`;
       row.onclick = () => onGoToMatch({ bookId: book.id });
       results.appendChild(row);
     }
