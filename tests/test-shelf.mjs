@@ -635,6 +635,34 @@ t('dividing shows what each cut separates', () => {
   assert.match(app, /return openDivide\(book\)/);
 });
 
+t('which search it is, is decided when the screen opens', () => {
+  /* A book stays loaded after you leave it, so asking "is a book open" at
+   * search time made the shelf search search inside whatever had been read
+   * last -- and the shelf search then found no books at all, because it was
+   * never running. */
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /let findInBook = false/);
+  assert.match(screens, /findInBook = inBook;/);
+
+  // Nothing inside the search itself asks the reader what is loaded.
+  const run = screens.slice(screens.indexOf('async function runFind'));
+  assert.ok(!/!reader\.state\.book/.test(run.slice(0, 2000)),
+    'the search still decides from whatever book is loaded');
+});
+
+t('a found book is shown the way the shelf shows it', () => {
+  // A name in a list is not how anyone recognises a book they own.
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /library\.bookTile\(book, \(\) => onGoToMatch/);
+  assert.match(screens, /grid\.className = 'shelf find-shelf'/);
+  assert.match(css, /\.find-shelf \{/);
+
+  // The same tile as the shelf, without the selection machinery.
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /export function bookTile/);
+  assert.match(library, /if \(!onLongPress\) return node;/);
+});
+
 t('several books write out as one archive', () => {
   /* Saving them individually would mean the system file picker opening once
    * per book -- for a shelf of twenty, twenty decisions about where things

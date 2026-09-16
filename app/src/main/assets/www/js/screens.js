@@ -545,10 +545,19 @@ const MAX_HITS = 500;
 
 const foldDiacritics = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
+/** Whether the search screen is searching a book or the shelf. */
+let findInBook = false;
+
 export function initFind(onGoToMatch, fromReader = false) {
   const input = el('find-input');
   // Told, not inferred: the reader keeps its book so reading can be resumed.
+  /* Which search this is, decided once when the screen opens.
+   *
+   * Kept here rather than worked out while searching: a book stays loaded
+   * after you leave it, so asking "is a book open" at search time made the
+   * shelf search search inside whatever had been read last. */
   const inBook = fromReader && !!reader.state.book;
+  findInBook = inBook;
 
   /* Opening the screen resets it.
    *
@@ -637,7 +646,74 @@ async function runFind(query, onGoToMatch) {
    * shown on the shelf, its author, its series, its folder and its tags --
    * and puts the best match first.
    */
-  if (!reader.state.book) {
+  /* Which search this is was decided when the screen opened.
+   *
+   * It used to be decided here, from whether a book happened to be loaded --
+   * and a book stays loaded after you leave it, so searching from the shelf
+   * searched inside whatever you had read last. The shelf search then found
+   * no books at all, because it was never running.
+   */
+  if (!findInBook) {
+    // The same books the shelf shows: nothing from the vault while it is
+    // locked, and nothing still being imported.
+    const books = (await store.all('books'))
+      .filter((b) => !b.importing && (!b.inVault || vaultUnlocked));
+
+    const only = shelfScope === 'title' ? ['title', 'shown']
+      : shelfScope === 'author' ? ['author']
+      : null;
+
+    const hits = library.findBooks(books, query, only);
+    results.innerHTML = hits.length
+      ? '' : '<p class="muted" style="padding:20px 16px">No book found.</p>';
+
+    /* Shown the way the shelf shows them: cover first, then the name.
+     *
+     * A list of names is not how anyone recognises a book they own. The title
+     * is the one on the shelf, translated or not, so what you search for and
+     * what you see are the same thing.
+     */
+    const grid = document.createElement('div');
+    grid.className = 'shelf find-shelf';
+
+    for (const book of hits) {
+      const node = library.bookTile(book, () => onGoToMatch({ bookId: book.id }));
+
+      /* Why this book is in the list.
+       *
+       * A book matched on its folder or its series looks like a mistake
+       * beside one matched on its title, unless it says so. */
+      const where = library.matchedOn(book, query, only);
+      if (where && where !== 'author') {
+        const note = document.createElement('span');
+        note.className = 'tile-meta';
+        note.textContent = `in ${String(book[where] ?? where)}`;
+        node.appendChild(note);
+      }
+      grid.appendChild(node);
+    }
+
+    if (hits.length) results.appendChild(grid);
+    stepper.hidden = true;
+    return;
+  }
+
+  /* No book open: find a book, which is the whole job of this search.
+   *
+   * Pinpointing a book on a shelf is a different question from finding a
+   * sentence inside one, and they want different answers. This looks at
+   * everything that identifies a book -- its title, the translated title
+   * shown on the shelf, its author, its series, its folder and its tags --
+   * and puts the best match first.
+   */
+  /* Which search this is was decided when the screen opened.
+   *
+   * It used to be decided here, from whether a book happened to be loaded --
+   * and a book stays loaded after you leave it, so searching from the shelf
+   * searched inside whatever you had read last. The shelf search then found
+   * no books at all, because it was never running.
+   */
+  if (!findInBook) {
     // The same books the shelf shows: nothing from the vault while it is
     // locked, and nothing still being imported.
     const books = (await store.all('books'))

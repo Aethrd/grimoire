@@ -459,6 +459,17 @@ const DENSITY_ICONS = {
   4: '<rect x="2" y="6" width="4" height="12"/><rect x="7" y="6" width="4" height="12"/><rect x="12" y="6" width="4" height="12"/><rect x="17" y="6" width="4" height="12"/>',
 };
 
+/**
+ * A book as it looks on the shelf, for use outside the shelf.
+ *
+ * Search results were a list of names, and a name is not how anyone
+ * recognises a book they own -- the cover is. This is the same tile, without
+ * the selection and long-press machinery that only the shelf needs.
+ */
+export function bookTile(book, onOpen) {
+  return tile(book, onOpen, null, null, false);
+}
+
 function tile(book, onOpen, onLongPress, selection, selecting) {
   const coverUrl = coverUrlFor(book);
   const node = document.createElement('button');
@@ -481,6 +492,8 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
     <span class="tile-meta">${escape(cleanAuthor(book.author))}</span>`;
 
   node.addEventListener('click', () => onOpen(book));
+
+  if (!onLongPress) return node;
 
   // Long press starts selection. The click listener above still fires on
   // touchend, so it checks whether selection mode is on and toggles instead

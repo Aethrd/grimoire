@@ -1472,3 +1472,8 @@ body[data-view="reader"] .stepper {
    banding rather than contrast and sharpening. */
 [data-grey="eink"] .page-flow img,
 [data-grey="eink"] .reel-item img { filter: url(#eink); }
+
+
+/* Search results, shown as the shelf shows books.
+   A name in a list is not how anyone recognises a book they own. */
+.find-shelf { padding: 4px 16px 16px; }
