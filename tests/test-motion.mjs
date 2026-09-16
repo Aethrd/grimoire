@@ -418,6 +418,21 @@ t('the behaviour pane renders its controls', async () => {
   assert.match(behaviourPane, /Tap the sides/);
 });
 
+t('a notice can be read through', () => {
+  /* These say things about the page you are looking at -- that you have
+   * reached the end of a chapter -- and a solid block covering the words it
+   * is talking about is the wrong way round. */
+  assert.match(css, /@supports \(backdrop-filter: blur\(6px\)\)/);
+  assert.match(css, /color-mix\(in srgb, var\(--accent-900\) 62%, transparent\)/);
+  assert.match(css, /backdrop-filter: blur\(7px\)/);
+
+  /* The blur is what makes it legible: without it the text underneath shows
+   * through as noise. So where it is unsupported the notice stays opaque
+   * rather than becoming unreadable. */
+  const plain = css.slice(css.indexOf('.toast {'), css.indexOf('@supports (backdrop-filter'));
+  assert.match(plain, /background: var\(--accent-900\);/);
+});
+
 t('the annotation bar stays on the screen', () => {
   /* It used to measure the room above a selection and, finding little, place
    * itself above anyway -- so selecting a line near the top put the bar off

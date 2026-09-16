@@ -499,6 +499,13 @@ body[data-mode="scroll"][data-images="original"] .page-flow { overflow-x: auto; 
 [data-images="smart"] .page-flow img.landscape { height: 88vh; width: auto; max-width: none; }
 body[data-mode="scroll"][data-images="smart"] .page-flow { overflow-x: auto; }
 
+/* A picture's own box.
+ *
+ * Transparent and the size of what is in it by default, so nothing changes
+ * for the fitting modes that never needed more room than the page. It earns
+ * its keep in the three that do. */
+.pic { display: block; margin: 0 auto; max-width: 100%; }
+
 /* Paged mode keeps every picture inside its column.
  *
  * A page is one column of a fixed width and the viewport clips what leaves
@@ -515,13 +522,34 @@ body[data-mode="paged"] .page-flow img {
   max-width: 100%;
   max-height: 88vh;
 }
-body[data-mode="paged"] .page-flow img.landscape,
-body[data-mode="paged"] .page-flow img.tall {
+
+/* Except where the setting is asking for more room than a page has.
+ *
+ * Fit height, Original and Smart exist to let a picture be larger than the
+ * screen. Clamping them to the page made them identical to Fit screen, so
+ * four of the six settings did the same thing. The box scrolls instead: the
+ * page keeps its shape and the picture can be panned inside it. */
+body[data-mode="paged"][data-images="height"] .pic,
+body[data-mode="paged"][data-images="original"] .pic,
+body[data-mode="paged"][data-images="smart"] .pic {
   max-width: 100%;
   max-height: 88vh;
-  width: auto;
-  height: auto;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  /* So a drag inside the picture pans it rather than turning the page. */
+  touch-action: pan-x pan-y;
 }
+body[data-mode="paged"][data-images="height"] .pic img,
+body[data-mode="paged"][data-images="original"] .pic img,
+body[data-mode="paged"][data-images="smart"] .pic img {
+  max-width: none;
+  max-height: none;
+}
+/* Smart still decides by shape: the width for a tall strip, the height for a
+   wide spread, the whole thing for anything near square. */
+body[data-mode="paged"][data-images="smart"] .pic img { max-width: 100%; max-height: 88vh; }
+body[data-mode="paged"][data-images="smart"] .pic img.tall { width: 100%; max-height: none; height: auto; }
+body[data-mode="paged"][data-images="smart"] .pic img.landscape { height: 88vh; width: auto; max-width: none; }
 
 .page-flow blockquote { margin: 1em 0; padding-left: 1em;
                         border-left: 2px solid var(--accent-400); }
@@ -727,8 +755,30 @@ body[data-view="reader"] .stepper {
 .toast { position: fixed; left: 50%; transform: translateX(-50%);
          bottom: calc(var(--safe-bottom) + 82px); z-index: 50;
          max-width: 78%; padding: 11px 16px; border-radius: var(--radius-md);
-         background: var(--accent-900); color: var(--accent-100);
-         font-size: 13px; text-align: center; }
+         color: var(--accent-100);
+         font-size: 13px; text-align: center;
+
+         /* You can read through it.
+          *
+          * These say things about the page you are looking at -- that you
+          * have reached the end of a chapter, that a mark was made -- and a
+          * solid block covering the words it is talking about is the wrong
+          * way round. Enough opacity to stay legible, little enough to see
+          * the text beneath.
+          *
+          * The blur is what makes that work: without it the text underneath
+          * shows through as noise and neither is readable. Where it is not
+          * supported the fallback below is more opaque instead. */
+         background: var(--accent-900);
+         box-shadow: 0 2px 12px rgba(0, 0, 0, .22); }
+
+@supports (backdrop-filter: blur(6px)) or (-webkit-backdrop-filter: blur(6px)) {
+  .toast {
+    background: color-mix(in srgb, var(--accent-900) 62%, transparent);
+    -webkit-backdrop-filter: blur(7px) saturate(1.2);
+    backdrop-filter: blur(7px) saturate(1.2);
+  }
+}
 [data-chrome="none"] .toast { bottom: calc(var(--safe-bottom) + 24px); }
 /* In the reader it goes to the top. At the bottom it landed squarely on the
    Copy chapter button, covering the control that had just been pressed. */

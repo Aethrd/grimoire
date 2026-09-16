@@ -445,6 +445,41 @@ await (async () => {
     document.body.dataset.grey = 'off';
   });
 
+  await t('every fitting mode does something different in paged mode', () => {
+    /* A page is one column with the overflow hidden, so Original, Fit height
+     * and Smart had to be clamped back to Fit screen there -- four of the six
+     * settings doing the same thing. Each picture has a box of its own now
+     * that can scroll, so it can exceed the page and still be reachable. */
+    const box = document.createElement('span');
+    box.className = 'pic';
+    const inner = document.createElement('img');
+    box.appendChild(inner);
+    document.getElementById('page-flow').appendChild(box);
+
+    const shapeOf = (fit) => {
+      document.body.dataset.mode = 'paged';
+      document.body.dataset.images = fit;
+      const outside = window.getComputedStyle(box);
+      const picture = window.getComputedStyle(inner);
+      return [outside.overflow, picture.maxWidth, picture.maxHeight, picture.height].join('/');
+    };
+
+    const shapes = ['screen', 'width', 'height', 'stretch', 'original', 'smart'].map(shapeOf);
+    // The three that need room say so by scrolling their box.
+    assert.equal(shapeOf('original').split('/')[0], 'auto');
+    assert.equal(shapeOf('height').split('/')[0], 'auto');
+    assert.equal(shapeOf('smart').split('/')[0], 'auto');
+    // And Original is no longer indistinguishable from Fit screen.
+    assert.notEqual(shapeOf('original'), shapeOf('screen'));
+    assert.notEqual(shapeOf('height'), shapeOf('screen'));
+
+    // At least five genuinely different results out of six.
+    assert.ok(new Set(shapes).size >= 5, `only ${new Set(shapes).size} distinct modes`);
+
+    box.remove();
+    document.body.dataset.images = 'screen';
+  });
+
   await t('scroll mode still lets a picture run off the side', () => {
     // Which is what makes Fit height and Original worth having.
     for (const fit of ['height', 'original']) {

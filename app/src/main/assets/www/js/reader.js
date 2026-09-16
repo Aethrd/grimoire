@@ -351,6 +351,22 @@ function hydrateImages(section, index) {
     const url = urls.url(state.images.get(img.getAttribute('data-img')));
     if (url) {
       img.src = url;
+
+      /* Somewhere for a picture to be bigger than the page.
+       *
+       * A page in paged mode is one column of fixed width with the overflow
+       * hidden, so a picture larger than it simply disappears -- which is why
+       * Original, Fit height and Smart all had to be clamped back down to
+       * Fit screen there, leaving four of the six settings doing the same
+       * thing. Giving each picture a box of its own that can scroll means it
+       * can exceed the page and still be reachable: the box stays inside the
+       * column and the picture pans within it.
+       */
+      if (img.parentElement?.classList.contains('pic')) continue;
+      const box = document.createElement('span');
+      box.className = 'pic';
+      img.replaceWith(box);
+      box.appendChild(img);
       /* Marked once it has loaded, so the two-page-spread mode has something
          to act on. Measured here rather than at import: the cost belongs on
          the page that actually shows the picture. */
