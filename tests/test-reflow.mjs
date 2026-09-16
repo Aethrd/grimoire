@@ -604,6 +604,78 @@ await (async () => {
   });
 })();
 
+await (async () => {
+  /* Progress wandered on its own in a comic.
+   *
+   * Every picture that arrives changes the height of the chapter, and in
+   * scroll mode the reading position is derived from exactly that height. A
+   * chapter of forty pages is forty reflows, each one re-deriving the
+   * position against a page about to be a different size. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const reader = await import(
+    `${new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href}?arriving`);
+
+  const id = await store.add('books', { title: 'Arriving', fingerprint: 'arriving', addedAt: 1 });
+  const pages = Array.from({ length: 6 }, (_, i) => `<img data-img="p${i}.png" alt=""/>`).join('');
+  for (let c = 0; c < 2; c++) {
+    await store.put('chapters', { bookId: id, index: c, title: `Ch ${c}`, words: 0, html: pages });
+  }
+  for (let i = 0; i < 6; i++) {
+    await store.put('images', {
+      bookId: id, href: `p${i}.png`, order: i, chapterIndex: 0, blob: new Blob([`x${i}`]),
+    });
+  }
+
+  reader.init({ onChange() {} });
+  await reader.open(id);
+  await reader.setMode('scroll');
+
+  const viewport = document.getElementById('page-viewport');
+  let top = 0;
+  let height = 700;
+  Object.defineProperty(viewport, 'clientHeight', { get: () => height, configurable: true });
+  Object.defineProperty(viewport, 'scrollTop',
+    { get: () => top, set: (v) => { top = v; }, configurable: true });
+
+  await t('the position holds while the pictures are still arriving', async () => {
+    reader.state.page = 5;
+
+    // The chapter growing under the reader, which is what a reflow looks like.
+    for (const grown of [700, 1400, 2100]) {
+      height = grown;
+      top = 900;
+      viewport.dispatchEvent(new window.Event('scroll'));
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    assert.equal(reader.state.page, 5, `it moved to page ${reader.state.page}`);
+  });
+
+  await t('waiting for pictures is bounded', async () => {
+    /* A picture that fires neither load nor error would otherwise hold the
+     * position still for the rest of the session, which is a worse fault than
+     * the one this prevents. */
+    const source = read('app/src/main/assets/www/js/reader.js');
+    assert.match(source, /function stopWaitingForPictures/);
+    assert.match(source, /setTimeout\(stopWaitingForPictures, 4000\)/);
+    // And a new chapter never inherits the last one's outstanding pictures.
+    assert.match(source, /clearTimeout\(arrivingTimer\);\n  arrivingTimer = null;\n  arriving = 0;/);
+  });
+
+  await t('once they have arrived the position tracks again', async () => {
+    for (const img of document.querySelectorAll('#page-flow img')) {
+      img.dispatchEvent(new window.Event('load'));
+    }
+    await new Promise((r) => setTimeout(r, 200));
+
+    height = 700;
+    top = 2800;
+    viewport.dispatchEvent(new window.Event('scroll'));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(reader.state.page, 4, `it settled on page ${reader.state.page}`);
+  });
+})();
+
 console.log('what counts as reading');
 
 await (async () => {

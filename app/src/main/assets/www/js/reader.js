@@ -362,6 +362,31 @@ function hydrateImages(section, index) {
        * can exceed the page and still be reachable: the box stays inside the
        * column and the picture pans within it.
        */
+      /* Pictures still on their way.
+       *
+       * Each one that arrives changes the height of the chapter, and in
+       * scroll mode the reading position is derived from exactly that height
+       * -- so a position recorded while they are still arriving is measured
+       * against a page that is about to be a different size. On a comic that
+       * is forty reflows in a row, each one moving the recorded position, and
+       * it reads as the progress jumping about on its own.
+       */
+      if (!img.complete) {
+        arriving += 1;
+        if (!arrivingTimer) arrivingTimer = setTimeout(stopWaitingForPictures, 4000);
+        const done = () => {
+          arriving = Math.max(0, arriving - 1);
+          // The last one settles the position once, properly.
+          if (arriving === 0) {
+            clearTimeout(arrivingTimer);
+            arrivingTimer = null;
+            if (isScroll()) onScrolled();
+          }
+        };
+        img.addEventListener('load', done, { once: true });
+        img.addEventListener('error', done, { once: true });
+      }
+
       if (img.parentElement?.classList.contains('pic')) continue;
       const box = document.createElement('span');
       box.className = 'pic';
@@ -551,6 +576,12 @@ export async function open(bookId, opts = {}) {
 }
 
 export async function loadChapter(index, anchor = 0) {
+  // Whatever the previous chapter was still waiting for is no longer on
+  // screen, so it must not hold up the new one.
+  clearTimeout(arrivingTimer);
+  arrivingTimer = null;
+  arriving = 0;
+
   const chapter = state.chapters[Math.max(0, Math.min(index, state.chapters.length - 1))];
   if (!chapter) return;
 
@@ -753,7 +784,35 @@ function trimWindow(from) {
   }
 }
 
+/** How many of the chapter's pictures have not arrived yet. */
+let arriving = 0;
+let arrivingTimer = null;
+
+/**
+ * Stop waiting for pictures, whether or not they came.
+ *
+ * A picture that fires neither load nor error -- a decode that stalls, a blob
+ * that went away -- would otherwise hold the reading position still for the
+ * rest of the session, which is a worse fault than the one this is here to
+ * prevent. Four seconds is long enough for a chapter of a comic to settle on
+ * a slow phone and short enough not to lose a real position.
+ */
+function stopWaitingForPictures() {
+  clearTimeout(arrivingTimer);
+  arrivingTimer = null;
+  if (arriving === 0) return;
+  arriving = 0;
+  if (isScroll()) onScrolled();
+}
+
 function onScrolled() {
+  /* Not while the chapter is still growing.
+   *
+   * Every picture that arrives changes the height this position is measured
+   * against. Waiting costs a second at the top of a chapter and saves the
+   * position wandering while the page settles. */
+  if (arriving > 0) return;
+
   /* Nothing to read from a page that is not on screen.
    *
    * A scroll settle can arrive after the reader has been hidden -- leaving
