@@ -1273,16 +1273,30 @@ let pendingSelection = null;
 
 function placeAnnotateBar(rect) {
   const bar = el('annotate');
-  const host = el('page-host').getBoundingClientRect();
-  const roomAbove = rect.top - host.top;
 
+  /* Below the selection where it fits, above where it does not, and always
+   * inside the screen.
+   *
+   * This used to measure the room above and, finding little, place the bar
+   * above anyway -- so selecting a line near the top of the page put the bar
+   * off the top edge, where most of it could not be seen at all. Which side
+   * it ends up on is decided by where it fits, and then clamped regardless.
+   *
+   * Below is preferred because Android puts its own selection menu above when
+   * it can, and covering Copy or Translate is worse than being a little far
+   * from the words.
+   */
   bar.hidden = false;
-  bar.style.top = '';
   bar.style.bottom = '';
 
-  // Room above means the system menu goes there, so this goes below.
-  if (roomAbove > 120) bar.style.top = `${Math.min(rect.bottom + 16, host.bottom - 170)}px`;
-  else bar.style.bottom = `${Math.max(16, window.innerHeight - rect.top + 16)}px`;
+  const margin = 12;
+  const height = bar.offsetHeight || 170;
+  const limit = window.innerHeight - height - margin;
+
+  let top = rect.bottom + margin;
+  if (top > limit) top = rect.top - height - margin;
+
+  bar.style.top = `${Math.max(margin, Math.min(top, Math.max(margin, limit)))}px`;
 }
 
 function hideAnnotateBar() {
@@ -1314,7 +1328,8 @@ async function wireAnnotations() {
   const colours = el('annotate-colours');
   for (const [value, hex] of reader.MARK_COLOURS) {
     const button = document.createElement('button');
-    button.style.background = hex;
+    button.style.setProperty('--swatch', hex);
+    button.title = value;
     button.setAttribute('aria-pressed', String(colour === value));
     button.onclick = () => {
       colour = value;
@@ -1351,16 +1366,42 @@ async function wireAnnotations() {
 
   // Offered as soon as there is something to mark, and withdrawn the moment
   // there is not.
+  /* A tap on the bar is not the selection going away.
+   *
+   * Pressing a colour or a style collapses the selection, which fired
+   * selectionchange, which hid the bar -- so the press appeared to do nothing
+   * and the bar vanished under the finger. Anything begun inside the bar is
+   * the bar being used. */
+  let usingBar = false;
+  el('annotate').addEventListener('pointerdown', () => { usingBar = true; });
+  el('annotate').addEventListener('touchstart', () => { usingBar = true; }, { passive: true });
+  document.addEventListener('pointerup', () => { setTimeout(() => { usingBar = false; }, 0); });
+
   document.addEventListener('selectionchange', () => {
     if (current !== 'reader') return;
+    if (usingBar) return;
     // Typing in the note field selects text too; that is not a passage to
     // mark, and reacting to it would close the bar being typed into.
     if (document.activeElement === noteField) return;
     const found = reader.selectionRange();
     if (!found) { hideAnnotateBar(); return; }
     pendingSelection = found;
-    // The button says which of the two it will do.
-    el('annotate-save').textContent = reader.markAround(found) ? 'Split out' : 'Mark';
+
+    /* What the bar offers depends on what is under the selection.
+     *
+     * Inside an existing mark there are two useful things to do -- pick a
+     * phrase out of it, or take it off -- and removing was only reachable by
+     * tapping the mark afterwards to open its note. */
+    const around = reader.markAround(found) || reader.markAt(found);
+    el('annotate-save').textContent = around && around.exact ? 'Mark' : (around ? 'Split out' : 'Mark');
+    el('annotate-remove').hidden = !around;
+    el('annotate-remove').onclick = async () => {
+      await reader.removeMark(around.id);
+      window.getSelection?.().removeAllRanges();
+      hideAnnotateBar();
+      toast('Mark removed');
+    };
+
     placeAnnotateBar(found.rect);
   });
 

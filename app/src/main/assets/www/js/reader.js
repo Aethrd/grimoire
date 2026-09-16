@@ -1349,6 +1349,20 @@ export function markAround({ chapterIndex, anchor, end }) {
 }
 
 /**
+ * Any mark the selection touches, whether or not it covers it exactly.
+ *
+ * markAround only answers for a selection strictly inside a mark, which is
+ * the case for splitting one. Removing one wants the looser question: is
+ * there a mark here at all.
+ */
+export function markAt({ chapterIndex, anchor, end }) {
+  const marks = marksByChapter.get(chapterIndex) || [];
+  const found = marks.find((m) => anchor < m.end && end > m.anchor);
+  if (!found) return null;
+  return { ...found, exact: anchor >= found.anchor && end <= found.end };
+}
+
+/**
  * Take a phrase out of a longer mark and give it its own.
  *
  * The remainder stays as it was, in up to two pieces. Splitting a paragraph's

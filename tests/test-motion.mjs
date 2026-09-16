@@ -418,6 +418,46 @@ t('the behaviour pane renders its controls', async () => {
   assert.match(behaviourPane, /Tap the sides/);
 });
 
+t('the annotation bar stays on the screen', () => {
+  /* It used to measure the room above a selection and, finding little, place
+   * itself above anyway -- so selecting a line near the top put the bar off
+   * the top edge where most of it could not be seen. */
+  const app = read('app/src/main/assets/www/js/app.js');
+  const place = app.slice(app.indexOf('function placeAnnotateBar'), app.indexOf('function hideAnnotateBar'));
+  assert.match(place, /if \(top > limit\) top = rect\.top - height - margin/);
+  assert.match(place, /Math\.max\(margin, Math\.min\(top, Math\.max\(margin, limit\)\)\)/);
+  // Measured, not guessed, so a taller bar is still placed correctly.
+  assert.match(place, /bar\.offsetHeight/);
+});
+
+t('using the bar does not count as losing the selection', () => {
+  /* Pressing a colour collapses the selection, which fired selectionchange,
+   * which hid the bar -- so the press appeared to do nothing and the bar
+   * vanished under the finger. */
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /let usingBar = false/);
+  assert.match(app, /addEventListener\('pointerdown', \(\) => \{ usingBar = true; \}\)/);
+  assert.match(app, /if \(usingBar\) return;/);
+});
+
+t('a mark can be taken off from the bar that made it', () => {
+  // Removing was only reachable by tapping the mark afterwards to open its
+  // note, which is not where anyone looks for it.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /el\('annotate-remove'\)\.hidden = !around/);
+  assert.match(app, /await reader\.removeMark\(around\.id\)/);
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /export function markAt/);
+});
+
+t('a colour swatch is big enough to hit', () => {
+  // A swatch was a 28px circle, about half what a finger needs, so taps
+  // landed between them. The circle looks the same; the button is bigger.
+  const rule = css.slice(css.indexOf('.annotate-colours button {'), css.indexOf('.annotate-colours button::before'));
+  assert.match(rule, /width: 44px; height: 44px/);
+  assert.match(css, /\.annotate-colours button::before/);
+});
+
 t('anything offered as a choice is big enough to press', () => {
   /* A chip is 23px tall at its own padding, which is half what a finger
    * needs. Finding an option and being unable to hit it is the same as the

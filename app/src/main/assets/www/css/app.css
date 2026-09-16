@@ -1136,9 +1136,24 @@ body[data-view="reader"] .stepper {
                           font-family: var(--font-heading); font-weight: 600; }
 .annotate-styles button[aria-pressed="true"] { background: var(--accent-100);
                                                color: var(--accent-ink); }
-.annotate-colours button { width: 28px; height: 28px; border-radius: 50%;
-                           border: 2px solid transparent; }
-.annotate-colours button[aria-pressed="true"] { border-color: var(--text); }
+.annotate-colours { justify-content: space-between; }
+/* A swatch was a 28px circle, which is about half what a finger needs -- the
+   taps were landing between them. The circle stays the size it looks; the
+   button around it is big enough to hit. */
+.annotate-colours button {
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 0; background: none; padding: 0;
+  display: grid; place-items: center;
+}
+.annotate-colours button::before {
+  content: ""; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--swatch); border: 2px solid transparent;
+}
+.annotate-colours button[aria-pressed="true"]::before {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--surface) inset;
+}
+.annotate-styles button { min-height: 40px; }
 .annotate-note { width: 100%; margin-bottom: 8px; padding: 8px 10px;
                  border-radius: var(--radius-md); border: 1px solid var(--hairline);
                  background: var(--bg); color: var(--text); font: inherit;
