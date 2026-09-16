@@ -1415,3 +1415,10 @@ body[data-view="reader"] .stepper {
 [data-grey="crisp"] .reel-item img {
   filter: grayscale(1) contrast(1.14) brightness(1.02) url(#crisp);
 }
+
+
+/* E-ink: the whole conversion lives in the filter, so nothing is applied
+   twice. See the comment beside the filter itself for why it is levels and
+   banding rather than contrast and sharpening. */
+[data-grey="eink"] .page-flow img,
+[data-grey="eink"] .reel-item img { filter: url(#eink); }

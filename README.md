@@ -242,6 +242,10 @@ licence header is not a violation, which is why it replaced a blanket `grep`.
 
 Honest list, in rough order of how much they matter:
 
+- **The e-ink preset is tuned by eye, not measured.** Its black and white
+  points assume manga on white paper; a photograph loses highlight detail
+  above about 88% grey. Panels differ in gamma, so the numbers are a starting
+  point rather than a calibration.
 - **Greying is CSS, not a pipeline.** Luminance and contrast are right, and
   the sharpening is a small convolution. What is not there: local contrast
   (CLAHE), denoising, and choosing between the colour channels for whichever

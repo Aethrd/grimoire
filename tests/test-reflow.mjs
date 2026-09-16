@@ -412,6 +412,35 @@ await (async () => {
     document.body.dataset.grey = 'off';
   });
 
+  await t('the e-ink preset uses every level the panel has', () => {
+    /* Raising contrast linearly clips both ends, and on sixteen levels losing
+     * three to black is a fifth of the range. The preset sets a black and a
+     * white point instead, lifts the midtones, and picks the sixteen levels
+     * itself rather than letting the panel dither them. */
+    document.body.dataset.grey = 'eink';
+    assert.match(window.getComputedStyle(picture).filter, /url\(#eink\)/);
+
+    const html = read('app/src/main/assets/www/index.html');
+    const filter = html.slice(html.indexOf('<filter id="eink"'), html.indexOf('</filter>', html.indexOf('<filter id="eink"')));
+
+    // Luminance, then levels, then gamma, then sixteen bands.
+    assert.match(filter, /feColorMatrix type="saturate" values="0"/);
+    assert.match(filter, /type="linear" slope="1\.30" intercept="-0\.14"/);
+    assert.match(filter, /type="gamma" exponent="0\.82"/);
+    assert.equal((filter.match(/type="discrete"/g) || []).length, 3);
+
+    const table = /tableValues="([^"]+)"/.exec(filter)[1].split(' ');
+    assert.equal(table.length, 16, 'not sixteen levels');
+    assert.equal(table[0], '0');
+    assert.equal(table[15], '1');
+
+    /* No sharpening: a halo is subtle at 256 levels and obvious at sixteen,
+     * and it lingers in the ghosting of the next page. */
+    assert.ok(!/feConvolveMatrix/.test(filter), 'the e-ink preset sharpens');
+
+    document.body.dataset.grey = 'off';
+  });
+
   await t('scroll mode still lets a picture run off the side', () => {
     // Which is what makes Fit height and Original worth having.
     for (const fit of ['height', 'original']) {

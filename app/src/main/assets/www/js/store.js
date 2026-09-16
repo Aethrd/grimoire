@@ -219,7 +219,7 @@ export const DEFAULT_SETTINGS = {
 
   /* Showing colour pages in grey.
    *
-   * off | plain | contrast | crisp. Not a saving of anything -- the file is
+   * off | plain | contrast | crisp | eink. Not a saving of anything -- the file is
    * unchanged and the original is one tap away -- but a coloured page greyed
    * naively reads flatter than the black-and-white it was drawn as, and the
    * contrast is recoverable.

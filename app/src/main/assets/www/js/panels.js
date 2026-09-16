@@ -1357,12 +1357,20 @@ async function renderBehaviourPane(body) {
       A coloured page greyed plainly reads flatter than the black and white it
       was drawn as: the contrast that separated edges was hue, not brightness.
       The later settings put that contrast back. Nothing is changed in the
-      file.</p>`;
+      file.
+      <br><br>
+      E-ink is for a screen that shows about sixteen greys and has no
+      backlight. It sets a black and a white point so ink reads black and
+      paper reads white, pulls the midtones apart where screentones live, and
+      picks the sixteen levels itself rather than letting the panel dither
+      them. It has no sharpening: a halo is subtle at 256 levels and obvious
+      at sixteen.</p>`;
   for (const [value, label, note] of [
     ['off', 'Off', 'Pages as they are'],
     ['plain', 'Grey', 'Luminance, nothing else'],
     ['contrast', 'Grey, lifted', 'With the local contrast raised'],
     ['crisp', 'Grey, crisp', 'Contrast and a mild sharpening of edges'],
+    ['eink', 'E-ink', 'Sixteen levels, spread to use all of them'],
   ]) {
     const option = document.createElement('button');
     option.className = 'list-row';

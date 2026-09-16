@@ -212,6 +212,7 @@ export async function openLayout(bookId) {
     ['plain', 'Grey'],
     ['contrast', 'Grey, lifted'],
     ['crisp', 'Grey, crisp'],
+    ['eink', 'E-ink'],
   ]) {
     const chip = document.createElement('button');
     chip.className = 'chip';
