@@ -38,6 +38,8 @@ async function show(name, { replace = false } = {}) {
   if (current === 'divide' && name !== 'divide') dividePages.release();
 
   if (current === 'reader' && name !== 'reader') {
+    // Before anything is hidden, for the same reason as in back().
+    reader.holdPosition();
     if (desk) await closeDesk({ returnHome: false });
     await reader.pauseSession();
     // Only when leaving the book, not when stepping into one of its own
@@ -113,9 +115,19 @@ function back() {
   }
   stack.pop();
   const target = stack[stack.length - 1];
+  const previous = current;
+
+  /* Where you were, captured before the screen is taken away.
+   *
+   * A hidden element has no layout, so its scroll position reads as zero --
+   * and in scroll mode the position is derived from exactly that. Hiding the
+   * reader first and saving afterwards recorded the top of the chapter for
+   * anyone who left while part way down one.
+   */
+  if (previous === 'reader') reader.holdPosition();
+
   screenNode(current)?.removeAttribute('data-active');
   screenNode(target)?.setAttribute('data-active', '');
-  const previous = current;
   current = target;
   document.body.dataset.view = target;
   if (previous === 'reader') reader.pauseSession();   // back() is sync; the
@@ -2267,13 +2279,22 @@ function wireReader() {
     const fraction = (e.changedTouches[0].clientX - box.left) / box.width;
     const middle = fraction > zone && fraction < 1 - zone;
 
-    if (middle) {
+    /* In scroll mode every tap toggles the chrome.
+     *
+     * A side tap used to jump a screenful, which fights the thing scroll mode
+     * is for: the text is already moving under your thumb, and a stray tap
+     * snapping it a screen on -- then the scroll settling and recomputing the
+     * position from where it landed -- is two mechanisms driving the same
+     * axis. Paged mode has no such conflict, because a tap is the only way
+     * the text moves there.
+     */
+    if (middle || reader.state.mode === 'scroll') {
       reader.cycleChrome();
       paintReader();
       return;
     }
-    // Scroll mode moves by a screen; paged mode by a page. Neither crosses
-    // into another chapter.
+
+    // Paged mode moves by a page, and never into another chapter.
     if (!settings.turnBySideTap) return;
     const direction = fraction <= zone ? -1 : 1;
     if (!reader.turn(direction)) await atChapterEdge(direction);

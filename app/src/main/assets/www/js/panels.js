@@ -1409,7 +1409,7 @@ async function renderBehaviourPane(body) {
   turning.textContent = 'Page turning';
   body.appendChild(turning);
 
-  body.appendChild(row('Tap the sides', 'Left and right edges turn the page',
+  body.appendChild(row('Tap the sides', 'Left and right edges turn the page. Paged mode only: in scroll mode a tap toggles the chrome.',
     toggle(settings.turnBySideTap, (on) => store.saveSettings({ turnBySideTap: on }))));
   body.appendChild(row('Swipe', 'Horizontal swipe turns the page. Off in scroll mode regardless.',
     toggle(settings.turnBySwipe, (on) => store.saveSettings({ turnBySwipe: on }))));

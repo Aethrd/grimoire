@@ -422,6 +422,10 @@ function rangeAt(entry, offset = 0) {
 
 /** The character offset currently at the top of the view. */
 function currentAnchor() {
+  // Measured, or the last thing measured: never a position derived from a
+  // page that is not laid out.
+  if (!measurable()) return state.anchor || 0;
+
   const index = chapterAtViewport();
   const section = sectionFor(index);
   if (!section) return 0;
@@ -734,6 +738,15 @@ function trimWindow(from) {
 }
 
 function onScrolled() {
+  /* Nothing to read from a page that is not on screen.
+   *
+   * A scroll settle can arrive after the reader has been hidden -- leaving
+   * mid-scroll does exactly that -- and a hidden element reports a scroll
+   * position of zero, which would record the top of the chapter over the
+   * position just held on the way out.
+   */
+  if (!measurable()) return;
+
   const previous = state.chapterIndex;
   state.anchor = currentAnchor();
   state.page = Math.round(viewport.scrollTop / viewportHeight());
@@ -1324,6 +1337,26 @@ export async function endSession() {
   await store.flushPosition();
   await flushSession();
   session = null;
+}
+
+/**
+ * Take the reading position now, while the page can still be measured.
+ *
+ * Called by the shell on the way out of the reader. Scrolling settles on a
+ * timer, so leaving straight after a scroll could otherwise flush a position
+ * from before it -- and once the screen is hidden nothing can be measured at
+ * all, because a hidden element reports a scroll position of zero.
+ */
+export function holdPosition() {
+  if (!state.book || !measurable()) return;
+  state.anchor = currentAnchor();
+  if (isScroll()) state.page = Math.round(viewport.scrollTop / viewportHeight());
+  save();
+}
+
+/** Whether the page is laid out, and so whether anything can be measured. */
+function measurable() {
+  return viewport && viewport.clientHeight > 0;
 }
 
 export async function pauseSession() {

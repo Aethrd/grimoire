@@ -500,6 +500,75 @@ await (async () => {
   });
 })();
 
+await (async () => {
+  /* Leaving a book in scroll mode used to record the top of the chapter.
+   *
+   * A hidden element has no layout and reports a scroll position of zero, and
+   * in scroll mode the reading position is derived from exactly that. The
+   * screen was hidden first and the position saved afterwards. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const reader = await import(
+    `${new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href}?leaving`);
+
+  const id = await store.add('books', { title: 'Leaving', fingerprint: 'leaving', addedAt: 1, words: 900 });
+  for (let i = 0; i < 3; i++) {
+    await store.put('chapters', {
+      bookId: id, index: i, title: `Ch ${i}`, words: 300,
+      html: Array.from({ length: 60 }, (_, p) => `<p>Chapter ${i} paragraph ${p}.</p>`).join(''),
+    });
+  }
+
+  reader.init({ onChange() {} });
+  await reader.open(id);
+  await reader.setMode('scroll');
+
+  const viewport = document.getElementById('page-viewport');
+  let laidOut = 700;
+  let top = 0;
+  Object.defineProperty(viewport, 'clientHeight', { get: () => laidOut, configurable: true });
+  Object.defineProperty(viewport, 'scrollTop',
+    { get: () => top, set: (v) => { top = v; }, configurable: true });
+
+  await t('the position is taken before the screen is taken away', async () => {
+    viewport.scrollTop = 4200;
+    reader.holdPosition();
+    await reader.pauseSession();
+
+    const saved = await store.get('positions', id);
+    assert.ok(saved.page > 0, `it saved page ${saved.page}`);
+    assert.equal(saved.chapterIndex, 1);
+  });
+
+  await t('a scroll arriving after the screen is hidden changes nothing', async () => {
+    const before = await store.get('positions', id);
+
+    // What leaving mid-scroll does: the settle lands once there is no layout.
+    laidOut = 0;
+    viewport.scrollTop = 0;
+    viewport.dispatchEvent(new window.Event('scroll'));
+    await new Promise((r) => setTimeout(r, 300));
+    reader.holdPosition();
+    await reader.pauseSession();
+
+    const after = await store.get('positions', id);
+    assert.equal(after.page, before.page, `it moved to page ${after.page}`);
+    assert.equal(after.chapterIndex, before.chapterIndex);
+
+    laidOut = 700;
+  });
+
+  await t('in scroll mode a tap only ever toggles the chrome', () => {
+    /* A side tap used to jump a screenful, which fights the thing scroll mode
+     * is for: the text is already moving under your thumb. Two mechanisms
+     * driving the same axis. */
+    const app = read('app/src/main/assets/www/js/app.js');
+    assert.match(app, /if \(middle \|\| reader\.state\.mode === 'scroll'\)/);
+    // And the setting says so, rather than promising something it does not do.
+    const panels = read('app/src/main/assets/www/js/panels.js');
+    assert.match(panels, /Paged mode only: in scroll mode a tap toggles the chrome/);
+  });
+})();
+
 console.log('what counts as reading');
 
 await (async () => {
