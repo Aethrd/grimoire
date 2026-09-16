@@ -4,6 +4,7 @@ import * as store from './store.js';
 import { urlCache } from './blobs.js';
 import { parse, formatOf, expandArchive, chapterHtml, countWords, SUPPORTED, UNSUPPORTED_REASON } from './parse.js';
 import * as translate from './translate.js';
+import * as mix from './mix.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -1480,4 +1481,30 @@ export function findBooks(books, query, only = null) {
     .sort((a, b) => b.score - a.score
       || String(displayTitle(a.book)).localeCompare(String(displayTitle(b.book))))
     .map((hit) => hit.book);
+}
+
+
+/**
+ * Work out, once, how a book's colour should become grey.
+ *
+ * Remembered on the book, because the measurement costs a canvas pass and a
+ * slow screen cannot afford one per page turn -- and a book is drawn by one
+ * person in one palette, so the answer does not change from page to page.
+ */
+export async function greyMixFor(book) {
+  if (book.greyMix) return book.greyMix;
+
+  const images = await store.byIndex('images', 'bookId', book.id);
+  const blobs = images.map((image) => image.blob).filter(Boolean);
+  if (!blobs.length) return null;
+
+  const chosen = await mix.measureBook(blobs);
+  if (!chosen) return null;
+
+  const stored = await store.get('books', book.id);
+  if (stored) {
+    stored.greyMix = chosen.name;
+    await store.put('books', stored);
+  }
+  return chosen.name;
 }

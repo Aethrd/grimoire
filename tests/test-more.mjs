@@ -204,4 +204,73 @@ await t('both spellings of the extension are read', async () => {
   assert.ok(!/mhtml\?/.test(source), 'the pattern still cannot match .mht');
 });
 
+
+
+console.log('choosing how colour becomes grey');
+
+const page = (width, height, draw) => {
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const [r, g, b] = draw(x, y);
+      const at = (y * width + x) * 4;
+      pixels[at] = r; pixels[at + 1] = g; pixels[at + 2] = b; pixels[at + 3] = 255;
+    }
+  }
+  return { pixels, width, height };
+};
+
+await t('a hue pair luminance flattens is caught by another channel', async () => {
+  /* Red at 220,70,70 and green at 30,160,90 are very different colours and
+   * nearly the same brightness. Under luminance the lettering and the panel
+   * behind it become one grey, and nothing downstream recovers it. */
+  const mix = await import(new URL('../app/src/main/assets/www/js/mix.js', import.meta.url).href);
+
+  const trap = page(60, 60, (x) => (x % 8 < 3 ? [220, 70, 70] : [30, 160, 90]));
+  const scored = (name) => {
+    const found = mix.MIXES.find((m) => m.name === name);
+    return mix.scoreGrey(mix.applyMix(trap.pixels, found.rgb), trap.width, trap.height);
+  };
+
+  assert.ok(scored('red') > scored('luminance') * 2,
+    'the red channel did not do better than luminance on a red/green page');
+  assert.notEqual(mix.chooseMix([trap]).name, 'luminance');
+});
+
+await t('a page with no colour is left alone', async () => {
+  // Switching conversion on a mono scan would change nothing and risk making
+  // it worse.
+  const mix = await import(new URL('../app/src/main/assets/www/js/mix.js', import.meta.url).href);
+  const scan = page(60, 60, (x) => { const v = x % 10 < 4 ? 30 : 230; return [v, v, v]; });
+
+  assert.equal(mix.hasColour(scan.pixels), false);
+  assert.equal(mix.chooseMix([scan]).name, 'luminance');
+});
+
+await t('luminance wins ties, and near-ties', async () => {
+  /* A mix that wins by a whisker is noise, and switching on noise means two
+   * volumes of one book rendering differently for no visible reason. */
+  const mix = await import(new URL('../app/src/main/assets/www/js/mix.js', import.meta.url).href);
+  const source = fs.readFileSync(
+    new URL('../app/src/main/assets/www/js/mix.js', import.meta.url), 'utf8');
+  assert.match(source, /totals\[best\] < totals\[0\] \* 1\.1/);
+  // Luminance is first in the list, so an exact tie leaves it in place.
+  assert.equal(mix.MIXES[0].name, 'luminance');
+});
+
+await t('the measurement is per book, not per page', async () => {
+  /* A page is a canvas pass and a slow screen cannot afford one per turn --
+   * and a book is drawn by one person in one palette. */
+  const library = fs.readFileSync(
+    new URL('../app/src/main/assets/www/js/library.js', import.meta.url), 'utf8');
+  assert.match(library, /export async function greyMixFor/);
+  assert.match(library, /if \(book\.greyMix\) return book\.greyMix/);
+  assert.match(library, /stored\.greyMix = chosen\.name/);
+
+  // Sampled through the book, since the first pages are a cover and a title.
+  const mixSource = fs.readFileSync(
+    new URL('../app/src/main/assets/www/js/mix.js', import.meta.url), 'utf8');
+  assert.match(mixSource, /const step = Math\.max\(1, Math\.floor\(blobs\.length \/ take\)\)/);
+});
+
 console.log(`\n${pass} assertions passed`);

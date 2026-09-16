@@ -183,6 +183,44 @@ async function refreshShelf() {
   });
 }
 
+/**
+ * Point the grey filters at the conversion this book actually wants.
+ *
+ * Worked out once from a handful of its pages and remembered on the book, so
+ * it costs a canvas pass the first time the book is greyed and nothing
+ * afterwards. Not awaited: the book opens now and the filter follows.
+ *
+ * Nothing happens at all when greying is off, which is the default -- a
+ * screen that shows colour shows the page as it was drawn.
+ */
+/* The book the grey conversion was last settled for. */
+let greyMixFor = null;
+
+function settleGreyMix(book) {
+  /* Called from the repaint rather than from one way of opening a book.
+   *
+   * There are several ways in -- a tile, a bundle, a search result, a file
+   * handed over from another app -- and hanging this off one of them meant it
+   * ran for some books and not others. The repaint happens for all of them.
+   */
+  if (!book || greyMixFor === book.id) return;
+  greyMixFor = book.id;
+
+  store.settings().then((settings) => {
+    if (settings.greyscale === 'off') {
+      theme.useGreyMix('luminance');
+      return null;
+    }
+    return library.greyMixFor(book).then((name) => theme.useGreyMix(name || 'luminance'));
+  }).catch((error) => {
+    // Swallowed silently, this hid the fact that the whole thing was never
+    // running. Greying falls back to luminance either way, so a failure here
+    // costs nothing except the measurement -- but it should still be visible.
+    console.warn('Could not settle the grey conversion', error);
+    theme.useGreyMix('luminance');
+  });
+}
+
 async function openBook(book, opts) {
   await show('reader');
   try {
@@ -1114,6 +1152,7 @@ async function handleFiles(files, { transient = false } = {}) {
 function paintReader() {
   const state = reader.state;
   if (!state.book) return;
+  settleGreyMix(state.book);
   el('reader-book').textContent = state.book.title;
   const name = reader.chapterName(state.chapterIndex);
   const within = state.mode === 'scroll'

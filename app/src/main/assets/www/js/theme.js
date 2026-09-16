@@ -241,3 +241,35 @@ export function extractPalette(img) {
     ['Light muted', hslToHex(lightMuted.h, Math.min(lightMuted.s, 0.28), 0.8)],
   ];
 }
+
+
+/**
+ * Point the grey filters at a particular conversion.
+ *
+ * Both chains start with the same matrix, so choosing once sets how every
+ * grey mode converts -- including the e-ink preset, whose levels and banding
+ * then work on a plane that kept the detail rather than one that lost it.
+ */
+export function useGreyMix(name) {
+  const mix = GREY_MIXES[name] || GREY_MIXES.luminance;
+  const values = matrixFor(mix);
+  for (const id of ['greymix-matrix', 'eink-matrix']) {
+    document.getElementById(id)?.setAttribute('values', values);
+  }
+  document.body.dataset.greyMix = name || 'luminance';
+}
+
+const GREY_MIXES = {
+  luminance: [0.2126, 0.7152, 0.0722],
+  red: [0.72, 0.21, 0.07],
+  green: [0.15, 0.75, 0.10],
+  blue: [0.10, 0.25, 0.65],
+  'red-green': [0.62, -0.10, 0.48],
+};
+
+const matrixFor = ([r, g, b]) => [
+  r, g, b, 0, 0,
+  r, g, b, 0, 0,
+  r, g, b, 0, 0,
+  0, 0, 0, 1, 0,
+].map((n) => Number(n.toFixed(4))).join(' ');

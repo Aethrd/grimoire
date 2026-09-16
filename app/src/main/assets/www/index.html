@@ -584,8 +584,20 @@
     No sharpening. A halo is subtle at 256 levels and obvious at sixteen, and
     it lingers in the ghosting of the next page.
   -->
+  <!--
+    The grey conversion itself, which is measured per book rather than assumed.
+    Luminance is the default and the wrong answer often enough to matter: two
+    hues can differ enormously and sit at the same brightness, and then the
+    coloured text and the coloured bubble behind it become one grey.
+  -->
+  <filter id="greymix" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+    <feColorMatrix id="greymix-matrix" type="matrix"
+                   values="0.2126 0.7152 0.0722 0 0  0.2126 0.7152 0.0722 0 0  0.2126 0.7152 0.0722 0 0  0 0 0 1 0"/>
+  </filter>
+
   <filter id="eink" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
-    <feColorMatrix type="saturate" values="0"/>
+    <feColorMatrix id="eink-matrix" type="matrix"
+                   values="0.2126 0.7152 0.0722 0 0  0.2126 0.7152 0.0722 0 0  0.2126 0.7152 0.0722 0 0  0 0 0 1 0"/>
     <feComponentTransfer>
       <feFuncR type="linear" slope="1.30" intercept="-0.14"/>
       <feFuncG type="linear" slope="1.30" intercept="-0.14"/>

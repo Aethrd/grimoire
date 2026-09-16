@@ -1400,12 +1400,12 @@ body[data-view="reader"] .stepper {
    0.0722 B), so a naive desaturation is not what happens here. */
 
 [data-grey="plain"] .page-flow img,
-[data-grey="plain"] .reel-item img { filter: grayscale(1); }
+[data-grey="plain"] .reel-item img { filter: url(#greymix); }
 
 /* Contrast lifted a little, because grey alone flattens a coloured page. */
 [data-grey="contrast"] .page-flow img,
 [data-grey="contrast"] .reel-item img {
-  filter: grayscale(1) contrast(1.14) brightness(1.02);
+  filter: url(#greymix) contrast(1.14) brightness(1.02);
 }
 
 /* And with the edges put back. The order matters: grey first, sharpen the
@@ -1413,7 +1413,7 @@ body[data-view="reader"] .stepper {
    would then average away. */
 [data-grey="crisp"] .page-flow img,
 [data-grey="crisp"] .reel-item img {
-  filter: grayscale(1) contrast(1.14) brightness(1.02) url(#crisp);
+  filter: url(#greymix) contrast(1.14) brightness(1.02) url(#crisp);
 }
 
 

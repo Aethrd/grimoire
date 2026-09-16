@@ -398,15 +398,19 @@ await (async () => {
     };
 
     assert.equal(greyed('off'), 'none');
-    assert.match(greyed('plain'), /grayscale\(1\)/);
+
+    /* The conversion itself is a filter now, not CSS grayscale(), because
+     * which conversion to use is measured per book: luminance is the default
+     * and the wrong answer often enough to matter. */
+    assert.match(greyed('plain'), /url\(#greymix\)/);
 
     // Contrast lifted, because grey alone flattens a coloured page.
-    assert.match(greyed('contrast'), /grayscale\(1\) contrast\(/);
+    assert.match(greyed('contrast'), /url\(#greymix\) contrast\(/);
 
     /* And the edges put back, greying first: sharpening in colour exaggerates
      * chroma noise the greying would then average away. */
     const crisp = greyed('crisp');
-    assert.match(crisp, /^grayscale\(1\)/);
+    assert.match(crisp, /^url\(#greymix\)/);
     assert.match(crisp, /url\(#crisp\)$/);
 
     document.body.dataset.grey = 'off';
@@ -423,8 +427,8 @@ await (async () => {
     const html = read('app/src/main/assets/www/index.html');
     const filter = html.slice(html.indexOf('<filter id="eink"'), html.indexOf('</filter>', html.indexOf('<filter id="eink"')));
 
-    // Luminance, then levels, then gamma, then sixteen bands.
-    assert.match(filter, /feColorMatrix type="saturate" values="0"/);
+    // The measured conversion, then levels, then gamma, then sixteen bands.
+    assert.match(filter, /feColorMatrix id="eink-matrix" type="matrix"/);
     assert.match(filter, /type="linear" slope="1\.30" intercept="-0\.14"/);
     assert.match(filter, /type="gamma" exponent="0\.82"/);
     assert.equal((filter.match(/type="discrete"/g) || []).length, 3);
@@ -450,6 +454,50 @@ await (async () => {
 
   style.remove();
   picture.remove();
+})();
+
+await (async () => {
+  /* Opening a book must not throw.
+   *
+   * A function was called that had never been defined -- an edit that looked
+   * applied but matched nothing. Every book failed to open, and nothing
+   * caught it: a syntax check passes on a name that does not exist, and no
+   * test opened a book through the shell.
+   */
+  const fs2 = await import('node:fs');
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+
+  await library.importFiles([new File(
+    [fs2.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url))],
+    'Opens.epub')], {});
+
+  await import(`${new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href}?open`);
+  await new Promise((r) => setTimeout(r, 300));
+
+  await t('tapping a book opens it', async () => {
+    const tile = document.querySelector('#shelf .tile');
+    assert.ok(tile, 'nothing on the shelf to tap');
+    tile.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 800));
+
+    assert.equal(document.body.dataset.view, 'reader', 'the book did not open');
+    assert.ok((document.getElementById('page-flow').textContent || '').trim().length > 0,
+      'the reader opened empty');
+  });
+
+  await t('the grey conversion is settled for whatever opened the book', async () => {
+    /* There are several ways in -- a tile, a bundle, a search result, a file
+     * handed over from another app -- so this hangs off the repaint rather
+     * than off one of them. */
+    await new Promise((r) => setTimeout(r, 400));
+    assert.ok(document.body.dataset.greyMix, 'no conversion was chosen');
+
+    const app = read('app/src/main/assets/www/js/app.js');
+    assert.match(app, /function paintReader\(\)[\s\S]{0,160}settleGreyMix\(state\.book\)/);
+    // Defined, not merely called.
+    assert.match(app, /function settleGreyMix\(book\) \{/);
+  });
 })();
 
 console.log('what counts as reading');
