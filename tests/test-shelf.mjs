@@ -72,7 +72,7 @@ t('actions are labelled, not a row of bare glyphs', () => {
   const grid = html.slice(html.indexOf('id="select-actions"'), html.indexOf('id="confirm-bar"'));
   const acts = [...grid.matchAll(/data-act="(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(acts,
-    ['open', 'folder', 'status', 'bundle', 'merge', 'export', 'details', 'vault', 'delete']);
+    ['open', 'folder', 'status', 'bundle', 'merge', 'blur', 'export', 'details', 'vault', 'delete']);
   // Every one carries a text label beside its icon.
   assert.equal((grid.match(/<span>/g) || []).length, acts.length);
   assert.ok(html.includes('id="select-all"') && html.includes('id="select-cancel"'));
@@ -702,6 +702,29 @@ t('a settings pane does not wipe what it has already built', () => {
     .replace(/\/\/[^\n]*/g, '');
   assert.ok(!/body\.innerHTML\s*=/.test(code),
     'the pane assigns innerHTML partway through and loses what came before');
+});
+
+t('a cover can be covered', () => {
+  /* A shelf is looked at in public. Some covers are fine on a train and some
+   * are not, and the choice belongs to the reader rather than to whoever drew
+   * the cover. */
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /export async function blurCovers/);
+  // Nothing in the file changes; it is the tile that is blurred.
+  assert.match(library, /if \(book\.coverBlur\) node\.dataset\.blur = ''/);
+  assert.match(css, /\.tile\[data-blur\] \.tile-cover img \{/);
+  assert.match(css, /filter: blur\(16px\)/);
+  // Scaled, because a blur samples past its own edges.
+  assert.match(css, /transform: scale\(1\.12\)/);
+
+  // One action that reads both ways rather than two that do not.
+  assert.ok(html.includes('data-act="blur"'));
+  assert.match(app, /const allBlurred = books\.every\(\(book\) => book\.coverBlur\)/);
+
+  // And a whole folder at once, which is the point of having folders.
+  assert.match(app, /Blur every cover/);
+  assert.match(app, /Show every cover/);
+  assert.match(library, /export async function booksInFolder/);
 });
 
 t('a folder can be emptied or deleted as a folder', () => {

@@ -1477,3 +1477,26 @@ body[data-view="reader"] .stepper {
 /* Search results, shown as the shelf shows books.
    A name in a list is not how anyone recognises a book they own. */
 .find-shelf { padding: 4px 16px 16px; }
+
+
+/* ── a cover you would rather not have on screen ─────────────────────────
+   A shelf is looked at in public, and the choice of what is on it belongs to
+   the reader rather than to whoever drew the cover. Only the tile is blurred:
+   nothing in the file changes and the book opens exactly as it did. */
+
+.tile[data-blur] .tile-cover img {
+  /* Scaled a little because a blur samples past its own edges, and without
+     it the border of the picture fades into the tile. */
+  filter: blur(16px);
+  transform: scale(1.12);
+}
+.tile[data-blur] .tile-cover { overflow: hidden; }
+
+/* Something to say it is deliberate rather than a picture that failed. */
+.tile[data-blur] .tile-cover::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: radial-gradient(circle at 50% 45%,
+              rgba(0, 0, 0, .06), rgba(0, 0, 0, .22));
+  pointer-events: none;
+}

@@ -356,6 +356,24 @@ function wireSelection() {
        other things you do to a book. It was only inside the details sheet,
        which is a long press and a scroll away -- far enough that it may as
        well not have been there. */
+    /* Covering a cover, for a shelf that is looked at in public.
+     *
+     * A toggle rather than two actions: with several selected, any that are
+     * showing get blurred, and a selection that is already entirely blurred
+     * is revealed. */
+    blur: async () => {
+      const books = await selectedBooks();
+      if (!books.length) return;
+
+      const allBlurred = books.every((book) => book.coverBlur);
+      const changed = await library.blurCovers(books.map((b) => b.id), !allBlurred);
+      clearSelection();
+      await refreshShelf();
+      toast(allBlurred
+        ? `${changed} cover${changed === 1 ? '' : 's'} showing again`
+        : `${changed} cover${changed === 1 ? '' : 's'} blurred`);
+    },
+
     export: async () => {
       const books = await selectedBooks();
       if (!books.length) return;
@@ -978,6 +996,22 @@ async function openFolderActions(folder, label, count) {
     await refreshShelf();
     await panels.openFolders(openFolder);
     toast(`${books.length} book${books.length === 1 ? '' : 's'} taken out of “${label}”`);
+  });
+
+  choice('Blur every cover', 'Hide what is on them, on this shelf only', async () => {
+    sheet.hidden = true;
+    const books = await library.booksInFolder(folder);
+    const changed = await library.blurCovers(books.map((b) => b.id), true);
+    await refreshShelf();
+    toast(`${changed} cover${changed === 1 ? '' : 's'} blurred in “${label}”`);
+  });
+
+  choice('Show every cover', 'Undo it for this folder', async () => {
+    sheet.hidden = true;
+    const books = await library.booksInFolder(folder);
+    const changed = await library.blurCovers(books.map((b) => b.id), false);
+    await refreshShelf();
+    toast(`${changed} cover${changed === 1 ? '' : 's'} showing again`);
   });
 
   const remove = choice(`Delete all ${count}`, 'The books themselves, permanently', async () => {

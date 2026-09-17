@@ -476,6 +476,9 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
   node.className = selection?.has(book.id) ? 'tile selected' : 'tile';
   if (book.bundle) node.classList.add('bundled');
   node.dataset.book = String(book.id);
+  // A cover you would rather not have on screen. Nothing is changed in the
+  // file; it is the tile that is blurred.
+  if (book.coverBlur) node.dataset.blur = '';
   node.innerHTML = `
     <span class="tile-cover">
       ${coverUrl
@@ -1520,4 +1523,37 @@ export async function greyMixFor(book) {
     await store.put('books', stored);
   }
   return chosen.name;
+}
+
+
+/**
+ * Hide, or stop hiding, the covers of some books.
+ *
+ * A shelf is looked at in public. Some covers are fine on a train and some
+ * are not, and the choice belongs to the reader rather than to whoever drew
+ * the cover. Only the tile is blurred: the file is untouched, and the book
+ * opens exactly as it did.
+ *
+ * @param on  true to blur, false to show, or undefined to flip each one
+ */
+export async function blurCovers(ids, on) {
+  let changed = 0;
+  for (const id of ids) {
+    const book = await store.get('books', id);
+    if (!book) continue;
+
+    const wanted = on === undefined ? !book.coverBlur : !!on;
+    if (!!book.coverBlur === wanted) continue;
+
+    if (wanted) book.coverBlur = true;
+    else delete book.coverBlur;
+    await store.put('books', book);
+    changed += 1;
+  }
+  return changed;
+}
+
+/** The books in a folder, or the unfiled ones when the folder is null. */
+export async function booksInFolder(folder) {
+  return (await store.all('books')).filter((book) => (book.folder || null) === (folder || null));
 }
