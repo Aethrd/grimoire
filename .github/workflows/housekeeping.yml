@@ -1,0 +1,150 @@
+# Housekeeping.
+#
+# Every push keeps an APK, and a hundred and fifty of those is exactly the
+# storage quota that stopped a build. Retention limits help from the day they
+# are set and do nothing about what is already there, so this prunes on a
+# schedule instead.
+#
+# What it will not do is leave you with nothing to install. The newest three
+# of every kind of artifact are kept whatever their age -- so there is always
+# a current APK, the one before it, and the one before that. Only what is
+# older than those three, and older than the grace period, is deleted.
+name: Housekeeping
+
+on:
+  schedule:
+    # A little after three in the morning UTC. The exact minute is arbitrary;
+    # it is offset from the hour because everything runs on the hour and the
+    # scheduler is slower then.
+    - cron: '17 3 * * *'
+  # So it can be run by hand when storage is already full and waiting for
+  # tomorrow is not much help.
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: 'How many of each kind to keep whatever their age'
+        required: false
+        default: '3'
+      days:
+        description: 'Delete the rest once they are older than this many days'
+        required: false
+        default: '2'
+
+# The only permission it needs, and the only one it gets.
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: housekeeping
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Prune old artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Delete artifacts, keeping the newest few
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEEP: ${{ github.event.inputs.keep || '3' }}
+          DAYS: ${{ github.event.inputs.days || '2' }}
+        run: |
+          set -euo pipefail
+
+          echo "Keeping the newest $KEEP of each kind; deleting the rest once"
+          echo "they are more than $DAYS days old."
+
+          # Everything currently stored, newest first within each name.
+          # Already-expired artifacts are skipped: they occupy no space and
+          # deleting them only spends rate limit.
+          gh api "repos/$REPO/actions/artifacts" --paginate \
+            --jq '.artifacts[] | select(.expired == false)
+                  | [.id, .name, .created_at, .size_in_bytes] | @tsv' \
+            > all.tsv || true
+
+          if [ ! -s all.tsv ]; then
+            echo "Nothing stored. Done."
+            exit 0
+          fi
+
+          echo "Found $(wc -l < all.tsv) artifacts."
+
+          cutoff=$(date -u -d "$DAYS days ago" +%s)
+          freed=0
+          deleted=0
+          kept=0
+
+          # Grouped by name, so three APKs survive even if three lint reports
+          # were uploaded in between. Sorted newest first inside each group.
+          for name in $(cut -f2 all.tsv | sort -u); do
+            rank=0
+            while IFS=$'\t' read -r id artifact created size; do
+              rank=$((rank + 1))
+
+              if [ "$rank" -le "$KEEP" ]; then
+                echo "keep   $artifact  $created  (newest $rank)"
+                kept=$((kept + 1))
+                continue
+              fi
+
+              made=$(date -u -d "$created" +%s)
+              if [ "$made" -ge "$cutoff" ]; then
+                echo "keep   $artifact  $created  (inside the grace period)"
+                kept=$((kept + 1))
+                continue
+              fi
+
+              echo "delete $artifact  $created"
+              if gh api -X DELETE "repos/$REPO/actions/artifacts/$id" --silent; then
+                deleted=$((deleted + 1))
+                freed=$((freed + size))
+              else
+                # One that will not delete -- already gone, or a rate limit --
+                # should not stop the rest.
+                echo "       could not delete $id; carrying on"
+              fi
+            done < <(awk -F'\t' -v n="$name" '$2 == n' all.tsv | sort -t$'\t' -k3,3r)
+          done
+
+          echo
+          echo "Deleted $deleted, kept $kept, freed $((freed / 1048576)) MB."
+
+          {
+            echo "### Housekeeping"
+            echo
+            echo "- Deleted **$deleted** artifacts, freeing **$((freed / 1048576)) MB**"
+            echo "- Kept **$kept** (the newest $KEEP of each kind, plus anything under $DAYS days old)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Delete caches older than a week
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+
+          # Caches have their own allowance rather than sharing the artifact
+          # one, so this is housekeeping rather than a fix for the same
+          # problem. Gradle caches are large and a stale one is worth nothing.
+          cutoff=$(date -u -d '7 days ago' +%s)
+          gone=0
+
+          gh api "repos/$REPO/actions/caches" --paginate \
+            --jq '.actions_caches[] | [.id, .created_at, .key] | @tsv' \
+            > caches.tsv || true
+
+          [ -s caches.tsv ] || { echo "No caches stored."; exit 0; }
+
+          while IFS=$'\t' read -r id created key; do
+            made=$(date -u -d "$created" +%s)
+            if [ "$made" -lt "$cutoff" ]; then
+              echo "delete cache $key ($created)"
+              gh api -X DELETE "repos/$REPO/actions/caches/$id" --silent && gone=$((gone + 1))
+            fi
+          done < caches.tsv
+
+          echo "Deleted $gone caches."
