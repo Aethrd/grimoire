@@ -1008,14 +1008,40 @@ body[data-view="reader"] .stepper {
 }
 /* Except the one control on it. */
 .import-progress .icon-btn { pointer-events: auto; }
-.import-progress.minimised { left: auto; width: 46px; padding: 8px; }
-.import-progress.minimised .import-line span:first-child,
-.import-progress.minimised .bar { display: none; }
 .import-progress[hidden] { display: none; }
+
+/* Room on the right for the minimise control, so no row runs under it. */
+.import-progress { padding-right: 46px; }
+.jobs-minimise { position: absolute; top: 4px; right: 4px; }
+
+/* A row per operation. */
+.job + .job { margin-top: 10px; }
+.job[hidden] { display: none; }
 .import-line { display: flex; justify-content: space-between; gap: 10px;
-               font-size: 12px; margin-bottom: 8px; }
+               font-size: 12px; margin-bottom: 6px; }
 .import-line span:first-child { white-space: nowrap; overflow: hidden;
-                                text-overflow: ellipsis; }
+                                text-overflow: ellipsis; min-width: 0; }
+.job-count { flex: none; }
+
+/* Finished, it stays a moment, marked, rather than vanishing mid-glance. */
+.job.done .job-label::before { content: "✓ "; color: var(--accent-ink); }
+.job.done .bar-fill { background: var(--accent-ink); }
+.job.failed .job-label::before { content: "✕ "; }
+.job.failed .job-label { color: var(--muted); }
+.job.failed .bar-fill { background: var(--muted); }
+.job.done, .job.failed { opacity: .72; transition: opacity var(--motion) var(--ease); }
+
+.jobs-more { margin: 8px 0 0; font-size: 11px; }
+
+/* Shown only when minimised: the panel becomes a pill saying how many are
+   running, or how far the one is. */
+.jobs-summary { display: none; font-size: 12px; font-family: var(--font-heading);
+                font-weight: 600; white-space: nowrap; }
+.import-progress.minimised { left: auto; padding: 8px 46px 8px 14px; min-height: 46px;
+                             display: flex; align-items: center; }
+.import-progress.minimised .jobs,
+.import-progress.minimised .jobs-more { display: none; }
+.import-progress.minimised .jobs-summary { display: block; }
 
 
 /* Fifty-odd languages behind a disclosure, so the handful your library
@@ -1698,14 +1724,14 @@ body[data-view="reader"] .stepper {
 }
 
 
-/* Several operations at once: the bar is put away rather than animated.
- *
- * One bar cannot show two fractions, and the usual answer -- a looping
- * indeterminate stripe -- is a looping animation, which this app does not
- * have anywhere: something moving in the corner of your eye while you read is
- * worse than not knowing how far along two background jobs are. The count in
- * the label says what is happening; the bar comes back when one is left. */
-.import-progress.many .bar { display: none; }
+/* Notices that arrived together: a line each, left-aligned so a column of
+   them reads as a list rather than a centred paragraph. */
+.toast.stack { text-align: left; padding: 9px 14px; }
+.toast-line { display: flex; gap: 8px; align-items: baseline; line-height: 1.45; }
+.toast-line + .toast-line { margin-top: 5px; padding-top: 5px;
+                            border-top: 1px solid rgba(255, 255, 255, .12); }
+.toast-mark { flex: none; font-weight: 700; }
+.toast-line.failed .toast-mark { opacity: .8; }
 
 
 /* ===========================================================================

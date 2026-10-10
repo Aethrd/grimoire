@@ -585,7 +585,11 @@ await t('search, long press, pick the credit pages, take them out, put them back
   assert.deepEqual(await hrefsOf(id),
     ['v1-p2.png', 'v1-p3.png', 'v2-p2.png', 'v2-p3.png']);
 
-  // The panel comes back down, and the screen now offers the way back.
+  /* The operation's row is marked finished, stays a moment so the finish is
+   * seen, and then the panel comes back down. */
+  const row = el('jobs').querySelector('.job');
+  assert.ok(!row || row.classList.contains('done'), 'the row was not marked finished');
+  await settle(1000);
   assert.equal(el('import-progress').hidden, true);
   const back = [...el('remove-body').querySelectorAll('.remove-history-actions button')]
     .find((b) => b.textContent.includes('Put the last one back'));

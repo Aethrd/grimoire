@@ -949,7 +949,7 @@ async function confirmDestroy(everything) {
     try {
       for (const [at, book] of books.entries()) {
         await library.destroyBooks([book.id]);
-        progress.say(null, (at + 1) / books.length, `${at + 1} of ${books.length}`);
+        finish.say(null, (at + 1) / books.length, `${at + 1} of ${books.length}`);
       }
     } finally {
       finish();
@@ -957,7 +957,7 @@ async function confirmDestroy(everything) {
     binSelection.clear();
     await renderBin();
     await refreshShelf();
-    toast(`${books.length} book${books.length === 1 ? '' : 's'} deleted for good`, 6000);
+    toast(`${books.length} book${books.length === 1 ? '' : 's'} deleted for good`, 6000, { kind: 'done' });
   };
 }
 
@@ -1052,11 +1052,11 @@ async function exportMany(books) {
 
   try {
     for (const [at, book] of books.entries()) {
-      progress.say(`Writing ${library.displayTitle(book)}`, null, `${at + 1} of ${books.length}`);
+      finish.say(`Writing ${library.displayTitle(book)}`, null, `${at + 1} of ${books.length}`);
       try {
         const { blob, name } = await epub.buildEpub(book.id, {
           onProgress: (fraction) => {
-            progress.say(null, ((at + fraction) / books.length) * 0.9);
+            finish.say(null, ((at + fraction) / books.length) * 0.9);
           },
         });
         // Two books of the same name would otherwise replace each other.
@@ -1077,16 +1077,17 @@ async function exportMany(books) {
     const archive = await bundle.generateAsync({ type: 'blob', mimeType: 'application/zip' });
     await writeOut(archive, `${epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books')}.zip`,
       'application/zip', {
-        onProgress: (fraction) => progress.say(null, 0.9 + fraction * 0.1),
+        onProgress: (fraction) => finish.say(null, 0.9 + fraction * 0.1),
       });
 
     clearSelection();
     await refreshShelf();
     toast(failed.length
       ? `${books.length - failed.length} written · ${failed.length} skipped — ${failed[0].title}: ${failed[0].reason}`
-      : `${books.length} books written out`, 7000);
+      : `${books.length} books written out`, 7000, { kind: 'done' });
   } catch (error) {
-    toast(error.message || 'Those books could not be written out', 6000);
+    finish.fail();
+    toast(error.message || 'Those books could not be written out', 6000, { kind: 'failed' });
   } finally {
     finish();
   }
@@ -1161,12 +1162,12 @@ async function exportBook(book, { share = false, title, author, filename, size }
       title,
       author,
       size,
-      onProgress: (fraction, message) => progress.say(message, fraction * 0.9),
+      onProgress: (fraction, message) => finish.say(message, fraction * 0.9),
     });
     const saveAs = filename && /\.epub$/i.test(filename) ? filename : name;
     await writeOut(blob, saveAs, 'application/epub+zip', {
       share,
-      onProgress: (fraction) => progress.say(null, 0.9 + fraction * 0.1),
+      onProgress: (fraction) => finish.say(null, 0.9 + fraction * 0.1),
     });
 
     /* What it came out as, when it is not what the book is.
@@ -1176,10 +1177,11 @@ async function exportBook(book, { share = false, title, author, filename, size }
     const smaller = size && size !== 'full'
       ? ` · ${shrink.describeSize(size)}${saved ? `, ${shrink.describeSaving(saved)} smaller` : ''}`
       : '';
-    if (share) toast(`${saveAs} ready to send${smaller}`, 5000);
-    else if (smaller) toast(`${saveAs} written${smaller}`, 5000);
+    if (share) toast(`${saveAs} ready to send${smaller}`, 5000, { kind: 'done' });
+    else if (smaller) toast(`${saveAs} written${smaller}`, 5000, { kind: 'done' });
   } catch (error) {
-    toast(error.message || 'That book could not be written out', 6000);
+    finish.fail();
+    toast(error.message || 'That book could not be written out', 6000, { kind: 'failed' });
   } finally {
     finish();
   }
@@ -1210,13 +1212,14 @@ async function openMergeSheet() {
     try {
       const made = await library.mergeBooks(ordered.map((b) => b.id), {
         title: el('merge-title').value.trim() || ordered[0].title,
-        onProgress: progress.step,
+        onProgress: finish.step,
       });
       clearSelection();
       await refreshShelf();
-      toast(`Joined into “${made.title}” — ${made.chapters} chapters`, 6000);
+      toast(`Joined into “${made.title}” — ${made.chapters} chapters`, 6000, { kind: 'done' });
     } catch (error) {
-      toast(error.message || 'Those books could not be joined', 6000);
+      finish.fail();
+      toast(error.message || 'Those books could not be joined', 6000, { kind: 'failed' });
     } finally {
       finish();
     }
@@ -1315,7 +1318,7 @@ async function openFolderActions(folder, label, count) {
       try {
         for (const [at, book] of books.entries()) {
           await library.binBooks([book.id]);
-          progress.say(null, (at + 1) / books.length, `${at + 1} of ${books.length}`);
+          finish.say(null, (at + 1) / books.length, `${at + 1} of ${books.length}`);
         }
       } finally {
         finish();
@@ -1324,7 +1327,7 @@ async function openFolderActions(folder, label, count) {
       if (activeFolder === folder) await openFolder(null);
       await refreshShelf();
       await panels.openFolders(openFolder);
-      toast(`${books.length} book${books.length === 1 ? '' : 's'} deleted`);
+      toast(`${books.length} book${books.length === 1 ? '' : 's'} deleted`, 4000, { kind: 'done' });
     };
   });
   remove.classList.add('danger');
@@ -1426,76 +1429,138 @@ function pickFiles() {
   el('file-input').click();
 }
 
-/* ── one progress panel, any number of operations ─────────────────────────
+/* ── a bar for every operation ───────────────────────────────────────────
  *
  * There is one panel and there was never one operation. Importing, building,
- * dividing, exporting, deleting a folder and writing a backup all used it,
- * and each one hid it when it finished -- so starting a second build while
- * the first was running meant the first one to end took the bar away from the
- * other, which from the outside is an operation that stopped reporting and
- * may or may not still be running.
+ * dividing, exporting, deleting a folder and writing a backup all use it.
+ * The first version hid it when any of them finished, taking the bar away
+ * from the others; the second counted them, but could only show one, so two
+ * builds at once read as "2 things at once" with no bar at all -- no way to
+ * tell which was nearly done and which had stalled.
  *
- * Counted instead: the panel is up while anything is up. And while more than
- * one thing is running the panel says so rather than letting two operations
- * fight over one label, which read as a single confused operation.
+ * So each operation gets a row of its own: its name, how far along, and a
+ * bar. The panel is up while any row is. A finished row stays for a moment
+ * marked done, rather than vanishing mid-glance, so you see it complete.
  */
 const progress = (() => {
-  let live = 0;
-  let label = '';
+  const jobs = [];
+  let counter = 0;
+
+  const panel = () => el('import-progress');
+  const list = () => el('jobs');
+
+  /** At most this many rows; the rest are counted. A phone has no room for a
+   *  dozen bars, and nobody is watching a dozen. */
+  const SHOWN = 4;
 
   function paint() {
-    const panel = el('import-progress');
-    if (!panel) return;
-    panel.hidden = live === 0;
-    if (live === 0) panel.classList.remove('minimised', 'many');
+    const host = panel();
+    if (!host) return;
+    const live = jobs.filter((job) => !job.ended);
+    host.hidden = jobs.length === 0;
+    if (!jobs.length) host.classList.remove('minimised');
 
-    if (live > 1) {
-      panel.classList.add('many');
-      el('import-label').textContent = `${live} things at once`;
-      el('import-count').textContent = '';
-    } else {
-      panel.classList.remove('many');
-      if (live === 1 && label) el('import-label').textContent = label;
+    // The summary for when the panel is minimised, or there are more rows
+    // than room.
+    const summary = el('jobs-summary');
+    if (summary) {
+      summary.textContent = live.length > 1
+        ? `${live.length} running`
+        : live.length === 1 ? `${Math.round((live[0].fraction || 0) * 100)}%` : 'Done';
     }
+    const more = el('jobs-more');
+    if (more) {
+      const hidden = jobs.length - SHOWN;
+      more.hidden = hidden <= 0;
+      more.textContent = hidden > 0 ? `+${hidden} more running` : '';
+    }
+    jobs.forEach((job, at) => { job.row.hidden = at >= SHOWN; });
   }
 
-  /** What the one running operation is doing. Ignored while several are. */
-  function say(message, fraction, count) {
-    if (live > 1) return;
-    if (message) { label = message; el('import-label').textContent = message; }
-    if (fraction != null) el('import-bar').style.width = `${Math.round(fraction * 100)}%`;
-    if (count != null) el('import-count').textContent = count;
+  function makeRow(label) {
+    const row = document.createElement('div');
+    row.className = 'job';
+    row.innerHTML = '<div class="import-line"><span class="job-label"></span>'
+      + '<span class="muted job-count"></span></div>'
+      + '<span class="bar"><span class="bar-fill" style="width:0%"></span></span>';
+    row.querySelector('.job-label').textContent = label || 'Working';
+    list()?.appendChild(row);
+    return row;
   }
 
-  return {
-    say,
-    /** Passed straight to anything taking an onProgress(message, fraction). */
-    step: (message, fraction) => say(message, fraction),
+  function start(label) {
+    // Minimising is the panel's, not any one import's, so it is wired once.
+    const minimise = el('import-minimise');
+    if (minimise && !minimise.onclick) {
+      minimise.onclick = () => panel()?.classList.toggle('minimised');
+    }
+
+    const job = { id: ++counter, label: label || 'Working', fraction: 0, ended: false };
+    job.row = makeRow(job.label);
+    jobs.push(job);
+    paint();
+
+    /** What this operation is doing now. Each row says only its own. */
+    const say = (message, fraction, count) => {
+      if (job.ended) return;
+      if (message) {
+        job.label = message;
+        job.row.querySelector('.job-label').textContent = message;
+      }
+      if (fraction != null && Number.isFinite(fraction)) {
+        job.fraction = Math.max(0, Math.min(1, fraction));
+        job.row.querySelector('.bar-fill').style.width = `${Math.round(job.fraction * 100)}%`;
+      }
+      if (count != null) job.row.querySelector('.job-count').textContent = count;
+      paint();
+    };
 
     /**
-     * Put the panel up, and hand back the one way of taking it down.
+     * End it. Callable once; the closure is the only way to end a row, so a
+     * count cannot drift and one operation cannot take down another's bar.
      *
-     * The closure is deliberately the only way to end: a `progress.end()`
-     * anyone could call is a count that drifts, and the version of this with
-     * a shared flag had exactly one unguarded path that hid the panel with
-     * two operations still running.
+     * @param failed  marks the row as having failed rather than finished.
      */
-    start(message) {
-      live += 1;
-      if (live === 1) {
-        label = message || '';
-        el('import-count').textContent = '';
-        el('import-bar').style.width = '0%';
-      }
+    const end = (failed = false) => {
+      if (job.ended) return;
+      job.ended = true;
+      job.row.classList.add(failed ? 'failed' : 'done');
+      if (!failed) job.row.querySelector('.bar-fill').style.width = '100%';
       paint();
-
-      let ended = false;
-      return () => {
-        if (ended) return;
-        ended = true;
-        live = Math.max(0, live - 1);
+      // Left up briefly, marked, so a finish is seen rather than inferred
+      // from a row that has gone.
+      setTimeout(() => {
+        const at = jobs.indexOf(job);
+        if (at !== -1) jobs.splice(at, 1);
+        job.row.remove();
         paint();
-      };
+      }, failed ? 2400 : 900);
+    };
+
+    // Called as a function, as every caller already does; and with say and
+    // step on it for routing progress to this row and no other.
+    const handle = () => end(false);
+    handle.say = say;
+    handle.step = (message, fraction) => say(message, fraction);
+    handle.fail = () => end(true);
+    handle.end = end;
+    return handle;
+  }
+
+  /** The newest live row, for anything that reports without a handle. */
+  const newest = () => [...jobs].reverse().find((job) => !job.ended);
+
+  return {
+    start,
+    get running() { return jobs.filter((job) => !job.ended).length; },
+    /* Kept for callers outside an operation: they speak for the newest
+     * row, which is the one they started. */
+    say: (message, fraction, count) => {
+      const job = newest();
+      if (!job) return;
+      if (message) job.row.querySelector('.job-label').textContent = message;
+      if (fraction != null) job.row.querySelector('.bar-fill').style.width = `${Math.round(fraction * 100)}%`;
+      if (count != null) job.row.querySelector('.job-count').textContent = count;
     },
   };
 })();
@@ -1567,13 +1632,13 @@ function stageForRead(file) {
  */
 const refused = new Map();
 
-async function rescueFile(file) {
+async function rescueFile(file, job = null) {
   if (!canStage()) {
     refused.set(file.name, 'Android would not let the app read it');
     throw Object.assign(new Error('Android would not let the app read it'), { name: 'NotReadableError' });
   }
   try {
-    progress.say(`Reading ${file.name} another way`);
+    (job || progress).say(`Reading ${file.name} another way`);
     const url = await stageForRead(file);
     const copy = await fetch(url);
     if (!copy.ok) throw new Error(`could not fetch the staged copy (${copy.status})`);
@@ -1612,10 +1677,7 @@ function plainReason(reason) {
 async function handleFiles(files, { transient = false } = {}) {
   if (!files.length) return;
 
-  const panel = el('import-progress');
   const done = progress.start('Opening…');
-
-  el('import-minimise').onclick = () => panel.classList.toggle('minimised');
 
   /* The shelf is refreshed as books land rather than only at the end, so an
      import can be watched -- and used -- while it runs. Not per book: on a
@@ -1634,9 +1696,9 @@ async function handleFiles(files, { transient = false } = {}) {
       transient,
       // Anything the page is not allowed to read is read by the shell
       // instead -- but only when a read is actually refused.
-      rescue: rescueFile,
+      rescue: (file) => rescueFile(file, done),
       onProgress: (message, fraction, at, total) => {
-        progress.say(message, fraction || 0, total ? `${at + 1} of ${total}` : '');
+        done.say(message, fraction || 0, total > 1 ? `${at + 1} of ${total}` : '');
 
         /* Only while the shelf is what is on screen. Redrawing a shelf
          * nobody is looking at, every three seconds, competes with the
@@ -1663,8 +1725,11 @@ async function handleFiles(files, { transient = false } = {}) {
      * refusal wins where there was one. */
     const first = results.failed[0];
     const why = refused.get(first.name);
+    // Failed only if nothing at all came of it; some books in and one refused
+    // is a finish with a note, not a failure.
     toast(`${results.added} added · ${first.name}: ${
-      why ? plainReason(why) : plainReason(first.reason)}`, 8000);
+      why ? plainReason(why) : plainReason(first.reason)}`, 8000,
+    { kind: results.added ? 'done' : 'failed' });
   } else if (results.joined?.length) {
     /* Said, because it is a decision the app made: a folder of chapter files
      * became one book rather than a book per file. Dividing it at chapters
@@ -1674,7 +1739,7 @@ async function handleFiles(files, { transient = false } = {}) {
     toast(results.joined.length === 1
       ? `“${first.name}” — ${first.chapters} chapters from ${first.files} files${
         others ? ` · ${others} other book${others === 1 ? '' : 's'}` : ''}`
-      : `${results.joined.length} books from chapter files, ${results.added} added in all`, 7000);
+      : `${results.joined.length} books from chapter files, ${results.added} added in all`, 7000, { kind: 'done' });
   } else {
     const folders = results.folders?.size || 0;
     const seconds = (results.elapsedMs || 0) / 1000;
@@ -1685,7 +1750,7 @@ async function handleFiles(files, { transient = false } = {}) {
     const took = seconds > 2 ? ` · ${seconds.toFixed(0)}s, ${each.toFixed(1)}s a book` : '';
     toast(folders
       ? `${results.added} book${results.added === 1 ? '' : 's'} added across ${folders} folder${folders === 1 ? '' : 's'}${took}`
-      : `${results.added} book${results.added === 1 ? '' : 's'} added${took}`, 6000);
+      : `${results.added} book${results.added === 1 ? '' : 's'} added${took}`, 6000, { kind: 'done' });
   }
 
   return results;
@@ -2706,16 +2771,17 @@ function wireDivide() {
       const divide = divideMode === 'pages' ? library.fragmentPages : library.fragmentBook;
       const made = await divide(dividing.book.id, [...divideCuts], {
         name: library.displayTitle(dividing.book),
-        onProgress: progress.step,
+        onProgress: finish.step,
       });
       dividing = null;
       divideCuts = new Set();
       dividePages.release();
       await refreshShelf();
       await show('library');
-      toast(`Divided into ${made.length} parts — the original is still here`, 7000);
+      toast(`Divided into ${made.length} parts — the original is still here`, 7000, { kind: 'done' });
     } catch (error) {
-      toast(error.message || 'That book could not be divided', 6000);
+      finish.fail();
+      toast(error.message || 'That book could not be divided', 6000, { kind: 'failed' });
     } finally {
       finish();
     }
@@ -3251,12 +3317,13 @@ async function runPutBack() {
   const id = removing.book.id;
   const done = progress.start('Putting it back');
   try {
-    const out = await trim.putBack(id, { onProgress: progress.step });
-    toast(`${out.what} back in the book`, 5000);
+    const out = await trim.putBack(id, { onProgress: done.step });
+    toast(`${out.what} back in the book`, 5000, { kind: 'done' });
     await refreshShelf();
     await reopenRemove(id);
   } catch (error) {
-    toast(error.message || 'That could not be put back', 6000);
+    done.fail();
+    toast(error.message || 'That could not be put back', 6000, { kind: 'failed' });
   } finally {
     done();
   }
@@ -3278,13 +3345,14 @@ async function runDiscard() {
     resetConfirm();
     const done = progress.start('Discarding');
     try {
-      const out = await trim.discard(id, { onProgress: progress.step });
+      const out = await trim.discard(id, { onProgress: done.step });
       toast(out.pictures
         ? `Discarded — ${out.pictures} picture${out.pictures === 1 ? '' : 's'} freed`
-        : 'Discarded', 5000);
+        : 'Discarded', 5000, { kind: 'done' });
       await reopenRemove(id);
     } catch (error) {
-      toast(error.message || 'That could not be discarded', 6000);
+      done.fail();
+      toast(error.message || 'That could not be discarded', 6000, { kind: 'failed' });
     } finally {
       done();
     }
@@ -3341,7 +3409,7 @@ function wireRemove() {
     const done = progress.start('Taking it out');
     try {
       const take = removeMode === 'pages' ? trim.removePages : trim.removeChapters;
-      const out = await take(id, pickedKeys(), { onProgress: progress.step });
+      const out = await take(id, pickedKeys(), { onProgress: done.step });
 
       await refreshShelf();
       await reopenRemove(id);
@@ -3352,9 +3420,10 @@ function wireRemove() {
       const marks = out.marks
         ? `, ${out.marks} mark${out.marks === 1 ? '' : 's'} with it`
         : '';
-      toast(`${out.what} taken out${marks} — put back from this screen`, 7000);
+      toast(`${out.what} taken out${marks} — put back from this screen`, 7000, { kind: 'done' });
     } catch (error) {
-      toast(error.message || 'That could not be taken out', 6000);
+      done.fail();
+      toast(error.message || 'That could not be taken out', 6000, { kind: 'failed' });
     } finally {
       done();
     }
@@ -3483,7 +3552,7 @@ function wireWorkshop() {
 
       const finish = progress.start('Reading the files');
       try {
-        await build.add(files, (message, fraction) => progress.say(message, fraction || 0));
+        await build.add(files, (message, fraction) => finish.say(message, fraction || 0));
       } finally {
         finish();
       }
@@ -3512,7 +3581,7 @@ function wireWorkshop() {
         title: el('build-title').value.trim() || undefined,
         author: el('build-author').value.trim() || undefined,
         onProgress: (message, fraction, at, total) => {
-          progress.say(message, fraction, total ? `${at + 1} of ${total}` : '');
+          finish.say(message, fraction, total > 1 ? `${at + 1} of ${total}` : '');
         },
       });
       build.clear();
@@ -3525,10 +3594,11 @@ function wireWorkshop() {
       // three volumes should not look like a complete one.
       toast(failed.length
         ? `Built “${book.title}” — ${book.chapters} chapters · ${failed.length} part${failed.length === 1 ? '' : 's'} skipped: ${failed[0].reason}`
-        : `Built “${book.title}” — ${book.chapters} chapters`, 8000);
+        : `Built “${book.title}” — ${book.chapters} chapters`, 8000, { kind: 'done' });
       await show('library');
     } catch (error) {
-      toast(error.message || 'That could not be built', 6000);
+      finish.fail();
+      toast(error.message || 'That could not be built', 6000, { kind: 'failed' });
     } finally {
       finish();
     }

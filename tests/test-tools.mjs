@@ -657,8 +657,63 @@ await t('the toast says chapters were joined, so it is not a surprise', async ()
   assert.match(app, /chapters from \$\{first\.files\} files/);
   // And nothing is checked up front any more: a rescue is offered, used only
   // when a read is actually refused.
-  assert.match(app, /rescue: rescueFile/);
+  assert.match(app, /rescue: \(file\) => rescueFile\(file, done\)/);
   assert.ok(!/async function openable/.test(app), 'every file is still read before the import starts');
+});
+
+/* ── several operations at once ──────────────────────────────────────── */
+
+console.log('\nseveral operations at once');
+
+await t('two imports at once are two bars, and both results are shown', async () => {
+  const pick = (files) => {
+    Object.defineProperty(el('file-input'), 'files', { value: files, configurable: true });
+    el('file-input').dispatchEvent(new window.Event('change', { bubbles: true }));
+  };
+  const chapters = (novel, count) => Array.from({ length: count }, (_, i) =>
+    new window.File([savedPage(novel, i + 1)], `${novel} - Chapter ${i + 1}.mht`));
+
+  el('toast').hidden = true;      // whatever earlier tests left on it
+  pick(chapters('Twin One', 40));
+  await settle(30);
+  pick(chapters('Twin Two', 25));
+  await settle(120);
+
+  /* Mid-flight: a row each, each with its own name and its own bar, rather
+   * than "2 things at once" and no bar at all. */
+  const rows = [...el('jobs').querySelectorAll('.job')];
+  assert.equal(rows.length, 2, 'the two imports do not have a row each');
+  const labels = rows.map((row) => row.querySelector('.job-label').textContent);
+  assert.ok(labels.some((l) => /Twin One/.test(l)) && labels.some((l) => /Twin Two/.test(l)),
+    `the rows do not say which import they are: ${labels.join(' / ')}`);
+  for (const row of rows) assert.ok(row.querySelector('.bar-fill').style.width, 'a row has no bar');
+
+  for (let i = 0; i < 80 && el('jobs').querySelectorAll('.job:not(.done):not(.failed)').length; i++) {
+    await settle(100);
+  }
+
+  // Each finished row is marked, rather than both vanishing at once.
+  assert.ok([...el('jobs').querySelectorAll('.job')].every((row) => row.classList.contains('done')));
+
+  /* And both results are in the banner -- the second no longer replaces the
+   * first. */
+  const said = [...el('toast').querySelectorAll('.toast-line')].map((line) => line.textContent);
+  assert.ok(said.some((l) => /Twin One/.test(l)), `the first result was lost: ${said.join(' | ')}`);
+  assert.ok(said.some((l) => /Twin Two/.test(l)), `the second result was lost: ${said.join(' | ')}`);
+  assert.ok(said.filter((l) => /Twin/.test(l)).every((l) => l.startsWith('✓')),
+    'a finished import is not marked as finished');
+
+  await settle(1200);
+  assert.equal(el('import-progress').hidden, true, 'the panel stayed up after both finished');
+});
+
+await t('a notice repeated is counted, not stacked', async () => {
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  el('toast').hidden = true;
+  screensMod.toast('That is the last chapter');
+  screensMod.toast('That is the last chapter');
+  screensMod.toast('That is the last chapter');
+  assert.equal(el('toast').textContent, 'That is the last chapter (×3)');
 });
 
 console.log(`\n${pass} assertions passed`);

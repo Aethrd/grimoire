@@ -987,12 +987,90 @@ export async function openToc(onGoToChapter) {
 
 /* ── shared ───────────────────────────────────────────────────────────── */
 
+/* ── notices that arrive together ────────────────────────────────────────
+ *
+ * There is one banner, and a second notice used to replace the first. Two
+ * builds finishing a second apart showed only the later one: the first
+ * book's "Built — 40 chapters" was on screen for a moment and gone, and
+ * whether it had worked at all had to be checked on the shelf.
+ *
+ * So a notice that arrives while another is showing joins it as a line of
+ * its own, and each line stays for as long as it was asked to -- the banner
+ * shrinks as the older ones run out rather than everything vanishing at the
+ * time of the newest. Notices about operations say whether they finished or
+ * failed, so a stack of three reads at a glance.
+ */
 let toastTimer = null;
+const lines = [];
+const MOST = 4;
 
-export function toast(message, ms = 2200) {
+/**
+ * @param message  what to say
+ * @param ms       how long this line stays
+ * @param options  { kind: 'done' | 'failed' } for the outcome of an operation
+ *                 -- or pass the options in place of ms.
+ */
+export function toast(message, ms = 2200, options = {}) {
+  if (ms && typeof ms === 'object') { options = ms; ms = 2200; }
   const node = el('toast');
-  node.textContent = message;
-  node.hidden = false;
+  if (!node) return;
+  const now = Date.now();
+  const text = String(message ?? '');
+
+  // Whatever is on screen is still on screen; a hidden banner starts afresh.
+  if (node.hidden) lines.length = 0;
+
+  /* The same thing said twice is said once, with a count -- a page turn that
+   * keeps landing on the last chapter is one notice, not a column of them. */
+  const last = lines[lines.length - 1];
+  if (last && last.text === text) {
+    last.repeat += 1;
+    last.until = Math.max(last.until, now + ms);
+  } else {
+    lines.push({ text, kind: options.kind || null, repeat: 1, until: now + ms });
+  }
+  while (lines.length > MOST) lines.shift();
+
+  if (!node.onclick) {
+    // Tapping it puts it away: four lines of notices over the page are worth
+    // dismissing without waiting for them.
+    node.onclick = () => { lines.length = 0; clearTimeout(toastTimer); node.hidden = true; };
+  }
+
+  paintToast(node);
+}
+
+function paintToast(node) {
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { node.hidden = true; }, ms);
+  const now = Date.now();
+  for (let i = lines.length - 1; i >= 0; i--) if (lines[i].until <= now) lines.splice(i, 1);
+  if (!lines.length) { node.hidden = true; return; }
+
+  const one = lines.length === 1 && !lines[0].kind;
+  node.classList.toggle('stack', !one);
+  if (one) {
+    // A single plain notice looks exactly as it always did.
+    node.textContent = lines[0].repeat > 1 ? `${lines[0].text} (×${lines[0].repeat})` : lines[0].text;
+  } else {
+    node.innerHTML = '';
+    for (const line of lines) {
+      const row = document.createElement('div');
+      row.className = `toast-line${line.kind ? ` ${line.kind}` : ''}`;
+      if (line.kind) {
+        const mark = document.createElement('span');
+        mark.className = 'toast-mark';
+        mark.textContent = line.kind === 'failed' ? '✕' : '✓';
+        row.appendChild(mark);
+      }
+      const words = document.createElement('span');
+      words.textContent = line.repeat > 1 ? `${line.text} (×${line.repeat})` : line.text;
+      row.appendChild(words);
+      node.appendChild(row);
+    }
+  }
+  node.hidden = false;
+
+  // Woken again when the next line runs out, not when the newest does.
+  const next = Math.min(...lines.map((line) => line.until)) - now;
+  toastTimer = setTimeout(() => paintToast(node), Math.max(50, next));
 }

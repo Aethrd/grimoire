@@ -233,33 +233,52 @@ t('back leaves a tab for the shelf rather than the app', () => {
 
 t('importing reports progress rather than a silent wait', () => {
   assert.match(html, /id="import-progress"/);
-  assert.match(app, /el\('import-bar'\)\.style\.width/);
+  assert.match(html, /id="jobs"/);
+  assert.match(app, /\.bar-fill'\)\.style\.width/);
   assert.match(app, /onProgress: \(message, fraction, at, total\)/);
 });
 
-t('one progress panel survives several operations at once', () => {
-  /* There is one panel and there was never one operation. Importing,
-   * building, dividing, exporting and deleting all used it and each hid it
-   * when it finished, so the first to end took the bar away from the rest --
-   * which from the outside is an operation that stopped reporting. */
+t('every operation running at once has a bar of its own', () => {
+  /* One panel, and never one operation. The first version hid it when any
+   * operation finished; the second counted them and showed "2 things at
+   * once" with no bar at all. Each gets a row: its name, a count, a bar. */
   assert.doesNotMatch(app, /panel\.hidden = true/,
     'something still hides the shared panel on its own completion');
 
-  const counter = app.slice(app.indexOf('const progress = (() =>'),
+  const block = app.slice(app.indexOf('const progress = (() =>'),
     app.indexOf('async function handleFiles'));
-  assert.match(counter, /live \+= 1/);
-  assert.match(counter, /live = Math\.max\(0, live - 1\)/);
-  assert.match(counter, /panel\.hidden = live === 0/);
-  // Ending is a closure, so there is no end() anyone can call twice.
-  assert.match(counter, /let ended = false/);
-  // And two operations never fight over one label.
-  assert.match(counter, /things at once/);
-  assert.match(counter, /if \(live > 1\) return/);
+  assert.match(block, /function makeRow/);
+  assert.match(block, /row\.className = 'job'/);
+  // Each operation speaks only for its own row.
+  assert.match(block, /handle\.say = say/);
+  assert.match(block, /job\.row\.querySelector\('\.bar-fill'\)/);
+  // Ended once, through the handle, and marked done or failed.
+  assert.match(block, /if \(job\.ended\) return/);
+  assert.match(block, /failed \? 'failed' : 'done'/);
 
-  // Every operation takes the panel down in a finally, never on the happy
-  // path alone: one that threw used to leave it up for the whole session.
+  // No operation reports through the shared fallback while it has its own row.
+  const shared = [...app.matchAll(/progress\.(say|step)\b/g)].length;
+  assert.ok(shared <= 1, `${shared} operations still report to whichever row is newest`);
+
+  // And every operation takes its row down in a finally, never on the happy
+  // path alone.
   assert.ok((app.match(/finish\(\);/g) || []).length >= 5,
-    'not every operation releases the panel');
+    'not every operation releases its row');
+});
+
+t('notices that arrive together are kept, not replaced', () => {
+  /* Two builds finishing a second apart showed only the second: the first
+   * book's result was on screen for a moment and gone. */
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  const toast = screens.slice(screens.indexOf('export function toast'));
+  assert.match(toast, /lines\.push\(/);
+  assert.match(toast, /const MOST = 4|lines\.length > MOST/);
+  // Each line stays for its own time.
+  assert.match(toast, /Math\.min\(\.\.\.lines\.map\(\(line\) => line\.until\)\)/);
+  // An operation's outcome says which it was.
+  assert.match(app, /\{ kind: 'done' \}/);
+  assert.match(app, /\{ kind: 'failed' \}/);
+  assert.match(css, /\.toast\.stack/);
 });
 
 t('a long author name cannot widen its column', () => {

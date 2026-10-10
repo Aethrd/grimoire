@@ -615,15 +615,15 @@
 
 <!-- Importing a large archive takes a while, and a toast that says nothing
      about how far along it is reads as a hang. -->
+<!-- A row per operation: two builds at once are two bars, each saying how far
+     its own build has got. -->
 <div class="import-progress" id="import-progress" hidden>
-  <div class="import-line">
-    <span id="import-label">Importing</span>
-    <span class="muted" id="import-count"></span>
-    <button class="icon-btn" id="import-minimise" title="Get out of the way">
-      <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
-    </button>
-  </div>
-  <span class="bar"><span class="bar-fill" id="import-bar" style="width:0%"></span></span>
+  <div class="jobs" id="jobs"></div>
+  <p class="muted jobs-more" id="jobs-more" hidden></p>
+  <span class="jobs-summary" id="jobs-summary"></span>
+  <button class="icon-btn jobs-minimise" id="import-minimise" title="Get out of the way">
+    <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+  </button>
 </div>
 
 <!-- Sits opposite Android's own selection menu, never over it. -->
