@@ -59,6 +59,8 @@ python3 tools/audit_assets.py    # fails if anything would hit the network
 | Translation | On-device, DeepL or LibreTranslate; titles, chapter names and body as separate switches |
 | Settings | One screen, six panes: text, layout, theme, behaviour, translation, data |
 | Stats | Heat grid, streaks with freezes, script-aware word counts, JSON export |
+| Take out | Pick pages, image pages or chapters out of a book; recoverable until discarded |
+| Bin | Deleted books wait here with everything they had; delete for good frees the space |
 | Vault | Passphrase-gated shelf, filtered out of search, reel and stats |
 
 Formats read in full: **EPUB 2/3, PDF, CBZ, TXT, Markdown, HTML, FB2**.
@@ -109,6 +111,98 @@ sort sheet, and nest another level under it if you want.
 Refused with a stated reason: DOCX, MOBI, AZW3, RTF, CBR — see
 `UNSUPPORTED_REASON` in `js/parse.js`.
 
+### Books in, books out, and books taken apart
+
+Four operations, and they are the four directions:
+
+- **Build** joins files into one book. Volumes, chapters, image archives and
+  saved pages, in whatever mix: a zip of one, an EPUB of the next, a PDF of
+  the third. A book already on the shelf can be the first part, so the volume
+  that came out this week goes on the end of the thirty you already have
+  without re-importing any of them.
+- **Divide** cuts one book into several, at chapters, at pages or at
+  paragraphs, with a preview of what each cut actually separates.
+- **Take out** removes content and keeps the book. This is the one for what
+  arrives attached to a download rather than belonging to the work: the
+  scanlator's credit page in front of every chapter, the advertisement spread
+  bound into a volume, the duplicated scan, the afterword, the sample chapter
+  for a different series.
+- **Undo the join** takes a built book back into what it was made from.
+
+A comic gets a **grid of its own pages** to pick from rather than a list of
+their names — a page of a comic has no name worth reading and is recognised on
+sight. Prose gets the list. And because the commonest job of all is one page
+repeated through thirty volumes, **First of each chapter** and **Last of each
+chapter** take them in one tap instead of sixty.
+
+Nothing is destroyed on the way out. Every other operation here leaves its
+source alone, so a bad result costs a delete; this one reaches into a book
+that already exists, and there is no such consolation. So a removal is kept
+and can be **put back** until it is **discarded** on purpose. What that costs
+is the markup of the removed pages, which is bytes, and leaving their pictures
+where they are, which was already paid for — the pictures keep their rows,
+flagged rather than deleted, which is why the reel, the export and every kind
+of dividing all ask for the pictures the book is *still using*.
+
+Put back works newest-first, as an undo does. That is not a limitation worth
+engineering around: it is the only order in which the positions a removal
+recorded still describe the book it is going back into. Re-inserting a page
+from two removals ago, into a book that has changed shape twice since, would
+be a guess dressed up as a restore.
+
+Marks and the saved reading position are handled rather than left to rot. A
+mark in a chapter that survives untouched follows it to its new number with
+its offsets intact. A mark on text that was removed — or in a chapter whose
+offsets have shifted because pages came out of the middle of it — is carried
+out **with** the removal and comes back with it, because a mark left pointing
+somewhere plausible and wrong is worse than one that is temporarily absent.
+
+### Deleting, in two steps
+
+A mistap on a grid of covers is not a decision, and deleting outright treated
+it as one: the file had to be found again, which for something downloaded a
+year ago often means not at all.
+
+So **delete** means out of the way, and the **bin** is where gone happens. A
+book in the bin keeps everything — its chapters, its pictures, its folder, its
+place, its bookmarks — and nothing is freed until it is deleted from the bin.
+That is the whole point of the second step: the first one has to be reversible
+to be worth having, and reversible means nothing was thrown away.
+
+Both the bin and a blurred cover are carried in the backup, because neither is
+a property of the file and so neither comes back from re-importing it.
+
+### Smaller copies
+
+A comic scanned at 2400 pixels tall is four or five times the file of the same
+comic at 1400, and on a phone the two are indistinguishable. Writing a book
+out can write a smaller one — large, screen or small — and the book on the
+shelf keeps every pixel it has: the downscaling happens on the way into the
+file, so a smaller copy is a copy rather than an edit.
+
+It gives back the original wherever shrinking would make things worse: an
+animated GIF, which would come back as one frame; a page already under the
+target, which would lose a generation of quality for nothing; and a result
+that came out *bigger*, which happens with line art and flat colour because
+PNG's own compression beats JPEG there. The saving is reported rather than
+assumed, because on line art it can be close to zero.
+
+### Turning a chapter where your thumb already is
+
+The footer is the one place a tall phone cannot be reached without regripping,
+and in a comic — where a chapter is a whole volume — turning a chapter is the
+control used most. So it can float: dragged anywhere, resized, and flipped to
+whichever side the hand is on, with **up as the next chapter**, because that is
+how a thumb reads a stack.
+
+It is **locked by default**, which is the part that makes it usable at all: an
+unlocked control sitting over the page is one that moves every time you meant
+to press it. Unlock it, put it where you want it, lock it again. Only the
+dotted grip drags it — dragging by a button means every slightly imprecise
+press moves the thing you were trying to press.
+
+Copy chapter stays in the footer. That one is pressed with two hands.
+
 ## How it fits together
 
 ```
@@ -122,6 +216,10 @@ app/src/main/assets/www/
   js/library.js       shelf, import pipeline, sort comparator, grouping
   js/screens.js       sort, layout, reel, find, index
   js/panels.js        appearance, language, stats, vault
+  js/build.js         the workshop: several files in, one book out
+  js/trim.js          taking pages and chapters out, and putting them back
+  js/shrink.js        downscaling pictures for a smaller copy
+  js/epub.js          writing a book back out as an EPUB
   js/app.js           routing, gestures, the shell's two hooks
 ```
 
@@ -223,6 +321,14 @@ EPUB never executes.
 - **shelf** — cover geometry that content cannot stretch, and the selection
   contract: buttons rather than typed menus, in-app confirmation, back leaves
   the mode before the screen
+- **trim** — taking pages and chapters out, that nothing is destroyed on the
+  way, that marks and the saved position follow or are carried out rather than
+  left wrong, and the whole path a finger takes: search, long press, pick the
+  credit page out of every chapter, take them out, put them back
+- **tools** — the bin as two steps rather than one, the floating chapter pad as
+  it is actually drawn on the reader, smaller copies and every case where
+  shrinking is refused, building onto a book already on the shelf, and the two
+  ways the app used to end up a blank page
 - **motion** — reading-mode defaults, and the motion contract: nothing loops,
   no transition over 250ms, reduced motion honoured, text never animates
 - **freedom** — asserts no paywall, no ads, no sign-in, that `INTERNET` is the
@@ -269,6 +375,21 @@ Honest list, in rough order of how much they matter:
   Kit's first-run model download is the most likely to need adjustment.
 - **Korean and Japanese books will translate but not render well**, because the
   bundled fonts are Latin-only.
+- **Downscaling for a smaller copy cannot be tested here.** It needs a real
+  canvas to decode and re-encode with, and jsdom has none — so the guards are
+  tested (an animated GIF untouched, an already-small page untouched, a result
+  that came out bigger rejected) and the actual re-encode is not. The first
+  smaller copy written on a device is worth opening and looking at.
+- **Dragging the chapter pad is not driven in a test.** jsdom has no layout, so
+  a synthetic touch carries no coordinates to drag by. That the pad is drawn
+  where it was put, that the footer pair gives way to it, and that its buttons
+  turn chapters are all exercised; the drag itself is checked only against the
+  source.
+- **A removal keeps the markup of what it removed on the book's own row.** For
+  a comic that is a handful of image tags and costs nothing; for a two-thousand
+  chapter novel, removing a hundred chapters duplicates their text until the
+  removal is discarded. It is bounded and recoverable, but it is not free, and
+  a per-book cap would be the honest next step.
 - `boot()` has no catch, so a startup exception is a blank screen.
 - **Scroll mode is untested on a device.** jsdom has no layout engine, so every
   measurement in it returns zero; the tests cover the contract around scroll

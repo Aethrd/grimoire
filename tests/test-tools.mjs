@@ -1,0 +1,493 @@
+/* The things done to a book rather than inside one.
+ *
+ * The bin, the floating chapter pad, smaller copies on the way out, building
+ * onto a book already on the shelf, and the two crashes that came of a
+ * control wearing the router's attribute.
+ */
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { boot } from './harness.mjs';
+
+const window = await boot();
+window.URL.createObjectURL = globalThis.URL.createObjectURL = () => 'blob:stub/0';
+window.URL.revokeObjectURL = globalThis.URL.revokeObjectURL = () => {};
+
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
+const html = read('app/src/main/assets/www/index.html');
+const css = read('app/src/main/assets/www/css/app.css');
+const app = read('app/src/main/assets/www/js/app.js');
+const panels = read('app/src/main/assets/www/js/panels.js');
+const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+
+const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+const shrink = await import(new URL('../app/src/main/assets/www/js/shrink.js', import.meta.url).href);
+
+let pass = 0;
+const t = async (name, fn) => { await fn(); console.log('  ok  ' + name); pass++; };
+
+const rule = (selector) => {
+  const at = css.indexOf(`${selector} `);
+  const start = css.indexOf('{', at === -1 ? css.indexOf(selector) : at);
+  return css.slice(start, css.indexOf('}', start));
+};
+
+let seed = 0;
+const aBook = (fields = {}) => store.add('books', {
+  title: `Book ${++seed}`, fingerprint: `tool:${seed}`, addedAt: seed, ...fields,
+});
+
+/* ── the bin ─────────────────────────────────────────────────────────── */
+
+console.log('the bin');
+
+await t('deleting takes a book off the shelf without destroying it', async () => {
+  const id = await aBook({ folder: 'Manhwa', percent: 0.4 });
+  await store.put('chapters', { bookId: id, index: 0, title: 'One', html: '<p>hi</p>', words: 1 });
+
+  assert.equal(await library.binBooks([id]), 1);
+
+  const book = await store.get('books', id);
+  assert.ok(book, 'the book was destroyed by a delete that should be reversible');
+  assert.ok(library.isBinned(book));
+  // Everything it had is still there: that is what makes the first step worth
+  // having, and what the second step is for.
+  assert.equal((await store.byIndex('chapters', 'bookId', id)).length, 1);
+  assert.equal(book.folder, 'Manhwa');
+  assert.equal(book.percent, 0.4);
+});
+
+await t('a binned book is off the shelf and out of its folder count', async () => {
+  const id = await aBook({ folder: 'Fiction' });
+  const before = (await library.folderCounts()).find((f) => f[0] === 'Fiction')?.[1] || 0;
+  await library.binBooks([id]);
+  const after = (await library.folderCounts()).find((f) => f[0] === 'Fiction')?.[1] || 0;
+  assert.equal(after, before - 1, 'the bin still counts towards its folder');
+
+  const shelf = read('app/src/main/assets/www/js/library.js');
+  assert.match(shelf, /!b\.binnedAt/, 'renderShelf does not filter the bin out');
+});
+
+await t('binning twice does not move the clock a second time', async () => {
+  const id = await aBook();
+  await library.binBooks([id]);
+  const first = (await store.get('books', id)).binnedAt;
+  assert.equal(await library.binBooks([id]), 0);
+  assert.equal((await store.get('books', id)).binnedAt, first,
+    'a second delete reset how long it had been in the bin');
+});
+
+await t('putting a book back returns it with everything it had', async () => {
+  const id = await aBook({ folder: 'Manga', status: 'reading' });
+  await store.addMark({ bookId: id, kind: 'highlight', chapterIndex: 0, anchor: 2, end: 5 });
+  await library.binBooks([id]);
+  assert.equal(await library.restoreBooks([id]), 1);
+
+  const book = await store.get('books', id);
+  assert.equal(library.isBinned(book), false);
+  assert.equal(book.folder, 'Manga');
+  assert.equal(book.status, 'reading');
+  assert.equal((await store.byIndex('marks', 'bookId', id)).length, 1);
+});
+
+await t('the bin lists newest first', async () => {
+  const older = await aBook();
+  const newer = await aBook();
+  await library.binBooks([older]);
+  await new Promise((r) => setTimeout(r, 2));
+  await library.binBooks([newer]);
+
+  const binned = await library.binnedBooks();
+  const at = binned.findIndex((b) => b.id === newer);
+  const then = binned.findIndex((b) => b.id === older);
+  assert.ok(at < then, 'what you just deleted is what you are most likely after');
+});
+
+await t('deleting for good is the only step that frees anything', async () => {
+  const id = await aBook();
+  await store.put('chapters', { bookId: id, index: 0, title: 'One', html: '<p>x</p>', words: 1 });
+  await store.put('images', { bookId: id, href: 'a.png', order: 0, chapterIndex: 0, blob: new Blob(['a']) });
+  await library.binBooks([id]);
+
+  assert.equal((await store.byIndex('images', 'bookId', id)).length, 1,
+    'the bin threw the pictures away, so putting it back was never possible');
+
+  await library.destroyBooks([id]);
+  assert.equal(await store.get('books', id), undefined);
+  assert.equal((await store.byIndex('chapters', 'bookId', id)).length, 0);
+  assert.equal((await store.byIndex('images', 'bookId', id)).length, 0);
+});
+
+await t('the bin survives a backup and a restore', async () => {
+  assert.ok(read('app/src/main/assets/www/js/store.js').includes("'binnedAt', 'coverBlur'"),
+    'neither the bin nor a blurred cover is carried in a backup');
+
+  const id = await aBook({ fingerprint: 'bin-backup' });
+  await library.binBooks([id]);
+  const backup = await store.exportBackup();
+  const saved = backup.books.find((b) => b.fingerprint === 'bin-backup');
+  assert.ok(saved.binnedAt, 'the backup does not record that it was in the bin');
+
+  // And absent means "was not in the bin" rather than "leave it alone": a
+  // book put back after the backup was made must not come out of a restore
+  // still binned.
+  await library.restoreBooks([id]);
+  await store.importBackup({ ...backup, books: [{ fingerprint: 'bin-backup', title: 'x' }] });
+  assert.equal(library.isBinned(await store.get('books', id)), false);
+});
+
+await t('the bin has a seat on the bar and a screen of its own', async () => {
+  assert.match(html, /data-screen="bin"/);
+  assert.match(html, /data-go="bin"/);
+  assert.match(app, /case 'bin': return renderBin\(\)/);
+  // Deleting for good is asked for in full, because it is the one delete in
+  // the app that cannot be undone.
+  assert.match(app, /cannot be undone/);
+  assert.match(app, /Delete for good/);
+});
+
+/* ── the chapter pad ─────────────────────────────────────────────────── */
+
+console.log('\nthe chapter pad');
+
+await t('it is off, locked and vertical until asked otherwise', async () => {
+  const pad = store.DEFAULT_SETTINGS.chapterPad;
+  assert.equal(pad.on, false);
+  // Locked matters most: an unlocked control over the page moves every time
+  // you meant to press it.
+  assert.equal(pad.locked, true);
+  assert.equal(pad.vertical, true, 'up is the next chapter');
+});
+
+await t('it is placed in percentages, so rotation does not lose it', async () => {
+  const paint = app.slice(app.indexOf('function paintChapterPad'),
+    app.indexOf('function wireChapterPad'));
+  assert.match(paint, /pad\.style\.left = `\$\{[^`]*\}%`/);
+  assert.match(paint, /pad\.style\.top = `\$\{[^`]*\}%`/);
+  // And clamped, so it can never be dragged off the screen it lives on.
+  assert.match(paint, /Math\.max\(2, Math\.min\(98/);
+  assert.match(paint, /Math\.max\(6, Math\.min\(94/);
+});
+
+await t('the footer pair goes away when the pad is up', async () => {
+  const paint = app.slice(app.indexOf('function paintChapterPad'),
+    app.indexOf('function wireChapterPad'));
+  assert.match(paint, /el\('chapter-prev'\)\.hidden = own\.on/);
+  assert.match(paint, /el\('chapter-next'\)\.hidden = own\.on/);
+});
+
+await t('copy chapter stays in the footer', async () => {
+  // Copying is done with two hands, so that one does not move.
+  const pad = html.slice(html.indexOf('id="chapter-pad"'), html.indexOf('id="edge-hint"'));
+  assert.ok(!pad.includes('copy-chapter'), 'the copy button was dragged onto the pad');
+  assert.match(html, /class="copy-row"[\s\S]*id="copy-chapter"/);
+});
+
+await t('only the grip drags it, and only while unlocked', async () => {
+  const from = app.indexOf('function wireChapterPad');
+  const wire = app.slice(from, app.indexOf('/* \u2500\u2500 annotating', from));
+  assert.match(wire, /const grip = el\('pad-grip'\)/);
+  assert.match(wire, /grip\.addEventListener\('touchmove'/);
+  assert.match(wire, /locked !== false\) return/);
+  // Dragging by a button means every imprecise press moves what you meant to
+  // press, so the grip is the only handle.
+  assert.ok(!/pad-next'\)\.addEventListener\('touchmove/.test(wire));
+  assert.match(rule('.chapter-pad.locked .pad-grip'), /pointer-events:\s*none/);
+});
+
+await t('it can be flipped to either side in one tap', async () => {
+  assert.match(panels, /\['left', 'Left', 12\], \['right', 'Right', 88\]/);
+  // The side follows the pad when it is dragged, so Settings never disagrees
+  // with where it actually is.
+  assert.match(app, /side: x < 50 \? 'left' : 'right'/);
+});
+
+await t('the pad and the notice both belong to the reader only', async () => {
+  assert.match(app, /if \(name !== 'reader'\) \{ hideEdgeHint\(\); el\('chapter-pad'\)\.hidden = true; \}/);
+});
+
+/* ── the chapter edge ────────────────────────────────────────────────── */
+
+console.log('\nthe chapter edge');
+
+await t('the notice is read-through and never takes the tap', async () => {
+  assert.match(html, /id="edge-hint"/);
+  const hint = rule('.edge-hint');
+  // The next tap is the one that turns the chapter.
+  assert.match(hint, /pointer-events:\s*none/);
+  // Transparent only where the blur that makes it legible exists; opaque
+  // otherwise, which is the pattern the toast already uses.
+  assert.match(css, /@supports \(backdrop-filter[^}]*\{\s*\.edge-hint/s);
+});
+
+await t('reaching the end of a chapter no longer raises a toast', async () => {
+  const at = app.indexOf('async function atChapterEdge');
+  const edge = app.slice(at, app.indexOf('/* \u2500\u2500 annotating', at));
+  assert.match(edge, /showEdgeHint\(/);
+  assert.ok(!/toast\(.*tap again/.test(edge),
+    'the opaque slab over the last lines of the chapter is still there');
+});
+
+/* ── smaller copies ──────────────────────────────────────────────────── */
+
+console.log('\nsmaller copies');
+
+await t('the sizes are named for what they are for', async () => {
+  assert.deepEqual(Object.keys(shrink.SIZES), ['full', 'large', 'screen', 'small']);
+  assert.equal(shrink.SIZES.full.edge, 0, 'full size must touch nothing');
+  assert.ok(shrink.SIZES.small.edge < shrink.SIZES.screen.edge);
+  assert.match(shrink.describeSize('screen'), /1400/);
+  assert.equal(shrink.describeSize('full'), 'full size');
+});
+
+await t('a picture is given back untouched wherever shrinking would not help', async () => {
+  const gif = new Blob(['x'.repeat(400)], { type: 'image/gif' });
+  // An animation re-encoded comes back as one frame.
+  assert.equal(await shrink.shrinkPicture(gif, { edge: 100 }), gif);
+
+  const png = new Blob(['x'.repeat(400)], { type: 'image/png' });
+  // No target is no work.
+  assert.equal(await shrink.shrinkPicture(png, { edge: 0 }), png);
+  // And anything that will not decode keeps its original rather than failing
+  // the export at that page.
+  assert.equal(await shrink.shrinkPicture(png, { edge: 100 }), png);
+});
+
+await t('sizes read as bytes somebody can judge', async () => {
+  assert.equal(shrink.describeSaving(900), '900 B');
+  assert.equal(shrink.describeSaving(2048), '2 kB');
+  assert.equal(shrink.describeSaving(5 * 1024 * 1024), '5.0 MB');
+});
+
+await t('the export writes a copy and never edits the book', async () => {
+  const epub = read('app/src/main/assets/www/js/epub.js');
+  assert.match(epub, /const wanted = size && size !== 'full' && SIZES\[size\]/);
+  assert.match(epub, /await shrinkPicture\(image\.blob, wanted\)/);
+  // Nothing is written back to the images store on the way out.
+  const writing = epub.slice(epub.indexOf('const renamed = new Map()'));
+  assert.ok(!/store\.put/.test(writing), 'exporting modified the stored book');
+  assert.match(html, /id="export-size"/);
+});
+
+await t('a smaller copy says how much smaller', async () => {
+  // The saving is the whole reason it was asked for, and on line art it can
+  // come out near zero -- which is worth knowing rather than assuming.
+  assert.match(read('app/src/main/assets/www/js/epub.js'), /name: `\$\{safeName\(book\.title\)\}\.epub`, saved/);
+  assert.match(app, /shrink\.describeSaving\(saved\)/);
+});
+
+/* ── building onto a book ────────────────────────────────────────────── */
+
+console.log('\nbuilding onto a book');
+
+await t('a book on the shelf goes into the workshop as a part', async () => {
+  build.clear();
+  const id = await aBook({ title: 'Volume one', chapters: 3 });
+  const book = await store.get('books', id);
+
+  build.addBook(book);
+  const [part] = build.contents();
+  assert.equal(part.bookId, id);
+  assert.equal(part.name, 'Volume one');
+  assert.match(build.describe(part), /From the shelf · 3 chapters/);
+  assert.equal(build.hasBook(id), true);
+});
+
+await t('it is a part like any other: movable, droppable, mixable', async () => {
+  build.clear();
+  const id = await aBook({ title: 'Shelf book' });
+  build.addBook(await store.get('books', id));
+  build.addBook(await store.get('books', await aBook({ title: 'Second' })));
+
+  const [first] = build.contents();
+  build.move(first.id, 1);
+  assert.equal(build.contents()[1].name, 'Shelf book');
+  build.drop(first.id);
+  assert.equal(build.contents().length, 1);
+  build.clear();
+});
+
+await t('building onto a book leaves the book alone', async () => {
+  const id = await aBook({ title: 'Original', chapters: 1 });
+  await store.put('chapters', {
+    bookId: id, index: 0, title: 'One', words: 2, html: '<p>The first part.</p>',
+  });
+
+  build.clear();
+  build.addBook(await store.get('books', id));
+  const { book } = await build.build({ title: 'Original and more' });
+
+  assert.notEqual(book.id, id, 'building wrote over the book it was built from');
+  assert.equal((await store.byIndex('chapters', 'bookId', id)).length, 1);
+  assert.equal(book.chapters, 1);
+  assert.equal(book.builtFrom[0].bookId, id, 'the result does not record where it came from');
+  build.clear();
+});
+
+await t('pages taken out of a book stay out of what is built onto it', async () => {
+  const source = read('app/src/main/assets/www/js/build.js');
+  assert.match(source, /async function readShelfBook/);
+  assert.match(source, /filter\(\(image\) => !image\.removed\)/);
+});
+
+await t('it is reachable from the book rather than from the workshop', async () => {
+  assert.match(app, /async function buildOnto\(book\)/);
+  assert.match(app, /'Build onto this book'/);
+  // Already in the build is said rather than silently added twice.
+  assert.match(app, /already in the build/);
+});
+
+/* ── the two blank screens ───────────────────────────────────────────── */
+
+console.log('\nthe blank screen');
+
+await t('the jump button no longer wears the router attribute', async () => {
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  // data-go with no value read as "go to the screen called nothing", which
+  // switched the current screen off, found none to switch on, and left the
+  // app a blank page.
+  assert.match(screens, /data-goto-page>Go to page/);
+  assert.ok(!/data-go>/.test(screens), 'a valueless data-go is back');
+  assert.ok(!/data-go>/.test(html), 'a valueless data-go is in the markup');
+});
+
+await t('the router refuses to navigate to a screen that is not there', async () => {
+  assert.match(app, /\[data-go\]:not\(\[data-go=""\]\)/);
+  assert.match(app, /if \(name && screenNode\(name\)\)/);
+  // And show() guards too, so the blank page is not one typo away.
+  const show = app.slice(app.indexOf('async function show(name'), app.indexOf('async function enter'));
+  assert.match(show, /if \(!screenNode\(name\)\) return;/);
+});
+
+await t('a dead renderer rebuilds the view instead of killing the app', async () => {
+  assert.match(activity, /public boolean onRenderProcessGone/);
+  assert.match(activity, /private void rebuildWebView/);
+  // The dead one is detached and destroyed: left attached it is a zombie view
+  // with live bridges, which is worse than the crash.
+  assert.match(activity, /removeView\(dead\)/);
+  assert.match(activity, /dead\.destroy\(\)/);
+  // And it says what happened, once there is somewhere to say it.
+  assert.match(activity, /pendingNotice/);
+  assert.match(app, /notice\(message\)/);
+});
+
+/* ── the panes and the pad, drawn rather than described ──────────────────
+ *
+ * A settings pane that wiped itself, a slider drawn invisible, a control that
+ * existed and could not be reached: every one of those passed a source check
+ * and failed on the phone. These render the real thing and look at what came
+ * out.
+ */
+
+console.log('\nwhat actually gets drawn');
+
+const el = (id) => document.getElementById(id);
+const tap = (node) => node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+const settle = (ms = 200) => new Promise((r) => setTimeout(r, ms));
+
+const behaviourPane = async () => {
+  const panelsMod = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  await panelsMod.openSettings(() => {});
+  const tab = [...el('settings-strip').children].find((b) => /behaviour/i.test(b.textContent));
+  tap(tab);
+  await settle();
+  return el('settings-body');
+};
+
+await t('the pad controls appear without wiping the pane they are in', async () => {
+  await store.saveSettings({
+    chapterPad: { on: true, x: 88, y: 64, scale: 1, vertical: true, locked: false, side: 'right' },
+  });
+  const body = await behaviourPane();
+  const text = body.textContent;
+
+  for (const want of ['Chapter buttons', 'Float them over the page', 'Up is the next chapter',
+    'Side', 'Size', 'Down the page', 'Put it back where it started']) {
+    assert.ok(text.includes(want), `the pane has no "${want}"`);
+  }
+
+  /* And everything that was already there is still there.
+   *
+   * A mid-render `body.innerHTML = ...` once discarded everything appended
+   * above it, so several settings had never been visible at all. */
+  for (const kept of ['Page turning', 'Pictures', 'At the end of a chapter', 'Streaks', 'Screen']) {
+    assert.ok(text.includes(kept), `adding the pad controls wiped "${kept}"`);
+  }
+
+  // Native range inputs, not boxes built out of pseudo-elements: the hand-drawn
+  // kind came out invisible on WebViews that do not apply them.
+  const ranges = [...body.querySelectorAll('input[type="range"]')];
+  assert.ok(ranges.length >= 6, `only ${ranges.length} sliders drawn`);
+});
+
+await t('the pad controls collapse when the pad is off', async () => {
+  await store.saveSettings({
+    chapterPad: { on: false, x: 88, y: 64, scale: 1, vertical: true, locked: true, side: 'right' },
+  });
+  const text = (await behaviourPane()).textContent;
+  assert.ok(text.includes('Float them over the page'));
+  assert.ok(!text.includes('Put it back where it started'),
+    'controls for a pad that is not on are still showing');
+});
+
+await t('the pad is drawn on the reader, where it was put, and turns chapters', async () => {
+  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
+  await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+
+  await store.saveSettings({
+    chapterPad: { on: true, x: 12, y: 40, scale: 1.3, vertical: true, locked: false, side: 'left' },
+  });
+
+  const id = await aBook({ title: 'Padded' });
+  for (let i = 0; i < 4; i++) {
+    await store.put('chapters', {
+      bookId: id, index: i, title: `Chapter ${i + 1}`, words: 20,
+      html: `<p>Chapter ${i + 1} runs on for a sentence so there is something to turn.</p>`,
+    });
+  }
+
+  // The app draws its own shelf, so the tile carries the app's own handler.
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(300);
+
+  const tile = document.querySelector(`[data-book="${id}"]`);
+  assert.ok(tile, 'the book is not on the shelf');
+  tap(tile);
+  await settle(500);
+  assert.equal(document.body.dataset.view, 'reader');
+
+  const pad = el('chapter-pad');
+  assert.equal(pad.hidden, false, 'the pad was turned on and never appeared');
+  assert.equal(pad.style.left, '12%');
+  assert.equal(pad.style.top, '40%');
+  assert.equal(pad.style.getPropertyValue('--pad-scale'), '1.3');
+  assert.equal(pad.dataset.vertical, '', 'up is not the next chapter');
+  assert.equal(pad.classList.contains('locked'), false);
+
+  // One control, not two: the footer pair goes away.
+  assert.equal(el('chapter-prev').hidden, true);
+  assert.equal(el('chapter-next').hidden, true);
+  // And it knows where it is in the book.
+  assert.equal(el('pad-prev').disabled, true, 'back is offered from the first chapter');
+  assert.equal(el('pad-next').disabled, false);
+
+  assert.equal(reader.state.chapterIndex, 0);
+  tap(el('pad-next'));
+  await settle(400);
+  assert.equal(reader.state.chapterIndex, 1, 'the pad does not turn the chapter');
+  tap(el('pad-prev'));
+  await settle(400);
+  assert.equal(reader.state.chapterIndex, 0);
+
+  /* Dragging cannot be driven here: jsdom has no layout, so a synthetic touch
+   * carries no coordinates to drag by. The grip being the only handle, and
+   * the lock stopping it, are checked against the source above. */
+});
+
+console.log(`\n${pass} assertions passed`);

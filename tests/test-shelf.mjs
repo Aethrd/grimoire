@@ -72,7 +72,8 @@ t('actions are labelled, not a row of bare glyphs', () => {
   const grid = html.slice(html.indexOf('id="select-actions"'), html.indexOf('id="confirm-bar"'));
   const acts = [...grid.matchAll(/data-act="(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(acts,
-    ['open', 'folder', 'status', 'bundle', 'merge', 'blur', 'export', 'details', 'vault', 'delete']);
+    ['open', 'folder', 'status', 'bundle', 'merge', 'blur', 'trim', 'export',
+      'details', 'vault', 'delete']);
   // Every one carries a text label beside its icon.
   assert.equal((grid.match(/<span>/g) || []).length, acts.length);
   assert.ok(html.includes('id="select-all"') && html.includes('id="select-cancel"'));
@@ -233,7 +234,32 @@ t('back leaves a tab for the shelf rather than the app', () => {
 t('importing reports progress rather than a silent wait', () => {
   assert.match(html, /id="import-progress"/);
   assert.match(app, /el\('import-bar'\)\.style\.width/);
-  assert.match(app, /onProgress: \(message, fraction, done, total\)/);
+  assert.match(app, /onProgress: \(message, fraction, at, total\)/);
+});
+
+t('one progress panel survives several operations at once', () => {
+  /* There is one panel and there was never one operation. Importing,
+   * building, dividing, exporting and deleting all used it and each hid it
+   * when it finished, so the first to end took the bar away from the rest --
+   * which from the outside is an operation that stopped reporting. */
+  assert.doesNotMatch(app, /panel\.hidden = true/,
+    'something still hides the shared panel on its own completion');
+
+  const counter = app.slice(app.indexOf('const progress = (() =>'),
+    app.indexOf('async function handleFiles'));
+  assert.match(counter, /live \+= 1/);
+  assert.match(counter, /live = Math\.max\(0, live - 1\)/);
+  assert.match(counter, /panel\.hidden = live === 0/);
+  // Ending is a closure, so there is no end() anyone can call twice.
+  assert.match(counter, /let ended = false/);
+  // And two operations never fight over one label.
+  assert.match(counter, /things at once/);
+  assert.match(counter, /if \(live > 1\) return/);
+
+  // Every operation takes the panel down in a finally, never on the happy
+  // path alone: one that threw used to leave it up for the whole session.
+  assert.ok((app.match(/finish\(\);/g) || []).length >= 5,
+    'not every operation releases the panel');
 });
 
 t('a long author name cannot widen its column', () => {
@@ -653,7 +679,7 @@ t('which search it is, is decided when the screen opens', () => {
 t('a found book is shown the way the shelf shows it', () => {
   // A name in a list is not how anyone recognises a book they own.
   const screens = read('app/src/main/assets/www/js/screens.js');
-  assert.match(screens, /library\.bookTile\(book, \(\) => onGoToMatch/);
+  assert.match(screens, /library\.bookTile\(\s*book,\s*\(\) => onGoToMatch/);
   assert.match(screens, /grid\.className = 'shelf find-shelf'/);
   assert.match(css, /\.find-shelf \{/);
 
@@ -661,6 +687,27 @@ t('a found book is shown the way the shelf shows it', () => {
   const library = read('app/src/main/assets/www/js/library.js');
   assert.match(library, /export function bookTile/);
   assert.match(library, /if \(!onLongPress\) return node;/);
+});
+
+t('a found book can be acted on where it was found', () => {
+  /* Everything you can do to a book was behind selecting it on the shelf, so
+   * finding one by name and then wanting to move or trim it meant leaving the
+   * search, clearing the query and hunting for the same book on a grid of
+   * three hundred covers. */
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /export function onLongPressBook/);
+  assert.match(screens, /onBookMenu \? \(pressed\) => onBookMenu\(pressed\) : null/);
+
+  assert.match(app, /screens\.onLongPressBook\(openBookMenu\)/);
+  const menu = app.slice(app.indexOf('async function openBookMenu'),
+    app.indexOf('function resetConfirm'));
+  for (const action of ['Open', 'Details', 'Take pages out', 'Write out',
+    'Move to folder', 'Reading status', 'Delete']) {
+    assert.ok(menu.includes(`'${action}'`), `the menu has no ${action}`);
+  }
+  // The sheet carries the book's own name, or it is a menu for nothing in
+  // particular.
+  assert.match(menu, /folder-actions-name'\)\.textContent = library\.displayTitle\(book\)/);
 });
 
 t('several books write out as one archive', () => {
@@ -1069,7 +1116,7 @@ console.log('settings');
 t('settings is a screen with panes, reachable from the bar', () => {
   assert.match(html, /data-screen="settings"/);
   assert.match(html, /data-go="settings"/);
-  assert.match(app, /TABS = \['library', 'folders', 'workshop', 'sort', 'stats', 'settings'\]/);
+  assert.match(app, /TABS = \['library', 'folders', 'workshop', 'bin', 'sort', 'stats', 'settings'\]/);
 });
 
 t('the settings strip is labelled', () => {

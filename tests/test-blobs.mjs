@@ -1151,7 +1151,9 @@ await t('pictures are stored rather than deflated again', () => {
    * is most of the export. */
   const source = read('app/src/main/assets/www/js/epub.js');
   assert.match(source, /const PICTURE = \{ compression: 'STORE' \}/);
-  assert.match(source, /zip\.file\(`OEBPS\/\$\{name\}`, image\.blob, PICTURE\)/);
+  // `written` rather than `image.blob`: a smaller copy substitutes a
+  // downscaled blob here, and either way it is stored, never deflated.
+  assert.match(source, /zip\.file\(`OEBPS\/\$\{name\}`, written, PICTURE\)/);
   assert.match(source, /zip\.file\('OEBPS\/cover\.jpg', book\.coverBlob, PICTURE\)/);
   // While the markup says DEFLATE rather than relying on the default alone.
   assert.match(source, /const TEXT = \{ compression: 'DEFLATE'/);
