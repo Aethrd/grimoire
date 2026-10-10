@@ -95,8 +95,29 @@ here.** A zip organised into directories is someone's existing filing, and
 rebuilding it by hand afterwards is exactly the tedium worth avoiding. Two
 judgement calls it makes for you:
 
+- **A folder of chapter files is one book.** A web novel arrives as a saved
+  page per chapter, often a folder per novel zipped together, and each page
+  used to become a book of its own — a zip of three series put hundreds of
+  one-chapter books on the shelf. Saved pages in the same folder are now one
+  book, in reading order (prologue, numbered chapters, epilogue, side stories,
+  afterword — not filename order), named for the folder or for the title the
+  pages share. Two novels saved into one folder still come apart by their
+  names. Text, HTML and Markdown files are only joined when their names say
+  they are chapters (`Chapter 12`, `Ch. 12`, `12화`, `第12話`, `Prologue`):
+  `Volume 2.txt` and `Volume 10.txt` stay two books, because joining volumes
+  is the workshop's job and it asks. Picking chapter files loose from one
+  folder does the same, and so does the workshop.
+- **A folder of pictures is a chapter.** A manga series zipped as a folder per
+  chapter comes out with a chapter per folder rather than one run of
+  thousands of pages; two series side by side are two comics; folders named
+  `Vol 1`, `Vol 2` are volumes of one. The 2,000-file limit that refused an
+  ordinary sixty-chapter series is now 50,000.
+- Pictures picked loose are the pages of one comic, and a file of no known
+  kind is refused rather than read as text.
 - A zip of images is a comic; a zip containing any readable book is a
-  container. The extension cannot tell them apart, so the contents do.
+  container. The extension cannot tell them apart, so the contents do — and a
+  comic in a plain `.zip` imports exactly as a `.cbz` does, which most of them
+  are.
 - A single wrapper directory is stripped, because zipping a folder puts
   everything under one directory of that name and filing the whole library
   under *My Books* helps nobody. It is **not** stripped when doing so would
@@ -243,6 +264,7 @@ app/src/main/assets/www/
   js/library.js       shelf, import pipeline, sort comparator, grouping
   js/screens.js       sort, layout, reel, find, index
   js/panels.js        appearance, language, stats, vault
+  js/group.js         which files are one book: chapters, comics, reading order
   js/build.js         the workshop: several files in, one book out
   js/trim.js          taking pages and chapters out, and putting them back
   js/shrink.js        downscaling pictures for a smaller copy
@@ -419,6 +441,15 @@ Honest list, in rough order of how much they matter:
   chapter novel, removing a hundred chapters duplicates their text until the
   removal is discarded. It is bounded and recoverable, but it is not free, and
   a per-book cap would be the honest next step.
+- **Reading a picked file can be refused by Android**, and the shell reading
+  it instead is the workaround rather than a cure. The renderer is a separate
+  sandboxed process and is handed a file descriptor rather than the URI grant;
+  when a provider refuses that descriptor the page sees `NotReadableError`
+  while this process can still open the same URI. The rescue copies the file
+  into the app's own storage first, which costs its size in disk for the
+  length of the import. It is not tested on a device — jsdom has no content
+  providers, so the tests drive a File that refuses to be read and check that
+  the shell is asked and the copy is used.
 - `boot()` has no catch, so a startup exception is a blank screen.
 - **Scroll mode is untested on a device.** jsdom has no layout engine, so every
   measurement in it returns zero; the tests cover the contract around scroll

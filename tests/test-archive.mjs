@@ -250,4 +250,241 @@ await t('a zip with nothing readable in it says so rather than vanishing', async
   assert.match(out.failed[0].reason, /No books found/);
 });
 
+/* ── chapters that arrive as files ───────────────────────────────────────
+ *
+ * A web novel arrives as a folder of saved pages, one per chapter, usually a
+ * folder per novel zipped together. Every page was imported as a book of its
+ * own: a zip of three novels put hundreds of one-chapter books on the shelf,
+ * and doing all that work hundreds of times over was most of why it was slow.
+ */
+
+console.log('\nchapters that arrive as files');
+
+const group = await import(new URL('../app/src/main/assets/www/js/group.js', import.meta.url).href);
+
+const saved = (novel, n, heading = `Chapter ${n}`) => [
+  'MIME-Version: 1.0', 'Content-Type: multipart/related; boundary="----B"', '', '------B',
+  'Content-Type: text/html; charset="utf-8"', 'Content-Transfer-Encoding: quoted-printable',
+  `Content-Location: https://site.example/${encodeURIComponent(novel)}/${n}`, '',
+  `<html><head><title>${novel} - ${heading} | NovelSite</title></head><body>`,
+  `<article><h1>${heading}</h1><p>The text of ${heading} of ${novel}, which runs on.</p></article>`,
+  '</body></html>', '', '------B--',
+].join('\r\n');
+
+const zipFile = async (name, entries) => {
+  const zip = new JSZip();
+  for (const [path, body] of Object.entries(entries)) zip.file(path, body);
+  return new File([await zip.generateAsync({ type: 'nodebuffer' })], name);
+};
+
+const chaptersOf = async (book) =>
+  (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
+const bookCalled = async (title) => (await store.all('books')).find((b) => b.title === title);
+
+await t('a zip of novels in folders is a book per novel, not a book per page', async () => {
+  const entries = {};
+  for (const novel of ['Witch City', 'Salt Road']) {
+    for (let n = 1; n <= 6; n++) entries[`webnovel/${novel}/${novel} - Chapter ${n} - NovelSite.mht`] = saved(novel, n);
+  }
+  const before = (await store.all('books')).length;
+  const out = await library.importFiles([await zipFile('webnovel 10.10.26.zip', entries)], {});
+
+  assert.equal(out.added, 2, 'twelve pages became something other than two novels');
+  assert.equal((await store.all('books')).length - before, 2);
+
+  const witch = await bookCalled('Witch City');
+  assert.ok(witch, 'the novel is not named for its folder');
+  assert.equal((await chaptersOf(witch)).length, 6);
+  assert.equal(witch.joinedFrom, 6);
+  // Filed where the folder sat, not inside a shelf folder of its own name.
+  assert.equal(witch.folder || '', '');
+  assert.ok(out.joined.some((j) => j.name === 'Salt Road' && j.chapters === 6));
+});
+
+await t('chapters come out in reading order, not filename order', async () => {
+  /* Sorting by name puts "Epilogue" between chapters and "Prologue" after
+   * all of them, and "Chapter 10" before "Chapter 2". */
+  const entries = {};
+  for (const heading of ['Chapter 10', 'Epilogue', 'Chapter 2', 'Prologue', 'Side Story 1', 'Chapter 1']) {
+    entries[`Ninth Bell/Ninth Bell - ${heading}.mht`] = saved('Ninth Bell', heading, heading);
+  }
+  await library.importFiles([await zipFile('ninth.zip', entries)], {});
+  const titles = (await chaptersOf(await bookCalled('Ninth Bell'))).map((c) => c.title);
+  assert.deepEqual(titles,
+    ['Prologue', 'Chapter 1', 'Chapter 2', 'Chapter 10', 'Epilogue', 'Side Story 1']);
+});
+
+await t('two novels saved into one folder are still two novels', async () => {
+  const entries = {};
+  for (const novel of ['Glass Harbour', 'Red Orchard']) {
+    for (let n = 1; n <= 3; n++) entries[`saved/${novel} - Chapter ${n}.mht`] = saved(novel, n);
+  }
+  const out = await library.importFiles([await zipFile('mixed pages.zip', entries)], {});
+  assert.equal(out.added, 2);
+  assert.ok(await bookCalled('Glass Harbour'));
+  assert.ok(await bookCalled('Red Orchard'));
+});
+
+await t('Korean and Japanese chapter numbering is read too', async () => {
+  const plan = group.planBooks(['마녀의 도시 3화.txt', '마녀의 도시 1화.txt', '마녀의 도시 프롤로그.txt',
+    '마녀의 도시 외전 1화.txt', '마녀의 도시 2화.txt'].map((name) => ({ name })));
+  assert.equal(plan.length, 1, 'the side story or the prologue was filed as another novel');
+  assert.deepEqual(plan[0].items.map((i) => i.name), ['마녀의 도시 프롤로그.txt',
+    '마녀의 도시 1화.txt', '마녀의 도시 2화.txt', '마녀의 도시 3화.txt', '마녀의 도시 외전 1화.txt']);
+  assert.equal(group.chapterNumber('第12話 夜'), 12);
+});
+
+await t('separate novels that happen to be text files stay separate', async () => {
+  /* The judgement is made cautiously for text: thirty differently named
+   * novels in one folder are thirty books. */
+  const plan = group.planBooks(['The Left Hand of Darkness.txt', 'The Dispossessed.txt',
+    'Middlemarch.txt', 'Emma.txt'].map((name) => ({ name })));
+  assert.ok(plan.every((step) => step.kind === 'book'));
+});
+
+await t('whole books in the same zip are left whole', async () => {
+  const entries = {
+    'Series/Volume 2.txt': 'CHAPTER ONE\n\nVolume two.\n',
+    'Series/Volume 10.txt': 'CHAPTER ONE\n\nVolume ten.\n',
+    'Series/Side Stories/Side Stories Ch 1.html': '<h1>One</h1><p>a</p>',
+    'Series/Side Stories/Side Stories Ch 2.html': '<h1>Two</h1><p>b</p>',
+  };
+  const { books } = await parse.expandArchive(await zipFile('series.zip', entries));
+  assert.deepEqual(books.map((b) => (b.group ? `[${b.name}: ${b.parts.length}]` : b.name)),
+    ['[Side Stories: 2]', 'Volume 2.txt', 'Volume 10.txt'],
+    'whole books were joined, or the order is not natural');
+});
+
+await t('chapters picked loose from one folder are one book', async () => {
+  const files = Array.from({ length: 9 }, (_, i) =>
+    new File([saved('Loose Leaf', i + 1)], `Loose Leaf - Chapter ${i + 1}.mht`));
+  const before = (await store.all('books')).length;
+  const out = await library.importFiles(files, {});
+  assert.equal(out.added, 1);
+  assert.equal((await store.all('books')).length - before, 1);
+  assert.equal((await chaptersOf(await bookCalled('Loose Leaf'))).length, 9);
+});
+
+await t('importing the same zip twice does not make a second copy', async () => {
+  const entries = {};
+  for (let n = 1; n <= 3; n++) entries[`Twice/Twice - Chapter ${n}.mht`] = saved('Twice', n);
+  const file = await zipFile('twice.zip', entries);
+  await library.importFiles([file], {});
+  const again = await library.importFiles([file], {});
+  assert.equal(again.added, 0);
+  assert.equal((await store.all('books')).filter((b) => b.title === 'Twice').length, 1);
+});
+
+/* ── comics that arrive as folders ───────────────────────────────────── */
+
+console.log('\ncomics that arrive as folders');
+
+await t('a whole manga series in one zip is no longer refused', async () => {
+  /* Sixty chapters of forty pages is two thousand four hundred pictures --
+   * an ordinary download, refused outright as "a disk image". */
+  const zip = new JSZip();
+  for (let c = 1; c <= 60; c++) {
+    for (let p = 1; p <= 40; p++) zip.file(`Series/Ch ${c}/${String(p).padStart(3, '0')}.png`, PNG);
+  }
+  const file = new File([await zip.generateAsync({ type: 'nodebuffer' })], 'long series.zip');
+  const out = await library.importFiles([file], {});
+  assert.equal(out.added, 1, out.failed.map((f) => f.reason).join(' | '));
+
+  const book = await bookCalled('long series');
+  const chapters = await chaptersOf(book);
+  assert.equal(chapters.length, 60, 'the chapters were run together into one');
+  assert.equal(chapters[0].title, 'Ch 1');
+  assert.equal(chapters[59].title, 'Ch 60');
+  assert.equal(book.imageCount, 2400);
+});
+
+await t('each folder of pictures is a chapter, in natural order', async () => {
+  const file = await zipFile('chaptered.zip', {
+    'Comic/Ch 10/1.png': PNG, 'Comic/Ch 2/1.png': PNG, 'Comic/Ch 2/2.png': PNG, 'Comic/Ch 1/1.png': PNG,
+  });
+  await library.importFiles([file], {});
+  const chapters = await chaptersOf(await bookCalled('chaptered'));
+  assert.deepEqual(chapters.map((c) => c.title), ['Ch 1', 'Ch 2', 'Ch 10']);
+
+  // And the pictures belong to the chapters they are in.
+  const book = await bookCalled('chaptered');
+  const images = (await store.byIndex('images', 'bookId', book.id)).sort((a, b) => a.order - b.order);
+  assert.deepEqual(images.map((i) => i.chapterIndex), [0, 1, 1, 2]);
+});
+
+await t('two series side by side are two comics', async () => {
+  const file = await zipFile('two series.zip', {
+    'Crow Road/Ch 1/1.png': PNG, 'Crow Road/Ch 2/1.png': PNG,
+    'Lantern/Ch 1/1.png': PNG,
+  });
+  const out = await library.importFiles([file], {});
+  assert.equal(out.added, 2);
+  assert.equal((await chaptersOf(await bookCalled('Crow Road'))).length, 2);
+  assert.equal((await chaptersOf(await bookCalled('Lantern'))).length, 1);
+});
+
+await t('volumes of chapters are one series, not one book per volume', async () => {
+  const plan = group.planComics(['Vol 1/Ch 1/1.png', 'Vol 1/Ch 2/1.png', 'Vol 2/Ch 3/1.png'], 'saga');
+  assert.equal(plan.length, 1);
+  assert.deepEqual(plan[0].chapters.map((c) => c.title), ['Vol 1 · Ch 1', 'Vol 1 · Ch 2', 'Vol 2 · Ch 3']);
+});
+
+await t('a comic with no folders is one chapter, as it always was', async () => {
+  const cbz = await parse.parse(new File([await (async () => {
+    const zip = new JSZip();
+    zip.file('1.png', PNG); zip.file('2.png', PNG);
+    return zip.generateAsync({ type: 'nodebuffer' });
+  })()], 'flat.cbz'));
+  assert.equal(cbz.chapters.length, 1);
+  assert.equal(cbz.chapters[0].title, 'Pages');
+});
+
+/* ── loose files that are not books ──────────────────────────────────── */
+
+console.log('\nloose files that are not books');
+
+await t('pictures picked together are one comic, not a book each', async () => {
+  /* They were each read as text: a chapter folder of pages became a shelf of
+   * books full of mojibake. */
+  const files = Array.from({ length: 7 }, (_, i) =>
+    new File([PNG], `${String(i + 1).padStart(3, '0')}.png`, { type: 'image/png' }));
+  const before = (await store.all('books')).length;
+  const out = await library.importFiles(files, {});
+  assert.equal(out.added, 1);
+  assert.equal((await store.all('books')).length - before, 1);
+  const book = (await store.all('books')).find((b) => b.imageCount === 7 && b.format === 'CBZ');
+  assert.ok(book, 'the pages did not become a comic');
+});
+
+await t('a file of no known kind is refused, not read as text', async () => {
+  const out = await library.importFiles([new File(['\u0000\u0001binary'], 'backup.sqlite')], {});
+  assert.equal(out.added, 0);
+  assert.match(out.failed[0].reason, /not a kind of file/);
+});
+
+/* ── the wait ────────────────────────────────────────────────────────── */
+
+console.log('\nthe wait');
+
+await t('chapters are read ahead, so a slow provider is not waited on in turn', async () => {
+  /* Each read of a picked file is a round trip to wherever it lives. Done
+   * strictly in turn the parser sits idle through every one; read ahead, the
+   * waiting overlaps the work. Measured with a 25ms delay on every read:
+   * forty chapters cannot take a full second unless none of it overlaps. */
+  const LATENCY = 25;
+  const files = Array.from({ length: 40 }, (_, i) => {
+    const body = saved('Slow', i + 1);
+    const file = new File([body], `Slow - Chapter ${i + 1}.mht`);
+    const wait = () => new Promise((r) => setTimeout(r, LATENCY));
+    file.arrayBuffer = async () => { await wait(); return new TextEncoder().encode(body).buffer; };
+    file.text = async () => { await wait(); return body; };
+    return file;
+  });
+  const started = Date.now();
+  const out = await parse.parseChapters(files, null, {});
+  const took = Date.now() - started;
+  assert.equal(out.chapters.length, 40);
+  assert.ok(took < 40 * LATENCY * 0.7, `${took}ms: the reads were not overlapped`);
+});
+
 console.log(`\n${pass} assertions passed`);

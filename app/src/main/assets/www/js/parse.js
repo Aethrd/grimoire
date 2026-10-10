@@ -16,6 +16,7 @@
  */
 
 import { openZip } from './zipreader.js';
+import { planComics, planBooks, commonLabel, naturalOrder } from './group.js';
 
 const DOMP = new DOMParser();
 
@@ -32,7 +33,16 @@ const DOMP = new DOMParser();
  * stops importing.
  */
 async function openArchive(file) {
-  const streamed = await openZip(file).catch(() => null);
+  /* A refusal is not a format problem.
+   *
+   * Anything the streaming reader cannot handle falls back to JSZip -- but a
+   * file the page is not allowed to read will not read for JSZip either, and
+   * the fallback turned the one error worth recognising into "corrupted zip".
+   * That one is passed on as it is, so it can be rescued. */
+  const streamed = await openZip(file).catch((error) => {
+    if (isUnreadable(error)) throw error;
+    return null;
+  });
   if (streamed) return streamed;
 
   const zip = await JSZip.loadAsync(file);
@@ -510,43 +520,81 @@ async function blobOf(zip, path) {
 
 /* ── CBZ ──────────────────────────────────────────────────────────────── */
 
-export async function parseCbz(file, onProgress, { onImage } = {}) {
+export async function parseCbz(file, onProgress, { onImage, prefix = null } = {}) {
   const zip = await openArchive(file);
-  const entries = zip.names()
+  const fallback = file.name.replace(/\.[^.]+$/, '');
+  const pictures = zip.names()
     .filter((name) => /\.(jpe?g|png|gif|webp|avif)$/i.test(name))
-    .map((name) => ({ name }))
-    // Comic archives are ordered by filename and nothing else, so a natural
-    // sort is the difference between page 2 and page 10 being adjacent.
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    .filter((name) => !name.startsWith('__MACOSX/') && !name.split('/').pop().startsWith('.'));
 
-  if (!entries.length) throw new Error('No images in this archive');
+  if (!pictures.length) throw new Error('No images in this archive');
 
+  /* A chapter per folder of pictures.
+   *
+   * A series downloaded as a folder per chapter used to come out as one
+   * chapter called "Pages": every page of every chapter in a single run,
+   * nothing in the index, and no way back to chapter thirty except
+   * scrolling. The folders were the chapters all along. A comic with no
+   * folders is still one chapter, as it was. */
+  const comics = planComics(pictures, fallback);
+  const comic = (prefix != null && comics.find((c) => c.prefix === prefix)) || comics[0];
+
+  const dirOf = (path) => path.split('/').slice(0, -1).join('/');
+  const order = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+  const runs = comic.chapters
+    .map((chapter) => ({
+      title: chapter.title,
+      // Comic archives are ordered by filename and nothing else, so a natural
+      // sort is the difference between page 2 and page 10 being adjacent.
+      pages: pictures.filter((p) => dirOf(p) === chapter.folder).sort(order),
+    }))
+    .filter((run) => run.pages.length);
+
+  const total = runs.reduce((n, run) => n + run.pages.length, 0);
   const images = [];
+  const chapters = [];
   let coverBlob = null;
-  let html = '';
-  for (let i = 0; i < entries.length; i++) {
-    onProgress?.((i + 1) / entries.length);
-    const blob = await blobOf(zip, entries[i].name);
-    // Kept before the record is handed on: with a sink, images is empty by
-    // the time the cover is needed.
-    if (i === 0) coverBlob = blob;
-    const record = {
-      href: entries[i].name, blob, order: i, chapterIndex: 0,
-      animated: /\.gif$/i.test(entries[i].name),
-      width: 0, height: 0,   // measured lazily by the reel; see parseEpub
-    };
-    if (onImage) await onImage(record); else images.push(record);
-    html += `<figure><img data-img="${entries[i].name.replace(/"/g, '&quot;')}" alt="Page ${i + 1}"></figure>`;
+  let i = 0;
+
+  for (const run of runs) {
+    let html = '';
+    for (const name of run.pages) {
+      onProgress?.((i + 1) / total);
+      const blob = await blobOf(zip, name);
+      // Kept before the record is handed on: with a sink, images is empty by
+      // the time the cover is needed.
+      if (i === 0) coverBlob = blob;
+      const record = {
+        href: name, blob, order: i, chapterIndex: chapters.length,
+        animated: /\.gif$/i.test(name),
+        width: 0, height: 0,   // measured lazily by the reel; see parseEpub
+      };
+      if (onImage) await onImage(record); else images.push(record);
+      html += `<figure><img data-img="${name.replace(/"/g, '&quot;')}" alt="Page ${i + 1}"></figure>`;
+      i += 1;
+    }
+    chapters.push({
+      index: chapters.length,
+      // One run of pages is the whole comic, and keeps the name it always had.
+      title: runs.length === 1 ? 'Pages' : run.title,
+      fromToc: false,
+      html,
+      words: 0,
+    });
   }
 
   return {
-    title: file.name.replace(/\.[^.]+$/, ''),
+    // One comic is called what its file is called; one of several side by
+    // side in a zip is called what its folder is called.
+    title: comics.length === 1 ? fallback : (comic.title || fallback),
     author: null, series: null, seriesIndex: null, lang: null,
     coverBlob,
-    chapters: [{ index: 0, title: 'Pages', fromToc: false, html, words: 0 }],
+    chapters,
     images,
-    imageCount: entries.length,
-    tocSource: 'the archive order — a comic has no chapters to derive',
+    imageCount: total,
+    tocSource: runs.length > 1
+      ? 'the folders in the archive, one chapter each'
+      : 'the archive order — a comic has no chapters to derive',
   };
 }
 
@@ -665,7 +713,14 @@ function parseFb2(raw) {
 /** A book found inside an archive, with the folder path it was filed under. */
 // { name, folder, blob }
 
-const MAX_ARCHIVE_ENTRIES = 2000;
+/* Fifty thousand, not two thousand.
+ *
+ * The limit was there to refuse disk images, and it refused manga instead: a
+ * series of sixty chapters at forty pages is two thousand four hundred
+ * pictures, which is an ordinary download. Entries are read one at a time
+ * as they are needed, so the number of them costs a list of names rather
+ * than memory. */
+const MAX_ARCHIVE_ENTRIES = 50000;
 const MAX_ENTRY_BYTES = 512 * 1024 * 1024;
 
 /**
@@ -766,7 +821,16 @@ export async function expandArchive(file, onProgress) {
     throw new Error(`That archive holds ${entries.length} files. Split it up — this is meant for a library, not a disk image.`);
   }
 
-  if (looksLikeComic(entries)) return { comic: true, books: [] };
+  if (looksLikeComic(entries)) {
+    /* One comic, or several side by side.
+     *
+     * A zip of two series, each a folder of chapter folders, is two comics.
+     * Each is parsed from the same archive with its own part of the tree. */
+    const fallback = file.name.replace(/\.[^.]+$/, '');
+    const comics = planComics(entries.map((e) => e.name), fallback)
+      .map(({ title, prefix }) => ({ title, prefix }));
+    return { comic: true, comics, books: [] };
+  }
 
   const books = entries.filter((e) =>
     ARCHIVE_CONTENTS.has(formatOf(e.name)) && !isIncidental(e.name));
@@ -785,13 +849,13 @@ export async function expandArchive(file, onProgress) {
   // library archive, which is enough to have the WebView killed mid-import.
   // Each book is handed back with a read() that extracts it on demand, so the
   // importer can take one, store it, and let it go before touching the next.
-  const out = books.map((entry, i) => {
+  const entryOf = (entry, relative) => {
     const uncompressed = zip.sizeOf(entry.name);
-    const relative = folders[i];
     const parts = relative.split('/');
     const name = parts.pop();
     return {
       name,
+      path: relative,
       folder: parts.join('/'),          // "" when the book sat at the root
       size: uncompressed,
       async read() {
@@ -801,9 +865,42 @@ export async function expandArchive(file, onProgress) {
         return zip.blob(entry.name);
       },
     };
-  });
+  };
+  /* In natural order, once, here: "Volume 2" before "Volume 10", which a zip's
+   * own order does not promise. Both the importer and the workshop take the
+   * books in the order they come back, and a work made of chapters sits where
+   * its first chapter falls. */
+  const singles = books.map((entry, i) => entryOf(entry, folders[i]))
+    .sort((a, b) => naturalOrder(a.path, b.path));
 
-  onProgress?.(1, `${out.length} books found`);
+  /* Chapters of one work are one book.
+   *
+   * A web novel is a folder of saved pages, and every page was being
+   * imported as a book of its own: a zip of three series put six hundred
+   * one-chapter books on the shelf. Pages of the same work are gathered and
+   * handed back as a single entry with its parts in reading order. Whole
+   * books -- EPUBs, PDFs -- are untouched. See group.js for how the
+   * judgement is made, and why it is made cautiously for text files. */
+  const out = [];
+  for (const step of planBooks(singles, { pathOf: (item) => item.path })) {
+    if (step.kind === 'book') { out.push(step.item); continue; }
+
+    const parent = step.folder.split('/').slice(0, -1).join('/');
+    const generic = !step.title || step.title === 'Chapters';
+    out.push({
+      group: true,
+      name: generic ? file.name.replace(/\.[^.]+$/, '') : step.title,
+      // Filed where the folder of chapters sat, not inside it: the folder
+      // *is* the book, and a shelf folder called "Witch City" holding one
+      // book called "Witch City" is a level of nothing.
+      folder: parent,
+      size: step.items.reduce((n, item) => n + (item.size || 0), 0),
+      parts: step.items,
+    });
+  }
+
+  const count = out.length;
+  onProgress?.(1, `${count} book${count === 1 ? '' : 's'} found`);
   return { comic: false, books: out };
 }
 
@@ -838,6 +935,208 @@ export async function parse(file, onProgress, options = {}) {
   return result;
 }
 
+
+/**
+ * Several chapter files, as one book.
+ *
+ * The pieces of a work that arrived one file per chapter -- saved web pages,
+ * numbered text files -- parsed in turn and laid end to end. Each piece is
+ * parsed and let go before the next, and its pictures go straight to the sink
+ * rather than accumulating, so a two-hundred-chapter novel costs one chapter's
+ * worth of memory at a time.
+ *
+ * Pictures are re-keyed per piece. Every saved page names its pictures by the
+ * address they had on the site, and two chapters of one novel routinely share
+ * a banner or a divider: left as they were, the later one quietly replaces the
+ * earlier.
+ *
+ * @param parts  [{ name, read() }] or Files, already in reading order.
+ * @returns the same shape parse() does, plus `skipped` for pieces that would
+ *   not read -- which cost their own chapter, never the book.
+ */
+/* A file the page is not allowed to read.
+ *
+ * Chromium's NotReadableError: the renderer was refused the file descriptor
+ * behind the content:// URI, though the app's own process can usually still
+ * open it. Recognised by name and, for WebViews that report it only as a
+ * message, by the message. */
+export const isUnreadable = (error) => error?.name === 'NotReadableError'
+  || /could not be read, typically due to permission/i.test(error?.message || '');
+
+/**
+ * Do something with a file, and if the page is refused it, with a copy the
+ * shell made instead.
+ *
+ * Tried first and rescued only on failure. Checking every file up front
+ * meant a read per file before the first book had started -- for a few
+ * hundred files from a slow provider, that was a long pause doing nothing.
+ */
+export async function withRescue(file, use, rescue) {
+  try {
+    return await use(file);
+  } catch (error) {
+    if (!rescue || !isUnreadable(error)) throw error;
+    const copy = await rescue(file);
+    return use(copy);
+  }
+}
+
+/** A Blob's bytes, where arrayBuffer() is missing on an old WebView. */
+export function bytesOf(blob) {
+  if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+export async function parseChapters(parts, onProgress, { onImage, title, rescue } = {}) {
+  const chapters = [];
+  const images = [];
+  const skipped = [];
+  let order = 0;
+  let coverBlob = null;
+
+  /* Reading ahead.
+   *
+   * Every chapter is a separate read from wherever the file lives -- for a
+   * pick from the phone's storage, a round trip through a content provider
+   * each time -- and doing them strictly in turn meant the parser sat idle
+   * through every one. The next few are fetched while the current one is
+   * parsed, so the waiting overlaps the work. Three ahead: chapters are small,
+   * and three is enough to hide a slow provider without holding a volume's
+   * worth in memory. */
+  const AHEAD = 3;
+  const fetching = new Map();
+  const isFile = (part) => part instanceof Blob && part.name != null;
+  const fetchPart = (index) => {
+    if (index >= parts.length || fetching.has(index)) return;
+    const part = parts[index];
+    fetching.set(index, (async () => (isFile(part)
+      ? new File([await bytesOf(part)], part.name, { type: part.type })
+      : new File([await part.read()], part.name)))()
+      // Kept as a value, not thrown: a refused read is retried below, from
+      // the original, where a rescue can see it.
+      .catch((error) => ({ error })));
+  };
+
+  for (const [at, part] of parts.entries()) {
+    for (let k = at; k <= at + AHEAD; k++) fetchPart(k);
+    let parsed;
+    try {
+      const got = await fetching.get(at);
+      fetching.delete(at);
+      if (got?.error && !isFile(part)) throw got.error;
+      const file = got?.error ? part : got;
+      parsed = await withRescue(file,
+        (readable) => parse(readable, (fraction) => onProgress?.((at + fraction) / parts.length)),
+        rescue);
+    } catch (error) {
+      skipped.push({ name: part.name, reason: error.message || 'could not be read' });
+      continue;
+    }
+
+    const prefix = `p${at}/`;
+    const firstIndex = chapters.length;
+
+    for (const chapter of parsed.chapters) {
+      chapters.push({
+        index: chapters.length,
+        // A saved page's own heading, which is the chapter's real name; the
+        // file name only where the page has none.
+        title: chapter.title || stripExtension(part.name),
+        fromToc: false,
+        words: chapter.words || 0,
+        ...(chapter.source != null
+          ? { source: chapter.source, base: prefix + (chapter.base || '') }
+          : {
+            html: String(chapter.html || '').replace(
+              /data-img="([^"]*)"/g, (_, href) => `data-img="${prefix}${href}"`),
+          }),
+      });
+    }
+
+    for (const image of parsed.images || []) {
+      const record = {
+        ...image,
+        href: prefix + image.href,
+        order: order++,
+        chapterIndex: firstIndex + (image.chapterIndex || 0),
+      };
+      if (!coverBlob && record.blob) coverBlob = record.blob;
+      if (onImage) await onImage(record); else images.push(record);
+    }
+    onProgress?.((at + 1) / parts.length);
+  }
+
+  if (!chapters.length) {
+    throw new Error(skipped[0]
+      ? `None of those chapters could be read — ${skipped[0].name}: ${skipped[0].reason}`
+      : 'None of those chapters could be read.');
+  }
+
+  /* Named by what the chapters say they are, where the files did not.
+   *
+   * A folder of pages saved as "page.mht", "page (1).mht" gives the files
+   * nothing to share, but the pages themselves usually do -- every one of
+   * them is titled "Witch City - Chapter N". */
+  const shared = commonLabel(chapters.map((c) => c.title || ''));
+  const name = title && title !== 'Chapters' ? title : (shared || title || 'Chapters');
+
+  return {
+    title: name,
+    author: null, series: null, seriesIndex: null, lang: null,
+    coverBlob,
+    chapters,
+    images,
+    imageCount: order,
+    words: chapters.reduce((n, c) => n + (c.words || 0), 0),
+    format: formatOf(parts[0]?.name || '') === 'MHT' ? 'MHT' : 'TXT',
+    tocSource: 'one chapter per file, in the order their names give',
+    skipped,
+  };
+}
+
+/**
+ * Loose pictures, as one comic.
+ *
+ * A chapter of a manga is a folder of numbered pictures, and picking the lot
+ * to import made a book of each one: two hundred "books", every one of them a
+ * picture's bytes read as if they were text. They are the pages of one thing,
+ * in the order their numbers give.
+ */
+export async function parsePictures(files, onProgress, { onImage, title } = {}) {
+  const pages = [...files].sort((a, b) => naturalOrder(a.name, b.name));
+  if (!pages.length) throw new Error('No pictures to make a comic of.');
+
+  let html = '';
+  const images = [];
+  for (const [at, file] of pages.entries()) {
+    const href = `page${String(at + 1).padStart(4, '0')}-${file.name}`;
+    const record = {
+      href, blob: file, order: at, chapterIndex: 0,
+      animated: /\.gif$/i.test(file.name), width: 0, height: 0,
+    };
+    if (onImage) await onImage(record); else images.push(record);
+    html += `<figure><img data-img="${href.replace(/"/g, '&quot;')}" alt="Page ${at + 1}"></figure>`;
+    onProgress?.((at + 1) / pages.length);
+  }
+
+  const shared = commonLabel(pages.map((p) => p.name));
+  return {
+    title: title || shared || `${pages.length} pages`,
+    author: null, series: null, seriesIndex: null, lang: null,
+    coverBlob: pages[0],
+    chapters: [{ index: 0, title: 'Pages', fromToc: false, html, words: 0 }],
+    images,
+    imageCount: pages.length,
+    words: 0,
+    format: 'CBZ',
+    tocSource: 'the pictures, in the order their names give',
+  };
+}
 
 /**
  * A chapter as plain text, for anything that only wants the words.

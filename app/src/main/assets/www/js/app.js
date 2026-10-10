@@ -1556,56 +1556,37 @@ function stageForRead(file) {
   });
 }
 
-/** Whether the page can actually read this file's bytes. */
-async function readable(file) {
-  try {
-    await file.slice(0, 1).arrayBuffer();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
- * The same files, with any the page cannot read replaced by a copy it can.
+ * A copy of a file the page was refused, read by the shell instead.
  *
- * A file that cannot be rescued is passed through untouched rather than
- * dropped, so it still reaches the importer and still reports itself by name
- * in the failure -- being quietly missing is worse than failing out loud.
+ * Handed to the importer and used only when a read actually fails. This
+ * used to be a check of every file before the import began: one read per
+ * file, in turn, before the first book was started -- which for a few
+ * hundred files picked from a slow provider was a long wait spent proving
+ * that files were readable when nearly all of them were.
  */
-async function openable(files, onNote) {
-  const out = [];
-  /* The ones nothing could read.
-   *
-   * Remembered by name so the failure can be reported as what it was. Passed
-   * on to the importer anyway, it fails again further in and reports whatever
-   * the parser made of nothing -- "corrupted zip" for a file that is not
-   * corrupt and was never read. */
-  const refused = new Map();
+const refused = new Map();
 
-  for (const file of files) {
-    if (await readable(file)) { out.push(file); continue; }
-
-    if (!canStage()) {
-      refused.set(file.name, 'Android would not let the app read it');
-      out.push(file);
-      continue;
-    }
-
-    try {
-      onNote?.(`Reading ${file.name} another way`);
-      const url = await stageForRead(file);
-      const copy = await fetch(url);
-      if (!copy.ok) throw new Error(`could not fetch the staged copy (${copy.status})`);
-      const blob = await copy.blob();
-      out.push(new File([blob], file.name, { type: file.type || blob.type }));
-    } catch (error) {
-      console.warn('Could not rescue', file.name, error);
-      refused.set(file.name, error.message || 'it could not be read');
-      out.push(file);
-    }
+async function rescueFile(file) {
+  if (!canStage()) {
+    refused.set(file.name, 'Android would not let the app read it');
+    throw Object.assign(new Error('Android would not let the app read it'), { name: 'NotReadableError' });
   }
-  return { files: out, refused };
+  try {
+    progress.say(`Reading ${file.name} another way`);
+    const url = await stageForRead(file);
+    const copy = await fetch(url);
+    if (!copy.ok) throw new Error(`could not fetch the staged copy (${copy.status})`);
+    const blob = await copy.blob();
+    return new File([blob], file.name, { type: file.type || blob.type });
+  } catch (error) {
+    /* Remembered by name so the failure is reported as what it was. Left to
+     * the parser, a file nothing could read fails again further in as a
+     * "corrupted zip" -- about a file that is not corrupt and was never
+     * read. */
+    refused.set(file.name, error.message || 'it could not be read');
+    throw error;
+  }
 }
 
 /**
@@ -1647,19 +1628,21 @@ async function handleFiles(files, { transient = false } = {}) {
    * up forever, which with the count behind it now would also hold it up for
    * every later operation. */
   let results;
-  let refusedFiles = new Map();
+  refused.clear();
   try {
-    // Anything the page is not allowed to read is read by the shell instead,
-    // before the importer is handed it.
-    const opened = await openable(files, (message) => progress.say(message, 0));
-    refusedFiles = opened.refused;
-
-    results = await library.importFiles(opened.files, {
+    results = await library.importFiles(files, {
       transient,
+      // Anything the page is not allowed to read is read by the shell
+      // instead -- but only when a read is actually refused.
+      rescue: rescueFile,
       onProgress: (message, fraction, at, total) => {
         progress.say(message, fraction || 0, total ? `${at + 1} of ${total}` : '');
 
-        if (Date.now() - shownAt > 3000) {
+        /* Only while the shelf is what is on screen. Redrawing a shelf
+         * nobody is looking at, every three seconds, competes with the
+         * import for the same thread -- and redraws a little more each
+         * time. */
+        if (current === 'library' && Date.now() - shownAt > 3000) {
           shownAt = Date.now();
           refreshShelf();
         }
@@ -1679,9 +1662,19 @@ async function handleFiles(files, { transient = false } = {}) {
      * what it made of nothing rather than why there was nothing -- so the
      * refusal wins where there was one. */
     const first = results.failed[0];
-    const why = refusedFiles.get(first.name);
+    const why = refused.get(first.name);
     toast(`${results.added} added · ${first.name}: ${
       why ? plainReason(why) : plainReason(first.reason)}`, 8000);
+  } else if (results.joined?.length) {
+    /* Said, because it is a decision the app made: a folder of chapter files
+     * became one book rather than a book per file. Dividing it at chapters
+     * puts it back the other way if that was wrong. */
+    const [first] = results.joined;
+    const others = results.added - 1;
+    toast(results.joined.length === 1
+      ? `“${first.name}” — ${first.chapters} chapters from ${first.files} files${
+        others ? ` · ${others} other book${others === 1 ? '' : 's'}` : ''}`
+      : `${results.joined.length} books from chapter files, ${results.added} added in all`, 7000);
   } else {
     const folders = results.folders?.size || 0;
     const seconds = (results.elapsedMs || 0) / 1000;

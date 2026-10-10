@@ -935,8 +935,12 @@ t('the workshop shows the order and lets it be changed', () => {
   assert.match(app, /function renderWorkshop/);
   assert.match(app, /build\.move\(part\.id, by\)/);
   // A zip of volumes becomes its contents, not one part joined to itself —
-  // ordered among themselves, so two books cannot interleave.
-  assert.match(build, /for \(const book of \[\.\.\.archive\.books\]\.sort/);
+  // ordered among themselves, so two books cannot interleave. The order is
+  // settled once, where the archive is opened, for the importer and the
+  // workshop alike.
+  assert.match(build, /for \(const book of archive\.books\)/);
+  const parse = read('app/src/main/assets/www/js/parse.js');
+  assert.match(parse, /\.sort\(\(a, b\) => naturalOrder\(a\.path, b\.path\)\)/);
   assert.ok(!/found\.sort\(/.test(build), 'everything added is sorted together again');
   // A part that will not open costs that part, not the build.
   assert.match(build, /failed\.push\(\{ name: part\.name, reason: error\.message \}\)/);

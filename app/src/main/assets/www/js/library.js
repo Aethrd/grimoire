@@ -2,7 +2,11 @@
 
 import * as store from './store.js';
 import { urlCache } from './blobs.js';
-import { parse, formatOf, expandArchive, chapterHtml, countWords, SUPPORTED, UNSUPPORTED_REASON } from './parse.js';
+import {
+  parse, parseChapters, parsePictures, formatOf, expandArchive, chapterHtml, countWords,
+  withRescue, nameWithFormat, bytesOf, SUPPORTED, UNSUPPORTED_REASON,
+} from './parse.js';
+import { planBooks } from './group.js';
 import * as translate from './translate.js';
 import * as mix from './mix.js';
 
@@ -243,7 +247,7 @@ export function sortSummary(keys) {
  *   closed. Opening a file from elsewhere on the phone should not silently
  *   add it to someone's library.
  */
-export async function importFiles(files, { onProgress, onDone, transient = false } = {}) {
+export async function importFiles(files, { onProgress, onDone, transient = false, rescue = null } = {}) {
   /* Timed, in phases.
    *
    * Judging an import from a benchmark on a desktop was a mistake: jsdom
@@ -269,15 +273,49 @@ export async function importFiles(files, { onProgress, onDone, transient = false
   // a book arrived on its own or came out of a zip. Each expanded book carries
   // the folder it was filed under inside the archive.
   const queue = [];
-  for (const file of files) {
-    if (formatOf(file.name) !== 'ZIP') {
-      queue.push({ file, name: file.name, folder: '' });
+  const loose = [];
+  const pictures = [];
+  const IS_PICTURE = /\.(jpe?g|png|gif|webp|avif|bmp)$/i;
+
+  for (const picked of files) {
+    /* Named for what it is, where the name does not say.
+     *
+     * Only a file with no extension is looked at -- plenty of downloaders
+     * name things by id -- so this costs nothing for the rest. */
+    let original = picked;
+    // Any extension at all is taken at its word -- ".sqlite" is not a book
+    // that forgot its extension.
+    if (!/\.[a-z0-9]{1,10}$/i.test(picked.name)) {
+      const named = await nameWithFormat(picked.name, picked).catch(() => picked.name);
+      if (named !== picked.name) original = new File([picked], named, { type: picked.type });
+    }
+
+    if (IS_PICTURE.test(original.name)) {
+      pictures.push(original);
       continue;
     }
+    if (formatOf(original.name) === 'UNKNOWN') {
+      /* Refused, not read as text. A file of unknown kind went to the text
+       * reader, which will take anything: a picture or a database came out
+       * as a book of mojibake, and a folder of them as a shelf of it. */
+      results.failed.push({ name: original.name, reason: 'not a kind of file this app can read as a book' });
+      continue;
+    }
+    if (formatOf(original.name) !== 'ZIP') {
+      loose.push(original);
+      continue;
+    }
+    // Whichever copy could actually be read, so the comic below is parsed
+    // from the same one the expander opened.
+    let file = original;
     try {
       onProgress?.(`Opening ${file.name}`, 0);
-      const archive = await expandArchive(file, (fraction, name) =>
-        onProgress?.(`Unpacking ${name}`, fraction));
+      const archive = await withRescue(file, async (readable) => {
+        const opened = await expandArchive(readable, (fraction, name) =>
+          onProgress?.(`Unpacking ${name}`, fraction));
+        file = readable;
+        return opened;
+      }, rescue);
 
       if (archive.comic) {
         /* A zip of images is a comic, not a container.
@@ -291,16 +329,34 @@ export async function importFiles(files, { onProgress, onDone, transient = false
          * that had already happened. Renaming only the copy handed to the
          * parser keeps the book called what the file is called.
          */
-        queue.push({
-          file,
-          name: file.name,
-          folder: '',
-          as: `${file.name.replace(/\.zip$/i, '')}.cbz`,
-        });
+        /* Several comics side by side in one zip are several books, each
+         * parsed from its own part of the archive. One is one, as before. */
+        const many = (archive.comics || []).length > 1;
+        for (const comic of (many ? archive.comics : [null])) {
+          queue.push({
+            file,
+            name: many ? comic.title : file.name,
+            folder: '',
+            as: `${file.name.replace(/\.zip$/i, '')}.cbz`,
+            prefix: comic?.prefix ?? null,
+            fingerprint: many ? `${file.name}:${file.size}:${comic.prefix}` : undefined,
+          });
+        }
         continue;
       }
 
       for (const book of archive.books) {
+        if (book.group) {
+          queue.push({
+            group: true,
+            parts: book.parts,
+            name: book.name,
+            folder: book.folder,
+            fingerprint: `group:${file.name}:${book.name}:${book.size}:${book.parts.length}`,
+          });
+          if (book.folder) results.folders.add(book.folder);
+          continue;
+        }
         queue.push({
           // read() rather than a File: the entry is extracted when its turn
           // comes and released straight after, so a big archive never has more
@@ -319,13 +375,75 @@ export async function importFiles(files, { onProgress, onDone, transient = false
     }
   }
 
+  /* Loose files, sorted into books.
+   *
+   * Two hundred chapters picked from one folder are one novel, not two
+   * hundred books -- and making them two hundred books is most of what made
+   * a mass import take so long: a book row, a lookup and a transaction each,
+   * and the shelf redrawn under all of them. */
+  /* Pictures picked together are the pages of one comic. */
+  if (pictures.length) {
+    queue.push({
+      pictures: true,
+      parts: pictures,
+      name: `${pictures.length} page${pictures.length === 1 ? '' : 's'}`,
+      folder: '',
+      fingerprint: `pictures:${pictures.length}:${pictures.reduce((n, p) => n + (p.size || 0), 0)}:${pictures[0].name}`,
+    });
+  }
+
+  for (const step of planBooks(loose)) {
+    if (step.kind === 'book') {
+      queue.push({ file: step.item, name: step.item.name, folder: '' });
+      continue;
+    }
+    const size = step.items.reduce((n, item) => n + (item.size || 0), 0);
+    queue.push({
+      group: true,
+      parts: step.items,
+      name: step.title,
+      folder: '',
+      fingerprint: `group:${step.title}:${size}:${step.items.length}`,
+    });
+  }
+
+  /* The next book, read while this one is parsed.
+   *
+   * A book on the phone's storage is read in hundreds of small pieces -- one
+   * for every chapter and every picture inside it -- and each of those is a
+   * round trip to wherever the file actually lives. Read in one go first,
+   * the pieces come out of memory instead; and read while the book before it
+   * is still parsing, the wait for it overlaps work rather than adding to it.
+   *
+   * Only for books of a modest size, and only one ahead: two of them in
+   * memory at once is the most this does, and a three-hundred-megabyte comic
+   * is read where it lies, as before. */
+  const PREFETCH_LIMIT = 24 * 1024 * 1024;
+  const prefetched = new Map();
+  const prefetch = (index) => {
+    const ahead = queue[index];
+    if (!ahead || prefetched.has(index) || ahead.group || ahead.pictures) return;
+    const source = ahead.file;
+    if (!source || !(source.size > 0) || source.size > PREFETCH_LIMIT) return;
+    prefetched.set(index, bytesOf(source)
+      .then((bytes) => new File([bytes], source.name, { type: source.type }))
+      // A read that fails here is tried again from the original, where a
+      // rescue can see it.
+      .catch(() => null));
+  };
+
   for (let i = 0; i < queue.length; i++) {
     const entry = queue[i];
+    // Anything read ahead for a book that was then skipped -- already on the
+    // shelf, or refused -- is let go rather than held to the end.
+    for (const index of prefetched.keys()) if (index < i) prefetched.delete(index);
+    prefetch(i);
+    prefetch(i + 1);
     const folder = entry.folder;
     const name = entry.name || entry.file?.name || 'book';
     onProgress?.(`Reading ${name}`, i / queue.length, i, queue.length);
 
-    const format = formatOf(name);
+    const format = entry.group || entry.pictures ? 'GROUP' : formatOf(name);
     if (UNSUPPORTED_REASON[format]) {
       results.failed.push({ name, reason: UNSUPPORTED_REASON[format] });
       continue;
@@ -333,18 +451,23 @@ export async function importFiles(files, { onProgress, onDone, transient = false
 
     try {
       // A file the user picked twice is the same book, not a second copy.
-      const fingerprint = entry.fingerprint || `${name}:${entry.file.size}`;
+      const fingerprint = entry.fingerprint || `${name}:${entry.file?.size}`;
       const existing = (await store.byIndex('books', 'fingerprint', fingerprint))[0];
       if (existing) continue;
 
       // Extracted only now, and only this one.
       const readAt = performance.now();
-      const raw = entry.file || new File([await entry.read()], name);
+      const early = prefetched.has(i) ? await prefetched.get(i) : null;
+      prefetched.delete(i);
+      const raw = entry.group || entry.pictures
+        ? null
+        : (early || entry.file || new File([await entry.read()], name));
       /* Re-wrapped, not re-read: a File built from a Blob references the same
        * bytes, so this costs a name and nothing else. */
-      const file = entry.as && entry.as !== raw.name
-        ? new File([raw], entry.as, { type: raw.type })
-        : raw;
+      const named = (f) => (entry.as && entry.as !== f.name
+        ? new File([f], entry.as, { type: f.type })
+        : f);
+      const file = raw ? named(raw) : null;
       spent.read += performance.now() - readAt;
       const bookAt = performance.now();
 
@@ -367,15 +490,21 @@ export async function importFiles(files, { onProgress, onDone, transient = false
         };
 
       const parseAt = performance.now();
-        parsed = await parse(file, (p) =>
-          onProgress?.(`Parsing ${name}`, (i + p) / queue.length, i, queue.length), {
-          onImage: async (record) => {
-            buffered.push({ bookId, ...record });
-            // Written in batches: one transaction per image is as wasteful as
-            // holding them all, just in the other direction.
-            if (buffered.length >= 12) await flush();
-          },
-        });
+        const progress = (p) =>
+          onProgress?.(`${entry.group ? 'Joining' : 'Parsing'} ${name}`, (i + p) / queue.length, i, queue.length);
+        const onImage = async (record) => {
+          buffered.push({ bookId, ...record });
+          // Written in batches: one transaction per image is as wasteful as
+          // holding them all, just in the other direction.
+          if (buffered.length >= 12) await flush();
+        };
+        parsed = entry.pictures
+          ? await parsePictures(entry.parts, progress, { onImage })
+          : entry.group
+          ? await parseChapters(entry.parts, progress, { onImage, title: name, rescue })
+          : await withRescue(raw,
+            (readable) => parse(named(readable), progress, { onImage, prefix: entry.prefix ?? null }),
+            rescue);
         await flush();
         spent.parse += performance.now() - parseAt;
       } catch (error) {
@@ -400,6 +529,9 @@ export async function importFiles(files, { onProgress, onDone, transient = false
         chapterCount: parsed.chapters.length,
         imageCount: parsed.imageCount ?? parsed.images.length,
         tocSource: parsed.tocSource,
+        // How many files went into it, so "80 chapters joined" can be said and
+        // a book that came from a folder of pages is recognisable as one.
+        ...(entry.group ? { joinedFrom: entry.parts.length } : {}),
         fingerprint,
         folder,
         importing: false,
@@ -420,17 +552,36 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       const writeMs = performance.now() - writeAt;
       spent.write += writeMs;
 
-      perBook.push({
-        name,
-        format: parsed.format || null,
-        bytes: file.size,
-        chapters: parsed.chapters.length,
-        images: parsed.imageCount || 0,
-        words: parsed.words || 0,
-        ms: Math.round(performance.now() - bookAt),
-        writeMs: Math.round(writeMs),
-      });
+      /* Bookkeeping, kept from failing the book it is about.
+       *
+       * By here the book is written and whole. A slip in recording how long
+       * it took -- which is what this is -- used to land in the catch below,
+       * report the book as failed, and leave it on the shelf anyway. */
+      try {
+        perBook.push({
+          name,
+          format: parsed.format || null,
+          bytes: file ? file.size : entry.parts.reduce((n, part) => n + (part.size || 0), 0),
+          chapters: parsed.chapters.length,
+          images: parsed.imageCount || 0,
+          words: parsed.words || 0,
+          ms: Math.round(performance.now() - bookAt),
+          writeMs: Math.round(writeMs),
+        });
+      } catch (error) {
+        console.warn('Could not record the import of', name, error);
+      }
       results.added += 1;
+      if (entry.group) {
+        // Not ||=: that is Chrome 85, and an old WebView is a real phone.
+        if (!results.joined) results.joined = [];
+        results.joined.push({
+          name: parsed.title,
+          chapters: parsed.chapters.length,
+          files: entry.parts.length,
+          skipped: parsed.skipped?.length || 0,
+        });
+      }
     } catch (error) {
       results.failed.push({ name, reason: error.message || 'Could not be parsed' });
     }

@@ -603,4 +603,62 @@ await t('the shell keeps what was picked, so there is something to retry with', 
   assert.match(bridge, /public void stageForRead\(String id, String name, double size\)/);
 });
 
+/* ── the workshop sorts files the same way ───────────────────────────── */
+
+console.log('\nthe workshop and chapter files');
+
+const JSZipMod = (await import('jszip')).default;
+const savedPage = (novel, n) => [
+  'MIME-Version: 1.0', 'Content-Type: multipart/related; boundary="----B"', '', '------B',
+  'Content-Type: text/html; charset="utf-8"', 'Content-Transfer-Encoding: quoted-printable',
+  `Content-Location: https://s.example/${n}`, '',
+  `<html><head><title>${novel} - Chapter ${n}</title></head><body><article><h1>Chapter ${n}</h1>`
+    + `<p>Chapter ${n} of ${novel}.</p></article></body></html>`, '', '------B--',
+].join('\r\n');
+
+await t('a zip of three novels is three parts, not one run of all of them', async () => {
+  /* It used to be one volume of every saved page in the zip, so three
+   * novels came out as one book whose chapters ran from the first into the
+   * third. */
+  const zip = new JSZipMod();
+  for (const novel of ['Alpha Tide', 'Beta Fen', 'Gamma Reach']) {
+    for (let n = 1; n <= 3; n++) zip.file(`novels/${novel}/${novel} - Chapter ${n}.mht`, savedPage(novel, n));
+  }
+  build.clear();
+  await build.add([new window.File([await zip.generateAsync({ type: 'nodebuffer' })], 'three.zip')]);
+  assert.deepEqual(build.contents().map((p) => `${p.name}:${p.pages?.length}`),
+    ['Alpha Tide:3', 'Beta Fen:3', 'Gamma Reach:3']);
+  build.clear();
+});
+
+await t('loose chapters join, and keep their place among the volumes', async () => {
+  build.clear();
+  // Volume two came as saved pages; one and three as whole files.
+  await build.add([
+    new window.File(['CHAPTER ONE\n\nThree.\n'], 'Volume 3.txt'),
+    new window.File([savedPage('Volume 2', 2)], 'Volume 2 - Chapter 2.mht'),
+    new window.File(['CHAPTER ONE\n\nOne.\n'], 'Volume 1.txt'),
+    new window.File([savedPage('Volume 2', 1)], 'Volume 2 - Chapter 1.mht'),
+  ]);
+  const parts = build.contents();
+  assert.deepEqual(parts.map((p) => p.name), ['Volume 1.txt', 'Volume 2', 'Volume 3.txt'],
+    'the joined chapters were moved out of their place in the series');
+  assert.deepEqual(parts[1].pages.map((f) => f.name),
+    ['Volume 2 - Chapter 1.mht', 'Volume 2 - Chapter 2.mht']);
+
+  // And it builds.
+  const { book } = await build.build({ title: 'Mid series' });
+  assert.equal(book.chapters, 4);
+  build.clear();
+});
+
+await t('the toast says chapters were joined, so it is not a surprise', async () => {
+  // A decision the app made on the person's behalf has to be said out loud.
+  assert.match(app, /chapters from \$\{first\.files\} files/);
+  // And nothing is checked up front any more: a rescue is offered, used only
+  // when a read is actually refused.
+  assert.match(app, /rescue: rescueFile/);
+  assert.ok(!/async function openable/.test(app), 'every file is still read before the import starts');
+});
+
 console.log(`\n${pass} assertions passed`);
