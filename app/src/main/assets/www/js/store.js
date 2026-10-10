@@ -237,6 +237,28 @@ export const DEFAULT_SETTINGS = {
   chapterOnEdge: 'confirm', // confirm | immediate | buttons
   mergeMarks: true,         // two marks that touch become one
 
+  /* Turning a chapter, put where the thumb is.
+   *
+   * The footer is the one place a tall phone cannot be reached without
+   * regripping, and in a comic -- where a chapter is a whole volume -- it is
+   * the control used most. So it can float: dragged anywhere, resized, and
+   * flipped to whichever side the hand is on.
+   *
+   * Vertical with up as onward, because that is how a thumb reads a stack.
+   * Locked by default, because an unlocked control over the page is one that
+   * moves every time you meant to press it. The copy button is not part of
+   * this and stays in the footer: copying is done with two hands.
+   */
+  chapterPad: {
+    on: false,
+    x: 88,            // percentages, so rotation does not lose it
+    y: 64,
+    scale: 1,         // 0.7–1.6
+    vertical: true,   // up is the next chapter
+    locked: true,
+    side: 'right',
+  },
+
   /* Guides. Both are off by default: they help a great deal with dense
      non-fiction, textbooks, dyslexia and tired eyes, and are a distraction
      for anyone who does not need them. */
@@ -406,6 +428,13 @@ const BOOK_FIELDS = [
   'title', 'author', 'series', 'seriesIndex', 'lang', 'folder', 'status',
   'tags', 'inVault', 'percent', 'addedAt', 'lastReadAt', 'lastOpenedAt',
   'finishedAt', 'coverBytes', 'coverCustom',
+  /* In the bin, and blurred on the shelf.
+   *
+   * Both are things done to a book rather than properties of its file, so
+   * neither comes back from re-importing it -- and a restore that put every
+   * binned book back on the shelf, uncovered, would undo exactly the two
+   * decisions somebody made deliberately. */
+  'binnedAt', 'coverBlur',
 ];
 
 /**
@@ -530,6 +559,16 @@ export async function importBackup(data) {
     for (const field of BOOK_FIELDS) {
       if (saved[field] !== undefined) book[field] = saved[field];
     }
+
+    /* Absent means it was not in the bin, not "leave it as it is".
+     *
+     * Every other field here is additive, and for the bin that is wrong: a
+     * book put back on the shelf after the backup was made would come out of
+     * a restore still in the bin, because nothing was written to say
+     * otherwise. A restore is meant to reproduce what was recorded.
+     */
+    if (saved.binnedAt === undefined) delete book.binnedAt;
+
     await put('books', book);
     report.books += 1;
   }

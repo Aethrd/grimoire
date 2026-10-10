@@ -3,6 +3,7 @@ package com.grimoire.ereader;
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import java.io.File;
@@ -12,6 +13,7 @@ import org.json.JSONObject;
 import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -124,6 +126,40 @@ public class MainActivity extends AppCompatActivity {
         handleIncomingIntent(getIntent());
     }
 
+    /* Build the WebView again after its renderer died.
+     *
+     * The dead one is taken out of the layout and destroyed before the new
+     * one goes in: leaving it attached keeps a zombie view on screen and its
+     * JavaScript bridges alive, which is worse than the crash. Everything the
+     * new view needs is set up by the same two calls as at launch, so there is
+     * no second configuration path to keep in step with the first.
+     */
+    private void rebuildWebView() {
+        WebView dead = webView;
+
+        webView = new WebView(this);
+        webView.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        setContentView(webView);
+
+        contentReady = false;
+        configureWebView();
+        applyInsetsToCss();
+        webView.loadUrl(START_URL);
+
+        if (dead != null) {
+            if (dead.getParent() instanceof ViewGroup) {
+                ((ViewGroup) dead.getParent()).removeView(dead);
+            }
+            dead.destroy();
+        }
+    }
+
+    /** Said once the page is up, because before that there is nowhere to say it. */
+    @Nullable
+    private String pendingNotice;
+
     @SuppressLint("SetJavaScriptEnabled")
     private void configureWebView() {
         WebSettings s = webView.getSettings();
@@ -179,6 +215,48 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 contentReady = true;
                 pushInsets(lastInsets);
+                if (pendingNotice != null) {
+                    tellReader("window.Grimoire.notice(" + JSONObject.quote(pendingNotice) + ")");
+                    pendingNotice = null;
+                }
+            }
+
+            /* The renderer died, and the app did not have to.
+             *
+             * The whole app is one WebView, and when its render process is
+             * killed -- by the system reclaiming memory, or by the renderer
+             * itself crashing on a very large book -- the view is left dead.
+             * Without this the default behaviour is to take the whole process
+             * down with it, which from the outside is the app vanishing while
+             * somebody was reading.
+             *
+             * A dead WebView cannot be revived, so the old one is destroyed
+             * and a new one built in its place. That costs the current page
+             * and nothing else: the library, the reading positions and the
+             * marks are all in IndexedDB, so the new view opens on the shelf
+             * with everything still there.
+             */
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                boolean crashed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                        && detail != null && detail.didCrash();
+                Log.w(TAG, crashed
+                        ? "Render process crashed; rebuilding the WebView"
+                        : "Render process killed by the system; rebuilding the WebView");
+
+                if (view != webView) {
+                    // A view we have already replaced. Let it go.
+                    view.destroy();
+                    return true;
+                }
+
+                // Said on the way back in, because by then there is something
+                // to say it in.
+                pendingNotice = crashed
+                        ? "The reader ran out of room and restarted. Nothing was lost."
+                        : "Android reclaimed the reader's memory. Nothing was lost.";
+                rebuildWebView();
+                return true;
             }
         });
 

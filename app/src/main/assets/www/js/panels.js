@@ -1418,6 +1418,81 @@ async function renderBehaviourPane(body) {
     Math.round(settings.tapZone * 100), 12, 40, 1, '%',
     (value) => store.saveSettings({ tapZone: value / 100 })));
 
+  /* ── the chapter pad ──
+   *
+   * The footer is the one place a tall phone cannot be reached without
+   * regripping, and in a comic -- where a chapter is a volume -- turning a
+   * chapter is the control used most. So it can come off the footer and go
+   * where the hand actually is.
+   */
+  const pad = { on: false, x: 88, y: 64, scale: 1, vertical: true, locked: true, side: 'right' };
+  const own = { ...pad, ...(settings.chapterPad || {}) };
+  const savePad = (patch) => store.saveSettings({ chapterPad: { ...own, ...patch } });
+
+  const padBlock = document.createElement('section');
+  padBlock.className = 'block';
+  padBlock.innerHTML = `<h2>Chapter buttons</h2>
+    <p class="muted" style="font-size:12px;line-height:1.55">
+      A floating pair that can go anywhere on the page, at whatever size suits
+      your thumb. Copy chapter stays in the footer: that one is pressed with
+      two hands.</p>`;
+
+  padBlock.appendChild(row('Float them over the page', 'Instead of the footer',
+    toggle(own.on, async (on) => { await savePad({ on }); renderSettings(); })));
+
+  if (own.on) {
+    padBlock.appendChild(row('Up is the next chapter', 'Stacked rather than side by side',
+      toggle(own.vertical !== false, async (vertical) => {
+        await savePad({ vertical });
+        renderSettings();
+      })));
+
+    /* Which side, as two chips rather than a drag.
+     *
+     * Dragging it across is fine once you know it can be dragged; swapping
+     * hands is a thing people do constantly and should cost one tap. */
+    const sides = document.createElement('div');
+    sides.innerHTML = '<p class="eyebrow">Side</p>';
+    const sideRow = document.createElement('div');
+    sideRow.className = 'chip-row';
+    for (const [side, label, x] of [['left', 'Left', 12], ['right', 'Right', 88]]) {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.textContent = label;
+      chip.setAttribute('aria-pressed', String((own.side || 'right') === side));
+      chip.onclick = async () => { await savePad({ side, x }); renderSettings(); };
+      sideRow.appendChild(chip);
+    }
+    sides.appendChild(sideRow);
+    padBlock.appendChild(sides);
+
+    padBlock.appendChild(slider('Size', Math.round((own.scale || 1) * 100), 70, 160, 5, '%',
+      (value) => savePad({ scale: value / 100 })));
+
+    padBlock.appendChild(slider('Down the page', Math.round(own.y), 6, 94, 1, '%',
+      (value) => savePad({ y: value })));
+
+    /* Locked by default, and that is what makes it usable.
+     *
+     * An unlocked control sitting over the page moves every time you meant to
+     * press it. Unlock, put it where you want it, lock it again. */
+    padBlock.appendChild(row(own.locked === false ? 'Unlocked — drag the grip' : 'Locked in place',
+      own.locked === false
+        ? 'Drag the dotted grip between the arrows'
+        : 'It cannot be moved by accident while reading',
+      toggle(own.locked !== false, async (locked) => { await savePad({ locked }); renderSettings(); })));
+
+    const reset = document.createElement('button');
+    reset.className = 'btn ghost';
+    reset.textContent = 'Put it back where it started';
+    reset.onclick = async () => {
+      await store.saveSettings({ chapterPad: { ...pad, on: true } });
+      renderSettings();
+    };
+    padBlock.appendChild(reset);
+  }
+  body.appendChild(padBlock);
+
   const screen = document.createElement('section');
   screen.className = 'block';
   screen.innerHTML = '<h2>Screen</h2>';

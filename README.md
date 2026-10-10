@@ -135,6 +135,33 @@ sight. Prose gets the list. And because the commonest job of all is one page
 repeated through thirty volumes, **First of each chapter** and **Last of each
 chapter** take them in one tap instead of sixty.
 
+#### Looking before leaping
+
+A thumbnail is enough to find a page and not enough to be sure about it: at
+eighty pixels a scanlator's credit page and the first page of a chapter are
+the same shape, and so are two halves of one spread. A chapter is worse — an
+afterword and a chapter are the same row until you read a paragraph of either.
+
+So nothing is taken out unseen:
+
+- **The glass on every page opens it full size**, and from there you can step
+  through the book one page at a time, picking or unpicking as you go. That is
+  also the quickest way through a volume: look, decide, next. It is a separate
+  target from the page itself on purpose — one tap cannot mean both *show me
+  this* and *remove this*, and making the tap open a viewer would turn picking
+  forty credit pages into forty viewers to dismiss.
+- **A chapter is previewed by a paragraph of itself**, not by its name.
+- **Taking out asks first**, with a strip of the pages themselves rather than
+  a number, what the book will be left with, how many pictures stop being
+  used, and how many bookmarks come out with them. From there, **Look through
+  them** steps through exactly what was listed — the honest answer to "are you
+  sure" is the pages, not a louder warning.
+
+What the confirmation says comes from the **same plan the removal runs**, read
+rather than written. A preview worked out by a second piece of code that is
+supposed to agree with the first will eventually disagree, and a preview that
+can be wrong is worse than none.
+
 Nothing is destroyed on the way out. Every other operation here leaves its
 source alone, so a bad result costs a delete; this one reaches into a book
 that already exists, and there is no such consolation. So a removal is kept
@@ -323,8 +350,10 @@ EPUB never executes.
   the mode before the screen
 - **trim** — taking pages and chapters out, that nothing is destroyed on the
   way, that marks and the saved position follow or are carried out rather than
-  left wrong, and the whole path a finger takes: search, long press, pick the
-  credit page out of every chapter, take them out, put them back
+  left wrong, that the preview is the removal's own plan and writes nothing,
+  and the whole path a finger takes: search, long press, open a page full size,
+  pick the credit page out of every chapter, see the confirmation, cancel it,
+  confirm it, put it back
 - **tools** — the bin as two steps rather than one, the floating chapter pad as
   it is actually drawn on the reader, smaller copies and every case where
   shrinking is refused, building onto a book already on the shelf, and the two

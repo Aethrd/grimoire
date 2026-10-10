@@ -466,8 +466,8 @@ const DENSITY_ICONS = {
  * recognises a book they own -- the cover is. This is the same tile, without
  * the selection and long-press machinery that only the shelf needs.
  */
-export function bookTile(book, onOpen) {
-  return tile(book, onOpen, null, null, false);
+export function bookTile(book, onOpen, onLongPress = null) {
+  return tile(book, onOpen, onLongPress, null, false);
 }
 
 function tile(book, onOpen, onLongPress, selection, selecting) {
@@ -564,7 +564,7 @@ export async function renderShelf(handlers) {
   // A hard kill during import leaves a row with no chapters behind it. It is
   // not a book yet, so it does not belong on the shelf.
   let visible = all.filter((b) =>
-    !b.importing && !b.transient && (!b.inVault || vaultUnlocked));
+    !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
 
   // Filtered to one folder, and to anything nested under it.
   if (folder != null) {
@@ -766,6 +766,7 @@ export async function folderCounts() {
   const counts = new Map();
   for (const book of books) {
     if (book.inVault && !vaultUnlocked) continue;
+    if (book.binnedAt) continue;     // in the bin is not in a folder
     const folder = book.folder || '';
     counts.set(folder, (counts.get(folder) || 0) + 1);
   }
@@ -817,6 +818,80 @@ export async function initVaultGate() {
 /** 'Volume 2' before 'Volume 10', which plain text sorting gets backwards. */
 export const naturalOrder = (a, b) => String(a || '').localeCompare(String(b || ''),
   undefined, { numeric: true, sensitivity: 'base' });
+
+/* ── the bin ──────────────────────────────────────────────────────────────
+ *
+ * Deleting used to be final, and a book deleted by accident meant finding the
+ * file again -- which for something downloaded a year ago often means not
+ * getting it back at all. A mistap on a grid of covers is not a decision, and
+ * it was being treated as one.
+ *
+ * So delete means "out of the way" and the bin is where "gone" happens. The
+ * book keeps everything while it sits there: its chapters, its pictures, its
+ * place, its marks. Nothing is actually freed until it is deleted from the
+ * bin, which is the whole point of the second step -- the first one has to be
+ * reversible to be worth having, and reversible means nothing was thrown away.
+ */
+
+export const isBinned = (book) => !!book?.binnedAt;
+
+/** Out of the way, with the time it happened kept so the bin can be ordered. */
+export async function binBooks(ids) {
+  let moved = 0;
+  for (const id of ids) {
+    const book = await store.get('books', id);
+    if (!book || book.binnedAt) continue;
+    book.binnedAt = Date.now();
+    await store.put('books', book);
+    moved += 1;
+  }
+  return moved;
+}
+
+export async function restoreBooks(ids) {
+  let back = 0;
+  for (const id of ids) {
+    const book = await store.get('books', id);
+    if (!book || !book.binnedAt) continue;
+    delete book.binnedAt;
+    await store.put('books', book);
+    back += 1;
+  }
+  return back;
+}
+
+/** The irreversible one, and the only one that frees anything. */
+export async function destroyBooks(ids) {
+  let gone = 0;
+  for (const id of ids) {
+    await store.deleteBook(id).catch(() => {});
+    gone += 1;
+  }
+  return gone;
+}
+
+/** Newest first: what you just deleted is what you are most likely after. */
+export async function binnedBooks() {
+  return (await store.all('books'))
+    .filter((book) => book.binnedAt && !book.importing && !book.transient)
+    .sort((a, b) => b.binnedAt - a.binnedAt);
+}
+
+/* ── the pictures a book is still using ───────────────────────────────────
+ *
+ * A page taken out of a book keeps its picture's row. That is what makes a
+ * removal something that can be put back rather than a re-import: the markup
+ * referring to it is gone, so nothing displays it, and the blob is still
+ * there if it is wanted again. It is flagged, not deleted.
+ *
+ * A flag is only worth anything if everything that reads pictures by book
+ * honours it, which is what this is for. Joining, splitting, every kind of
+ * dividing, the reel and the export all mean the pictures the book still
+ * shows -- not the ones it used to.
+ */
+export async function livePictures(bookId) {
+  return (await store.byIndex('images', 'bookId', bookId)).filter((image) => !image.removed);
+}
 
 /**
  * Build one book from several.
@@ -894,7 +969,7 @@ export async function mergeBooks(ids, { title, markVolumes = true, onProgress } 
     words += rows.reduce((n, r) => n + r.words, 0);
     await store.putAll('chapters', rows);
 
-    const images = await store.byIndex('images', 'bookId', source.id);
+    const images = await livePictures(source.id);
     await store.putAll('images', images.map((image) => ({
       ...image,
       id: undefined,
@@ -943,7 +1018,7 @@ export async function splitBook(bookId) {
 
   const chapters = (await store.byIndex('chapters', 'bookId', bookId))
     .sort((a, b) => a.index - b.index);
-  const images = await store.byIndex('images', 'bookId', bookId);
+  const images = await livePictures(bookId);
 
   const restored = [];
   for (let volume = 0; volume < book.mergedFrom.length; volume++) {
@@ -1092,7 +1167,7 @@ export async function fragmentBook(bookId, cuts, { name, onProgress } = {}) {
     .sort((a, b) => a - b);
   if (!points.length) throw new Error('Choose at least one place to divide it.');
 
-  const images = await store.byIndex('images', 'bookId', bookId);
+  const images = await livePictures(bookId);
   const bounds = [0, ...points, chapters.length];
   const made = [];
 
@@ -1234,7 +1309,7 @@ export async function fragmentChapter(bookId, cuts, { name, onProgress } = {}) {
     .sort((a, b) => a - b);
   if (!points.length) throw new Error('Choose at least one place to divide it.');
 
-  const images = await store.byIndex('images', 'bookId', bookId);
+  const images = await livePictures(bookId);
   const byHref = new Map(images.map((image) => [image.href, image]));
   const bounds = [0, ...points, units.length];
   const made = [];
@@ -1329,7 +1404,7 @@ export async function fragmentPages(bookId, cuts, { name, onProgress } = {}) {
     .sort((a, b) => a - b);
   if (!points.length) throw new Error('Choose at least one place to divide it.');
 
-  const images = await store.byIndex('images', 'bookId', bookId);
+  const images = await livePictures(bookId);
   const byHref = new Map(images.map((image) => [image.href, image]));
   const bounds = [0, ...points, pages.length];
   const made = [];
@@ -1510,7 +1585,7 @@ export function findBooks(books, query, only = null) {
 export async function greyMixFor(book) {
   if (book.greyMix) return book.greyMix;
 
-  const images = await store.byIndex('images', 'bookId', book.id);
+  const images = await livePictures(book.id);
   const blobs = images.map((image) => image.blob).filter(Boolean);
   if (!blobs.length) return null;
 

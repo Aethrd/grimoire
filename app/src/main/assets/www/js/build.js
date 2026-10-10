@@ -17,7 +17,7 @@
  */
 
 import * as store from './store.js';
-import { parse, formatOf, expandArchive, nameWithFormat, UNSUPPORTED_REASON } from './parse.js';
+import { parse, formatOf, expandArchive, nameWithFormat, chapterHtml, UNSUPPORTED_REASON } from './parse.js';
 
 /** The parts waiting to be built, in the order they will be joined. */
 let parts = [];
@@ -136,6 +136,33 @@ export async function add(files, onProgress) {
   return parts;
 }
 
+/**
+ * A book already on the shelf, as a part.
+ *
+ * Building was files-only, which left the commonest case of all out: the
+ * series you have been reading for a year, and volume thirty-one has just
+ * come out. Re-importing thirty volumes to put one on the end is not a thing
+ * anybody should be asked to do.
+ *
+ * It goes in as a part like any other, so it can be moved, removed, and
+ * joined to files of any format. The book itself is untouched -- building
+ * makes a new book, as it always has, and the original is still on the shelf
+ * if the result is not what was wanted.
+ */
+export function addBook(book) {
+  parts = [...parts, {
+    id: `book-${book.id}-${Date.now()}`,
+    name: book.title || 'Book',
+    bookId: book.id,
+    chapterCount: book.chapters || 0,
+    words: book.words || 0,
+    fromShelf: true,
+  }];
+  return parts;
+}
+
+export const hasBook = (bookId) => parts.some((part) => part.bookId === bookId);
+
 export function move(id, by) {
   const at = parts.findIndex((p) => p.id === id);
   const to = at + by;
@@ -158,6 +185,12 @@ export function clear() {
 /** What a part is, said plainly enough to spot the odd one out. */
 export function describe(part) {
   if (part.error) return `Could not be opened — ${part.error}`;
+  if (part.fromShelf) {
+    const chapters = part.chapterCount
+      ? `${part.chapterCount} chapter${part.chapterCount === 1 ? '' : 's'}`
+      : 'on the shelf';
+    return `From the shelf · ${chapters}`;
+  }
   if (part.pictures) {
     const size = part.size ? ` · ${(part.size / 1048576).toFixed(1)}MB` : '';
     return `${part.pictures.length} pages${size}`;
@@ -204,7 +237,7 @@ export async function build({ title, author, onProgress } = {}) {
     addedAt: Date.now(),
     words: 0,
     importing: true,
-    builtFrom: parts.map((p) => ({ name: p.name })),
+    builtFrom: parts.map((p) => (p.bookId ? { name: p.name, bookId: p.bookId } : { name: p.name })),
   });
 
   let index = 0;
@@ -222,7 +255,9 @@ export async function build({ title, author, onProgress } = {}) {
 
     let parsed;
     try {
-      parsed = part.pictures
+      parsed = part.bookId
+        ? await readShelfBook(part)
+        : part.pictures
         ? await readPictures(part)
         : part.pages
         ? await readPages(part, (fraction) =>
@@ -307,6 +342,48 @@ export async function build({ title, author, onProgress } = {}) {
   await store.put('books', finished);
 
   return { book: finished, failed };
+}
+
+/**
+ * A book on the shelf, in the shape a parsed file comes back in.
+ *
+ * Its chapters are read out as finished markup rather than as source: the
+ * source's picture paths are relative to an archive that is not here any
+ * more, and resolving them is exactly what chapterHtml already does on the
+ * way to the page. What comes out is what was being read.
+ */
+async function readShelfBook(part) {
+  const book = await store.get('books', part.bookId);
+  if (!book) throw new Error('that book is no longer in the library');
+
+  const chapters = (await store.byIndex('chapters', 'bookId', part.bookId))
+    .sort((a, b) => a.index - b.index);
+  if (!chapters.length) throw new Error('that book has nothing in it');
+
+  // Pages taken out of it stay out: building onto a trimmed book should not
+  // quietly bring back what was trimmed.
+  const images = (await store.byIndex('images', 'bookId', part.bookId))
+    .filter((image) => !image.removed)
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  return {
+    chapters: chapters.map((chapter) => ({
+      title: chapter.title,
+      fromToc: !!chapter.fromToc,
+      words: chapter.words || 0,
+      html: chapterHtml(chapter),
+    })),
+    images: images.map((image, order) => ({
+      href: image.href,
+      blob: image.blob,
+      order,
+      chapterIndex: image.chapterIndex || 0,
+      width: image.width,
+      height: image.height,
+      animated: image.animated,
+    })),
+    coverBlob: book.coverBlob || null,
+  };
 }
 
 /** Point already-resolved picture references at their prefixed copies. */

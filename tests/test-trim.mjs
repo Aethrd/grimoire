@@ -409,6 +409,95 @@ await t('removal is reachable from a book and has a screen to do it on', async (
   assert.match(app, /trim\.(removePages|removeChapters)/);
 });
 
+/* ── looking before leaping ──────────────────────────────────────────────
+ *
+ * This is the one operation here that deleting the result does not undo, so
+ * it is the one that has to be looked at first -- and "12 pages" is not
+ * something anybody can check.
+ */
+
+console.log('\nthe preview');
+
+await t('the preview is the plan, not a second opinion about it', async () => {
+  /* Computed by the same code the removal runs. A preview worked out
+   * separately would eventually disagree with what happens, and a preview
+   * that can be wrong is worse than none. */
+  const source = read('app/src/main/assets/www/js/trim.js');
+  assert.match(source, /function planPages/);
+  assert.match(source, /function planChapters/);
+  const look = source.slice(source.indexOf('export async function preview'));
+  assert.match(look, /planChapters\(book, chapters, picks\)/);
+  assert.match(look, /planPages\(book, chapters, pages, picks\)/);
+  // And it writes nothing.
+  const body = look.slice(0, look.indexOf('const describeChapter'));
+  assert.ok(!/store\.(put|add|del|putAll)/.test(body), 'the preview changes the book');
+});
+
+await t('it says what goes, how much is left, and what comes with it', async () => {
+  const id = await comic([3, 3]);
+  await store.addMark({ bookId: id, kind: 'highlight', chapterIndex: 0, anchor: 1, end: 3 });
+
+  const look = await trim.preview(id, 'pages', [0, 3]);
+  assert.equal(look.what, '2 pages');
+  assert.equal(look.count, 2);
+  assert.equal(look.pictures, 2, 'it does not say which pictures stop being used');
+  assert.equal(look.marks, 1, 'it does not warn that a bookmark comes out too');
+  assert.equal(look.pagesWas, 6);
+  assert.equal(look.pagesLeft, 4);
+  assert.equal(look.chaptersLeft, 2);
+
+  // And the book is untouched by having been asked.
+  assert.equal((await hrefsOf(id)).length, 6);
+  assert.equal((await store.byIndex('marks', 'bookId', id)).length, 1);
+});
+
+await t('it lists the items themselves, in the order they sit in the book', async () => {
+  const id = await comic([3, 3]);
+  const look = await trim.preview(id, 'pages', [3, 0]);
+  assert.deepEqual(look.items.map((i) => i.label), ['Page 1', 'Page 4']);
+  assert.deepEqual(look.items.map((i) => i.picture), ['v1-p1.png', 'v2-p1.png']);
+  assert.deepEqual(look.items.map((i) => i.note), ['Volume 1', 'Volume 2']);
+});
+
+await t('a chapter is previewed by a paragraph of it, not by its name', async () => {
+  /* An afterword and a chapter are the same row until you read some of
+   * either, which is the whole case for this. */
+  const id = await store.add('books', {
+    title: 'Novel', fingerprint: `afterword:${++seed}`, addedAt: 1, chapters: 2, lang: 'en',
+  });
+  await store.put('chapters', {
+    bookId: id, index: 0, title: 'Chapter 1', words: 9,
+    html: '<p>The road out of Keld ran east through salt flats.</p>',
+  });
+  const afterword = 'Afterword: a note on the sources, with spelling left exactly as it '
+    + 'was found in the almanac of 1861, which is quoted throughout and which '
+    + 'disagrees with itself about the spelling of almost every place name east '
+    + 'of the salt flats, a habit the translator has chosen not to tidy away.';
+  await store.put('chapters', {
+    bookId: id, index: 1, title: 'Chapter 2', words: afterword.split(/\s+/).length,
+    html: `<p>${afterword}</p>`,
+  });
+
+  const look = await trim.preview(id, 'chapters', [1]);
+  assert.equal(look.items.length, 1);
+  assert.match(look.items[0].text, /^Afterword: a note on the sources/);
+  assert.match(look.items[0].note, /1 page/);
+
+  // And the list the screen is built from carries a paragraph, not a label.
+  const rows = (await trim.inspect(id)).rows;
+  // 18 words is a label; the extract is a paragraph, which is what it takes
+  // to tell an afterword from a chapter.
+  assert.ok(rows[1].extract.split(/\s+/).length > 18,
+    'there is nothing longer than the label to read');
+  assert.ok(rows[1].extract.length > rows[1].preview.length);
+});
+
+await t('an empty or emptying pick is refused before anything is shown', async () => {
+  const id = await comic([2]);
+  await assert.rejects(() => trim.preview(id, 'pages', []), /Choose something/);
+  await assert.rejects(() => trim.preview(id, 'pages', [0, 1]), /empty the book/);
+});
+
 /* ── the whole path a finger takes ───────────────────────────────────────
  *
  * Every bug in this app that reached the user got through because the pieces
@@ -475,7 +564,18 @@ await t('search, long press, pick the credit pages, take them out, put them back
   assert.deepEqual(picked, [1, 4], 'the wrong pages were picked');
   assert.equal(el('remove-go').disabled, false);
 
+  /* The footer asks; it does not act. Nothing may happen until the
+   * confirmation has been seen and agreed to. */
   tap(el('remove-go'));
+  await settle(350);
+  assert.equal(el('remove-confirm').hidden, false, 'it went ahead without confirming');
+  assert.match(el('remove-confirm-what').textContent, /Taking out 2 pages/);
+  assert.equal(el('remove-confirm-strip').children.length, 2,
+    'the confirmation does not show what is going');
+  assert.match(el('remove-confirm-note').textContent, /4 pages and 2 chapters left/);
+  assert.equal((await hrefsOf(id)).length, 6, 'pages went before the confirmation');
+
+  tap(el('remove-confirm-go'));
   await settle(450);
 
   const chapters = (await store.byIndex('chapters', 'bookId', id)).sort((a, b) => a.index - b.index);
@@ -498,6 +598,90 @@ await t('search, long press, pick the credit pages, take them out, put them back
     ['v1-p1.png', 'v1-p2.png', 'v1-p3.png', 'v2-p1.png', 'v2-p2.png', 'v2-p3.png']);
   assert.equal(el('remove-body').querySelector('.remove-history'), null,
     'the history is still shown after the last removal was undone');
+});
+
+await t('a page can be opened full size, and looking at it is not picking it', async () => {
+  /* The thing this answers: at eighty pixels a scanlator's credit page and the
+   * first page of a chapter are the same shape. A preview nobody can read is
+   * not a preview. */
+  const el = (id) => document.getElementById(id);
+  const tap = (node) => node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  const id = await comic([3, 3]);
+  const book = await store.get('books', id);
+  book.title = 'Looked at';
+  await store.put('books', book);
+  await settle();
+
+  screensMod.initFind(() => {}, false);
+  el('find-input').value = 'Looked at';
+  el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle(400);
+  const tile = el('find-results').querySelector(`[data-book="${id}"]`);
+  tile.dispatchEvent(new window.Event('touchstart', { bubbles: true }));
+  await settle(620);
+  tap([...el('folder-actions-list').children].find((b) => b.textContent.includes('Take pages out')));
+  await settle(300);
+
+  const cells = [...el('remove-body').querySelectorAll('.remove-cell')];
+  assert.ok(cells.every((c) => c.querySelector('.remove-look-btn')),
+    'not every page offers a way to look at it');
+
+  // Looking is a separate target: tapping the page itself picks it, and one
+  // gesture cannot mean both.
+  tap(cells[0].querySelector('.remove-look-btn'));
+  await settle(200);
+  assert.equal(el('remove-look').hidden, false, 'the glass opened nothing');
+  assert.equal(cells[0].getAttribute('aria-pressed'), 'false',
+    'looking at a page picked it');
+  assert.ok(el('remove-look-stage').querySelector('img'), 'the page itself is not shown');
+  assert.match(el('remove-look-caption').textContent, /Page 1 of 6 · Volume 1/);
+  assert.equal(el('remove-look-prev').disabled, true);
+  assert.equal(el('remove-look-pick').textContent, 'Take this out');
+
+  // Step on, and decide from inside the viewer, which is the fast way through
+  // a volume: look, decide, next.
+  tap(el('remove-look-next'));
+  await settle(150);
+  assert.match(el('remove-look-caption').textContent, /Page 2 of 6/);
+  tap(el('remove-look-pick'));
+  await settle(150);
+  assert.equal(el('remove-look-pick').textContent, 'Keep it',
+    'the one button does not say both things');
+
+  tap(el('remove-look-close'));
+  await settle(250);
+  const picked = [...el('remove-body').querySelectorAll('.remove-cell[aria-pressed="true"]')]
+    .map((c) => Number(c.querySelector('.remove-number').textContent));
+  assert.deepEqual(picked, [2], 'what was decided in the viewer did not stick');
+
+  /* And from the confirmation, straight into looking through exactly what it
+   * listed -- which is the honest answer to "are you sure": not a bigger
+   * warning, the pages themselves. */
+  tap(el('remove-go'));
+  await settle(300);
+  tap(el('remove-confirm-look'));
+  await settle(250);
+  assert.equal(el('remove-confirm').hidden, true);
+  assert.equal(el('remove-look').hidden, false);
+  assert.match(el('remove-look-caption').textContent, /1 of 1 picked/);
+  assert.equal(el('remove-look-next').disabled, true,
+    'it is stepping through the whole book rather than the picked pages');
+
+  tap(el('remove-look-close'));
+  await settle(200);
+
+  // Cancelling really cancels, and keeps the picks.
+  tap(el('remove-go'));
+  await settle(300);
+  tap(el('remove-confirm-cancel'));
+  await settle(200);
+  assert.equal(el('remove-confirm').hidden, true);
+  assert.equal((await hrefsOf(id)).length, 6, 'cancel took pages out anyway');
+  assert.equal([...el('remove-body').querySelectorAll('.remove-cell[aria-pressed="true"]')].length, 1,
+    'cancelling threw away the picks as well');
 });
 
 await t('the bin screen lists what was deleted and puts it back', async () => {

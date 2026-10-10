@@ -13,6 +13,7 @@
 
 import * as store from './store.js';
 import { chapterHtml } from './parse.js';
+import { SIZES, shrinkPicture, describeSaving } from './shrink.js';
 
 const escapeXml = (text) => String(text ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -30,8 +31,11 @@ const mediaFor = (name) => MEDIA[String(name).split('.').pop().toLowerCase()] ||
  *
  * @param onProgress  called with a fraction, because a long book is a lot of
  *   files and a silent wait is indistinguishable from a hang.
+ * @param size  a key from shrink.SIZES. The pictures are downscaled on the
+ *   way into the file and the book on the shelf is left exactly as it is: a
+ *   smaller copy is a copy, not an edit.
  */
-export async function buildEpub(bookId, { onProgress, title, author } = {}) {
+export async function buildEpub(bookId, { onProgress, title, author, size } = {}) {
   const stored = await store.get('books', bookId);
   if (!stored) throw new Error('That book is no longer in the library.');
 
@@ -52,7 +56,10 @@ export async function buildEpub(bookId, { onProgress, title, author } = {}) {
     .sort((a, b) => a.index - b.index);
   if (!chapters.length) throw new Error('That book has no chapters to write out.');
 
-  const images = await store.byIndex('images', 'bookId', bookId);
+  // Pages taken out of the book keep their rows so they can be put back;
+  // writing them into the file would be exporting what was removed.
+  const images = (await store.byIndex('images', 'bookId', bookId))
+    .filter((image) => !image.removed);
   const zip = new JSZip();
 
   /* The mimetype entry must come first and must not be compressed. It is the
@@ -92,6 +99,11 @@ export async function buildEpub(bookId, { onProgress, title, author } = {}) {
    * path, so each gets a plain serial name and the chapters are pointed at
    * it. */
   const renamed = new Map();
+  /* Null for a full-size copy, which is also the only case that touches no
+   * picture at all: an export nobody asked to shrink must be byte-identical
+   * to the one before this existed. */
+  const wanted = size && size !== 'full' && SIZES[size] ? SIZES[size] : null;
+  let saved = 0;
   let at = 0;
   for (const image of images) {
     /* Only pictures that can actually be written.
@@ -104,15 +116,27 @@ export async function buildEpub(bookId, { onProgress, title, author } = {}) {
      */
     if (typeof image.blob?.size !== 'number' || image.blob.size <= 0) continue;
 
-    const extension = String(image.href).split('.').pop().toLowerCase().slice(0, 4) || 'jpg';
+    /* Smaller, where a smaller copy was asked for.
+     *
+     * shrinkPicture hands back the original whenever shrinking would not
+     * help -- an animation, a page already under the target, a re-encode that
+     * came out bigger -- so the extension has to be read off what comes back
+     * rather than off what went in. */
+    const written = wanted ? await shrinkPicture(image.blob, wanted) : image.blob;
+    saved += Math.max(0, image.blob.size - written.size);
+
+    const extension = written === image.blob
+      ? String(image.href).split('.').pop().toLowerCase().slice(0, 4) || 'jpg'
+      : 'jpg';
     const name = `images/img${String(++at).padStart(4, '0')}.${extension}`;
     try {
-      zip.file(`OEBPS/${name}`, image.blob, PICTURE);
+      zip.file(`OEBPS/${name}`, written, PICTURE);
       renamed.set(image.href, name);
     } catch {
       // Skipped rather than fatal, for the same reason.
     }
-    onProgress?.(at / (images.length + chapters.length) * 0.5);
+    onProgress?.(at / (images.length + chapters.length) * 0.5,
+      saved ? `Writing pictures · ${describeSaving(saved)} saved` : undefined);
   }
 
   const manifest = [];
@@ -209,7 +233,9 @@ export async function buildEpub(bookId, { onProgress, title, author } = {}) {
     (state) => onProgress?.(0.95 + (state.percent / 100) * 0.05));
 
   onProgress?.(1);
-  return { blob, name: `${safeName(book.title)}.epub` };
+  // The saving is reported rather than assumed: it is the whole reason a
+  // smaller copy was asked for, and on line art it can come out near zero.
+  return { blob, name: `${safeName(book.title)}.epub`, saved };
 }
 
 /** A filename a file system will accept, from a title that may be anything. */

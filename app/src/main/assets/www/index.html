@@ -141,6 +141,25 @@
         <div class="scrub-thumb" id="scrub-thumb"></div>
         <div class="scrub-bubble" id="scrub-bubble" hidden></div>
       </div>
+
+      <!-- Chapter turning, put where the thumb already is.
+           Vertical by default because up-is-onward is how a thumb reads a
+           stack: the chapter you want next is the one above. The copy button
+           stays in the footer, where two hands can reach it. -->
+      <div class="chapter-pad" id="chapter-pad" hidden>
+        <button class="pad-btn" id="pad-next" title="Next chapter">
+          <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+        <button class="pad-grip" id="pad-grip" title="Drag to move — unlock it in Settings">
+          <svg viewBox="0 0 24 24"><circle cx="9" cy="7" r="1.3"/><circle cx="15" cy="7" r="1.3"/><circle cx="9" cy="12" r="1.3"/><circle cx="15" cy="12" r="1.3"/><circle cx="9" cy="17" r="1.3"/><circle cx="15" cy="17" r="1.3"/></svg>
+        </button>
+        <button class="pad-btn" id="pad-prev" title="Previous chapter">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+        </button>
+      </div>
+
+      <!-- The chapter edge, said without covering the words it is about. -->
+      <div class="edge-hint" id="edge-hint" hidden></div>
     </div>
 
     <footer class="reader-bottom" id="reader-bottom">
@@ -342,6 +361,40 @@
     </footer>
   </section>
 
+  <!-- Taking things out of a book: the pages, and what each one is.
+       Everything else here makes something new and leaves its source alone.
+       This one reaches into a book, so what went can be put back. -->
+  <section class="screen" data-screen="remove">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="app-head-title"><h1>Take out</h1><p class="eyebrow" id="remove-of"></p></div>
+    </header>
+
+    <div class="chip-row pad-x" id="remove-mode"></div>
+    <div class="chip-row pad-x wrap" id="remove-picks"></div>
+    <div class="scroll pad" id="remove-body"></div>
+
+    <footer class="stepper" id="remove-foot">
+      <button class="btn ghost" id="remove-none">None</button>
+      <span class="muted" id="remove-count"></span>
+      <button class="btn danger" id="remove-go">Take out…</button>
+    </footer>
+  </section>
+
+  <!-- The bin. Deleting a book puts it here; here is where it is deleted. -->
+  <section class="screen" data-screen="bin">
+    <header class="app-head">
+      <div class="app-head-title"><h1>Bin</h1><p class="eyebrow" id="bin-eyebrow">Nothing in here</p></div>
+      <button class="btn ghost" id="bin-empty">Empty</button>
+    </header>
+    <div class="scroll pad" id="bin-body"></div>
+    <footer class="stepper" id="bin-foot" hidden>
+      <button class="btn ghost" id="bin-restore-all">Put all back</button>
+      <span class="muted" id="bin-count"></span>
+      <button class="btn danger" id="bin-destroy">Delete for good</button>
+    </footer>
+  </section>
+
   <section class="screen" data-screen="stats">
     <header class="app-head">
       <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
@@ -370,6 +423,7 @@
   <button data-go="folders"><svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z"/><path d="M3 7V5h6"/></svg><span>Folders</span></button>
   <button data-go="sort"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6"/></svg><span>Groups</span></button>
   <button data-go="workshop"><svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"/><path d="M8 13h8M12 9v8"/></svg><span>Build</span></button>
+  <button data-go="bin"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg><span>Bin</span></button>
   <button data-go="stats"><svg viewBox="0 0 24 24"><path d="M4 19V10M10 19V5M16 19v-6M2 19h20"/></svg><span>Stats</span></button>
   <button data-go="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
 </nav>
@@ -400,6 +454,10 @@
   <button data-act="blur">
     <svg viewBox="0 0 24 24"><path d="M12 3c-3 4-5 6.5-5 9a5 5 0 0010 0c0-2.5-2-5-5-9z"/><path d="M4 20h16"/></svg>
     <span>Blur</span>
+  </button>
+  <button data-act="trim">
+    <svg viewBox="0 0 24 24"><path d="M6 5l12 14M18 5L6 19"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/></svg>
+    <span>Take out</span>
   </button>
   <button data-act="export">
     <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M8 11l4 4 4-4"/><path d="M4 17v3h16v-3"/></svg>
@@ -462,9 +520,13 @@
     <label class="field"><span>File name</span>
       <input class="query" id="export-file" type="text" autocomplete="off">
     </label>
+    <p class="eyebrow">Picture size</p>
+    <div class="chip-row wrap" id="export-size"></div>
     <p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 10px">
       The title and author are written into the book itself, so another reader
-      shows them too. The file name is only what it is called on disk.
+      shows them too. The file name is only what it is called on disk. A
+      smaller copy shrinks the pictures on the way into the file — the book
+      here keeps every pixel it has.
     </p>
     <div class="sheet-actions" style="border:0;background:none;padding:0">
       <button class="btn ghost" id="export-cancel">Cancel</button>
@@ -514,6 +576,41 @@
 
 <div class="sheet-scrim" id="details-sheet" hidden>
   <div class="sheet" id="details-body"></div>
+</div>
+
+<!-- Looking at one page properly before deciding about it.
+     A thumbnail is enough to find a page and not enough to be sure: a credit
+     page and the first page of a chapter are the same shape. -->
+<div class="look" id="remove-look" hidden>
+  <div class="look-stage" id="remove-look-stage"></div>
+  <div class="look-bar">
+    <button class="icon-btn" id="remove-look-prev" title="Previous">
+      <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <span class="look-caption" id="remove-look-caption"></span>
+    <button class="icon-btn" id="remove-look-next" title="Next">
+      <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
+    </button>
+  </div>
+  <div class="look-actions">
+    <button class="btn ghost" id="remove-look-close">Done</button>
+    <button class="btn" id="remove-look-pick">Take this out</button>
+  </div>
+</div>
+
+<!-- The last word before it happens: what is going, said with the pages
+     themselves rather than as a number. -->
+<div class="sheet-scrim" id="remove-confirm" hidden>
+  <div class="sheet">
+    <p class="eyebrow" id="remove-confirm-what"></p>
+    <div class="remove-strip" id="remove-confirm-strip"></div>
+    <p class="muted" id="remove-confirm-note" style="font-size:12px;line-height:1.55;margin:10px 0"></p>
+    <div class="sheet-actions" style="border:0;background:none;padding:0">
+      <button class="btn ghost" id="remove-confirm-cancel">Cancel</button>
+      <button class="btn ghost" id="remove-confirm-look">Look through them</button>
+      <button class="btn danger" id="remove-confirm-go">Take out</button>
+    </div>
+  </div>
 </div>
 
 <!-- Importing a large archive takes a while, and a toast that says nothing

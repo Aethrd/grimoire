@@ -9,6 +9,8 @@ import * as panels from './panels.js';
 import { nameWithFormat, chapterHtml } from './parse.js';
 import * as build from './build.js';
 import * as epub from './epub.js';
+import * as trim from './trim.js';
+import * as shrink from './shrink.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
 
@@ -30,12 +32,27 @@ function screenNode(name) {
 
 async function show(name, { replace = false } = {}) {
   if (name === current) return;
+  /* A screen that does not exist is not navigated to.
+   *
+   * Switching the current one off and finding nothing to switch on leaves the
+   * app a blank page with no way back, which is the worst thing it can do and
+   * was one missing attribute value away. */
+  if (!screenNode(name)) return;
 
   // Leaving the reader ends the session, so the log never counts the time
   // someone spent on the stats page as reading.
   // Await it: the stats screen reads the log the moment it opens, and an
   // unawaited flush would land just after it had rendered the old numbers.
   if (current === 'divide' && name !== 'divide') dividePages.release();
+  /* Thumbnails of six hundred pages, held only while the screen is up.
+   * Leaving without releasing them is the whole volume kept decoded for the
+   * rest of the session. */
+  if (current === 'remove' && name !== 'remove') {
+    removeThumbs.release();
+    looking = null;
+    el('remove-look').hidden = true;
+    el('remove-confirm').hidden = true;
+  }
 
   if (current === 'reader' && name !== 'reader') {
     // Before anything is hidden, for the same reason as in back().
@@ -65,6 +82,8 @@ async function show(name, { replace = false } = {}) {
   // The tab bar is app furniture; it has no business over a page of prose.
   document.body.dataset.view = name;
   el('tabbar').hidden = name === 'reader' || selecting();
+  if (name !== 'reader') { hideEdgeHint(); el('chapter-pad').hidden = true; }
+  else store.settings().then(paintChapterPad);
   for (const button of el('tabbar').children) {
     button.setAttribute('aria-pressed', String(button.dataset.go === name));
   }
@@ -78,6 +97,8 @@ async function enter(name) {
     case 'sort': return screens.openSort();
     case 'workshop': return renderWorkshop();
     case 'divide': return renderDivide();
+    case 'remove': return renderRemove();
+    case 'bin': return renderBin();
     case 'find': return screens.initFind(goToMatch, cameFrom === 'reader');
     case 'toc': return screens.openToc(goToChapter);
     case 'reel': return reader.state.book
@@ -462,9 +483,22 @@ function wireSelection() {
       toast(anyOut ? `${books.length} moved to the vault` : `${books.length} taken out of the vault`);
     },
 
+    /* Out of the way, not gone.
+     *
+     * A mistap on a grid of covers is not a decision, and deleting outright
+     * treated it as one: the file had to be found again, which for something
+     * downloaded a year ago often means not at all. */
+    trim: async () => {
+      const books = await selectedBooks();
+      if (books.length !== 1) return toast('Choose one book to take pages out of');
+      clearSelection();
+      return openRemove(books[0]);
+    },
+
     delete: () => {
+      resetConfirm();
       el('confirm-text').textContent =
-        `Delete ${selection.size} book${selection.size === 1 ? '' : 's'}?`;
+        `Delete ${selection.size} book${selection.size === 1 ? '' : 's'}? They go to the bin.`;
       el('confirm-bar').hidden = false;
     },
   };
@@ -473,14 +507,7 @@ function wireSelection() {
     button.onclick = () => actions[button.dataset.act]?.();
   }
 
-  el('confirm-no').onclick = () => { el('confirm-bar').hidden = true; };
-  el('confirm-yes').onclick = async () => {
-    const ids = [...selection];
-    el('confirm-bar').hidden = true;
-    for (const id of ids) await store.deleteBook(id);
-    clearSelection();
-    toast(`${ids.length} book${ids.length === 1 ? '' : 's'} removed`);
-  };
+  resetConfirm();
 
   el('details-sheet').onclick = (e) => {
     if (e.target === el('details-sheet')) el('details-sheet').hidden = true;
@@ -730,6 +757,210 @@ function openBundleSheet(members) {
  * wherever you like, which is a different thing entirely -- and the one that
  * was unreachable.
  */
+/* ── everything you can do to one book, where the book is ─────────────────
+ *
+ * All of it lived behind selecting a book on the shelf. So finding a book by
+ * name and then wanting to move it, write it out or trim it meant leaving the
+ * search, clearing the query and finding the same book again on a grid of
+ * three hundred covers -- which is the opposite of what searching for it was
+ * for.
+ */
+async function openBookMenu(book) {
+  const sheet = el('folder-actions');
+  el('folder-actions-name').textContent = library.displayTitle(book);
+
+  const list = el('folder-actions-list');
+  list.innerHTML = '';
+
+  const choice = (text, note, run) => {
+    const button = document.createElement('button');
+    button.innerHTML = `<span>${escapeText(text)}</span><span>${escapeText(note)}</span>`;
+    button.onclick = () => { sheet.hidden = true; run(); };
+    list.appendChild(button);
+  };
+
+  /* Actions that work on a selection are given one of exactly this book,
+   * rather than each being rewritten to take a book: one path through moving
+   * and status, used from both places. */
+  const only = () => {
+    selectMode = true;
+    selection.clear();
+    selection.add(book.id);
+    paintSelection();
+  };
+
+  choice('Open', 'Start reading', () => openBook(book));
+  choice('Details', 'Title, author, series, cover', () => openDetails(book));
+  choice('Take pages out', 'Credit pages, ads, afterwords', () => openRemove(book));
+
+  if (library.wasJoined(book) || book.builtFrom) {
+    choice('Take apart', 'Undo the join, or divide it', () => offerTakeApart(book));
+  } else {
+    choice('Divide', 'Into parts of your own choosing', () => openDivide(book));
+  }
+
+  choice('Build onto this book', 'Add more files to the end of it', () => buildOnto(book));
+  choice('Write out', 'As an EPUB, whole or smaller', () => askAboutExport(book));
+  choice('Move to folder', book.folder ? `In ${book.folder}` : 'Not filed', () => { only(); openFolderSheet(); });
+  choice('Reading status', library.STATUS_LABELS[book.status] || 'Not set', () => { only(); openStatusSheet(); });
+  choice(book.coverBlur ? 'Show the cover' : 'Blur the cover', 'For a shelf read in public', async () => {
+    await library.blurCovers([book.id], !book.coverBlur);
+    await refreshShelf();
+    toast(book.coverBlur ? 'Cover showing again' : 'Cover blurred');
+  });
+  choice('Delete', 'To the bin, where it can be put back', async () => {
+    await library.binBooks([book.id]);
+    await refreshShelf();
+    toast(`“${library.displayTitle(book)}” moved to the bin`, 6000);
+  });
+
+  sheet.hidden = false;
+}
+
+/** The delete confirmation is shared, so it is put back the way it was. */
+function resetConfirm() {
+  el('confirm-yes').textContent = 'Delete';
+  el('confirm-no').onclick = () => { el('confirm-bar').hidden = true; resetConfirm(); };
+  el('confirm-yes').onclick = async () => {
+    const ids = [...selection];
+    el('confirm-bar').hidden = true;
+    const moved = await library.binBooks(ids);
+    clearSelection();
+    toast(`${moved} book${moved === 1 ? '' : 's'} moved to the bin`, 6000);
+  };
+}
+
+/* ── the bin ──────────────────────────────────────────────────────────────
+ *
+ * Deleting means "out of the way"; this is where "gone" happens. Nothing is
+ * freed until it is deleted from here, which is what makes the first step
+ * worth having.
+ */
+const binSelection = new Set();
+
+async function renderBin() {
+  const books = await library.binnedBooks();
+  const body = el('bin-body');
+  body.innerHTML = '';
+
+  for (const id of [...binSelection]) {
+    if (!books.some((book) => book.id === id)) binSelection.delete(id);
+  }
+
+  el('bin-eyebrow').textContent = books.length
+    ? `${books.length} book${books.length === 1 ? '' : 's'} · still taking up room`
+    : 'Nothing in here';
+  el('bin-empty').hidden = !books.length;
+  el('bin-foot').hidden = !books.length;
+
+  if (!books.length) {
+    const none = document.createElement('p');
+    none.className = 'muted';
+    none.style.lineHeight = '1.6';
+    none.textContent = 'Books you delete wait here. They keep their place, their '
+      + 'bookmarks and their pictures until they are deleted for good, so a '
+      + 'mistap costs nothing.';
+    body.appendChild(none);
+    return;
+  }
+
+  const note = document.createElement('p');
+  note.className = 'muted';
+  note.style.cssText = 'font-size:12px;line-height:1.5;margin:0 0 10px';
+  note.textContent = 'Tap to pick. Putting one back returns it to its folder with '
+    + 'everything it had.';
+  body.appendChild(note);
+
+  const grid = document.createElement('div');
+  grid.className = 'shelf find-shelf';
+  for (const book of books) {
+    const node = library.bookTile(book, () => {
+      if (binSelection.has(book.id)) binSelection.delete(book.id);
+      else binSelection.add(book.id);
+      renderBin();
+    });
+    if (binSelection.has(book.id)) node.classList.add('selected');
+
+    const when = document.createElement('span');
+    when.className = 'tile-meta';
+    when.textContent = sinceBinned(book.binnedAt);
+    node.appendChild(when);
+    grid.appendChild(node);
+  }
+  body.appendChild(grid);
+
+  el('bin-count').textContent = binSelection.size
+    ? `${binSelection.size} picked`
+    : `${books.length} in the bin`;
+  el('bin-restore-all').textContent = binSelection.size ? 'Put back' : 'Put all back';
+  el('bin-destroy').disabled = false;
+}
+
+function sinceBinned(at) {
+  const days = Math.floor((Date.now() - at) / 86400000);
+  if (days <= 0) return 'Deleted today';
+  if (days === 1) return 'Yesterday';
+  if (days < 30) return `${days} days ago`;
+  const months = Math.round(days / 30);
+  return `${months} month${months === 1 ? '' : 's'} ago`;
+}
+
+/** Which books an action in the bin applies to: the picked ones, or all. */
+async function binTargets() {
+  const books = await library.binnedBooks();
+  return binSelection.size ? books.filter((book) => binSelection.has(book.id)) : books;
+}
+
+function wireBin() {
+  el('bin-restore-all').onclick = async () => {
+    const books = await binTargets();
+    if (!books.length) return;
+    const back = await library.restoreBooks(books.map((b) => b.id));
+    binSelection.clear();
+    await renderBin();
+    await refreshShelf();
+    toast(`${back} book${back === 1 ? '' : 's'} back on the shelf`, 5000);
+  };
+
+  el('bin-destroy').onclick = () => confirmDestroy(false);
+  el('bin-empty').onclick = () => confirmDestroy(true);
+}
+
+/**
+ * The irreversible step, asked for in the bar rather than a dialog.
+ *
+ * Said in full, because it is the only delete in the app that cannot be
+ * undone and it has to read differently from the one that can.
+ */
+async function confirmDestroy(everything) {
+  const books = everything ? await library.binnedBooks() : await binTargets();
+  if (!books.length) return toast('The bin is empty');
+
+  el('confirm-text').textContent = `Delete ${books.length} book${books.length === 1 ? '' : 's'} for good? `
+    + 'This cannot be undone.';
+  el('confirm-yes').textContent = 'Delete for good';
+  el('confirm-bar').hidden = false;
+
+  el('confirm-no').onclick = () => { el('confirm-bar').hidden = true; resetConfirm(); };
+  el('confirm-yes').onclick = async () => {
+    el('confirm-bar').hidden = true;
+    resetConfirm();
+    const finish = progress.start(`Deleting ${books.length} book${books.length === 1 ? '' : 's'}`);
+    try {
+      for (const [at, book] of books.entries()) {
+        await library.destroyBooks([book.id]);
+        progress.say(null, (at + 1) / books.length, `${at + 1} of ${books.length}`);
+      }
+    } finally {
+      finish();
+    }
+    binSelection.clear();
+    await renderBin();
+    await refreshShelf();
+    toast(`${books.length} book${books.length === 1 ? '' : 's'} deleted for good`, 6000);
+  };
+}
+
 function offerTakeApart(book) {
   const sheet = el('folder-actions');
   el('folder-actions-name').textContent = library.displayTitle(book);
@@ -748,8 +979,39 @@ function offerTakeApart(book) {
   choice('Undo the join', `Back into ${from} parts`, () => splitSelected(book));
   choice('Divide at chapters', 'Cut wherever you choose', () => openDivide(book, 'chapters'));
   choice('Divide at pages', 'Ignore the chapter boundaries', () => openDivide(book, 'pages'));
+  /* Taking content out is the other direction entirely, and belongs here:
+   * this is the sheet somebody opens when a book is not the shape they
+   * wanted. */
+  choice('Take pages out', 'Keep the book, lose the pages', () => openRemove(book, 'pages'));
+  choice('Take chapters out', 'Afterwords, samples, notes', () => openRemove(book, 'chapters'));
 
   sheet.hidden = false;
+}
+
+/**
+ * Start a build with a book already on the shelf as its first part.
+ *
+ * The series you have been reading for a year, and the new volume has just
+ * come out. Building was files-only, so the only way to put one on the end
+ * was to re-import all thirty -- which is why this exists where the book is
+ * rather than in the workshop, where you would have to go and find it again.
+ */
+async function buildOnto(book) {
+  if (build.hasBook(book.id)) {
+    await show('workshop');
+    return toast('That book is already in the build');
+  }
+
+  build.addBook(book);
+  // Named after the book it is being built onto, unless a name has been typed.
+  if (!buildTitleTouched && !el('build-title').value.trim()) {
+    el('build-title').value = library.displayTitle(book);
+    el('build-eyebrow').textContent = library.displayTitle(book);
+  }
+  clearSelection();
+  renderWorkshop();
+  await show('workshop');
+  toast(`“${library.displayTitle(book)}” is the first part — add what goes after it`, 7000);
 }
 
 /** Take a joined book apart, and say what that actually did. */
@@ -783,22 +1045,18 @@ async function splitSelected(book) {
  * things go. One archive is one decision, and unpacks into the same files.
  */
 async function exportMany(books) {
-  const panel = el('import-progress');
-  el('import-label').textContent = `Writing ${books.length} books`;
-  panel.hidden = false;
+  const finish = progress.start(`Writing ${books.length} books`);
 
   const bundle = new JSZip();
   const failed = [];
 
   try {
     for (const [at, book] of books.entries()) {
-      el('import-count').textContent = `${at + 1} of ${books.length}`;
-      el('import-label').textContent = `Writing ${library.displayTitle(book)}`;
+      progress.say(`Writing ${library.displayTitle(book)}`, null, `${at + 1} of ${books.length}`);
       try {
         const { blob, name } = await epub.buildEpub(book.id, {
           onProgress: (fraction) => {
-            const done = (at + fraction) / books.length;
-            el('import-bar').style.width = `${Math.round(done * 90)}%`;
+            progress.say(null, ((at + fraction) / books.length) * 0.9);
           },
         });
         // Two books of the same name would otherwise replace each other.
@@ -819,9 +1077,7 @@ async function exportMany(books) {
     const archive = await bundle.generateAsync({ type: 'blob', mimeType: 'application/zip' });
     await writeOut(archive, `${epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books')}.zip`,
       'application/zip', {
-        onProgress: (fraction) => {
-          el('import-bar').style.width = `${90 + Math.round(fraction * 10)}%`;
-        },
+        onProgress: (fraction) => progress.say(null, 0.9 + fraction * 0.1),
       });
 
     clearSelection();
@@ -832,9 +1088,17 @@ async function exportMany(books) {
   } catch (error) {
     toast(error.message || 'Those books could not be written out', 6000);
   } finally {
-    panel.hidden = true;
+    finish();
   }
 }
+
+/* Remembered between exports, not between sessions.
+ *
+ * Writing out a series is one book after another at the same size; having to
+ * choose again each time is the kind of small friction that makes people stop
+ * at volume three. It resets on launch because full size is what an export
+ * should mean when nobody has said otherwise. */
+let exportSize = 'full';
 
 /** Ask what the book should be called before writing it out. */
 function askAboutExport(book) {
@@ -850,6 +1114,31 @@ function askAboutExport(book) {
     if (!fileTouched) el('export-file').value = `${epub.safeName(el('export-title').value)}.epub`;
   };
 
+  /* How big the pictures come out.
+   *
+   * Full size is the default and stays the default: a smaller copy is a
+   * choice somebody makes for a reason -- sending it, keeping thirty volumes
+   * -- and quietly shrinking an export would be throwing away detail nobody
+   * asked to lose. */
+  const row = el('export-size');
+  row.innerHTML = '';
+  for (const [key, size] of Object.entries(shrink.SIZES)) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.innerHTML = `<b>${escapeText(size.label)}</b>`;
+    chip.title = size.note;
+    chip.setAttribute('aria-pressed', String(exportSize === key));
+    chip.onclick = () => { exportSize = key; askAboutExport(book); };
+    row.appendChild(chip);
+  }
+
+  const which = shrink.SIZES[exportSize] || shrink.SIZES.full;
+  const note = document.createElement('span');
+  note.className = 'muted';
+  note.style.cssText = 'font-size:11px;align-self:center;margin-left:4px';
+  note.textContent = which.note;
+  row.appendChild(note);
+
   const go = (share) => () => {
     el('export-sheet').hidden = true;
     exportBook(book, {
@@ -857,6 +1146,7 @@ function askAboutExport(book) {
       title: el('export-title').value.trim() || book.title,
       author: el('export-author').value.trim() || null,
       filename: el('export-file').value.trim(),
+      size: exportSize,
     });
   };
   el('export-save').onclick = go(false);
@@ -864,31 +1154,34 @@ function askAboutExport(book) {
   el('export-sheet').hidden = false;
 }
 
-async function exportBook(book, { share = false, title, author, filename } = {}) {
-  const panel = el('import-progress');
-  el('import-label').textContent = `Writing ${book.title}`;
-  el('import-count').textContent = '';
-  panel.hidden = false;
+async function exportBook(book, { share = false, title, author, filename, size } = {}) {
+  const finish = progress.start(`Writing ${book.title}`);
   try {
-    const { blob, name } = await epub.buildEpub(book.id, {
+    const { blob, name, saved } = await epub.buildEpub(book.id, {
       title,
       author,
-      onProgress: (fraction) => {
-        el('import-bar').style.width = `${Math.round(fraction * 90)}%`;
-      },
+      size,
+      onProgress: (fraction, message) => progress.say(message, fraction * 0.9),
     });
     const saveAs = filename && /\.epub$/i.test(filename) ? filename : name;
     await writeOut(blob, saveAs, 'application/epub+zip', {
       share,
-      onProgress: (fraction) => {
-        el('import-bar').style.width = `${90 + Math.round(fraction * 10)}%`;
-      },
+      onProgress: (fraction) => progress.say(null, 0.9 + fraction * 0.1),
     });
-    if (share) toast(`${saveAs} ready to send`, 5000);
+
+    /* What it came out as, when it is not what the book is.
+     *
+     * A smaller copy is the one export whose result is not obvious from the
+     * file name, and the saving is the whole reason it was asked for. */
+    const smaller = size && size !== 'full'
+      ? ` · ${shrink.describeSize(size)}${saved ? `, ${shrink.describeSaving(saved)} smaller` : ''}`
+      : '';
+    if (share) toast(`${saveAs} ready to send${smaller}`, 5000);
+    else if (smaller) toast(`${saveAs} written${smaller}`, 5000);
   } catch (error) {
     toast(error.message || 'That book could not be written out', 6000);
   } finally {
-    panel.hidden = true;
+    finish();
   }
 }
 
@@ -913,15 +1206,11 @@ async function openMergeSheet() {
 
   el('merge-go').onclick = async () => {
     el('merge-sheet').hidden = true;
-    const panel = el('import-progress');
-    panel.hidden = false;
+    const finish = progress.start('Joining');
     try {
       const made = await library.mergeBooks(ordered.map((b) => b.id), {
         title: el('merge-title').value.trim() || ordered[0].title,
-        onProgress: (message, fraction) => {
-          el('import-label').textContent = message;
-          el('import-bar').style.width = `${Math.round(fraction * 100)}%`;
-        },
+        onProgress: progress.step,
       });
       clearSelection();
       await refreshShelf();
@@ -929,7 +1218,7 @@ async function openMergeSheet() {
     } catch (error) {
       toast(error.message || 'Those books could not be joined', 6000);
     } finally {
-      panel.hidden = true;
+      finish();
     }
   };
 
@@ -1022,17 +1311,14 @@ async function openFolderActions(folder, label, count) {
       sheet.hidden = true;
       const books = (await store.all('books')).filter((b) => (b.folder || '') === folder);
 
-      const panel = el('import-progress');
-      el('import-label').textContent = `Deleting ${label}`;
-      panel.hidden = false;
+      const finish = progress.start(`Deleting ${label}`);
       try {
         for (const [at, book] of books.entries()) {
-          await store.deleteBook(book.id);
-          el('import-bar').style.width = `${Math.round(((at + 1) / books.length) * 100)}%`;
-          el('import-count').textContent = `${at + 1} of ${books.length}`;
+          await library.binBooks([book.id]);
+          progress.say(null, (at + 1) / books.length, `${at + 1} of ${books.length}`);
         }
       } finally {
-        panel.hidden = true;
+        finish();
       }
 
       if (activeFolder === folder) await openFolder(null);
@@ -1140,14 +1426,85 @@ function pickFiles() {
   el('file-input').click();
 }
 
+/* ── one progress panel, any number of operations ─────────────────────────
+ *
+ * There is one panel and there was never one operation. Importing, building,
+ * dividing, exporting, deleting a folder and writing a backup all used it,
+ * and each one hid it when it finished -- so starting a second build while
+ * the first was running meant the first one to end took the bar away from the
+ * other, which from the outside is an operation that stopped reporting and
+ * may or may not still be running.
+ *
+ * Counted instead: the panel is up while anything is up. And while more than
+ * one thing is running the panel says so rather than letting two operations
+ * fight over one label, which read as a single confused operation.
+ */
+const progress = (() => {
+  let live = 0;
+  let label = '';
+
+  function paint() {
+    const panel = el('import-progress');
+    if (!panel) return;
+    panel.hidden = live === 0;
+    if (live === 0) panel.classList.remove('minimised', 'many');
+
+    if (live > 1) {
+      panel.classList.add('many');
+      el('import-label').textContent = `${live} things at once`;
+      el('import-count').textContent = '';
+    } else {
+      panel.classList.remove('many');
+      if (live === 1 && label) el('import-label').textContent = label;
+    }
+  }
+
+  /** What the one running operation is doing. Ignored while several are. */
+  function say(message, fraction, count) {
+    if (live > 1) return;
+    if (message) { label = message; el('import-label').textContent = message; }
+    if (fraction != null) el('import-bar').style.width = `${Math.round(fraction * 100)}%`;
+    if (count != null) el('import-count').textContent = count;
+  }
+
+  return {
+    say,
+    /** Passed straight to anything taking an onProgress(message, fraction). */
+    step: (message, fraction) => say(message, fraction),
+
+    /**
+     * Put the panel up, and hand back the one way of taking it down.
+     *
+     * The closure is deliberately the only way to end: a `progress.end()`
+     * anyone could call is a count that drifts, and the version of this with
+     * a shared flag had exactly one unguarded path that hid the panel with
+     * two operations still running.
+     */
+    start(message) {
+      live += 1;
+      if (live === 1) {
+        label = message || '';
+        el('import-count').textContent = '';
+        el('import-bar').style.width = '0%';
+      }
+      paint();
+
+      let ended = false;
+      return () => {
+        if (ended) return;
+        ended = true;
+        live = Math.max(0, live - 1);
+        paint();
+      };
+    },
+  };
+})();
+
 async function handleFiles(files, { transient = false } = {}) {
   if (!files.length) return;
 
   const panel = el('import-progress');
-  panel.hidden = false;
-  el('import-label').textContent = 'Opening…';
-  el('import-count').textContent = '';
-  el('import-bar').style.width = '0%';
+  const done = progress.start('Opening…');
 
   el('import-minimise').onclick = () => panel.classList.toggle('minimised');
 
@@ -1156,21 +1513,27 @@ async function handleFiles(files, { transient = false } = {}) {
      large shelf that is a redraw a second competing with the parsing. */
   let shownAt = 0;
 
-  const results = await library.importFiles(files, {
-    transient,
-    onProgress: (message, fraction, done, total) => {
-      el('import-label').textContent = message;
-      el('import-bar').style.width = `${Math.round((fraction || 0) * 100)}%`;
-      el('import-count').textContent = total ? `${done + 1} of ${total}` : '';
+  /* Taken down in a finally, not on the line after the import.
+   *
+   * An import that threw -- a corrupt archive, storage full -- left the panel
+   * up forever, which with the count behind it now would also hold it up for
+   * every later operation. */
+  let results;
+  try {
+    results = await library.importFiles(files, {
+      transient,
+      onProgress: (message, fraction, at, total) => {
+        progress.say(message, fraction || 0, total ? `${at + 1} of ${total}` : '');
 
-      if (Date.now() - shownAt > 3000) {
-        shownAt = Date.now();
-        refreshShelf();
-      }
-    },
-  });
-  panel.hidden = true;
-  panel.classList.remove('minimised');
+        if (Date.now() - shownAt > 3000) {
+          shownAt = Date.now();
+          refreshShelf();
+        }
+      },
+    });
+  } finally {
+    done();
+  }
   await refreshShelf();
 
   if (results.failed.length) {
@@ -1232,6 +1595,7 @@ function paintReader() {
 
   el('chapter-prev').disabled = !reader.hasPrevChapter();
   el('chapter-next').disabled = !reader.hasNextChapter();
+  store.settings().then(paintChapterPad);
   refreshBookmarkState();
   refreshKeepButton();
   refreshTranslateButton();
@@ -1309,6 +1673,147 @@ async function jumpToImage(image) {
  */
 let edgeToldAt = 0;
 let edgeDirection = 0;
+let edgeTimer = null;
+
+/* ── the chapter edge, said quietly ──────────────────────────────────────
+ *
+ * This was a toast: an opaque slab across the bottom of the page, over the
+ * last two lines of the chapter it is telling you about. Reaching the end of
+ * a chapter is the most ordinary thing that happens while reading and it was
+ * being announced like a failure.
+ *
+ * So it is a thin pill, mostly transparent, with the words still legible
+ * underneath it -- and it never takes a tap, because the next tap is the one
+ * that turns the chapter.
+ */
+function showEdgeHint(message) {
+  const hint = el('edge-hint');
+  if (!hint) return toast(message, 4000);
+  hint.textContent = message;
+  hint.hidden = false;
+  // Two frames, so the transition runs from the hidden state rather than
+  // being skipped because the element was display:none when it was set.
+  requestAnimationFrame(() => requestAnimationFrame(() => hint.classList.add('up')));
+
+  clearTimeout(edgeTimer);
+  edgeTimer = setTimeout(hideEdgeHint, 4000);
+}
+
+function hideEdgeHint() {
+  const hint = el('edge-hint');
+  if (!hint) return;
+  clearTimeout(edgeTimer);
+  hint.classList.remove('up');
+  // Left in the layout until the fade has finished, then taken out of it.
+  edgeTimer = setTimeout(() => { hint.hidden = true; }, 260);
+}
+
+/* ── the chapter pad ─────────────────────────────────────────────────────
+ *
+ * Turning a chapter lived in the footer, which on a tall phone is the one
+ * place a thumb cannot reach without regripping -- and in a comic, where a
+ * chapter is a volume, it is the control used most.
+ *
+ * So it floats, and it goes where the hand is: dragged anywhere, made bigger
+ * or smaller, and flipped to whichever side the thumb is on. Vertical by
+ * default, with up as onward, because that is how a thumb reads a stack --
+ * the next chapter is the one above.
+ *
+ * Locked by default, which is the part that makes it usable at all: an
+ * unlocked control sitting over the page is one that moves every time you
+ * meant to press it.
+ */
+const PAD = { on: false, x: 88, y: 64, scale: 1, vertical: true, locked: true, side: 'right' };
+
+function padSettings(settings) {
+  return { ...PAD, ...(settings?.chapterPad || {}) };
+}
+
+function paintChapterPad(settings) {
+  const pad = el('chapter-pad');
+  if (!pad) return;
+  const own = padSettings(settings);
+
+  pad.hidden = !own.on || current !== 'reader';
+  if (pad.hidden) return;
+
+  pad.dataset.vertical = own.vertical ? '' : 'no';
+  pad.classList.toggle('locked', own.locked !== false);
+  pad.style.setProperty('--pad-scale', String(own.scale || 1));
+  // Percentages, so it stays where it was put when the window changes shape
+  // -- rotation, the keyboard, the insets MainActivity pushes in.
+  pad.style.left = `${Math.max(2, Math.min(98, own.x))}%`;
+  pad.style.top = `${Math.max(6, Math.min(94, own.y))}%`;
+
+  /* Up is the next chapter when it is vertical, and the right-hand button
+   * when it is not. The two buttons swap rather than the labels, so the arrow
+   * always points the way it goes. */
+  el('pad-next').disabled = !reader.hasNextChapter();
+  el('pad-prev').disabled = !reader.hasPrevChapter();
+
+  // The footer's own pair would be a second copy of the same control.
+  el('chapter-prev').hidden = own.on;
+  el('chapter-next').hidden = own.on;
+}
+
+function wireChapterPad() {
+  const pad = el('chapter-pad');
+  if (!pad) return;
+
+  el('pad-next').onclick = async () => {
+    await reader.nextChapter();
+    paintReader();
+  };
+  el('pad-prev').onclick = async () => {
+    await reader.prevChapter(true);
+    paintReader();
+  };
+
+  /* Dragged by the grip, and only while unlocked.
+   *
+   * The grip rather than the whole pad: dragging by a button means every
+   * slightly imprecise press moves the thing you were trying to press.
+   */
+  const grip = el('pad-grip');
+  let from = null;
+
+  const begin = (event) => {
+    const touch = event.touches ? event.touches[0] : event;
+    from = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const move = async (event) => {
+    if (!from) return;
+    const settings = await store.settings();
+    if (padSettings(settings).locked !== false) return;
+
+    const touch = event.touches ? event.touches[0] : event;
+    const width = window.innerWidth || 1;
+    const height = window.innerHeight || 1;
+    const own = padSettings(settings);
+
+    const x = Math.max(2, Math.min(98, own.x + ((touch.clientX - from.x) / width) * 100));
+    const y = Math.max(6, Math.min(94, own.y + ((touch.clientY - from.y) / height) * 100));
+    from = { x: touch.clientX, y: touch.clientY };
+
+    // The side follows the pad rather than the other way round, so the
+    // Left/Right choice in Settings never disagrees with where it is.
+    const next = await store.saveSettings({
+      chapterPad: { ...own, x, y, side: x < 50 ? 'left' : 'right' },
+    });
+    paintChapterPad(next);
+    if (event.cancelable) event.preventDefault();
+  };
+
+  const end = () => { from = null; };
+
+  grip.addEventListener('touchstart', begin, { passive: true });
+  grip.addEventListener('touchmove', move, { passive: false });
+  grip.addEventListener('touchend', end);
+  grip.addEventListener('mousedown', (event) => { begin(event); event.preventDefault(); });
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', end);
+}
 
 async function atChapterEdge(direction) {
   const more = direction > 0 ? reader.hasNextChapter() : reader.hasPrevChapter();
@@ -1321,7 +1826,7 @@ async function atChapterEdge(direction) {
   if (how === 'buttons') {
     if (Date.now() - edgeToldAt > 2500) {
       edgeToldAt = Date.now();
-      toast(`End of the chapter — use ${direction > 0 ? 'Ch \u203a' : '\u2039 Ch'} to carry on`);
+      showEdgeHint(`End of the chapter — use ${direction > 0 ? 'Ch \u203a' : '\u2039 Ch'} to carry on`);
     }
     return;
   }
@@ -1333,8 +1838,8 @@ async function atChapterEdge(direction) {
   if (!asked) {
     edgeToldAt = Date.now();
     edgeDirection = direction;
-    toast(direction > 0 ? 'End of the chapter — tap again to carry on'
-      : 'Start of the chapter — tap again to go back', 4000);
+    showEdgeHint(direction > 0 ? 'End of the chapter — tap again to carry on'
+      : 'Start of the chapter — tap again to go back');
     return;
   }
 
@@ -1752,7 +2257,7 @@ async function openDivide(book, mode) {
 
   // The pages themselves, so a cut in a comic can be looked at rather than
   // read about.
-  const images = await store.byIndex('images', 'bookId', book.id);
+  const images = await library.livePictures(book.id);
   const pictures = new Map(images.filter((i) => i.blob).map((i) => [i.href, i.blob]));
 
   /* Two ways of cutting, and a comic wants both.
@@ -2061,16 +2566,12 @@ function wireDivide() {
 
   el('divide-go').onclick = async () => {
     if (!dividing || !divideCuts.size) return;
-    const panel = el('import-progress');
-    panel.hidden = false;
+    const finish = progress.start('Dividing');
     try {
       const divide = divideMode === 'pages' ? library.fragmentPages : library.fragmentBook;
       const made = await divide(dividing.book.id, [...divideCuts], {
         name: library.displayTitle(dividing.book),
-        onProgress: (label, fraction) => {
-          el('import-label').textContent = label;
-          el('import-bar').style.width = `${Math.round(fraction * 100)}%`;
-        },
+        onProgress: progress.step,
       });
       dividing = null;
       divideCuts = new Set();
@@ -2081,7 +2582,646 @@ function wireDivide() {
     } catch (error) {
       toast(error.message || 'That book could not be divided', 6000);
     } finally {
-      panel.hidden = true;
+      finish();
+    }
+  };
+}
+
+/* ── taking things out of a book ──────────────────────────────────────────
+ *
+ * Dividing cuts a book into books. This takes content out and keeps the
+ * book, which is the other half of the same need and the one that was
+ * missing: a download arrives with things attached that are not the work --
+ * a scanlator's credit page in front of every chapter, the advertisement
+ * spread bound into a volume, the duplicated scan, the sample chapter for a
+ * different series.
+ *
+ * Picking those out is a different gesture from placing a cut. A cut is one
+ * position chosen carefully; this is a handful of pages recognised on sight,
+ * scattered through six hundred. So it is a grid of the pages themselves
+ * rather than a list of their names, and the pages that repeat -- the first
+ * of every chapter, the last of every chapter -- can be taken in one tap
+ * instead of forty.
+ */
+
+let removing = null;                    // what inspect() found
+let removePicked = new Set();
+let removeMode = 'pages';
+/* Thumbnails live only as long as the screen does. */
+const removeThumbs = blobs.urlCache();
+
+async function openRemove(book, mode) {
+  let look;
+  try {
+    look = await trim.inspect(book.id);
+  } catch (error) {
+    return toast(error.message || 'That book could not be opened');
+  }
+
+  if (!look.canChapters && !look.canPages) {
+    return toast('There is nothing in that book to take out');
+  }
+
+  removeMode = mode || (look.canPages ? 'pages' : 'chapters');
+  if (removeMode === 'pages' && !look.canPages) removeMode = 'chapters';
+  if (removeMode === 'chapters' && !look.canChapters) removeMode = 'pages';
+
+  removing = look;
+  removePicked = new Set();
+  removeThumbs.release();
+  renderRemove();
+  await show('remove');
+}
+
+/** Which of the two things can be taken out, offered only where both can. */
+function renderRemoveModes() {
+  const row = el('remove-mode');
+  row.innerHTML = '';
+  if (!removing.canChapters || !removing.canPages) { row.hidden = true; return; }
+  row.hidden = false;
+
+  for (const [mode, text] of [['pages', 'Pages'], ['chapters', 'Chapters']]) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.textContent = text;
+    chip.setAttribute('aria-pressed', String(removeMode === mode));
+    chip.onclick = () => {
+      if (removeMode === mode) return;
+      removeMode = mode;
+      // A pick is a position in one list or the other; they do not carry over.
+      removePicked = new Set();
+      renderRemove();
+    };
+    row.appendChild(chip);
+  }
+}
+
+/**
+ * Ways of picking that would otherwise be forty taps.
+ *
+ * The credit page at the front of every chapter is the single most common
+ * thing anybody wants out of a comic, and picking it out by hand across
+ * thirty volumes is the kind of job people give up on halfway through.
+ */
+function renderRemovePicks() {
+  const row = el('remove-picks');
+  row.innerHTML = '';
+
+  const total = removeMode === 'pages' ? removing.pages.length : removing.rows.length;
+
+  const pick = (text, run, title) => {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.textContent = text;
+    if (title) chip.title = title;
+    chip.onclick = () => { run(); renderRemove(); };
+    row.appendChild(chip);
+  };
+
+  if (removeMode === 'pages') {
+    const byChapter = new Map();
+    removing.pages.forEach((page) => {
+      if (!byChapter.has(page.chapterIndex)) byChapter.set(page.chapterIndex, []);
+      byChapter.get(page.chapterIndex).push(page.at);
+    });
+
+    if (byChapter.size > 1) {
+      pick('First of each chapter', () => {
+        removePicked = new Set([...byChapter.values()].map((ats) => ats[0]));
+      }, 'The credit page, usually');
+      pick('Last of each chapter', () => {
+        removePicked = new Set([...byChapter.values()].map((ats) => ats[ats.length - 1]));
+      });
+    }
+  }
+
+  pick('Invert', () => {
+    const next = new Set();
+    for (let at = 0; at < total; at++) if (!removePicked.has(at)) next.add(at);
+    removePicked = next;
+  });
+
+  const note = document.createElement('span');
+  note.className = 'muted';
+  note.style.cssText = 'font-size:11px;align-self:center;margin-left:4px';
+  note.textContent = 'Tap to pick';
+  row.appendChild(note);
+}
+
+function renderRemove() {
+  if (!removing) return;
+  const { book } = removing;
+  const body = el('remove-body');
+  body.innerHTML = '';
+
+  const pages = removeMode === 'pages';
+  const rows = pages ? removing.pages : removing.rows;
+  const allPictures = pages && rows.every((row) => row.picture);
+  const noun = pages ? (allPictures ? 'pages' : 'sections') : 'chapters';
+
+  renderRemoveModes();
+  renderRemovePicks();
+
+  el('remove-of').textContent = `${library.displayTitle(book)} · ${rows.length} ${noun}`;
+
+  if (removing.history.length) body.appendChild(removeHistory());
+
+  const how = document.createElement('p');
+  how.className = 'muted';
+  how.style.cssText = 'font-size:12px;line-height:1.5;margin:0 0 10px';
+  how.textContent = allPictures
+    ? 'Tap a page to pick it, or the glass to see it full size. Nothing goes until you confirm, and it can be put back afterwards.'
+    : `Tap ${noun === 'chapters' ? 'a chapter' : 'one'} to pick it, or the glass to read a little of it. `
+      + 'Nothing goes until you confirm, and it can be put back afterwards.';
+  body.appendChild(how);
+
+  /* A grid of the pages for a comic, a list of names for anything else.
+   *
+   * A page of a comic has no name worth reading and is recognised on sight in
+   * a moment; a chapter of prose is the other way round. Showing both the
+   * same way means one of them is useless. */
+  const holder = document.createElement('div');
+  holder.className = allPictures ? 'remove-grid' : 'remove-list';
+
+  rows.forEach((row, at) => {
+    holder.appendChild(allPictures ? removeCell(row, at) : removeLine(row, at, pages));
+  });
+  body.appendChild(holder);
+
+  const left = rows.length - removePicked.size;
+  el('remove-count').textContent = removePicked.size
+    ? `${removePicked.size} out · ${left} left`
+    : `Nothing picked`;
+  el('remove-go').disabled = removePicked.size === 0 || left === 0;
+  el('remove-none').disabled = removePicked.size === 0;
+}
+
+/** A page of a comic, as the page. */
+function removeCell(page, at) {
+  const cell = document.createElement('button');
+  cell.className = 'remove-cell';
+  cell.setAttribute('aria-pressed', String(removePicked.has(at)));
+  cell.onclick = () => { toggleRemove(at); };
+
+  const img = document.createElement('img');
+  img.alt = '';
+  img.loading = 'lazy';
+  cell.appendChild(img);
+
+  const number = document.createElement('span');
+  number.className = 'remove-number';
+  number.textContent = String(at + 1);
+  cell.appendChild(number);
+
+  /* A separate target for looking, because tapping the page picks it.
+   *
+   * One gesture cannot mean both "I want to see this" and "remove this", and
+   * making the tap open a viewer would turn picking forty credit pages into
+   * forty viewers to dismiss. */
+  const look = document.createElement('span');
+  look.className = 'remove-look-btn';
+  look.title = 'Look at this page';
+  look.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/>'
+    + '<path d="M20 20l-4.6-4.6"/></svg>';
+  look.onclick = (event) => {
+    event.stopPropagation();     // not a pick
+    openRemoveLook(at);
+  };
+  cell.appendChild(look);
+
+  /* Decoded when it comes into view, not all six hundred at once.
+   *
+   * A volume of three hundred pages is three hundred decodes, and doing them
+   * on render is a screen that does not appear for several seconds on a
+   * mid-range phone. Where there is no observer to lean on -- an old WebView,
+   * or a test -- they are all drawn immediately, which is slow rather than
+   * broken. */
+  const blob = page.picture ? removing.pictures.get(page.picture) : null;
+  const draw = () => { if (blob) img.src = removeThumbs.url(page.picture, blob, blob.size); };
+
+  if (typeof IntersectionObserver === 'function') {
+    const watch = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      draw();
+      watch.disconnect();
+    }, { rootMargin: '400px' });
+    watch.observe(cell);
+  } else {
+    draw();
+  }
+
+  return cell;
+}
+
+/** A chapter, or a paragraph of prose, as a line of text. */
+function removeLine(row, at, pages) {
+  const line = document.createElement('button');
+  line.className = 'remove-row';
+  line.setAttribute('aria-pressed', String(removePicked.has(at)));
+  line.onclick = () => { toggleRemove(at); };
+
+  const label = pages
+    ? (row.picture
+      ? `Page ${at + 1}${row.chapterTitle ? ` · ${row.chapterTitle}` : ''}`
+      : (row.text.slice(0, 70) || `Section ${at + 1}`))
+    : row.title;
+
+  const note = pages
+    ? (row.picture ? (row.chapterTitle || 'page') : `${row.text.split(/\s+/).filter(Boolean).length} words`)
+    : [row.pages === 1 ? '1 page' : `${row.pages} pages`,
+      row.pictures ? `${row.pictures} pictures` : null,
+      row.words ? `${row.words} words` : null].filter(Boolean).join(' · ');
+
+  line.innerHTML = `<span class="remove-tick"></span>`
+    + `<span class="col"><b>${escapeText(label)}</b><small>${escapeText(note)}</small></span>`;
+
+  // The same split as the grid: tapping the row picks it, the glass looks at
+  // it. A chapter called "Chapter 41" and an afterword called "Chapter 41"
+  // are the same row until you read a paragraph of either.
+  const look = document.createElement('span');
+  look.className = 'remove-look-btn inline';
+  look.title = 'Look at this';
+  look.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/>'
+    + '<path d="M20 20l-4.6-4.6"/></svg>';
+  look.onclick = (event) => { event.stopPropagation(); openRemoveLook(at); };
+  line.appendChild(look);
+
+  return line;
+}
+
+function toggleRemove(at) {
+  if (removePicked.has(at)) removePicked.delete(at);
+  else removePicked.add(at);
+  renderRemove();
+}
+
+/* ── looking at one of them properly ─────────────────────────────────────
+ *
+ * A thumbnail is enough to find a page and not enough to be sure about it: a
+ * scanlator's credit page and the first page of a chapter are the same shape
+ * at that size, and so are two consecutive pages of the same spread. The
+ * whole reason to preview a removal is to be able to trust it, and a grid of
+ * eighty-pixel pictures cannot be trusted.
+ *
+ * So one of them can be opened full size and stepped through from there,
+ * picked or unpicked on the way -- which is also the fastest way to go
+ * through a volume: look, decide, next.
+ */
+let looking = null;          // { of: [at,…], cursor }
+
+function openRemoveLook(at, only = null) {
+  if (!removing) return;
+  const total = (removeMode === 'pages' ? removing.pages : removing.rows).length;
+
+  /* What it steps through: the picked ones when it was opened from the
+   * confirmation, which is a review of a decision already made, and the whole
+   * book when it was opened from a page, which is making the decision. */
+  const of = only && only.length ? [...only] : Array.from({ length: total }, (_, n) => n);
+  const cursor = Math.max(0, of.indexOf(at));
+
+  looking = { of, cursor: cursor === -1 ? 0 : cursor };
+  paintRemoveLook();
+  el('remove-look').hidden = false;
+}
+
+function closeRemoveLook() {
+  looking = null;
+  el('remove-look').hidden = true;
+  renderRemove();
+}
+
+function paintRemoveLook() {
+  if (!looking) return;
+  const at = looking.of[looking.cursor];
+  const pages = removeMode === 'pages';
+  const row = (pages ? removing.pages : removing.rows)[at];
+  if (!row) return closeRemoveLook();
+
+  const stage = el('remove-look-stage');
+  stage.innerHTML = '';
+
+  const href = row.picture || row.pictureHrefs?.[0] || null;
+  const blob = href ? removing.pictures.get(href) : null;
+
+  if (blob) {
+    const img = document.createElement('img');
+    img.src = removeThumbs.url(href, blob, blob.size);
+    img.alt = '';
+    stage.appendChild(img);
+  } else {
+    /* Prose, which is the other half of this: an afterword and a chapter are
+     * indistinguishable by name, and a paragraph of either tells you which
+     * one you are looking at. */
+    const text = document.createElement('p');
+    text.className = 'look-text';
+    text.textContent = pages
+      ? (row.text || 'Nothing to show for this one')
+      : (row.extract || row.preview || 'Nothing to show for this one');
+    stage.appendChild(text);
+  }
+
+  const label = pages
+    ? `Page ${at + 1} of ${removing.pages.length}${row.chapterTitle ? ` · ${row.chapterTitle}` : ''}`
+    : `${row.title} · ${[row.pages === 1 ? '1 page' : `${row.pages} pages`,
+      row.pictures ? `${row.pictures} pictures` : null,
+      row.words ? `${row.words} words` : null].filter(Boolean).join(' · ')}`;
+
+  el('remove-look-caption').textContent = looking.of.length < (pages ? removing.pages : removing.rows).length
+    ? `${label} · ${looking.cursor + 1} of ${looking.of.length} picked`
+    : label;
+
+  el('remove-look-prev').disabled = looking.cursor === 0;
+  el('remove-look-next').disabled = looking.cursor >= looking.of.length - 1;
+
+  // The same button says both things, so there is one place to look and one
+  // place to press.
+  const picked = removePicked.has(at);
+  const pick = el('remove-look-pick');
+  pick.textContent = picked ? 'Keep it' : 'Take this out';
+  pick.className = picked ? 'btn ghost' : 'btn danger';
+}
+
+function stepRemoveLook(by) {
+  if (!looking) return;
+  const to = looking.cursor + by;
+  if (to < 0 || to >= looking.of.length) return;
+  looking.cursor = to;
+  paintRemoveLook();
+}
+
+/* ── the last word before it happens ─────────────────────────────────────
+ *
+ * Taking pages out is the one operation here that deleting the result does
+ * not undo, so it is the one that gets a confirmation -- and the
+ * confirmation is the pages themselves, because "12 pages" is not something
+ * anybody can check.
+ *
+ * What it says about pictures, marks and what is left all comes from the same
+ * plan the removal runs, read rather than written. A preview computed by a
+ * second piece of code that is supposed to agree with the first will
+ * eventually disagree, and then it is worse than none.
+ */
+async function askAboutRemoval() {
+  if (!removing || !removePicked.size) return;
+
+  let look;
+  try {
+    look = await trim.preview(removing.book.id, removeMode, pickedKeys());
+  } catch (error) {
+    return toast(error.message || 'That could not be taken out', 6000);
+  }
+
+  el('remove-confirm-what').textContent = `Taking out ${look.what}`;
+
+  /* A strip of what is going, in the order it sits in the book.
+   *
+   * Capped, with the rest counted: a hundred thumbnails in a sheet is a
+   * scroll nobody finishes, and the point is to recognise the kind of thing
+   * being removed rather than to audit every one. Looking through all of them
+   * is the button next to it. */
+  const strip = el('remove-confirm-strip');
+  strip.innerHTML = '';
+  const SHOWN = 12;
+
+  for (const item of look.items.slice(0, SHOWN)) {
+    const cell = document.createElement('div');
+    cell.className = 'remove-strip-cell';
+
+    const blob = item.picture ? removing.pictures.get(item.picture) : null;
+    if (blob) {
+      const img = document.createElement('img');
+      img.src = removeThumbs.url(item.picture, blob, blob.size);
+      img.alt = '';
+      cell.appendChild(img);
+    } else {
+      const text = document.createElement('span');
+      text.className = 'remove-strip-text';
+      text.textContent = item.text || item.note || item.label;
+      cell.appendChild(text);
+    }
+
+    const name = document.createElement('small');
+    name.textContent = item.label;
+    cell.appendChild(name);
+    strip.appendChild(cell);
+  }
+
+  if (look.items.length > SHOWN) {
+    const more = document.createElement('div');
+    more.className = 'remove-strip-cell more';
+    more.innerHTML = `<span>+${look.items.length - SHOWN}</span><small>more</small>`;
+    strip.appendChild(more);
+  }
+
+  /* Everything that goes with it, said rather than discovered afterwards.
+   *
+   * The marks line is the one that matters: a bookmark on text that is being
+   * removed cannot stay where it is, and finding that out after the fact is
+   * how somebody loses a note they cared about. */
+  const parts = [];
+  if (look.pictures) {
+    parts.push(look.pictures === 1
+      ? '1 picture stops being used'
+      : `${look.pictures} pictures stop being used`);
+  }
+  if (look.marks) {
+    parts.push(look.marks === 1
+      ? '1 bookmark comes out with it'
+      : `${look.marks} bookmarks come out with them`);
+  }
+  /* Only worth saying when pages are what is being removed.
+   *
+   * Taking chapters out obviously costs chapters, and repeating it under a
+   * heading that already says "2 chapters" reads as a second, different
+   * consequence. Taking pages out emptying a whole chapter is the surprise,
+   * and that is the case this is here for. */
+  const gone = look.chaptersWas - look.chaptersLeft;
+  if (gone > 0 && look.mode === 'pages') {
+    parts.push(gone === 1
+      ? '1 chapter is emptied and goes with them'
+      : `${gone} chapters are emptied and go with them`);
+  }
+
+  el('remove-confirm-note').innerHTML =
+    `<b>${look.pagesLeft} page${look.pagesLeft === 1 ? '' : 's'} and ${
+      look.chaptersLeft} chapter${look.chaptersLeft === 1 ? '' : 's'} left.</b>`
+    + (parts.length ? ` ${escapeText(parts.join(' · '))}.` : '')
+    + ' Everything here can be put back from this screen until you discard it.';
+
+  el('remove-confirm').hidden = false;
+}
+
+/** The picks, as the numbers the removal itself takes. */
+function pickedKeys() {
+  if (removeMode === 'pages') return [...removePicked];
+  // A chapter is picked by where it sits in the list; the removal wants the
+  // chapter's own number, and after an earlier removal those are not the
+  // same thing to rely on.
+  return [...removePicked].map((at) => removing.rows[at]?.index).filter((n) => n != null);
+}
+
+/**
+ * What has already been taken out of this book, and the two ways back.
+ *
+ * Put back is offered for the newest removal only, and that is the whole
+ * reason it is exact rather than a guess: nothing has happened to the book
+ * since, so the positions the removal recorded still describe the book it is
+ * going back into.
+ */
+function removeHistory() {
+  const panel = document.createElement('div');
+  panel.className = 'remove-history';
+
+  const records = trim.removalSummary(removing.book);
+  const total = records.reduce((n, record) => n + record.count, 0);
+
+  const line = document.createElement('p');
+  line.innerHTML = `<b>${total} taken out of this book</b>`;
+  panel.appendChild(line);
+
+  const list = document.createElement('div');
+  list.className = 'remove-history-list';
+  for (const record of [...records].reverse()) {
+    const item = document.createElement('p');
+    item.className = 'muted';
+    item.textContent = record.newest
+      ? `${record.what} — the most recent`
+      : `${record.what}`;
+    list.appendChild(item);
+  }
+  panel.appendChild(list);
+
+  const actions = document.createElement('div');
+  actions.className = 'remove-history-actions';
+
+  const back = document.createElement('button');
+  back.className = 'btn ghost';
+  back.textContent = 'Put the last one back';
+  back.onclick = () => runPutBack();
+  actions.appendChild(back);
+
+  const gone = document.createElement('button');
+  gone.className = 'btn ghost';
+  gone.textContent = 'Discard for good';
+  gone.title = 'Frees the space the removed pictures still take up';
+  gone.onclick = () => runDiscard();
+  actions.appendChild(gone);
+
+  panel.appendChild(actions);
+  return panel;
+}
+
+async function runPutBack() {
+  if (!removing) return;
+  const id = removing.book.id;
+  const done = progress.start('Putting it back');
+  try {
+    const out = await trim.putBack(id, { onProgress: progress.step });
+    toast(`${out.what} back in the book`, 5000);
+    await refreshShelf();
+    await reopenRemove(id);
+  } catch (error) {
+    toast(error.message || 'That could not be put back', 6000);
+  } finally {
+    done();
+  }
+}
+
+async function runDiscard() {
+  if (!removing) return;
+  const id = removing.book.id;
+  const count = (removing.history || []).reduce((n, r) => n + (r.count || 0), 0);
+
+  // Asked for in the footer rather than a dialog, as deleting books is.
+  el('confirm-text').textContent = `Discard ${count} removed item${count === 1 ? '' : 's'}? They cannot be put back.`;
+  el('confirm-yes').textContent = 'Discard';
+  el('confirm-bar').hidden = false;
+
+  el('confirm-no').onclick = () => { el('confirm-bar').hidden = true; resetConfirm(); };
+  el('confirm-yes').onclick = async () => {
+    el('confirm-bar').hidden = true;
+    resetConfirm();
+    const done = progress.start('Discarding');
+    try {
+      const out = await trim.discard(id, { onProgress: progress.step });
+      toast(out.pictures
+        ? `Discarded — ${out.pictures} picture${out.pictures === 1 ? '' : 's'} freed`
+        : 'Discarded', 5000);
+      await reopenRemove(id);
+    } catch (error) {
+      toast(error.message || 'That could not be discarded', 6000);
+    } finally {
+      done();
+    }
+  };
+}
+
+/** Read the book again, so the screen shows what it is now. */
+async function reopenRemove(bookId) {
+  const book = await store.get('books', bookId);
+  if (!book) { removing = null; return show('library'); }
+  removeThumbs.release();
+  removing = await trim.inspect(bookId);
+  removePicked = new Set();
+  if (removeMode === 'pages' && !removing.canPages) removeMode = 'chapters';
+  if (removeMode === 'chapters' && !removing.canChapters) removeMode = 'pages';
+  renderRemove();
+}
+
+function wireRemove() {
+  el('remove-none').onclick = () => { removePicked = new Set(); renderRemove(); };
+
+  // The footer asks; the sheet is what actually sets it going.
+  el('remove-go').onclick = () => askAboutRemoval();
+
+  el('remove-confirm-cancel').onclick = () => { el('remove-confirm').hidden = true; };
+  el('remove-confirm').onclick = (event) => {
+    if (event.target === el('remove-confirm')) el('remove-confirm').hidden = true;
+  };
+
+  /* Straight from the confirmation into looking through exactly what it
+   * listed, which is the honest answer to "are you sure": not a bigger
+   * warning, the pages themselves. */
+  el('remove-confirm-look').onclick = () => {
+    el('remove-confirm').hidden = true;
+    const picked = [...removePicked].sort((a, b) => a - b);
+    if (picked.length) openRemoveLook(picked[0], picked);
+  };
+
+  el('remove-look-close').onclick = () => closeRemoveLook();
+  el('remove-look-prev').onclick = () => stepRemoveLook(-1);
+  el('remove-look-next').onclick = () => stepRemoveLook(1);
+  el('remove-look-pick').onclick = () => {
+    if (!looking) return;
+    const at = looking.of[looking.cursor];
+    if (removePicked.has(at)) removePicked.delete(at);
+    else removePicked.add(at);
+    paintRemoveLook();
+  };
+
+  el('remove-confirm-go').onclick = async () => {
+    el('remove-confirm').hidden = true;
+    if (!removing || !removePicked.size) return;
+    const id = removing.book.id;
+    const done = progress.start('Taking it out');
+    try {
+      const take = removeMode === 'pages' ? trim.removePages : trim.removeChapters;
+      const out = await take(id, pickedKeys(), { onProgress: progress.step });
+
+      await refreshShelf();
+      await reopenRemove(id);
+
+      /* Said in full, because it is the one operation here that changes a
+       * book that already exists -- and the sentence that matters is the one
+       * about getting it back. */
+      const marks = out.marks
+        ? `, ${out.marks} mark${out.marks === 1 ? '' : 's'} with it`
+        : '';
+      toast(`${out.what} taken out${marks} — put back from this screen`, 7000);
+    } catch (error) {
+      toast(error.message || 'That could not be taken out', 6000);
+    } finally {
+      done();
     }
   };
 }
@@ -2206,15 +3346,11 @@ function wireWorkshop() {
       const files = [...(picker.files || [])];
       if (!files.length) return;
 
-      const panel = el('import-progress');
-      panel.hidden = false;
+      const finish = progress.start('Reading the files');
       try {
-        await build.add(files, (message, fraction) => {
-          el('import-label').textContent = message;
-          el('import-bar').style.width = `${Math.round((fraction || 0) * 100)}%`;
-        });
+        await build.add(files, (message, fraction) => progress.say(message, fraction || 0));
       } finally {
-        panel.hidden = true;
+        finish();
       }
       renderWorkshop();
     };
@@ -2235,16 +3371,13 @@ function wireWorkshop() {
   };
 
   el('build-go').onclick = async () => {
-    const panel = el('import-progress');
-    panel.hidden = false;
+    const finish = progress.start('Building');
     try {
       const { book, failed } = await build.build({
         title: el('build-title').value.trim() || undefined,
         author: el('build-author').value.trim() || undefined,
-        onProgress: (message, fraction, done, total) => {
-          el('import-label').textContent = message;
-          el('import-bar').style.width = `${Math.round(fraction * 100)}%`;
-          el('import-count').textContent = total ? `${done + 1} of ${total}` : '';
+        onProgress: (message, fraction, at, total) => {
+          progress.say(message, fraction, total ? `${at + 1} of ${total}` : '');
         },
       });
       build.clear();
@@ -2262,7 +3395,7 @@ function wireWorkshop() {
     } catch (error) {
       toast(error.message || 'That could not be built', 6000);
     } finally {
-      panel.hidden = true;
+      finish();
     }
   };
 }
@@ -2455,13 +3588,17 @@ function wireReader() {
 /* The three tab screens sit in a row you can swipe between, in the order the
  * bar shows them. The reader is deliberately not in this set: a horizontal
  * swipe there already means turn the page. */
-const TABS = ['library', 'folders', 'workshop', 'sort', 'stats', 'settings'];
+const TABS = ['library', 'folders', 'workshop', 'bin', 'sort', 'stats', 'settings'];
 
 function wireSwipeBetweenTabs() {
   let startX = 0, startY = 0, startAt = 0, tracking = false;
 
   document.getElementById('screens').addEventListener('touchstart', (e) => {
-    if (!TABS.includes(current) || e.touches.length !== 1) { tracking = false; return; }
+    // A touchstart with no touch list is not a swipe. It should not be
+    // possible, and it threw here rather than being ignored -- one stray
+    // event of the wrong shape and the whole gesture layer stops working for
+    // the rest of the session.
+    if (!TABS.includes(current) || e.touches?.length !== 1) { tracking = false; return; }
     tracking = true;
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
@@ -2471,8 +3608,10 @@ function wireSwipeBetweenTabs() {
   document.getElementById('screens').addEventListener('touchend', (e) => {
     if (!tracking) return;
     tracking = false;
-    const dx = e.changedTouches[0].clientX - startX;
-    const dy = e.changedTouches[0].clientY - startY;
+    const went = e.changedTouches?.[0];
+    if (!went) return;
+    const dx = went.clientX - startX;
+    const dy = went.clientY - startY;
 
     // Strict on purpose, and stricter than it was: a shelf is a tall scrolling
     // grid, and a flick down with any lean to it was changing screens.
@@ -2494,8 +3633,21 @@ function wireSwipeBetweenTabs() {
 
 function wireChrome() {
   document.addEventListener('click', (event) => {
-    const go = event.target.closest('[data-go]');
-    if (go) { show(go.dataset.go, { replace: TABS.includes(go.dataset.go) }); return; }
+    /* A named screen, and only a named screen.
+     *
+     * An empty data-go used to reach here and navigate to nothing, which
+     * switched the current screen off and left the app blank. The selector
+     * excludes it and the guard below covers anything else that ever carries
+     * the attribute without a value -- a blank page is the worst failure this
+     * app has, and it should not be one typo away. */
+    const go = event.target.closest('[data-go]:not([data-go=""])');
+    if (go) {
+      const name = go.dataset.go;
+      if (name && screenNode(name)) {
+        show(name, { replace: TABS.includes(name) });
+      }
+      return;
+    }
     if (event.target.closest('[data-back]')) { back(); return; }
     if (event.target.closest('[data-import]')) { pickFiles(); }
   });
@@ -2611,6 +3763,13 @@ async function writeOut(blob, name, mimeType, { share = false, onProgress } = {}
 window.Grimoire = {
   /** Called from Java once a file has been written where it was asked for. */
   exportSaved(name) { toast(`Saved ${name}`, 5000); },
+
+  /* Something the shell needs to say, said once the page can say it.
+   *
+   * Used when the render process has died and the view has been rebuilt: the
+   * app comes back on the shelf, and without a word about it that reads as
+   * the app having thrown away whatever was being read. */
+  notice(message) { toast(message, 8000); },
   exportFailed(reason) { toast(reason || 'That file could not be saved', 6000); },
 
 
@@ -2619,13 +3778,15 @@ window.Grimoire = {
 
   /** Return true to swallow the back gesture. */
   onBack() {
+    if (!el('remove-look').hidden) { closeRemoveLook(); return true; }
+    if (!el('remove-confirm').hidden) { el('remove-confirm').hidden = true; return true; }
     if (!el('folder-actions').hidden) { el('folder-actions').hidden = true; return true; }
     if (!el('export-sheet').hidden) { el('export-sheet').hidden = true; return true; }
     if (!el('merge-sheet').hidden) { el('merge-sheet').hidden = true; return true; }
     if (!el('bundle-sheet').hidden) { el('bundle-sheet').hidden = true; return true; }
     if (!el('status-sheet').hidden) { el('status-sheet').hidden = true; return true; }
     if (!el('folder-sheet').hidden) { el('folder-sheet').hidden = true; return true; }
-    if (!el('confirm-bar').hidden) { el('confirm-bar').hidden = true; return true; }
+    if (!el('confirm-bar').hidden) { el('confirm-bar').hidden = true; resetConfirm(); return true; }
     // Selection is a mode, and back should leave a mode before leaving a
     // screen -- otherwise deselecting means backing out of the library.
     if (clearSelection()) return true;
@@ -2714,6 +3875,11 @@ async function boot() {
   wireDesk();
   wireWorkshop();
   wireDivide();
+  wireRemove();
+  wireBin();
+  wireChapterPad();
+  paintChapterPad(settings);
+  screens.onLongPressBook(openBookMenu);
   refreshGuides();
 
   /* If the app died last time, say so.

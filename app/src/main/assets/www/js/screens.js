@@ -358,7 +358,15 @@ export async function openReel(bookId, onJump) {
   }
 
   const settings = await store.settings();
-  const images = (await store.byIndex('images', 'bookId', bookId)).sort((a, b) => a.order - b.order);
+  /* The pictures the book still shows.
+   *
+   * A page taken out of the book keeps its row so the removal can be put
+   * back, so the strip has to skip the flagged ones -- otherwise the page is
+   * gone from the book and still here, which is the one place it would be
+   * most obvious. */
+  const images = (await store.byIndex('images', 'bookId', bookId))
+    .filter((image) => !image.removed)
+    .sort((a, b) => a.order - b.order);
 
   // Dimensions are not recorded at import -- decoding a whole book's artwork
   // to fill in two numbers is minutes nobody asked for. They are measured
@@ -522,10 +530,18 @@ function viewer(url, image, onGo) {
     <div class="viewer-bar">
       <button class="btn ghost" data-close>Close</button>
       <button class="btn ghost" data-share>Share</button>
-      <button class="btn primary" data-go>Go to page</button>
+      <button class="btn primary" data-goto-page>Go to page</button>
     </div>`;
   overlay.querySelector('[data-close]').onclick = () => overlay.remove();
-  overlay.querySelector('[data-go]').onclick = () => { overlay.remove(); onGo(); };
+  /* data-goto-page, not data-go.
+   *
+   * data-go is the app's router attribute and the handler for it is on the
+   * document: a bare `data-go` with no value read as "go to the screen called
+   * nothing", which switched the current screen off, found no screen to switch
+   * on, and left the app a blank page -- reported as the app crashing when
+   * jumping to a page. The jump is not a navigation; it should never have been
+   * wearing the router's attribute. */
+  overlay.querySelector('[data-goto-page]').onclick = () => { overlay.remove(); onGo(); };
   overlay.querySelector('[data-share]').onclick = () => {
     // The shell exposes a share intent; there is no web share in a WebView.
     window.GrimoireNative?.shareText?.(`Image from ${reader.state.book?.title || 'a book'}`);
@@ -547,6 +563,17 @@ const foldDiacritics = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 
 /** Whether the search screen is searching a book or the shelf. */
 let findInBook = false;
+
+/* A long press on a search result.
+ *
+ * Everything you can do to a book was behind selecting it on the shelf, so
+ * finding a book by name and then wanting to move it, rename it or write it
+ * out meant leaving the search, clearing the query and hunting for the same
+ * book on the grid. A press gives the same menu where the book already is.
+ */
+let onBookMenu = null;
+
+export function onLongPressBook(fn) { onBookMenu = fn; }
 
 export function initFind(onGoToMatch, fromReader = false) {
   const input = el('find-input');
@@ -677,7 +704,10 @@ async function runFind(query, onGoToMatch) {
     grid.className = 'shelf find-shelf';
 
     for (const book of hits) {
-      const node = library.bookTile(book, () => onGoToMatch({ bookId: book.id }));
+      const node = library.bookTile(
+        book,
+        () => onGoToMatch({ bookId: book.id }),
+        onBookMenu ? (pressed) => onBookMenu(pressed) : null);
 
       /* Why this book is in the list.
        *

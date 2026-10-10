@@ -1500,3 +1500,333 @@ body[data-view="reader"] .stepper {
               rgba(0, 0, 0, .06), rgba(0, 0, 0, .22));
   pointer-events: none;
 }
+
+
+/* ===========================================================================
+   Taking things out of a book.
+
+   Dividing is a list with lines drawn through it: one position, chosen
+   carefully. This is the opposite gesture -- a handful of pages recognised on
+   sight, scattered through six hundred -- so a comic gets a grid of the pages
+   themselves and everything else gets a list of names.
+   ======================================================================== */
+
+.remove-grid {
+  display: grid;
+  /* Four across on a phone, more on a tablet, without a media query: a page
+     needs to be big enough to recognise and small enough that a volume fits
+     on a screen or two. */
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+}
+
+.remove-cell {
+  position: relative;
+  display: block;
+  padding: 0;
+  aspect-ratio: 2 / 3;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.remove-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* Picked reads as "going", not as "selected".
+   The accent means chosen everywhere else in the app; here chosen means
+   deleted, so it is dimmed and crossed rather than brightened. */
+.remove-cell[aria-pressed="true"] { border-color: var(--accent); }
+.remove-cell[aria-pressed="true"] img { opacity: .34; }
+.remove-cell[aria-pressed="true"]::after {
+  content: "";
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(to bottom right, transparent calc(50% - 1px),
+                    var(--accent) calc(50% - 1px), var(--accent) calc(50% + 1px),
+                    transparent calc(50% + 1px)),
+    linear-gradient(to bottom left, transparent calc(50% - 1px),
+                    var(--accent) calc(50% - 1px), var(--accent) calc(50% + 1px),
+                    transparent calc(50% + 1px));
+  pointer-events: none;
+}
+
+.remove-number {
+  position: absolute; left: 0; bottom: 0;
+  padding: 2px 5px;
+  font-family: var(--font-heading); font-weight: 700; font-size: 10px;
+  color: var(--accent-100);
+  background: rgba(0, 0, 0, .55);
+  border-top-right-radius: var(--radius-sm);
+}
+
+.remove-list { display: block; }
+
+.remove-row {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 9px 2px; text-align: left;
+  min-height: 48px;
+  border-bottom: 1px solid var(--hairline);
+}
+.remove-row .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.remove-row b { font-size: 13px; font-weight: 500;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remove-row small { color: var(--muted); font-size: 11px; }
+
+/* A box that fills in, because the row has to say which state it is in
+   without relying on the colour of the text. */
+.remove-tick {
+  flex: none; width: 18px; height: 18px;
+  border: 1.5px solid var(--divider); border-radius: var(--radius-sm);
+}
+.remove-row[aria-pressed="true"] .remove-tick {
+  background: var(--accent); border-color: var(--accent);
+}
+.remove-row[aria-pressed="true"] b { color: var(--muted); text-decoration: line-through; }
+
+/* What has already gone, and the two ways back. */
+.remove-history {
+  margin: 0 0 12px; padding: 11px 12px;
+  border: 1px solid var(--hairline); border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.remove-history p { margin: 0 0 4px; font-size: 12px; line-height: 1.5; }
+.remove-history-list p { font-size: 11px; }
+.remove-history-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
+
+/* ===========================================================================
+   The chapter pad.
+
+   Chapter turning lived in the footer, which on a tall phone is the one place
+   a thumb cannot reach without regripping. It floats instead: anywhere on the
+   page, at whatever size suits the hand, on whichever side it is on.
+   ======================================================================== */
+
+.chapter-pad {
+  position: absolute;
+  z-index: 24;
+  /* The stored position is the pad's centre, so flipping sides and resizing
+     both behave the way they look like they should. */
+  transform: translate(-50%, -50%) scale(var(--pad-scale, 1));
+  transform-origin: center;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 4px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--divider);
+  /* Solid, and made read-through below only where the blur that makes that
+     legible is actually supported. A bare color-mix is an invalid
+     declaration on a WebView without it, which leaves the pad with no
+     background at all -- an invisible control over the page. */
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .22);
+}
+.chapter-pad[hidden] { display: none; }
+
+@supports (backdrop-filter: blur(6px)) or (-webkit-backdrop-filter: blur(6px)) {
+  .chapter-pad {
+    background: color-mix(in srgb, var(--surface) 74%, transparent);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+}
+
+/* Side by side, for anyone who would rather have it that way. */
+.chapter-pad[data-vertical="no"] { flex-direction: row; }
+
+.pad-btn {
+  display: grid; place-items: center;
+  width: 46px; height: 46px;
+  border-radius: 50%;
+  color: var(--text);
+}
+.pad-btn svg { width: 22px; height: 22px; fill: none;
+               stroke: currentColor; stroke-width: 2;
+               stroke-linecap: round; stroke-linejoin: round; }
+.pad-btn:disabled { opacity: .3; }
+.pad-btn:active { background: var(--accent-100); }
+
+/* The grip, not the buttons.
+   Dragging by a button means every slightly imprecise press moves the thing
+   you were trying to press. */
+.pad-grip {
+  display: grid; place-items: center;
+  width: 46px; height: 22px;
+  color: var(--muted);
+  touch-action: none;
+}
+.pad-grip svg { width: 18px; height: 18px; fill: currentColor; stroke: none; }
+.chapter-pad.locked .pad-grip { opacity: .22; pointer-events: none; }
+.chapter-pad:not(.locked) {
+  border-color: var(--accent);
+  border-style: dashed;
+}
+
+
+/* ===========================================================================
+   The chapter edge, said without covering the words it is about.
+   ======================================================================== */
+
+.edge-hint {
+  position: absolute;
+  left: 50%; bottom: 14px;
+  z-index: 22;
+  max-width: 82%;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 12px; line-height: 1.4; text-align: center;
+  color: var(--accent-100);
+  /* As the toast does: opaque where there is no blur to make transparency
+     readable, read-through where there is. */
+  background: var(--accent-900);
+  /* Never takes the tap. The next tap is the one that turns the chapter, and
+     a notice about the chapter edge intercepting it would be absurd. */
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 6px);
+  transition: opacity var(--motion) var(--ease), transform var(--motion) var(--ease);
+}
+.edge-hint.up { opacity: 1; transform: translate(-50%, 0); }
+.edge-hint[hidden] { display: none; }
+
+@supports (backdrop-filter: blur(6px)) or (-webkit-backdrop-filter: blur(6px)) {
+  .edge-hint {
+    background: color-mix(in srgb, var(--accent-900) 58%, transparent);
+    -webkit-backdrop-filter: blur(7px) saturate(1.2);
+    backdrop-filter: blur(7px) saturate(1.2);
+  }
+}
+
+
+/* Several operations at once: the bar is put away rather than animated.
+ *
+ * One bar cannot show two fractions, and the usual answer -- a looping
+ * indeterminate stripe -- is a looping animation, which this app does not
+ * have anywhere: something moving in the corner of your eye while you read is
+ * worse than not knowing how far along two background jobs are. The count in
+ * the label says what is happening; the bar comes back when one is left. */
+.import-progress.many .bar { display: none; }
+
+
+/* ===========================================================================
+   Previewing a removal.
+
+   Taking pages out is the one operation here that deleting the result does
+   not undo, so it is the one thing that has to be looked at before it
+   happens. A thumbnail is enough to find a page and not enough to be sure
+   about it: at eighty pixels a scanlator's credit page and the first page of
+   a chapter are the same shape.
+   ======================================================================== */
+
+/* The glass, on a page and on a row.
+   A separate target, because tapping the page itself picks it -- one gesture
+   cannot mean both "show me this" and "remove this". */
+.remove-look-btn {
+  position: absolute; right: 2px; top: 2px;
+  display: grid; place-items: center;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  color: var(--accent-100);
+  background: rgba(0, 0, 0, .5);
+}
+.remove-look-btn svg { width: 15px; height: 15px; fill: none;
+                       stroke: currentColor; stroke-width: 2;
+                       stroke-linecap: round; }
+.remove-look-btn:active { background: var(--accent); color: var(--on-accent); }
+
+/* On a row it sits in the flow at the end, where a trailing control belongs,
+   and is given a finger's worth of height rather than its own 30px. */
+.remove-look-btn.inline {
+  position: static;
+  flex: none;
+  width: 40px; height: 40px;
+  background: none;
+  color: var(--muted);
+}
+
+.remove-row { position: relative; }
+
+/* ── one of them, full size ── */
+
+.look {
+  position: fixed; inset: 0; z-index: 44;
+  background: #000;
+  display: grid;
+  grid-template-rows: 1fr auto auto;
+}
+.look[hidden] { display: none; }
+
+.look-stage { min-height: 0; display: grid; place-items: center; overflow: auto; padding: 8px; }
+.look-stage img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+/* Prose gets a column rather than a stretched line: an afterword and a
+   chapter are indistinguishable by name and obvious after a paragraph, and
+   the paragraph has to be readable for that to work. */
+.look-text {
+  max-width: 62ch;
+  margin: 0; padding: 18px 20px;
+  color: var(--accent-100);
+  font: 400 15px/1.7 var(--font-body);
+}
+
+.look-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  color: var(--accent-100);
+}
+.look-caption {
+  flex: 1; min-width: 0;
+  font-family: var(--font-heading); font-size: 11px; font-weight: 600;
+  letter-spacing: .03em;
+  text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.look-bar .icon-btn { color: var(--accent-100); }
+.look-bar .icon-btn:disabled { opacity: .3; }
+
+.look-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 10px 12px;
+  padding-bottom: calc(var(--safe-bottom) + 12px);
+}
+
+/* ── the strip in the confirmation ──
+   What is going, in the order it sits in the book. Capped, with the rest
+   counted: a hundred thumbnails in a sheet is a scroll nobody finishes, and
+   the point is to recognise the kind of thing being removed. */
+.remove-strip {
+  display: flex; gap: 8px;
+  overflow-x: auto;
+  padding: 2px 0 6px;
+}
+.remove-strip::-webkit-scrollbar { display: none; }
+
+.remove-strip-cell {
+  flex: none;
+  width: 72px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.remove-strip-cell img,
+.remove-strip-cell .remove-strip-text,
+.remove-strip-cell > span {
+  width: 72px; height: 108px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  object-fit: cover;
+}
+.remove-strip-text {
+  display: block; overflow: hidden; padding: 6px;
+  font-size: 9px; line-height: 1.35; color: var(--muted);
+}
+.remove-strip-cell small {
+  font-family: var(--font-heading); font-size: 10px; font-weight: 600;
+  color: var(--muted); text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.remove-strip-cell.more > span {
+  display: grid; place-items: center;
+  font-family: var(--font-heading); font-weight: 700; font-size: 15px;
+  color: var(--accent-ink);
+  border-style: dashed;
+}

@@ -545,7 +545,8 @@ export async function open(bookId, opts = {}) {
   state.chapters = await store.byIndex('chapters', 'bookId', bookId);
   state.chapters.sort((a, b) => a.index - b.index);
 
-  const images = await store.byIndex('images', 'bookId', bookId);
+  const images = (await store.byIndex('images', 'bookId', bookId))
+    .filter((image) => !image.removed);
   state.images = new Map(images.filter((i) => i.blob).map((i) => [i.href, i.blob]));
   state.layout = await store.layoutFor(bookId);
   applyLayout(state.layout, await store.settings());
