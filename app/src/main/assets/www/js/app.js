@@ -1730,16 +1730,6 @@ async function handleFiles(files, { transient = false } = {}) {
     toast(`${results.added} added · ${first.name}: ${
       why ? plainReason(why) : plainReason(first.reason)}`, 8000,
     { kind: results.added ? 'done' : 'failed' });
-  } else if (results.joined?.length) {
-    /* Said, because it is a decision the app made: a folder of chapter files
-     * became one book rather than a book per file. Dividing it at chapters
-     * puts it back the other way if that was wrong. */
-    const [first] = results.joined;
-    const others = results.added - 1;
-    toast(results.joined.length === 1
-      ? `“${first.name}” — ${first.chapters} chapters from ${first.files} files${
-        others ? ` · ${others} other book${others === 1 ? '' : 's'}` : ''}`
-      : `${results.joined.length} books from chapter files, ${results.added} added in all`, 7000, { kind: 'done' });
   } else {
     const folders = results.folders?.size || 0;
     const seconds = (results.elapsedMs || 0) / 1000;
@@ -1748,9 +1738,22 @@ async function handleFiles(files, { transient = false } = {}) {
     // whether a change to the importer helped, and no way to say where the
     // time actually went on a real phone.
     const took = seconds > 2 ? ` · ${seconds.toFixed(0)}s, ${each.toFixed(1)}s a book` : '';
-    toast(folders
-      ? `${results.added} book${results.added === 1 ? '' : 's'} added across ${folders} folder${folders === 1 ? '' : 's'}${took}`
-      : `${results.added} book${results.added === 1 ? '' : 's'} added${took}`, 6000, { kind: 'done' });
+    const one = results.added === 1 && results.titles?.[0];
+    toast(one
+      ? `Added “${one}”${took}`
+      : folders
+        ? `${results.added} book${results.added === 1 ? '' : 's'} added across ${folders} folder${folders === 1 ? '' : 's'}${took}`
+        : `${results.added} book${results.added === 1 ? '' : 's'} added${took}`, 6000, { kind: 'done' });
+  }
+
+  /* A web novel saved a page per chapter is imported as it came -- a book per
+   * page -- and Build is where those become one book. Said once, as its own
+   * line, so it is not mistaken for part of the result. */
+  const [run] = results.chapterRuns || [];
+  if (run && results.added) {
+    const more = results.chapterRuns.length - 1;
+    toast(`“${run.title}” came as ${run.count} chapter files${
+      more ? ` (and ${more} more like it)` : ''} — Build can join them into one book`, 9000);
   }
 
   return results;

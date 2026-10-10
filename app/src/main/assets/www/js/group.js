@@ -49,7 +49,8 @@ export const naturalOrder = (a, b) => String(a || '').localeCompare(String(b || 
 const MARKERS = [
   /\b(?:chapter|chap|ch)\.?\s*0*(\d+)/i,
   /\b(?:episode|ep)\.?\s*0*(\d+)/i,
-  /\bpart\s*0*(\d+)/i,
+  // Not "Part N": that is a volume as often as a chapter -- "Dune Part 1" and
+  // "Dune Part 2" are two whole novels.
   /0*(\d+)\s*(?:화|話|章|회|话)/,
   /第\s*0*(\d+)\s*[章話话回화]/,
   /#\s*0*(\d+)\b/,

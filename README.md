@@ -95,18 +95,16 @@ here.** A zip organised into directories is someone's existing filing, and
 rebuilding it by hand afterwards is exactly the tedium worth avoiding. Two
 judgement calls it makes for you:
 
-- **A folder of chapter files is one book.** A web novel arrives as a saved
-  page per chapter, often a folder per novel zipped together, and each page
-  used to become a book of its own — a zip of three series put hundreds of
-  one-chapter books on the shelf. Saved pages in the same folder are now one
-  book, in reading order (prologue, numbered chapters, epilogue, side stories,
-  afterword — not filename order), named for the folder or for the title the
-  pages share. Two novels saved into one folder still come apart by their
-  names. Text, HTML and Markdown files are only joined when their names say
-  they are chapters (`Chapter 12`, `Ch. 12`, `12화`, `第12話`, `Prologue`):
-  `Volume 2.txt` and `Volume 10.txt` stay two books, because joining volumes
-  is the workshop's job and it asks. Picking chapter files loose from one
-  folder does the same, and so does the workshop.
+- **A zip goes on the shelf as it is.** Every book file in it is a book,
+  filed in the folder it sat in — exactly as the importer has always done.
+  It does not join anything: a web novel saved a page per chapter arrives as
+  a book per page, and the import says so and points at **Build**, which
+  gathers each folder's chapters into one book in reading order (prologue,
+  numbered chapters, epilogue, side stories, afterword — not filename order,
+  and Korean and Japanese numbering included). For a while the importer did
+  that joining itself, and it joined "Dune Part 1" to "Dune Part 2" and
+  lifted books out of their folders; the comparison against the September
+  importer that caught it is in `tests/test-archive.mjs`.
 - **A folder of pictures is a chapter.** A manga series zipped as a folder per
   chapter comes out with a chapter per folder rather than one run of
   thousands of pages; two series side by side are two comics; folders named

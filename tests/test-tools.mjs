@@ -652,9 +652,11 @@ await t('loose chapters join, and keep their place among the volumes', async () 
   build.clear();
 });
 
-await t('the toast says chapters were joined, so it is not a surprise', async () => {
-  // A decision the app made on the person's behalf has to be said out loud.
-  assert.match(app, /chapters from \$\{first\.files\} files/);
+await t('an import of chapter files says Build can join them', async () => {
+  // Imported as they came, as in September -- and the place that joins them
+  // is named, rather than left to be discovered.
+  assert.match(app, /came as \$\{run\.count\} chapter files/);
+  assert.match(app, /Build can join them into one book/);
   // And nothing is checked up front any more: a rescue is offered, used only
   // when a read is actually refused.
   assert.match(app, /rescue: \(file\) => rescueFile\(file, done\)/);
@@ -670,41 +672,67 @@ await t('two imports at once are two bars, and both results are shown', async ()
     Object.defineProperty(el('file-input'), 'files', { value: files, configurable: true });
     el('file-input').dispatchEvent(new window.Event('change', { bubbles: true }));
   };
-  const chapters = (novel, count) => Array.from({ length: count }, (_, i) =>
-    new window.File([savedPage(novel, i + 1)], `${novel} - Chapter ${i + 1}.mht`));
+  const novels = (prefix, count) => Array.from({ length: count }, (_, i) =>
+    new window.File([`${prefix} ${i + 1}\n\nCHAPTER ONE\n\n${'Words run on. '.repeat(400)}\n`],
+      `${prefix} ${String.fromCharCode(65 + (i % 26))}${i}.txt`));
 
   el('toast').hidden = true;      // whatever earlier tests left on it
-  pick(chapters('Twin One', 40));
+  /* Everything the banner shows, as it shows it -- and whether it ever shows
+   * both results at once. How far apart the two finish depends on the
+   * machine, and a line that has run its time is meant to go. */
+  const seen = new Set();
+  let together = false;
+  const watch = new window.MutationObserver(() => {
+    const now = [...el('toast').querySelectorAll('.toast-line')].map((line) => line.textContent);
+    for (const line of now) seen.add(line);
+    if (now.some((l) => /30 books added/.test(l)) && now.some((l) => /20 books added/.test(l))) together = true;
+  });
+  watch.observe(el('toast'), { childList: true, subtree: true, characterData: true });
+  pick(novels('Alpha', 30));
   await settle(30);
-  pick(chapters('Twin Two', 25));
-  await settle(120);
+  pick(novels('Beta', 20));
+  await settle(60);
 
-  /* Mid-flight: a row each, each with its own name and its own bar, rather
+  /* Mid-flight: a row each, each saying what its own import is doing, rather
    * than "2 things at once" and no bar at all. */
   const rows = [...el('jobs').querySelectorAll('.job')];
   assert.equal(rows.length, 2, 'the two imports do not have a row each');
   const labels = rows.map((row) => row.querySelector('.job-label').textContent);
-  assert.ok(labels.some((l) => /Twin One/.test(l)) && labels.some((l) => /Twin Two/.test(l)),
+  assert.ok(labels.some((l) => /Alpha/.test(l)) && labels.some((l) => /Beta/.test(l)),
     `the rows do not say which import they are: ${labels.join(' / ')}`);
   for (const row of rows) assert.ok(row.querySelector('.bar-fill').style.width, 'a row has no bar');
 
-  for (let i = 0; i < 80 && el('jobs').querySelectorAll('.job:not(.done):not(.failed)').length; i++) {
+  for (let i = 0; i < 120 && el('jobs').querySelectorAll('.job:not(.done):not(.failed)').length; i++) {
     await settle(100);
   }
-
-  // Each finished row is marked, rather than both vanishing at once.
   assert.ok([...el('jobs').querySelectorAll('.job')].every((row) => row.classList.contains('done')));
 
-  /* And both results are in the banner -- the second no longer replaces the
-   * first. */
-  const said = [...el('toast').querySelectorAll('.toast-line')].map((line) => line.textContent);
-  assert.ok(said.some((l) => /Twin One/.test(l)), `the first result was lost: ${said.join(' | ')}`);
-  assert.ok(said.some((l) => /Twin Two/.test(l)), `the second result was lost: ${said.join(' | ')}`);
-  assert.ok(said.filter((l) => /Twin/.test(l)).every((l) => l.startsWith('✓')),
-    'a finished import is not marked as finished');
+  // Both results, each marked finished.
+  await settle(50);
+  watch.disconnect();
+  const said = [...seen];
+  assert.ok(said.some((l) => /✓30 books added/.test(l)), `a result was never shown: ${said.join(' | ')}`);
+  assert.ok(said.some((l) => /✓20 books added/.test(l)), `a result was never shown: ${said.join(' | ')}`);
+
 
   await settle(1200);
   assert.equal(el('import-progress').hidden, true, 'the panel stayed up after both finished');
+});
+
+await t('a second notice joins the first instead of replacing it', async () => {
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  el('toast').hidden = true;
+  screensMod.toast('Built “Witch City” — 40 chapters', 6000, { kind: 'done' });
+  screensMod.toast('Divided into 3 parts', 6000, { kind: 'done' });
+  const lines = [...el('toast').querySelectorAll('.toast-line')].map((line) => line.textContent);
+  assert.deepEqual(lines, ['✓Built “Witch City” — 40 chapters', '✓Divided into 3 parts']);
+
+  // Each line keeps its own time: a short one goes, a long one stays.
+  el('toast').hidden = true;
+  screensMod.toast('Brief', 120);
+  screensMod.toast('Lasting', 4000, { kind: 'done' });
+  await settle(300);
+  assert.deepEqual([...el('toast').querySelectorAll('.toast-line')].map((l) => l.textContent), ['✓Lasting']);
 });
 
 await t('a notice repeated is counted, not stacked', async () => {

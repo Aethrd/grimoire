@@ -16,7 +16,7 @@
  */
 
 import { openZip } from './zipreader.js';
-import { planComics, planBooks, commonLabel, naturalOrder } from './group.js';
+import { planComics, commonLabel, naturalOrder } from './group.js';
 
 const DOMP = new DOMParser();
 
@@ -866,38 +866,15 @@ export async function expandArchive(file, onProgress) {
       },
     };
   };
-  /* In natural order, once, here: "Volume 2" before "Volume 10", which a zip's
-   * own order does not promise. Both the importer and the workshop take the
-   * books in the order they come back, and a work made of chapters sits where
-   * its first chapter falls. */
-  const singles = books.map((entry, i) => entryOf(entry, folders[i]))
-    .sort((a, b) => naturalOrder(a.path, b.path));
-
-  /* Chapters of one work are one book.
+  /* Every book in the archive is a book, filed in the folder it sat in.
    *
-   * A web novel is a folder of saved pages, and every page was being
-   * imported as a book of its own: a zip of three series put six hundred
-   * one-chapter books on the shelf. Pages of the same work are gathered and
-   * handed back as a single entry with its parts in reading order. Whole
-   * books -- EPUBs, PDFs -- are untouched. See group.js for how the
-   * judgement is made, and why it is made cautiously for text files. */
-  const out = [];
-  for (const step of planBooks(singles, { pathOf: (item) => item.path })) {
-    if (step.kind === 'book') { out.push(step.item); continue; }
-
-    const parent = step.folder.split('/').slice(0, -1).join('/');
-    const generic = !step.title || step.title === 'Chapters';
-    out.push({
-      group: true,
-      name: generic ? file.name.replace(/\.[^.]+$/, '') : step.title,
-      // Filed where the folder of chapters sat, not inside it: the folder
-      // *is* the book, and a shelf folder called "Witch City" holding one
-      // book called "Witch City" is a level of nothing.
-      folder: parent,
-      size: step.items.reduce((n, item) => n + (item.size || 0), 0),
-      parts: step.items,
-    });
-  }
+   * This is what the importer did in September, and it is right: a zip is
+   * somebody's filing, and the importer's job is to put it on the shelf as
+   * it is. For a while the importer also gathered chapter files into one
+   * book -- and in doing so joined "Dune Part 1" to "Dune Part 2" and lifted
+   * books out of the folders they were filed in. Joining is what Build is
+   * for, where the parts are shown and the joining is asked for. */
+  const out = books.map((entry, i) => entryOf(entry, folders[i]));
 
   const count = out.length;
   onProgress?.(1, `${count} book${count === 1 ? '' : 's'} found`);

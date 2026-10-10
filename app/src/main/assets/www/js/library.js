@@ -3,7 +3,7 @@
 import * as store from './store.js';
 import { urlCache } from './blobs.js';
 import {
-  parse, parseChapters, parsePictures, formatOf, expandArchive, chapterHtml, countWords,
+  parse, parsePictures, formatOf, expandArchive, chapterHtml, countWords,
   withRescue, nameWithFormat, bytesOf, SUPPORTED, UNSUPPORTED_REASON,
 } from './parse.js';
 import { planBooks } from './group.js';
@@ -247,6 +247,24 @@ export function sortSummary(keys) {
  *   closed. Opening a file from elsewhere on the phone should not silently
  *   add it to someone's library.
  */
+/** Whether the start of a file reads as text rather than as bytes. */
+async function looksLikeText(file) {
+  try {
+    const head = new Uint8Array(await bytesOf(file.slice(0, 4096)));
+    if (!head.length) return false;
+    let odd = 0;
+    for (const byte of head) {
+      // Control characters other than tab, newline and carriage return are
+      // what binary files are made of and text files almost never contain.
+      if (byte === 0) return false;
+      if (byte < 9 || (byte > 13 && byte < 32)) odd += 1;
+    }
+    return odd / head.length < 0.02;
+  } catch {
+    return false;
+  }
+}
+
 export async function importFiles(files, { onProgress, onDone, transient = false, rescue = null } = {}) {
   /* Timed, in phases.
    *
@@ -295,10 +313,16 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       continue;
     }
     if (formatOf(original.name) === 'UNKNOWN') {
-      /* Refused, not read as text. A file of unknown kind went to the text
-       * reader, which will take anything: a picture or a database came out
-       * as a book of mojibake, and a folder of them as a shelf of it. */
-      results.failed.push({ name: original.name, reason: 'not a kind of file this app can read as a book' });
+      /* Read as text if it is text, as September did with anything it did
+       * not recognise -- a story saved as ".text" or ".log" is still a
+       * story. Refused if it is not: a picture or a database went to the
+       * text reader too, and came out as a book of mojibake. */
+      if (await looksLikeText(original)) {
+        // As it is: the parser reads anything it does not recognise as text.
+        loose.push(original);
+      } else {
+        results.failed.push({ name: original.name, reason: 'not a kind of file this app can read as a book' });
+      }
       continue;
     }
     if (formatOf(original.name) !== 'ZIP') {
@@ -346,17 +370,6 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       }
 
       for (const book of archive.books) {
-        if (book.group) {
-          queue.push({
-            group: true,
-            parts: book.parts,
-            name: book.name,
-            folder: book.folder,
-            fingerprint: `group:${file.name}:${book.name}:${book.size}:${book.parts.length}`,
-          });
-          if (book.folder) results.folders.add(book.folder);
-          continue;
-        }
         queue.push({
           // read() rather than a File: the entry is extracted when its turn
           // comes and released straight after, so a big archive never has more
@@ -375,13 +388,17 @@ export async function importFiles(files, { onProgress, onDone, transient = false
     }
   }
 
-  /* Loose files, sorted into books.
+  /* Loose files, each a book, as in September.
    *
-   * Two hundred chapters picked from one folder are one novel, not two
-   * hundred books -- and making them two hundred books is most of what made
-   * a mass import take so long: a book row, a lookup and a transaction each,
-   * and the shelf redrawn under all of them. */
-  /* Pictures picked together are the pages of one comic. */
+   * Chapter files picked together are not joined here: that is Build's job,
+   * where the parts are listed and the joining is asked for. Joining them on
+   * import made the importer second-guess what it was given -- and it
+   * guessed "Dune Part 1" and "Dune Part 2" were one book. */
+  for (const file of loose) queue.push({ file, name: file.name, folder: '' });
+
+  /* Pictures picked together are the pages of one comic. September read
+   * each one as text, so a chapter folder of pages became a shelf of books
+   * full of mojibake. */
   if (pictures.length) {
     queue.push({
       pictures: true,
@@ -392,58 +409,26 @@ export async function importFiles(files, { onProgress, onDone, transient = false
     });
   }
 
-  for (const step of planBooks(loose)) {
-    if (step.kind === 'book') {
-      queue.push({ file: step.item, name: step.item.name, folder: '' });
-      continue;
-    }
-    const size = step.items.reduce((n, item) => n + (item.size || 0), 0);
-    queue.push({
-      group: true,
-      parts: step.items,
-      name: step.title,
-      folder: '',
-      fingerprint: `group:${step.title}:${size}:${step.items.length}`,
-    });
-  }
 
-  /* The next book, read while this one is parsed.
+  /* Runs of chapter files, noticed but not acted on.
    *
-   * A book on the phone's storage is read in hundreds of small pieces -- one
-   * for every chapter and every picture inside it -- and each of those is a
-   * round trip to wherever the file actually lives. Read in one go first,
-   * the pieces come out of memory instead; and read while the book before it
-   * is still parsing, the wait for it overlaps work rather than adding to it.
-   *
-   * Only for books of a modest size, and only one ahead: two of them in
-   * memory at once is the most this does, and a three-hundred-megabyte comic
-   * is read where it lies, as before. */
-  const PREFETCH_LIMIT = 24 * 1024 * 1024;
-  const prefetched = new Map();
-  const prefetch = (index) => {
-    const ahead = queue[index];
-    if (!ahead || prefetched.has(index) || ahead.group || ahead.pictures) return;
-    const source = ahead.file;
-    if (!source || !(source.size > 0) || source.size > PREFETCH_LIMIT) return;
-    prefetched.set(index, bytesOf(source)
-      .then((bytes) => new File([bytes], source.name, { type: source.type }))
-      // A read that fails here is tried again from the original, where a
-      // rescue can see it.
-      .catch(() => null));
-  };
+   * Each one is imported as the book it is, as it always was. But a web novel
+   * saved a page per chapter comes out as forty one-chapter books, and the
+   * place that joins them is Build -- which is worth saying, once, rather than
+   * leaving somebody to discover it. Names only: nothing is read for this. */
+  results.chapterRuns = planBooks(queue
+    .filter((entry) => !entry.pictures)
+    .map((entry) => ({ name: entry.name, path: entry.folder ? `${entry.folder}/${entry.name}` : entry.name })))
+    .filter((step) => step.kind === 'chapters' && step.items.length >= 3)
+    .map((step) => ({ title: step.title, count: step.items.length }));
 
   for (let i = 0; i < queue.length; i++) {
     const entry = queue[i];
-    // Anything read ahead for a book that was then skipped -- already on the
-    // shelf, or refused -- is let go rather than held to the end.
-    for (const index of prefetched.keys()) if (index < i) prefetched.delete(index);
-    prefetch(i);
-    prefetch(i + 1);
     const folder = entry.folder;
     const name = entry.name || entry.file?.name || 'book';
     onProgress?.(`Reading ${name}`, i / queue.length, i, queue.length);
 
-    const format = entry.group || entry.pictures ? 'GROUP' : formatOf(name);
+    const format = entry.pictures ? 'PICTURES' : formatOf(name);
     if (UNSUPPORTED_REASON[format]) {
       results.failed.push({ name, reason: UNSUPPORTED_REASON[format] });
       continue;
@@ -457,11 +442,9 @@ export async function importFiles(files, { onProgress, onDone, transient = false
 
       // Extracted only now, and only this one.
       const readAt = performance.now();
-      const early = prefetched.has(i) ? await prefetched.get(i) : null;
-      prefetched.delete(i);
-      const raw = entry.group || entry.pictures
+      const raw = entry.pictures
         ? null
-        : (early || entry.file || new File([await entry.read()], name));
+        : (entry.file || new File([await entry.read()], name));
       /* Re-wrapped, not re-read: a File built from a Blob references the same
        * bytes, so this costs a name and nothing else. */
       const named = (f) => (entry.as && entry.as !== f.name
@@ -491,7 +474,7 @@ export async function importFiles(files, { onProgress, onDone, transient = false
 
       const parseAt = performance.now();
         const progress = (p) =>
-          onProgress?.(`${entry.group ? 'Joining' : 'Parsing'} ${name}`, (i + p) / queue.length, i, queue.length);
+          onProgress?.(`Parsing ${name}`, (i + p) / queue.length, i, queue.length);
         const onImage = async (record) => {
           buffered.push({ bookId, ...record });
           // Written in batches: one transaction per image is as wasteful as
@@ -500,8 +483,6 @@ export async function importFiles(files, { onProgress, onDone, transient = false
         };
         parsed = entry.pictures
           ? await parsePictures(entry.parts, progress, { onImage })
-          : entry.group
-          ? await parseChapters(entry.parts, progress, { onImage, title: name, rescue })
           : await withRescue(raw,
             (readable) => parse(named(readable), progress, { onImage, prefix: entry.prefix ?? null }),
             rescue);
@@ -529,9 +510,6 @@ export async function importFiles(files, { onProgress, onDone, transient = false
         chapterCount: parsed.chapters.length,
         imageCount: parsed.imageCount ?? parsed.images.length,
         tocSource: parsed.tocSource,
-        // How many files went into it, so "80 chapters joined" can be said and
-        // a book that came from a folder of pages is recognisable as one.
-        ...(entry.group ? { joinedFrom: entry.parts.length } : {}),
         fingerprint,
         folder,
         importing: false,
@@ -572,16 +550,10 @@ export async function importFiles(files, { onProgress, onDone, transient = false
         console.warn('Could not record the import of', name, error);
       }
       results.added += 1;
-      if (entry.group) {
-        // Not ||=: that is Chrome 85, and an old WebView is a real phone.
-        if (!results.joined) results.joined = [];
-        results.joined.push({
-          name: parsed.title,
-          chapters: parsed.chapters.length,
-          files: entry.parts.length,
-          skipped: parsed.skipped?.length || 0,
-        });
-      }
+      // Named, so a result can say which book -- two imports finishing
+      // together are otherwise two identical "1 book added" lines.
+      if (!results.titles) results.titles = [];
+      results.titles.push(parsed.title || name);
     } catch (error) {
       results.failed.push({ name, reason: error.message || 'Could not be parsed' });
     }

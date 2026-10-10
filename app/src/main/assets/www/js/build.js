@@ -133,11 +133,22 @@ export async function add(files, onProgress) {
          * each work's chapters in reading order; each becomes one part, so a
          * zip of three novels is three parts rather than one run of all of
          * them or six hundred of each. */
-        for (const book of archive.books) {
-          if (book.group) {
-            found.push({ name: book.name, pages: book.parts, size: book.size, from: file.name });
+        /* The importer puts a zip on the shelf as it is; Build is where
+         * chapters become a book. So the gathering happens here: each work's
+         * chapter files are one part, in reading order, and everything else
+         * is a part of its own, in natural order. */
+        const ordered = [...archive.books].sort((a, b) => naturalOrder(a.path || a.name, b.path || b.name));
+        for (const step of planBooks(ordered, { pathOf: (book) => book.path || book.name })) {
+          if (step.kind === 'chapters') {
+            found.push({
+              name: step.title,
+              pages: step.items,
+              size: step.items.reduce((n, item) => n + (item.size || 0), 0),
+              from: file.name,
+            });
             continue;
           }
+          const book = step.item;
           found.push({ read: book.read, name: book.name, from: file.name, size: book.size });
         }
         continue;
