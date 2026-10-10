@@ -56,6 +56,7 @@ async function show(name, { replace = false } = {}) {
   }
 
   if (current === 'reader' && name !== 'reader') {
+    hideRedactChip();
     // Before anything is hidden, for the same reason as in back().
     reader.holdPosition();
     if (desk) await closeDesk({ returnHome: false });
@@ -3611,16 +3612,26 @@ function redactUp(event) {
  * pages can be done one after another.
  */
 
-let picking = null;               // { book }
+let picking = null;               // { book, only, near }
 const pickUrls = blobs.pool();
 
-async function openRedactPick(book) {
+/**
+ * @param options.only  just these pictures -- the ones on screen, from the reader
+ * @param options.near  a chapter to open the list at
+ */
+async function openRedactPick(book, { only = null, near = null } = {}) {
   if (!book) return;
-  picking = { book };
-  el('redact-pick-of').textContent = library.displayTitle(book);
+  picking = { book, only, near };
+  el('redact-pick-of').textContent = only
+    ? `${library.displayTitle(book)} · on this page`
+    : library.displayTitle(book);
   el('redact-pick').hidden = false;
-  await paintRedactPick();
   el('redact-pick-body').scrollTop = 0;
+  await paintRedactPick();
+  if (near != null) {
+    const target = el('redact-pick-body').querySelector(`[data-chapter="${near}"]`);
+    if (target) el('redact-pick-body').scrollTop = Math.max(0, target.offsetTop - 60);
+  }
 }
 
 function closeRedactPick() {
@@ -3635,7 +3646,7 @@ async function paintRedactPick() {
   const body = el('redact-pick-body');
   const keep = body.scrollTop;
   const images = (await library.livePictures(picking.book.id))
-    .filter((image) => image.blob)
+    .filter((image) => image.blob && (!picking.only || picking.only.includes(image.href)))
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 
   pickUrls.release();
@@ -3651,6 +3662,7 @@ async function paintRedactPick() {
     const figure = document.createElement('figure');
     figure.className = 'reel-item';
     figure.dataset.href = image.href;
+    figure.dataset.chapter = String(image.chapterIndex || 0);
     figure.innerHTML = `
       ${redact.isEdited(image) ? '<span class="edited">BLACKED OUT</span>' : ''}
       <img src="${pickUrls.url(image.blob)}" alt="" loading="lazy">
@@ -3660,6 +3672,82 @@ async function paintRedactPick() {
   });
   body.appendChild(grid);
   body.scrollTop = keep;
+}
+
+/* ── while reading ─────────────────────────────────────────────────────
+ *
+ * Two ways from the page to the editor, without leaving the book. A button in
+ * the reader's toolbar takes the picture on screen -- straight to it when
+ * there is one, a choice of them when a page holds several. And holding a
+ * finger on a picture offers it: offered rather than opened, because a thumb
+ * resting on a comic page is a long press too, and finding yourself in an
+ * editor for having held the phone would be its own kind of broken.
+ */
+
+/** The toolbar button: the picture on screen, or a choice. */
+function redactHere() {
+  const book = reader.state.book;
+  if (!book) return;
+  const here = reader.picturesInView();
+  if (here.length === 1) return openRedact(book.id, here[0]);
+  if (here.length > 1) return openRedactPick(book, { only: here });
+  toast('No picture on this page — pick one from the book', 3500);
+  return openRedactPick(book, { near: reader.state.chapterIndex });
+}
+
+let chipTimer = null;
+let chipHide = null;
+
+function hideRedactChip() {
+  clearTimeout(chipTimer);
+  clearTimeout(chipHide);
+  chipTimer = null;
+  el('redact-chip').hidden = true;
+}
+
+function wireRedactWhileReading() {
+  el('redact-here').onclick = () => redactHere();
+
+  const host = el('page-host');
+  const chip = el('redact-chip');
+  let pressX = 0;
+  let pressY = 0;
+
+  host.addEventListener('touchstart', (e) => {
+    hideRedactChip();
+    if (e.touches.length !== 1) return;
+    const img = e.target.closest?.('img[data-img]');
+    if (!img || !reader.state.book) return;
+    pressX = e.touches[0].clientX;
+    pressY = e.touches[0].clientY;
+    const href = img.getAttribute('data-img');
+    const bookId = reader.state.book.id;
+    chipTimer = setTimeout(() => {
+      chipTimer = null;
+      chip.onclick = () => { hideRedactChip(); openRedact(bookId, href); };
+      // Above the finger, so the finger is not on top of it; kept on screen.
+      const width = 200;
+      chip.style.left = `${Math.max(12, Math.min(window.innerWidth - width - 12, pressX - width / 2))}px`;
+      chip.style.top = `${Math.max(12, pressY - 76)}px`;
+      chip.hidden = false;
+      chipHide = setTimeout(hideRedactChip, 4000);
+    }, 550);
+  }, { passive: true });
+
+  // Moving is scrolling or selecting, not holding.
+  host.addEventListener('touchmove', (e) => {
+    if (!chipTimer) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - pressX) > 10 || Math.abs(t.clientY - pressY) > 10) hideRedactChip();
+  }, { passive: true });
+  host.addEventListener('touchend', () => {
+    if (chipTimer) { clearTimeout(chipTimer); chipTimer = null; }
+  }, { passive: true });
+  el('page-viewport').addEventListener('scroll', () => { if (!chip.hidden || chipTimer) hideRedactChip(); }, { passive: true });
+  // Holding an image is not a request for the browser's own menu.
+  host.addEventListener('contextmenu', (e) => {
+    if (e.target.closest?.('img[data-img]')) e.preventDefault();
+  });
 }
 
 /** Everything showing this picture is shown the new one. */
@@ -3811,6 +3899,7 @@ function wireRedact() {
 
   screens.onRedact((bookId, href) => openRedact(bookId, href));
   el('redact-pick-close').onclick = () => closeRedactPick();
+  wireRedactWhileReading();
   el('reel-redact').onclick = () => {
     if (reader.state.book) openRedactPick(reader.state.book);
     else toast('Open a book first');

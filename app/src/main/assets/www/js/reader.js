@@ -1196,6 +1196,29 @@ export function flashImage(href) {
 }
 
 /**
+ * The pictures on screen now, most of the screen first.
+ *
+ * Measured, not worked out from the page number: in paged mode the pages
+ * beside this one are laid out in columns off to the side, and in scroll mode
+ * the chapters above and below are there too -- only what is actually inside
+ * the viewport counts.
+ */
+export function picturesInView() {
+  if (!viewport || !flow) return [];
+  const box = viewport.getBoundingClientRect();
+  const seen = new Map();
+  for (const img of flow.querySelectorAll('img[data-img]')) {
+    const r = img.getBoundingClientRect();
+    const w = Math.min(r.right, box.right) - Math.max(r.left, box.left);
+    const h = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
+    if (w <= 0 || h <= 0) continue;
+    const href = img.getAttribute('data-img');
+    seen.set(href, Math.max(seen.get(href) || 0, w * h));
+  }
+  return [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([href]) => href);
+}
+
+/**
  * A picture in the open book has changed -- blacked out, or put back.
  *
  * Swapped in where it already stands rather than by reloading the chapter:

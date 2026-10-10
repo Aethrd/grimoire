@@ -2020,3 +2020,15 @@ body[data-view="reader"] .stepper {
   background: #000; color: #fff;
 }
 #reel-redact { flex: none; }
+
+.redact-chip {
+  position: fixed; z-index: 35;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 14px; min-height: 44px;
+  border-radius: var(--radius-pill);
+  background: var(--accent); color: var(--on-accent);
+  font-family: var(--font-heading); font-weight: 600; font-size: 13px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+}
+.redact-chip[hidden] { display: none; }
+.redact-chip svg { width: 18px; height: 18px; }

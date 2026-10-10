@@ -181,9 +181,11 @@ So nothing is taken out unseen:
 
 Sometimes the page should stay and one panel should not: a spoiler in a
 colour insert, a watermark across the art, a translator's note pasted over a
-speech bubble. **Black out…** — in the reel's full-size viewer, and beside
-*Take this out* when looking at a page in Take out — opens the picture to mark
-panels on. **Press the four corners of a panel** — in any order; a panel is
+speech bubble. **Black out panels** is in a book's menu, among the shelf's
+selection actions and at the top of the image reel, each opening the book's
+pictures to pick from. While reading, the toolbar's black-out button takes
+the picture on screen, and holding a finger on a picture offers it. Any of
+them opens the picture to mark panels on. **Press the four corners of a panel** — in any order; a panel is
 never joined up as a bow tie — and it is covered. Each corner can then be
 dragged to fit, or the dot in the middle of an edge to move that whole edge
 at its angle; a loupe shows what is under the finger while a corner is

@@ -673,5 +673,114 @@ await t('the shelf\'s selection actions and the image reel both have it too', as
   assert.equal(el('redact-pick').hidden, true);
 });
 
+/* ── while reading ───────────────────────────────────────────────────── */
+
+console.log('\nwhile reading');
+
+const touch = (target, type, x, y) => {
+  const event = new window.Event(type, { bubbles: true, cancelable: true });
+  const point = { clientX: x, clientY: y, target };
+  Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : [point] });
+  Object.defineProperty(event, 'changedTouches', { value: [point] });
+  target.dispatchEvent(event);
+};
+
+/** Lay the reader's pictures out: these hrefs on screen, the rest off it. */
+const onScreen = (...hrefs) => {
+  el('page-viewport').getBoundingClientRect = () => ({ left: 0, top: 0, right: 400, bottom: 600, width: 400, height: 600 });
+  let y = 0;
+  for (const img of el('page-flow').querySelectorAll('img[data-img]')) {
+    const shown = hrefs.includes(img.getAttribute('data-img'));
+    const top = shown ? y : 5000;
+    if (shown) y += 200;
+    img.getBoundingClientRect = () => ({ left: 0, top, right: 400, bottom: top + 200, width: 400, height: 200 });
+  }
+};
+
+await t('the reader\'s toolbar button opens the picture on screen', async () => {
+  const reader = await import(www('reader.js'));
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(300);
+  const id = await comic(3);
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(300);
+  tap(document.querySelector(`[data-book="${id}"]`));
+  await settle(500);
+  assert.equal(reader.state.book?.id, id);
+  assert.ok(el('redact-here'), 'the reader has no black-out button');
+
+  onScreen('p2.jpg');
+  assert.deepEqual(reader.picturesInView(), ['p2.jpg']);
+  tap(el('redact-here'));
+  await settle(150);
+  assert.equal(el('redact').hidden, false, 'one picture on screen did not open the editor');
+  const svg = el('redact-svg');
+  svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 600, right: 400, bottom: 600 });
+  press(svg, 10, 10); press(svg, 100, 10); press(svg, 100, 100); press(svg, 10, 100);
+  tap(el('redact-save'));
+  await settle(300);
+  assert.equal(el('redact').hidden, true);
+  assert.ok(redact.isEdited(await store.get('images', [id, 'p2.jpg'])), 'the picture on screen was not the one edited');
+  // Back in the book, showing the edit where it stands.
+  assert.equal(document.body.dataset.view, 'reader');
+  assert.equal(reader.state.images.get('p2.jpg'), (await store.get('images', [id, 'p2.jpg'])).blob);
+});
+
+await t('several on screen are a choice of just those; none is the whole book', async () => {
+  const reader = await import(www('reader.js'));
+  onScreen('p1.jpg', 'p3.jpg');
+  tap(el('redact-here'));
+  await settle(200);
+  assert.equal(el('redact-pick').hidden, false);
+  assert.deepEqual([...el('redact-pick-body').querySelectorAll('.reel-item')].map((f) => f.dataset.href),
+    ['p1.jpg', 'p3.jpg']);
+  assert.match(el('redact-pick-of').textContent, /on this page/);
+  tap(el('redact-pick-close'));
+
+  onScreen();
+  tap(el('redact-here'));
+  await settle(200);
+  assert.equal(el('redact-pick').hidden, false);
+  assert.equal(el('redact-pick-body').querySelectorAll('.reel-item').length, 3);
+  tap(el('redact-pick-close'));
+  void reader;
+});
+
+await t('holding a picture while reading offers to black it out; moving does not', async () => {
+  const reader = await import(www('reader.js'));
+  const id = reader.state.book.id;
+  const img = el('page-flow').querySelector('img[data-img="p3.jpg"]');
+  assert.ok(img);
+
+  // A drag across it is scrolling, not holding.
+  touch(img, 'touchstart', 100, 300);
+  touch(img, 'touchmove', 100, 360);
+  await settle(650);
+  assert.equal(el('redact-chip').hidden, true, 'a scroll offered the editor');
+  touch(img, 'touchend', 100, 360);
+
+  // A quick tap is a tap.
+  touch(img, 'touchstart', 100, 300);
+  touch(img, 'touchend', 100, 300);
+  await settle(650);
+  assert.equal(el('redact-chip').hidden, true, 'a tap offered the editor');
+
+  // A hold offers it -- and only offers it.
+  touch(img, 'touchstart', 100, 300);
+  await settle(650);
+  assert.equal(el('redact-chip').hidden, false, 'holding a picture offered nothing');
+  assert.equal(el('redact').hidden, true, 'a hold went straight into the editor');
+  touch(img, 'touchend', 100, 300);
+  tap(el('redact-chip'));
+  await settle(150);
+  assert.equal(el('redact').hidden, false);
+  assert.equal(el('redact-chip').hidden, true);
+  tap(el('redact-cancel'));
+  assert.equal(el('redact').hidden, true);
+  void id;
+});
+
 console.log(`\n${pass} assertions passed`);
 process.exit(0);

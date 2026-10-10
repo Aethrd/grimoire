@@ -179,6 +179,9 @@
           <button class="icon-btn" data-go="toc" title="Index"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
           <button class="icon-btn" data-go="layout" title="Layout"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h9"/></svg></button>
           <button class="icon-btn" data-go="reel" title="Images"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1"/><path d="M3 15l5-4 4 3 3-2 6 4"/></svg></button>
+          <button class="icon-btn" id="redact-here" title="Black out panels in the picture on screen">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M6 8l6-1 1 6-6 1z" fill="currentColor"/></svg>
+          </button>
           <button class="icon-btn" id="desk-open" title="Reading desk">
             <svg viewBox="0 0 24 24"><path d="M3 7h18v4H3z"/><path d="M5 11v8M19 11v8M9 15h6"/></svg>
           </button>
@@ -622,6 +625,13 @@
 <!-- Blacking out part of a picture. Each panel is marked by its four
      corners here and painted into the picture itself on Save, so they go wherever the book
      goes -- an EPUB, a smaller copy, a book built onto this one. -->
+<!-- Offered where a picture is held down while reading. Offered, not
+     opened: a thumb resting on a comic page is a long press too. -->
+<button class="redact-chip" id="redact-chip" hidden>
+  <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M6 8l6-1 1 6-6 1z" fill="currentColor"/></svg>
+  <span>Black out panels</span>
+</button>
+
 <!-- Which picture to black out: every picture in the book, in order. Opened
      from a book's menu and from the image reel; the editor opens over it and
      comes back to it, so a run of pages can be done one after another. -->
