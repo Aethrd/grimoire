@@ -60,6 +60,7 @@ python3 tools/audit_assets.py    # fails if anything would hit the network
 | Settings | One screen, six panes: text, layout, theme, behaviour, translation, data |
 | Stats | Heat grid, streaks with freezes, script-aware word counts, JSON export |
 | Take out | Pick pages, image pages or chapters out of a book; recoverable until discarded |
+| Black out | Cover a panel or part of a picture with boxes, ovals or brush; painted into the file, original kept |
 | Bin | Deleted books wait here with everything they had; delete for good frees the space |
 | Vault | Passphrase-gated shelf, filtered out of search, reel and stats |
 
@@ -176,6 +177,23 @@ So nothing is taken out unseen:
   them** steps through exactly what was listed — the honest answer to "are you
   sure" is the pages, not a louder warning.
 
+#### Covering part of a page instead
+
+Sometimes the page should stay and one panel should not: a spoiler in a
+colour insert, a watermark across the art, a translator's note pasted over a
+speech bubble. **Black out…** — in the reel's full-size viewer, and beside
+*Take this out* when looking at a page in Take out — opens the picture with
+boxes, ovals and a brush in black or white, an eraser, undo, and zoom.
+
+Saving **paints the shapes into the picture itself**. The book's own copy is
+replaced, so the reader, the reel, an exported EPUB, a smaller copy and a book
+built onto this one all carry the edit; a mask laid over the page at reading
+time would vanish the moment the book left the app. The original is kept
+inside the app alongside the shapes, so an edit can be changed later — the
+editor always starts again from the original — or put back with **Restore
+original**. A comic whose cover is the edited page gets the edited cover too,
+unless the cover was picked by hand.
+
 What the confirmation says comes from the **same plan the removal runs**, read
 rather than written. A preview worked out by a second piece of code that is
 supposed to agree with the first will eventually disagree, and a preview that
@@ -267,6 +285,7 @@ app/src/main/assets/www/
   js/trim.js          taking pages and chapters out, and putting them back
   js/shrink.js        downscaling pictures for a smaller copy
   js/epub.js          writing a book back out as an EPUB
+  js/redact.js        blacking out part of a picture, painted into the file
   js/app.js           routing, gestures, the shell's two hooks
 ```
 

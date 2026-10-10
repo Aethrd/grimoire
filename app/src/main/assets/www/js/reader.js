@@ -1195,6 +1195,30 @@ export function flashImage(href) {
   setTimeout(() => img.classList.remove('fig-flash'), 1200);
 }
 
+/**
+ * A picture in the open book has changed -- blacked out, or put back.
+ *
+ * Swapped in where it already stands rather than by reloading the chapter:
+ * the picture is the same size it was, so the page does not move, and a
+ * reload would have lost the place on it. The old URL goes with its section's
+ * pool when that section leaves; the new one joins the same pool.
+ */
+export function refreshPicture(bookId, href, blob) {
+  if (!state.book || state.book.id !== bookId || !blob) return;
+  state.images.set(href, blob);
+  if (!flow) return;
+  // Compared rather than put in a selector: an href is whatever the book
+  // called the file, quotes and brackets included.
+  for (const img of flow.querySelectorAll('img[data-img]')) {
+    if (img.getAttribute('data-img') !== href) continue;
+    const section = img.closest('[data-chapter]');
+    const index = section ? Number(section.getAttribute('data-chapter')) : NaN;
+    let urls = sectionPools.get(index);
+    if (!urls) { urls = pool(); sectionPools.set(index, urls); }
+    img.src = urls.url(blob);
+  }
+}
+
 /* ── chrome ───────────────────────────────────────────────────────────── */
 
 const CYCLE = { full: 'copy', copy: 'none', none: 'full' };

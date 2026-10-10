@@ -530,8 +530,16 @@ function viewer(url, image, onGo) {
     <div class="viewer-bar">
       <button class="btn ghost" data-close>Close</button>
       <button class="btn ghost" data-share>Share</button>
+      ${onRedactPicture && image?.bookId && image?.href ? '<button class="btn ghost" data-redact>Black out…</button>' : ''}
       <button class="btn primary" data-goto-page>Go to page</button>
     </div>`;
+  /* Blacking out part of it, from where you are already looking at it full
+     size. The editor is the app's; the viewer only hands over which picture,
+     and closes, because what it shows is about to stop being true. */
+  const redactButton = overlay.querySelector('[data-redact]');
+  if (redactButton) {
+    redactButton.onclick = () => { overlay.remove(); onRedactPicture(image.bookId, image.href); };
+  }
   overlay.querySelector('[data-close]').onclick = () => overlay.remove();
   /* data-goto-page, not data-go.
    *
@@ -574,6 +582,11 @@ let findInBook = false;
 let onBookMenu = null;
 
 export function onLongPressBook(fn) { onBookMenu = fn; }
+
+/** Who opens the black-out editor for a picture in the reel. */
+let onRedactPicture = null;
+
+export function onRedact(fn) { onRedactPicture = fn; }
 
 export function initFind(onGoToMatch, fromReader = false) {
   const input = el('find-input');

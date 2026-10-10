@@ -13,6 +13,7 @@ import * as trim from './trim.js';
 import * as shrink from './shrink.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
+import * as redact from './redact.js';
 
 const el = (id) => document.getElementById(id);
 const { toast } = screens;
@@ -3107,6 +3108,10 @@ function paintRemoveLook() {
   const href = row.picture || row.pictureHrefs?.[0] || null;
   const blob = href ? removing.pictures.get(href) : null;
 
+  // Covering part of a page is often what was wanted instead of taking the
+  // whole page out -- one panel, not the chapter's opening spread.
+  el('remove-look-redact').hidden = !blob;
+
   if (blob) {
     const img = document.createElement('img');
     img.src = removeThumbs.url(href, blob, blob.size);
@@ -3151,6 +3156,422 @@ function stepRemoveLook(by) {
   if (to < 0 || to >= looking.of.length) return;
   looking.cursor = to;
   paintRemoveLook();
+}
+
+/* ── blacking out part of a picture ──────────────────────────────────────
+ *
+ * Shapes drawn over the picture, in the picture's own pixels, and painted
+ * into it on Save -- the book's copy is replaced, so the edit goes wherever
+ * the book goes. redact.js does the painting and the bookkeeping; this is
+ * the editor around it.
+ *
+ * The editor always shows the original with every shape drawn over it, never
+ * the last saved edit: a box can be moved by erasing it and drawing it again,
+ * and clearing every shape and saving is the picture as it came.
+ */
+
+let redacting = null;
+const redactUrls = blobs.pool();
+
+const REDACT_HINTS = {
+  box: 'Drag across what to cover.',
+  oval: 'Drag across what to cover.',
+  brush: 'Paint over it. The slider sets how wide.',
+  erase: 'Tap a shape to take it away.',
+  move: 'Drag to look around the picture.',
+};
+
+/** The picture's own size, from the record where it was measured, or by loading it. */
+function measureRedact(img, url) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), 10000);
+    img.onload = () => { clearTimeout(timer); resolve({ width: img.naturalWidth, height: img.naturalHeight }); };
+    img.onerror = () => { clearTimeout(timer); resolve(null); };
+    img.src = url;
+  });
+}
+
+async function openRedact(bookId, href) {
+  const image = await store.get('images', [bookId, href]);
+  if (!image?.blob) {
+    toast('That picture is no longer in the book', 4000, { kind: 'failed' });
+    return;
+  }
+  const original = image.original || image.blob;
+
+  redactUrls.release();
+  const img = el('redact-img');
+  const loaded = measureRedact(img, redactUrls.url(original));
+
+  let width = image.width;
+  let height = image.height;
+  if (!width || !height) {
+    const got = await loaded;
+    if (!got || !got.width || !got.height) {
+      redactUrls.release();
+      toast('That picture could not be opened for editing', 5000, { kind: 'failed' });
+      return;
+    }
+    ({ width, height } = got);
+  }
+
+  if (redact.tooLarge(width, height)) {
+    redactUrls.release();
+    toast(`That picture is ${width}×${height} — too large for a phone to edit in one piece`, 6000, { kind: 'failed' });
+    return;
+  }
+
+  const edits = JSON.parse(JSON.stringify(image.edits || []));
+  redacting = {
+    bookId, href, image, width, height,
+    shapes: edits,
+    saved: JSON.parse(JSON.stringify(edits)),
+    past: [], future: [],
+    tool: 'box', colour: 'black', size: Number(el('redact-size').value) || 24,
+    zoom: 1, draft: null, pointer: null, start: null, busy: false,
+  };
+
+  // The record's numbers were measured once, by the reel; the picture itself
+  // is the authority, and a disagreement is corrected before anything is drawn.
+  loaded.then((got) => {
+    const r = redacting;
+    if (!r || r.href !== href || !got?.width) return;
+    if ((got.width !== r.width || got.height !== r.height) && !r.shapes.length) {
+      r.width = got.width;
+      r.height = got.height;
+      layoutRedact();
+      paintRedact();
+    }
+  });
+
+  el('redact-svg').setAttribute('viewBox', `0 0 ${width} ${height}`);
+  el('redact-leave').hidden = true;
+  el('redact-save').disabled = false;
+  el('redact-restore').hidden = !redact.isEdited(image);
+  el('redact').hidden = false;
+  setRedactTool('box');
+  setRedactColour('black');
+  el('redact-zoom').textContent = '1×';
+  layoutRedact();
+  paintRedact();
+}
+
+function closeRedact() {
+  redacting = null;
+  el('redact').hidden = true;
+  el('redact-leave').hidden = true;
+  el('redact-svg').innerHTML = '';
+  el('redact-img').removeAttribute('src');
+  redactUrls.release();
+}
+
+function redactChanged() {
+  return !!redacting && !redact.sameShapes(redacting.shapes, redacting.saved);
+}
+
+/** Cancel, or the back gesture: straight out if nothing was drawn, asked if something was. */
+function leaveRedact() {
+  if (!redacting) return;
+  if (redactChanged()) el('redact-leave').hidden = false;
+  else closeRedact();
+}
+
+/**
+ * The picture at the size of the stage, times the zoom.
+ *
+ * Fitted whole, except a strip far taller than it is wide -- a webtoon
+ * chapter -- which fitted whole is a line down the middle of the screen. That
+ * is fitted to the width and scrolled with Move instead.
+ */
+function layoutRedact() {
+  const r = redacting;
+  if (!r) return;
+  const stage = el('redact-stage');
+  const frame = el('redact-frame');
+  const roomW = Math.max(1, stage.clientWidth - 16);
+  const roomH = Math.max(1, stage.clientHeight - 16);
+
+  // Kept centred on what was in the middle of the screen before the zoom.
+  const midX = stage.scrollWidth ? (stage.scrollLeft + stage.clientWidth / 2) / stage.scrollWidth : 0.5;
+  const midY = stage.scrollHeight ? (stage.scrollTop + stage.clientHeight / 2) / stage.scrollHeight : 0.5;
+
+  let fit = Math.min(roomW / r.width, roomH / r.height);
+  if (r.height / r.width > 3) fit = roomW / r.width;
+  if (!Number.isFinite(fit) || fit <= 0) fit = 1;
+
+  frame.style.width = `${Math.round(r.width * fit * r.zoom)}px`;
+  frame.style.height = `${Math.round(r.height * fit * r.zoom)}px`;
+  el('redact-svg').setAttribute('viewBox', `0 0 ${r.width} ${r.height}`);
+
+  stage.scrollLeft = midX * stage.scrollWidth - stage.clientWidth / 2;
+  stage.scrollTop = midY * stage.scrollHeight - stage.clientHeight / 2;
+}
+
+function paintRedact() {
+  const r = redacting;
+  if (!r) return;
+  el('redact-svg').innerHTML = r.shapes.map(redact.svgFor).join('')
+    + (r.draft ? `<g class="draft">${redact.svgFor(r.draft)}</g>` : '');
+  el('redact-undo').disabled = !r.past.length;
+  el('redact-redo').disabled = !r.future.length;
+  el('redact-clear').disabled = !r.shapes.length;
+
+  const count = r.shapes.length;
+  el('redact-caption').textContent = count
+    ? `Black out · ${count} shape${count === 1 ? '' : 's'}`
+    : 'Black out';
+
+  const notes = [REDACT_HINTS[r.tool]];
+  if (r.zoom > 1 && r.tool !== 'move') notes.push('Use Move to look around.');
+  if (r.image.animated || r.image.wasAnimated) {
+    notes.push('This picture moves — saved, it keeps only its first frame.');
+  }
+  el('redact-hint').textContent = notes.join(' ');
+}
+
+/** A change that Undo can take back. */
+function changeRedact(next) {
+  const r = redacting;
+  r.past.push(r.shapes);
+  if (r.past.length > 200) r.past.shift();
+  r.future = [];
+  r.shapes = next;
+  paintRedact();
+}
+
+function setRedactTool(tool) {
+  if (!redacting) return;
+  redacting.tool = tool;
+  redacting.draft = null;
+  redacting.pointer = null;
+  el('redact').dataset.tool = tool;
+  for (const button of el('redact-tool').querySelectorAll('[data-tool]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.tool === tool));
+  }
+  el('redact-size-row').hidden = tool !== 'brush';
+  paintRedact();
+}
+
+function setRedactColour(colour) {
+  if (!redacting) return;
+  redacting.colour = colour;
+  for (const button of el('redact-colour').querySelectorAll('[data-colour]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.colour === colour));
+  }
+}
+
+function redactPoint(event) {
+  const r = redacting;
+  const rect = el('redact-svg').getBoundingClientRect();
+  return {
+    point: redact.toPicture(event.clientX, event.clientY, rect, r.width, r.height),
+    // Picture pixels to one screen pixel, so sizes chosen on screen mean
+    // the same thing at every zoom.
+    scale: rect.width ? r.width / rect.width : 1,
+  };
+}
+
+function redactDown(event) {
+  const r = redacting;
+  if (!r || r.busy || r.tool === 'move') return;
+  // One finger draws. A second one landing mid-stroke is a palm or a pinch,
+  // not a second shape.
+  if (r.pointer != null) return;
+  event.preventDefault();
+  const { point, scale } = redactPoint(event);
+
+  if (r.tool === 'erase') {
+    const at = redact.shapeAt(r.shapes, point, 12 * scale);
+    if (at >= 0) changeRedact(r.shapes.filter((_, n) => n !== at));
+    return;
+  }
+
+  try { event.target.setPointerCapture?.(event.pointerId); } catch { /* not every target can */ }
+  r.pointer = event.pointerId;
+  r.start = point;
+  r.draft = r.tool === 'brush'
+    ? {
+      type: 'brush',
+      colour: r.colour,
+      size: Math.max(1, Math.round(r.size * scale)),
+      points: [[Math.round(point.x), Math.round(point.y)]],
+    }
+    : redact.fromDrag(r.tool, point, point, r.colour);
+  paintRedact();
+}
+
+function redactMove(event) {
+  const r = redacting;
+  if (!r || r.pointer !== event.pointerId || !r.draft) return;
+  event.preventDefault();
+  const { point } = redactPoint(event);
+  if (r.draft.type === 'brush') {
+    const [lx, ly] = r.draft.points[r.draft.points.length - 1];
+    // A point every few pixels is a smooth line; one per event is a list
+    // thousands long for one stroke, saved with the book.
+    if (Math.hypot(point.x - lx, point.y - ly) < Math.max(1, r.draft.size / 6)) return;
+    r.draft.points.push([Math.round(point.x), Math.round(point.y)]);
+  } else {
+    r.draft = redact.fromDrag(r.tool, r.start, point, r.colour);
+  }
+  paintRedact();
+}
+
+function redactUp(event) {
+  const r = redacting;
+  if (!r || r.pointer !== event.pointerId) return;
+  // Where the finger came off is where the box ends, even if no move event
+  // reported the last few pixels on the way there.
+  if (event.type === 'pointerup' && r.draft && r.draft.type !== 'brush') {
+    r.draft = redact.fromDrag(r.tool, r.start, redactPoint(event).point, r.colour);
+  }
+  const draft = r.draft;
+  r.pointer = null;
+  r.draft = null;
+  r.start = null;
+  if (event.type !== 'pointercancel' && draft && !redact.isTiny(draft)) {
+    changeRedact([...r.shapes, draft]);
+  } else {
+    paintRedact();
+  }
+}
+
+/** Everything showing this picture is shown the new one. */
+async function afterRedact(bookId, href, blob) {
+  // The save has happened by now. Anything here failing is a picture on
+  // screen left stale until it is next drawn -- not a failed save, and not
+  // to be reported as one.
+  try {
+    await showRedacted(bookId, href, blob);
+  } catch (error) {
+    console.warn('Could not redraw the edited picture', error);
+  }
+}
+
+async function showRedacted(bookId, href, blob) {
+  reader.refreshPicture(bookId, href, blob);
+  if (current === 'reel' && reader.state.book?.id === bookId) {
+    await screens.openReel(bookId, jumpToImage);
+  }
+  if (removing && removing.book.id === bookId && removing.pictures.has(href)) {
+    removing.pictures.set(href, blob);
+    if (looking) paintRemoveLook();
+    else if (current === 'remove') renderRemove();
+  }
+}
+
+async function saveRedact() {
+  const r = redacting;
+  if (!r || r.busy) return;
+  if (!redactChanged()) { closeRedact(); return; }
+
+  r.busy = true;
+  el('redact-save').disabled = true;
+  const covering = r.shapes.length > 0;
+  const done = progress.start(covering ? 'Blacking out a picture' : 'Putting a picture back');
+  try {
+    done.say(covering ? 'Painting it into the book' : 'Putting the original back', 0.3);
+    const next = await redact.saveEdits(r.bookId, r.href, r.shapes);
+    done.say(null, 1);
+    closeRedact();
+    await afterRedact(r.bookId, r.href, next.blob);
+    toast(covering
+      ? 'Blacked out. It is in the book itself now, and goes with it when it is exported — the original is kept, so it can be put back'
+      : 'The picture is back as it was', 7000, { kind: 'done' });
+  } catch (error) {
+    done.fail();
+    r.busy = false;
+    el('redact-save').disabled = false;
+    toast(plainReason(error?.message) || 'That picture could not be saved', 6000, { kind: 'failed' });
+  } finally {
+    done();
+  }
+}
+
+async function restoreRedact() {
+  const r = redacting;
+  if (!r || r.busy) return;
+  r.busy = true;
+  const done = progress.start('Putting a picture back');
+  try {
+    const next = await redact.restoreOriginal(r.bookId, r.href);
+    closeRedact();
+    await afterRedact(r.bookId, r.href, next.blob);
+    toast('The picture is back as it was', 5000, { kind: 'done' });
+  } catch (error) {
+    done.fail();
+    r.busy = false;
+    toast(error?.message || 'That picture could not be put back', 6000, { kind: 'failed' });
+  } finally {
+    done();
+  }
+}
+
+function wireRedact() {
+  const svg = el('redact-svg');
+  svg.addEventListener('pointerdown', redactDown);
+  svg.addEventListener('pointermove', redactMove);
+  svg.addEventListener('pointerup', redactUp);
+  svg.addEventListener('pointercancel', redactUp);
+
+  el('redact-tool').onclick = (event) => {
+    const button = event.target.closest('[data-tool]');
+    if (button) setRedactTool(button.dataset.tool);
+  };
+  el('redact-colour').onclick = (event) => {
+    const button = event.target.closest('[data-colour]');
+    if (button) setRedactColour(button.dataset.colour);
+  };
+  el('redact-size').oninput = () => {
+    if (redacting) redacting.size = Number(el('redact-size').value) || 24;
+  };
+  el('redact-zoom').onclick = () => {
+    if (!redacting) return;
+    redacting.zoom = redacting.zoom >= 3 ? 1 : redacting.zoom + 1;
+    el('redact-zoom').textContent = `${redacting.zoom}×`;
+    layoutRedact();
+    paintRedact();
+  };
+  el('redact-undo').onclick = () => {
+    const r = redacting;
+    if (!r || !r.past.length) return;
+    r.future.push(r.shapes);
+    r.shapes = r.past.pop();
+    paintRedact();
+  };
+  el('redact-redo').onclick = () => {
+    const r = redacting;
+    if (!r || !r.future.length) return;
+    r.past.push(r.shapes);
+    r.shapes = r.future.pop();
+    paintRedact();
+  };
+  el('redact-clear').onclick = () => {
+    if (redacting?.shapes.length) changeRedact([]);
+  };
+  el('redact-restore').onclick = () => restoreRedact();
+  el('redact-cancel').onclick = () => leaveRedact();
+  el('redact-leave-no').onclick = () => { el('redact-leave').hidden = true; };
+  el('redact-leave-yes').onclick = () => closeRedact();
+  el('redact-save').onclick = () => saveRedact();
+  /* Fitted again whenever the room for it changes -- a turned phone, or the
+   * brush's slider appearing under it -- or a picture fitted to the old room
+   * spills off the new one. Not every WebView has the observer; those still
+   * hear about the phone turning. */
+  window.addEventListener('resize', () => { if (redacting) layoutRedact(); });
+  if (typeof window.ResizeObserver === 'function') {
+    new window.ResizeObserver(() => { if (redacting && redacting.zoom === 1) layoutRedact(); })
+      .observe(el('redact-stage'));
+  }
+
+  screens.onRedact((bookId, href) => openRedact(bookId, href));
+  el('remove-look-redact').onclick = () => {
+    if (!looking || !removing) return;
+    const pages = removeMode === 'pages';
+    const row = (pages ? removing.pages : removing.rows)[looking.of[looking.cursor]];
+    const href = row?.picture || row?.pictureHrefs?.[0];
+    if (href) openRedact(removing.book.id, href);
+  };
 }
 
 /* ── the last word before it happens ─────────────────────────────────────
@@ -3998,6 +4419,12 @@ window.Grimoire = {
 
   /** Return true to swallow the back gesture. */
   onBack() {
+    // Above everything else, so it is the first thing back leaves.
+    if (!el('redact').hidden) {
+      if (!el('redact-leave').hidden) el('redact-leave').hidden = true;
+      else leaveRedact();
+      return true;
+    }
     if (!el('remove-look').hidden) { closeRemoveLook(); return true; }
     if (!el('remove-confirm').hidden) { el('remove-confirm').hidden = true; return true; }
     if (!el('folder-actions').hidden) { el('folder-actions').hidden = true; return true; }
@@ -4096,6 +4523,7 @@ async function boot() {
   wireWorkshop();
   wireDivide();
   wireRemove();
+  wireRedact();
   wireBin();
   wireChapterPad();
   paintChapterPad(settings);

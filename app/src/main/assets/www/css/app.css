@@ -1878,3 +1878,104 @@ body[data-view="reader"] .stepper {
   color: var(--accent-ink);
   border-style: dashed;
 }
+
+/* ── blacking out part of a picture ───────────────────────────────────── */
+
+/* Black around the picture, like the other full-size views, and its own
+   light text so it reads the same whichever theme the app is in. */
+.redact {
+  position: fixed; inset: 0; z-index: 46;
+  background: #000; color: #eee;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto auto;
+  padding-top: var(--safe-top, 0px);
+}
+.redact[hidden] { display: none; }
+.redact .btn.ghost { color: #eee; border-color: rgba(255, 255, 255, .28); }
+.redact .btn.ghost:active { background: rgba(255, 255, 255, .12); }
+.redact .icon-btn { color: #eee; }
+.redact .icon-btn:active { background: rgba(255, 255, 255, .12); }
+.redact .icon-btn:disabled, .redact .btn:disabled { opacity: .35; }
+.redact .seg { border-color: rgba(255, 255, 255, .28); }
+.redact .seg button { border-color: rgba(255, 255, 255, .28); color: #eee; }
+.redact .seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+
+.redact-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+}
+.redact-caption {
+  flex: 1; min-width: 0; text-align: center;
+  font-family: var(--font-heading); font-size: 12px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* The picture, at the size of the screen or larger when zoomed; scrolled
+   with the Move tool, drawn on with the others. */
+/* Centred by auto margins rather than by the grid: a centred box larger than
+   its scroller hangs off the top and left where it cannot be scrolled to,
+   and auto margins give way to nothing as soon as it is larger. */
+.redact-stage {
+  min-height: 0; overflow: auto;
+  display: flex;
+  padding: 8px;
+  -webkit-overflow-scrolling: touch;
+}
+.redact-frame { position: relative; flex: none; margin: auto; }
+.redact-frame img {
+  display: block; width: 100%; height: 100%;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+#redact-svg {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  fill: none; stroke: none;
+  /* Drawing, not scrolling: without this the first stroke of a box is taken
+     by the browser as a pan and the shape never arrives. */
+  touch-action: none;
+}
+.redact[data-tool="move"] #redact-svg { pointer-events: none; }
+/* The shape being drawn, until it is let go. */
+#redact-svg .draft { opacity: .7; }
+/* What the eraser will take, outlined so it can be seen against black. */
+.redact[data-tool="erase"] #redact-svg rect,
+.redact[data-tool="erase"] #redact-svg ellipse,
+.redact[data-tool="erase"] #redact-svg circle { stroke: var(--accent); stroke-width: 2px; vector-effect: non-scaling-stroke; }
+
+.redact-hint {
+  margin: 0; padding: 4px 16px 0;
+  font-size: 11px; line-height: 1.45; color: #aaa; text-align: center;
+  min-height: 1.45em;
+}
+
+.redact-leave {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.redact-leave[hidden] { display: none; }
+.redact-leave span { flex: 1; min-width: 10em; }
+
+.redact-tools {
+  display: grid; gap: 8px;
+  padding: 8px 12px;
+  padding-bottom: calc(var(--safe-bottom) + 10px);
+}
+.redact-row { display: flex; align-items: center; gap: 8px; }
+.redact-colour { flex: 1; }
+.redact-colour button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.swatch {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, .5);
+  display: inline-block; flex: none;
+}
+.redact-zoom { min-width: 52px; text-align: center; }
+.redact-size {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px; color: #bbb;
+}
+.redact-size[hidden] { display: none; }
+.redact-size input { flex: 1; accent-color: var(--accent); }
+.redact-more { justify-content: space-between; }
+
+.viewer .viewer-bar { flex-wrap: wrap; }

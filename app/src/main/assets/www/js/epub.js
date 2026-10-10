@@ -26,6 +26,22 @@ const MEDIA = {
 
 const mediaFor = (name) => MEDIA[String(name).split('.').pop().toLowerCase()] || 'image/jpeg';
 
+/* The extension a picture is written under.
+ *
+ * Read off what the picture now is, where that is known, and only then off
+ * the name it came in under. A blacked-out GIF is saved back as a PNG; filed
+ * under .gif the reader at the other end is told one thing and handed
+ * another, and the stricter ones show nothing. */
+const BY_TYPE = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
+  'image/avif': 'avif', 'image/svg+xml': 'svg',
+};
+export function extensionFor(blob, href) {
+  const known = BY_TYPE[String(blob?.type || '').toLowerCase()];
+  if (known) return known;
+  return String(href).split('.').pop().toLowerCase().slice(0, 4) || 'jpg';
+}
+
 /**
  * Turn a stored book into an EPUB.
  *
@@ -125,9 +141,7 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
     const written = wanted ? await shrinkPicture(image.blob, wanted) : image.blob;
     saved += Math.max(0, image.blob.size - written.size);
 
-    const extension = written === image.blob
-      ? String(image.href).split('.').pop().toLowerCase().slice(0, 4) || 'jpg'
-      : 'jpg';
+    const extension = extensionFor(written, written === image.blob ? image.href : 'x.jpg');
     const name = `images/img${String(++at).padStart(4, '0')}.${extension}`;
     try {
       zip.file(`OEBPS/${name}`, written, PICTURE);
