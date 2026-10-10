@@ -189,4 +189,65 @@ await t('several folders at once each keep their own path', async () => {
   assert.equal(byName['loose.txt'], '');
 });
 
+/* ── a comic that came as a .zip ─────────────────────────────────────────
+ *
+ * Which is most of them. A comic arrives as a .zip at least as often as a
+ * .cbz -- it is the same archive with a different extension on it -- and the
+ * two have to behave the same.
+ */
+
+console.log('\na comic in a plain zip');
+
+const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+
+const pagesZip = async (name) => {
+  const zip = new JSZip();
+  for (let i = 1; i <= 3; i++) zip.file(`page-${String(i).padStart(3, '0')}.png`, PNG);
+  return new File([await zip.generateAsync({ type: 'nodebuffer' })], name,
+    { type: 'application/zip' });
+};
+
+await t('a zip of images imports, whatever it is called', async () => {
+  /* It was recognised as a comic here and then queued under its own name, so
+   * two loops later the parser was handed a .zip and refused it with
+   * "Archives are expanded before parsing" -- which is the one thing that had
+   * already happened. A volume of three hundred pages could only be imported
+   * by renaming the file first. */
+  const out = await library.importFiles([await pagesZip('webnovel 10.10.26.zip')], {});
+  assert.equal(out.added, 1, out.failed.map((f) => f.reason).join(' | '));
+
+  const book = (await store.all('books')).find((b) => b.title === 'webnovel 10.10.26');
+  assert.ok(book, 'the book is not called what the file was called');
+  assert.equal(book.format, 'CBZ');
+  assert.equal((await store.byIndex('images', 'bookId', book.id)).length, 3);
+});
+
+await t('it comes out the same as the identical .cbz', async () => {
+  const asCbz = await library.importFiles([await pagesZip('same pages.cbz')], {});
+  assert.equal(asCbz.added, 1);
+
+  const books = await store.all('books');
+  const zipped = books.find((b) => b.title === 'webnovel 10.10.26');
+  const cbz = books.find((b) => b.title === 'same pages');
+  const pagesOf = async (b) => (await store.byIndex('images', 'bookId', b.id)).length;
+  assert.equal(await pagesOf(zipped), await pagesOf(cbz));
+  assert.equal(zipped.format, cbz.format);
+});
+
+await t('a zip with nothing readable in it says so rather than vanishing', async () => {
+  // Neither a comic nor a container. It must fail out loud: a file that
+  // disappears reads as the app having ignored the import entirely.
+  const zip = new JSZip();
+  zip.file('notes.docx', 'not really a docx');
+  zip.file('cover.psd', 'nor this');
+  const file = new File([await zip.generateAsync({ type: 'nodebuffer' })], 'odds and ends.zip');
+
+  const out = await library.importFiles([file], {});
+  assert.equal(out.added, 0);
+  assert.equal(out.failed.length, 1, 'the file was dropped silently');
+  assert.equal(out.failed[0].name, 'odds and ends.zip');
+  assert.match(out.failed[0].reason, /No books found/);
+});
+
 console.log(`\n${pass} assertions passed`);

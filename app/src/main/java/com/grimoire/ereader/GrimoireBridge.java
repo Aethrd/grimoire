@@ -130,6 +130,26 @@ public class GrimoireBridge {
         }
     }
 
+    /**
+     * Read a picked file from this side, because the page could not read it.
+     *
+     * The page is handed a File by the WebView and never learns which URI it
+     * came from, so when the renderer is refused the file descriptor -- the
+     * NotReadableError the page reports -- it has nothing to retry with. This
+     * is the retry: the activity still holds the grant, so it copies the file
+     * into the app's own storage and answers with a URL the page can simply
+     * fetch.
+     *
+     * Asynchronous on purpose. A bridge method runs on a binder thread and
+     * the page waits on its return value, so copying a six-hundred-megabyte
+     * volume inside one would stall the renderer for the length of the copy.
+     */
+    @JavascriptInterface
+    public void stageForRead(String id, String name, double size) {
+        if (!(activity instanceof MainActivity)) return;
+        ((MainActivity) activity).stageForRead(id, name, (long) size);
+    }
+
     /** The reader has booted and can take a file handed to it from outside. */
     @JavascriptInterface
     public void ready() {

@@ -77,7 +77,21 @@ public class MainActivity extends AppCompatActivity {
                     Uri[] result = (uris == null || uris.isEmpty())
                             ? null
                             : uris.toArray(new Uri[0]);
+                    /* Kept, so the file can be read from this side if the
+                     * WebView cannot read it from its own.
+                     *
+                     * The renderer is a separate sandboxed process and is
+                     * handed a file descriptor rather than the grant itself;
+                     * when that descriptor is refused -- a provider that
+                     * backs the file with a download, a grant the renderer
+                     * did not inherit -- the page sees NotReadableError while
+                     * this process can still open the very same URI. Without
+                     * the URI kept here there is nothing to retry with: the
+                     * page is given a File and never learns where it came
+                     * from. */
+                    lastPicked.clear();
                     if (result != null) {
+                        java.util.Collections.addAll(lastPicked, result);
                         for (Uri uri : result) {
                             try {
                                 getContentResolver().takePersistableUriPermission(
@@ -415,6 +429,86 @@ public class MainActivity extends AppCompatActivity {
                 source.delete();
             }
         });
+    }
+
+    /* What the picker last handed over, by URI.
+     *
+     * Only the most recent pick: this exists to retry a file the page has in
+     * front of it right now, not to hold on to anything. */
+    private final java.util.List<Uri> lastPicked = new java.util.ArrayList<>();
+
+    /**
+     * Copy a picked file into the app's own storage and tell the page where.
+     *
+     * The page asks for this only after its own read of the file has failed.
+     * Reading it here instead works because the grant belongs to this
+     * process; serving it back over the asset origin works because that is
+     * an ordinary same-origin fetch with no content provider in the middle.
+     *
+     * Matched by name first and size second, because a File is all the page
+     * has and it carries nothing that identifies the URI it came from. A
+     * single pick needs neither.
+     */
+    void stageForRead(String id, String name, long size) {
+        staging.execute(() -> {
+            Uri found = null;
+
+            if (lastPicked.size() == 1) {
+                found = lastPicked.get(0);
+            } else {
+                for (Uri uri : lastPicked) {
+                    String its = bridge != null ? bridge.displayName(uri.toString()) : null;
+                    if (its != null && its.equals(name)) { found = uri; break; }
+                }
+                if (found == null && size > 0) {
+                    for (Uri uri : lastPicked) {
+                        if (sizeOf(uri) == size) { found = uri; break; }
+                    }
+                }
+            }
+
+            if (found == null) {
+                settleStage(id, false, "that file is no longer the one being opened");
+                return;
+            }
+
+            String safe = (name == null || name.isEmpty() ? "file" : name)
+                    .replaceAll("[^A-Za-z0-9._\\- ]", "_");
+            java.io.File target = new java.io.File(handoffDir(this), safe);
+
+            try (InputStream in = getContentResolver().openInputStream(found);
+                 java.io.OutputStream out = new java.io.FileOutputStream(target)) {
+                if (in == null) throw new java.io.IOException("nothing to read");
+                byte[] buffer = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
+            } catch (Throwable e) {
+                Log.w(TAG, "Could not stage " + found + " for reading", e);
+                //noinspection ResultOfMethodCallIgnored
+                target.delete();
+                settleStage(id, false, "Android would not let the app read it either");
+                return;
+            }
+
+            settleStage(id, true, ORIGIN + "/handoff/" + Uri.encode(safe));
+        });
+    }
+
+    private void settleStage(String id, boolean ok, String payload) {
+        tellReader("window.Grimoire.settleFile("
+                + JSONObject.quote(id) + "," + ok + "," + JSONObject.quote(payload) + ")");
+    }
+
+    private long sizeOf(Uri uri) {
+        try (android.database.Cursor cursor = getContentResolver().query(
+                uri, new String[] { android.provider.OpenableColumns.SIZE }, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) {
+                return cursor.getLong(0);
+            }
+        } catch (Throwable ignored) {
+            // A provider that will not say is one more reason to match on name.
+        }
+        return -1;
     }
 
     /** Where a file handed over from elsewhere is staged before it is read. */

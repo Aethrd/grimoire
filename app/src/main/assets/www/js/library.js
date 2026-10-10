@@ -280,10 +280,26 @@ export async function importFiles(files, { onProgress, onDone, transient = false
         onProgress?.(`Unpacking ${name}`, fraction));
 
       if (archive.comic) {
-        // A zip of images is a comic, not a container.
-        queue.push({ file, name: file.name, folder: '' });
+        /* A zip of images is a comic, not a container.
+         *
+         * It goes back in the queue as itself -- but handed to the parser
+         * under a name the parser recognises. A comic arrives as often in a
+         * .zip as in a .cbz, and the parser dispatches on the extension: a
+         * zip of three hundred pages was identified correctly here, queued
+         * under its own name, and then refused two loops later with
+         * "Archives are expanded before parsing", which is the one thing
+         * that had already happened. Renaming only the copy handed to the
+         * parser keeps the book called what the file is called.
+         */
+        queue.push({
+          file,
+          name: file.name,
+          folder: '',
+          as: `${file.name.replace(/\.zip$/i, '')}.cbz`,
+        });
         continue;
       }
+
       for (const book of archive.books) {
         queue.push({
           // read() rather than a File: the entry is extracted when its turn
@@ -323,7 +339,12 @@ export async function importFiles(files, { onProgress, onDone, transient = false
 
       // Extracted only now, and only this one.
       const readAt = performance.now();
-      const file = entry.file || new File([await entry.read()], name);
+      const raw = entry.file || new File([await entry.read()], name);
+      /* Re-wrapped, not re-read: a File built from a Blob references the same
+       * bytes, so this costs a name and nothing else. */
+      const file = entry.as && entry.as !== raw.name
+        ? new File([raw], entry.as, { type: raw.type })
+        : raw;
       spent.read += performance.now() - readAt;
       const bookAt = performance.now();
 

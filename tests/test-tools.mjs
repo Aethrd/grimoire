@@ -490,4 +490,117 @@ await t('the pad is drawn on the reader, where it was put, and turns chapters', 
    * the lock stopping it, are checked against the source above. */
 });
 
+/* ── a file the page is not allowed to read ──────────────────────────────
+ *
+ * "The requested file could not be read, typically due to permission problems
+ * that have occurred after a reference to a file was acquired." That is
+ * Chromium's sentence, and on Android it means the renderer was refused the
+ * file descriptor behind the content:// URI the picker handed over. This
+ * process can almost always still read it, because the grant is held by the
+ * activity rather than by the renderer.
+ */
+
+console.log('\na file the page cannot read');
+
+const refusing = (name, size) => {
+  const file = new window.File([], name, { type: 'application/zip' });
+  Object.defineProperty(file, 'size', { value: size });
+  const deny = () => {
+    const error = new Error('The requested file could not be read, typically due to '
+      + 'permission problems that have occurred after a reference to a file was acquired.');
+    error.name = 'NotReadableError';
+    throw error;
+  };
+  file.slice = deny;
+  file.arrayBuffer = deny;
+  file.stream = deny;
+  file.text = deny;
+  return file;
+};
+
+await t('the shell is asked to read it, and the import carries on', async () => {
+  const fsMod = await import('node:fs');
+  const bytes = fsMod.readFileSync(path.join(root, 'tests/fixtures/comic.cbz'));
+
+  let asked = null;
+  window.GrimoireNative = {
+    stageForRead(stageId, name, size) {
+      asked = { name, size };
+      setTimeout(() => window.Grimoire.settleFile(stageId, true, 'handoff://rescued'), 20);
+    },
+  };
+  globalThis.fetch = async (url) => ({
+    ok: url === 'handoff://rescued',
+    status: 200,
+    blob: async () => new window.Blob([bytes], { type: 'application/zip' }),
+  });
+
+  const input = el('file-input');
+  Object.defineProperty(input, 'files',
+    { value: [refusing('rescued volume.zip', bytes.length)], configurable: true });
+  input.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle(1500);
+
+  assert.ok(asked, 'the page gave up without asking the shell');
+  assert.equal(asked.name, 'rescued volume.zip');
+  assert.equal(asked.size, bytes.length, 'the shell cannot tell which file to read');
+
+  const book = (await store.all('books')).find((b) => b.title === 'rescued volume');
+  assert.ok(book, 'the rescued file never reached the library');
+
+  /* Cleared after the import, not before it. Clearing the input is also
+   * letting go of what was picked, and reading a File afterwards is exactly
+   * what comes back refused. */
+  assert.equal(input.value, '');
+  assert.equal(el('import-progress').hidden, true);
+});
+
+await t('when nothing can read it, the reason is one somebody can act on', async () => {
+  window.GrimoireNative = {
+    stageForRead(stageId) {
+      setTimeout(() => window.Grimoire.settleFile(
+        stageId, false, 'Android would not let the app read it either'), 20);
+    },
+  };
+
+  const input = el('file-input');
+  Object.defineProperty(input, 'files',
+    { value: [refusing('lost cause.zip', 4096)], configurable: true });
+  input.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle(1500);
+
+  /* The refusal, not whatever the parser made of a file it never read.
+   * Passed straight through, it failed again inside JSZip and reported
+   * "corrupted zip" about a file that is not corrupt. */
+  const said = el('toast').textContent;
+  assert.match(said, /lost cause\.zip/);
+  assert.match(said, /would not let the app read it/);
+  assert.doesNotMatch(said, /[Cc]orrupt/);
+});
+
+await t('Chromium\'s own sentence is never what the person is shown', async () => {
+  // Accurate and useless: it names no cause the person controls and suggests
+  // nothing to do about it.
+  const plain = app.slice(app.indexOf('function plainReason'), app.indexOf('async function handleFiles'));
+  assert.match(plain, /NotReadableError/);
+  assert.match(plain, /copy it into a folder of your own/);
+});
+
+await t('the shell keeps what was picked, so there is something to retry with', async () => {
+  /* The page is handed a File and never learns which URI it came from, so
+   * without the URI kept on this side a refused read has nothing to retry. */
+  assert.match(activity, /lastPicked/);
+  assert.match(activity, /void stageForRead\(String id, String name, long size\)/);
+  // Matched by name first and size second, because a File carries nothing
+  // else that identifies it.
+  assert.match(activity, /its\.equals\(name\)/);
+  assert.match(activity, /sizeOf\(uri\) == size/);
+  // Copied on the staging thread: a bridge method blocks the page on its
+  // return value, and a six-hundred-megabyte volume would stall the renderer.
+  assert.match(activity, /staging\.execute/);
+
+  const bridge = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
+  assert.match(bridge, /public void stageForRead\(String id, String name, double size\)/);
+});
+
 console.log(`\n${pass} assertions passed`);

@@ -1500,6 +1500,134 @@ const progress = (() => {
   };
 })();
 
+/* ── a file the page is not allowed to read ──────────────────────────────
+ *
+ * "The requested file could not be read, typically due to permission problems
+ * that have occurred after a reference to a file was acquired." That sentence
+ * is Chromium's, and on Android it means one specific thing: the renderer was
+ * refused the file descriptor behind the content:// URI the picker handed
+ * over. It is a separate sandboxed process, and whether it inherits a usable
+ * descriptor depends on the provider the file came from -- a download that is
+ * still a placeholder, a provider that grants to the activity and not to the
+ * renderer, a file picked through Recents whose grant has already lapsed.
+ *
+ * The app's own process can almost always still read it, because the grant is
+ * held by the activity. So the file is read there instead and served back
+ * over this origin, which is an ordinary fetch with no provider in the way.
+ *
+ * Checked before importing rather than after it fails. A one-byte read proves
+ * the descriptor is usable, costs nothing, and means a book is either
+ * importable or rescued before any work is done on it -- rather than failing
+ * part-way through a two-hundred-chapter archive.
+ */
+
+const staging = new Map();
+let stageCounter = 0;
+
+/** Called from Java when a rescued file has been staged. Not a reader API. */
+function settleFile(id, ok, payload) {
+  const entry = staging.get(id);
+  if (!entry) return;
+  staging.delete(id);
+  clearTimeout(entry.timer);
+  if (ok) entry.resolve(payload);
+  else entry.reject(new Error(payload || 'That file could not be read'));
+}
+
+const canStage = () => typeof window.GrimoireNative?.stageForRead === 'function';
+
+function stageForRead(file) {
+  return new Promise((resolve, reject) => {
+    const id = `s${++stageCounter}`;
+    // A copy that never answers would hang the import for good. Generous,
+    // because the file being rescued may be a very large archive.
+    const timer = setTimeout(() => {
+      staging.delete(id);
+      reject(new Error('That file took too long to read'));
+    }, 180000);
+    staging.set(id, { resolve, reject, timer });
+    try {
+      window.GrimoireNative.stageForRead(id, file.name, file.size || 0);
+    } catch (error) {
+      staging.delete(id);
+      clearTimeout(timer);
+      reject(error);
+    }
+  });
+}
+
+/** Whether the page can actually read this file's bytes. */
+async function readable(file) {
+  try {
+    await file.slice(0, 1).arrayBuffer();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The same files, with any the page cannot read replaced by a copy it can.
+ *
+ * A file that cannot be rescued is passed through untouched rather than
+ * dropped, so it still reaches the importer and still reports itself by name
+ * in the failure -- being quietly missing is worse than failing out loud.
+ */
+async function openable(files, onNote) {
+  const out = [];
+  /* The ones nothing could read.
+   *
+   * Remembered by name so the failure can be reported as what it was. Passed
+   * on to the importer anyway, it fails again further in and reports whatever
+   * the parser made of nothing -- "corrupted zip" for a file that is not
+   * corrupt and was never read. */
+  const refused = new Map();
+
+  for (const file of files) {
+    if (await readable(file)) { out.push(file); continue; }
+
+    if (!canStage()) {
+      refused.set(file.name, 'Android would not let the app read it');
+      out.push(file);
+      continue;
+    }
+
+    try {
+      onNote?.(`Reading ${file.name} another way`);
+      const url = await stageForRead(file);
+      const copy = await fetch(url);
+      if (!copy.ok) throw new Error(`could not fetch the staged copy (${copy.status})`);
+      const blob = await copy.blob();
+      out.push(new File([blob], file.name, { type: file.type || blob.type }));
+    } catch (error) {
+      console.warn('Could not rescue', file.name, error);
+      refused.set(file.name, error.message || 'it could not be read');
+      out.push(file);
+    }
+  }
+  return { files: out, refused };
+}
+
+/**
+ * A reason somebody can act on, where the browser gives one nobody can.
+ *
+ * "The requested file could not be read, typically due to permission problems
+ * that have occurred after a reference to a file was acquired" is accurate
+ * and useless: it names no cause the person controls and suggests nothing to
+ * do. By the time it is shown the shell has already tried to read the file
+ * itself and failed too, so the honest next step is a copy of the file
+ * somewhere ordinary.
+ */
+function plainReason(reason) {
+  const text = String(reason || '');
+  if (/could not be read|NotReadableError|permission problems/i.test(text)) {
+    return 'Android would not let the app read it. If it is in Downloads or '
+      + 'came straight from another app, copy it into a folder of your own '
+      + 'and pick it from there.';
+  }
+  return text;
+}
+
 async function handleFiles(files, { transient = false } = {}) {
   if (!files.length) return;
 
@@ -1519,8 +1647,14 @@ async function handleFiles(files, { transient = false } = {}) {
    * up forever, which with the count behind it now would also hold it up for
    * every later operation. */
   let results;
+  let refusedFiles = new Map();
   try {
-    results = await library.importFiles(files, {
+    // Anything the page is not allowed to read is read by the shell instead,
+    // before the importer is handed it.
+    const opened = await openable(files, (message) => progress.say(message, 0));
+    refusedFiles = opened.refused;
+
+    results = await library.importFiles(opened.files, {
       transient,
       onProgress: (message, fraction, at, total) => {
         progress.say(message, fraction || 0, total ? `${at + 1} of ${total}` : '');
@@ -1539,7 +1673,15 @@ async function handleFiles(files, { transient = false } = {}) {
   if (results.failed.length) {
     // A parse failure is confined to its own file; the rest of the batch
     // still lands, and the reason is shown rather than swallowed.
-    toast(`${results.added} added · ${results.failed[0].name}: ${results.failed[0].reason}`, 6000);
+    /* The first failure, with the reason that actually applies.
+     *
+     * A file nothing could read fails again inside the parser, which reports
+     * what it made of nothing rather than why there was nothing -- so the
+     * refusal wins where there was one. */
+    const first = results.failed[0];
+    const why = refusedFiles.get(first.name);
+    toast(`${results.added} added · ${first.name}: ${
+      why ? plainReason(why) : plainReason(first.reason)}`, 8000);
   } else {
     const folders = results.folders?.size || 0;
     const seconds = (results.elapsedMs || 0) / 1000;
@@ -3652,10 +3794,21 @@ function wireChrome() {
     if (event.target.closest('[data-import]')) { pickFiles(); }
   });
 
-  el('file-input').addEventListener('change', (event) => {
-    const files = [...event.target.files];
-    event.target.value = '';
-    handleFiles(files);
+  el('file-input').addEventListener('change', async (event) => {
+    const input = event.target;
+    const files = [...input.files];
+    /* Cleared after the import, not before it.
+     *
+     * Clearing the input is what lets the same file be picked twice in a row,
+     * and it also drops the input's own hold on what was picked. The File
+     * objects are supposed to outlive that, and in a WebView reading one
+     * afterwards is exactly the kind of thing that comes back refused -- so
+     * the hold is kept until there is nothing left to read. */
+    try {
+      await handleFiles(files);
+    } finally {
+      input.value = '';
+    }
   });
 
   el('density-btn').onclick = async () => {
@@ -3775,6 +3928,7 @@ window.Grimoire = {
 
   /** Called from Java to settle an async bridge call. Not a reader API. */
   settle: translate.settle,
+  settleFile,
 
   /** Return true to swallow the back gesture. */
   onBack() {
