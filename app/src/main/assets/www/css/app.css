@@ -639,6 +639,28 @@ body[data-mode="paged"][data-images="smart"] .pic img.landscape { height: 88vh; 
                         margin-top: 3px; line-height: 1.45; }
 .list-row .body small mark { background: var(--accent-300); color: var(--accent-900); }
 .list-row .trail { flex: none; font-size: 11px; color: var(--muted); }
+
+/* A row that is one of several choices says which one is chosen.
+ *
+ * These rows carried aria-pressed and nothing drew it: tapping "Fit width"
+ * saved it and changed nothing on screen, so the chapter-end, picture and
+ * grey options all looked as if they did nothing at all. Each now has a
+ * radio mark on the right, filled for the chosen one, and the chosen row is
+ * tinted -- the same treatment the index gives the chapter you are in. */
+.list-row[aria-pressed] { align-items: center; }
+.list-row[aria-pressed]::after {
+  content: ""; flex: none;
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--divider);
+  box-sizing: border-box;
+}
+.list-row[aria-pressed="true"] { background: var(--accent-100);
+                                 box-shadow: inset 3px 0 0 var(--accent); }
+.list-row[aria-pressed="true"] .body b { color: var(--accent-ink); }
+.list-row[aria-pressed="true"]::after {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 4px, transparent 5px);
+}
 .list-head { padding: 14px 16px 6px; font-family: var(--font-heading);
              font-weight: 800; font-size: 11px; letter-spacing: .08em;
              text-transform: uppercase; color: var(--muted);

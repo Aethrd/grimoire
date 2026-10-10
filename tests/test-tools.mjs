@@ -744,4 +744,86 @@ await t('a notice repeated is counted, not stacked', async () => {
   assert.equal(el('toast').textContent, 'That is the last chapter (×3)');
 });
 
+/* ── the choices in Behaviour ────────────────────────────────────────── */
+
+console.log('\nthe choices in Behaviour');
+
+await t('every choice is drawn as chosen once it is tapped', async () => {
+  /* At the end of a chapter, Pictures and Colour pages in grey are lists of
+   * choices that carried aria-pressed and nothing drew it: tapping one saved
+   * it and changed nothing on screen, so they looked broken. */
+  assert.match(css, /\.list-row\[aria-pressed="true"\] \{[^}]*background/);
+  assert.match(css, /\.list-row\[aria-pressed\]::after/);
+  assert.match(css, /\.list-row\[aria-pressed="true"\]::after/);
+
+  const panelsMod = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  panelsMod.onSettingsChange(() => panelsMod.openSettings(() => {}));
+  const body = await behaviourPane();
+
+  for (const [section, choice, key, value] of [
+    ['At the end of a chapter', 'Carry straight on', 'chapterOnEdge', 'immediate'],
+    ['At the end of a chapter', 'Only the buttons', 'chapterOnEdge', 'buttons'],
+    ['At the end of a chapter', 'Tap again to carry on', 'chapterOnEdge', 'confirm'],
+    ['Pictures', 'Fit width', 'imageFit', 'width'],
+    ['Pictures', 'Smart fit', 'imageFit', 'smart'],
+    ['Pictures', 'Fit screen', 'imageFit', 'screen'],
+  ]) {
+    const block = () => [...body.querySelectorAll('section.block')]
+      .find((b) => b.querySelector('h2')?.textContent === section);
+    const button = [...block().querySelectorAll('button.list-row')].find((b) => b.textContent.includes(choice));
+    assert.ok(button, `no "${choice}" in ${section}`);
+    tap(button);
+    await settle(200);
+
+    assert.equal((await store.settings())[key], value, `"${choice}" was not saved`);
+    const pressed = [...block().querySelectorAll('button.list-row[aria-pressed="true"]')]
+      .map((b) => b.querySelector('b').textContent);
+    assert.deepEqual(pressed, [choice], `after "${choice}", ${section} shows ${pressed.join(', ') || 'nothing'} as chosen`);
+  }
+
+  // And the grey choices, by whichever names they have.
+  const grey = [...body.querySelectorAll('section.block')]
+    .find((b) => /grey/i.test(b.querySelector('h2')?.textContent || ''));
+  const options = [...grey.querySelectorAll('button.list-row')];
+  assert.ok(options.length >= 3);
+  tap(options[1]);
+  await settle(200);
+  const greyNow = [...body.querySelectorAll('section.block')]
+    .find((b) => /grey/i.test(b.querySelector('h2')?.textContent || ''));
+  assert.equal(greyNow.querySelectorAll('button.list-row[aria-pressed="true"]').length, 1);
+  assert.notEqual((await store.settings()).greyscale, 'off');
+  assert.equal(document.body.dataset.grey, (await store.settings()).greyscale, 'chosen but not applied');
+  tap(greyNow.querySelectorAll('button.list-row')[0]);
+  await settle(200);
+});
+
+await t('choosing something does not throw you back to the top of the pane', async () => {
+  /* The pane is redrawn on every choice, and emptying it collapsed the
+   * scroll: tap "Fit width" halfway down and you were back at Annotations,
+   * never seeing the option change. */
+  const panelsMod = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  const body = el('settings-body');
+  // jsdom has no layout, so the browser's clamp is played here: emptied, a
+  // scrolled box is back at the top.
+  let top = 0;
+  Object.defineProperty(body, 'scrollTop', { get: () => top, set: (v) => { top = v; }, configurable: true });
+  const clamp = new window.MutationObserver(() => { if (!body.childElementCount) top = 0; });
+  clamp.observe(body, { childList: true });
+
+  await behaviourPane();
+  body.scrollTop = 900;
+  const fit = [...body.querySelectorAll('button.list-row')].find((b) => b.textContent.includes('Fit width'));
+  tap(fit);
+  await settle(250);
+  assert.equal(body.scrollTop, 900, 'the pane jumped back to the top');
+
+  // A different pane still opens at its top.
+  tap([...el('settings-strip').children].find((b) => /^\s*Text/i.test(b.textContent)));
+  await settle(250);
+  assert.equal(body.scrollTop, 0);
+  clamp.disconnect();
+  delete body.scrollTop;
+  await panelsMod.openSettings(() => {});
+});
+
 console.log(`\n${pass} assertions passed`);

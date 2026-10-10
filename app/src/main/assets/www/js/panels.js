@@ -1145,6 +1145,8 @@ const PANES = {
 
 let pane = 'text';
 
+let shownPane = null;
+
 export async function openSettings(onVaultChange) {
   const strip = el('settings-strip');
   for (const button of strip.children) {
@@ -1153,8 +1155,24 @@ export async function openSettings(onVaultChange) {
   }
   el('settings-title').textContent = PANES[pane].title;
   const body = el('settings-body');
+
+  /* Redrawn where it was, when it is the same pane.
+   *
+   * Every choice in a pane redraws the pane, and emptying it first collapsed
+   * the scroll to the top: tap "Fit width" halfway down Behaviour and you were
+   * thrown back to Annotations, never seeing the option change. Combined with
+   * the chosen option not being drawn as chosen, those buttons looked as
+   * though they did nothing. A different pane still starts at the top. */
+  const same = shownPane === pane;
+  const scrolled = same ? body.scrollTop : 0;
   body.innerHTML = '';
-  await PANES[pane].render(body, onVaultChange);
+  try {
+    await PANES[pane].render(body, onVaultChange);
+  } finally {
+    // Put back once the pane is full again, when there is height to scroll.
+    body.scrollTop = scrolled;
+    shownPane = pane;
+  }
 }
 
 /* Declarations, not arrow consts: PANES is built above and references these,
