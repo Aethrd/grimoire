@@ -1889,6 +1889,8 @@ body[data-view="reader"] .stepper {
   display: grid;
   grid-template-rows: auto 1fr auto auto auto;
   padding-top: var(--safe-top, 0px);
+  /* The loupe is placed against this. */
+  isolation: isolate;
 }
 .redact[hidden] { display: none; }
 .redact .btn.ghost { color: #eee; border-color: rgba(255, 255, 255, .28); }
@@ -1911,7 +1913,7 @@ body[data-view="reader"] .stepper {
 }
 
 /* The picture, at the size of the screen or larger when zoomed; scrolled
-   with the Move tool, drawn on with the others. */
+   with Move, marked on with Mark panels. */
 /* Centred by auto margins rather than by the grid: a centred box larger than
    its scroller hangs off the top and left where it cannot be scrolled to,
    and auto margins give way to nothing as soon as it is larger. */
@@ -1930,17 +1932,40 @@ body[data-view="reader"] .stepper {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   fill: none; stroke: none;
-  /* Drawing, not scrolling: without this the first stroke of a box is taken
-     by the browser as a pan and the shape never arrives. */
+  /* Marking, not scrolling: without this a corner being dragged is taken by
+     the browser as a pan and the corner never moves. */
   touch-action: none;
 }
 .redact[data-tool="move"] #redact-svg { pointer-events: none; }
-/* The shape being drawn, until it is let go. */
-#redact-svg .draft { opacity: .7; }
-/* What the eraser will take, outlined so it can be seen against black. */
-.redact[data-tool="erase"] #redact-svg rect,
-.redact[data-tool="erase"] #redact-svg ellipse,
-.redact[data-tool="erase"] #redact-svg circle { stroke: var(--accent); stroke-width: 2px; vector-effect: non-scaling-stroke; }
+
+/* The panel being worked on: outlined, with a handle on each corner and on
+   the middle of each edge. Drawn the same width at every zoom. */
+#redact-svg .outline, #redact-svg .pending {
+  fill: none; stroke: var(--accent); stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+#redact-svg .pending { stroke-dasharray: 6 4; }
+#redact-svg .corner { fill: #fff; stroke: var(--accent); stroke-width: 2px; vector-effect: non-scaling-stroke; }
+#redact-svg .edge { fill: var(--accent); stroke: #fff; stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+#redact-svg .placed { fill: var(--accent); stroke: #fff; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+/* A panel not being worked on, while one is: so the one that is stands out. */
+#redact-svg.editing polygon.panel:not(.chosen) { opacity: .75; }
+
+.redact-loupe {
+  position: absolute; z-index: 1;
+  width: 120px; height: 120px; border-radius: 50%;
+  border: 2px solid var(--accent);
+  background-color: #000; background-repeat: no-repeat;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .6);
+  pointer-events: none;
+}
+.redact-loupe[hidden] { display: none; }
+/* Where the corner will go: the middle of the circle. */
+.redact-loupe::before, .redact-loupe::after {
+  content: ""; position: absolute; background: var(--accent);
+}
+.redact-loupe::before { left: 50%; top: 30%; bottom: 30%; width: 2px; margin-left: -1px; }
+.redact-loupe::after { top: 50%; left: 30%; right: 30%; height: 2px; margin-top: -1px; }
 
 .redact-hint {
   margin: 0; padding: 4px 16px 0;
@@ -1962,7 +1987,7 @@ body[data-view="reader"] .stepper {
   padding-bottom: calc(var(--safe-bottom) + 10px);
 }
 .redact-row { display: flex; align-items: center; gap: 8px; }
-.redact-colour { flex: 1; }
+.redact-mode { flex: 1; }
 .redact-colour button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .swatch {
   width: 14px; height: 14px; border-radius: 50%;
@@ -1970,12 +1995,7 @@ body[data-view="reader"] .stepper {
   display: inline-block; flex: none;
 }
 .redact-zoom { min-width: 52px; text-align: center; }
-.redact-size {
-  display: flex; align-items: center; gap: 10px;
-  font-size: 12px; color: #bbb;
-}
-.redact-size[hidden] { display: none; }
-.redact-size input { flex: 1; accent-color: var(--accent); }
-.redact-more { justify-content: space-between; }
+.redact-more { flex-wrap: wrap; }
+.redact-more .btn { flex: 1; text-align: center; white-space: nowrap; }
 
 .viewer .viewer-bar { flex-wrap: wrap; }

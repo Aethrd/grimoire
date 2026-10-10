@@ -84,7 +84,7 @@ window.HTMLCanvasElement.prototype.getContext = function getContext() {
   return ctx;
 };
 window.HTMLCanvasElement.prototype.toBlob = function toBlob(done, type) {
-  const fills = this.calls.filter((c) => c[0] === 'fillRect' || c[0] === 'fill' || c[0] === 'stroke');
+  const fills = this.calls.filter((c) => c[0] === 'fillRect' || c[0] === 'fill');
   setTimeout(() => done(new window.Blob([`painted:${this.width}x${this.height}:${fills.length}`], { type })), 0);
 };
 
@@ -111,6 +111,8 @@ async function comic(pages = 3, { type = 'image/jpeg', ext = 'jpg' } = {}) {
   return id;
 }
 
+const Q = (...points) => redact.quad(points);
+
 const fakeBake = async (original, shapes) =>
   new window.Blob([`baked:${shapes.length}`], { type: original.type || 'image/png' });
 
@@ -118,18 +120,29 @@ const fakeBake = async (original, shapes) =>
 
 console.log('shapes');
 
-await t('a box is the same box whichever way it was dragged', () => {
-  const a = redact.fromDrag('box', { x: 10, y: 20 }, { x: 110, y: 70 });
-  const b = redact.fromDrag('box', { x: 110, y: 70 }, { x: 10, y: 20 });
-  assert.deepEqual(a, b);
-  assert.deepEqual(a, { type: 'box', colour: 'black', x: 10, y: 20, w: 100, h: 50 });
+await t('four corners pressed in any order make the same panel, never a bow tie', () => {
+  const tidy = Q([10, 10], [110, 12], [105, 80], [8, 75]);
+  // Top-left, top-right, bottom-left, bottom-right: reading order, and
+  // joined up as pressed, a bow tie.
+  const reading = Q([10, 10], [110, 12], [8, 75], [105, 80]);
+  const backwards = Q([105, 80], [8, 75], [110, 12], [10, 10]);
+  assert.deepEqual(reading, tidy);
+  assert.deepEqual(backwards, tidy);
+  assert.deepEqual(tidy, { type: 'quad', colour: 'black', points: [[10, 10], [110, 12], [105, 80], [8, 75]] });
+  // A slanted panel keeps its slant.
+  const slanted = Q([0, 0], [100, 20], [100, 120], [0, 80]);
+  assert.deepEqual(slanted.points, [[0, 0], [100, 20], [100, 120], [0, 80]]);
 });
 
-await t('a tap is not a shape, a drag is', () => {
-  assert.ok(redact.isTiny(redact.fromDrag('box', { x: 5, y: 5 }, { x: 6, y: 6 })));
-  assert.ok(!redact.isTiny(redact.fromDrag('oval', { x: 5, y: 5 }, { x: 60, y: 40 })));
-  // One dab of the brush is a dot, and a dot was meant.
-  assert.ok(!redact.isTiny({ type: 'brush', size: 10, points: [[3, 3]] }));
+await t('four presses in one spot are not a panel', () => {
+  assert.ok(redact.isTiny(Q([5, 5], [6, 5], [6, 6], [5, 6])));
+  assert.ok(!redact.isTiny(Q([0, 0], [60, 0], [60, 40], [0, 40])));
+  assert.equal(redact.area([[0, 0], [60, 0], [60, 40], [0, 40]]), 2400);
+});
+
+await t('a box saved by the first version opens as a panel', () => {
+  const [panel] = redact.normalise([{ type: 'box', colour: 'white', x: 10, y: 20, w: 30, h: 40 }]);
+  assert.deepEqual(panel, { type: 'quad', colour: 'white', points: [[10, 20], [40, 20], [40, 60], [10, 60]] });
 });
 
 await t('a point on the screen lands on the same place in the picture at any zoom', () => {
@@ -145,44 +158,68 @@ await t('a point on the screen lands on the same place in the picture at any zoo
   assert.deepEqual(redact.toPicture(-50, 9999, shown, picture.width, picture.height), { x: 0, y: 3000 });
 });
 
-await t('every shape is painted, in its colour, in the picture\'s own pixels', () => {
+await t('a corner, the middle of an edge, or nothing is under the finger', () => {
+  const panel = Q([0, 0], [100, 0], [100, 100], [0, 100]);
+  assert.deepEqual(redact.handleAt(panel, { x: 96, y: 4 }, 10), { kind: 'corner', at: 1 });
+  assert.deepEqual(redact.handleAt(panel, { x: 100, y: 52 }, 10), { kind: 'edge', at: 1 });
+  assert.deepEqual(redact.handleAt(panel, { x: 50, y: 97 }, 10), { kind: 'edge', at: 2 });
+  assert.equal(redact.handleAt(panel, { x: 50, y: 50 }, 10), null);
+  // On a panel so small the two overlap, the corner wins.
+  const small = Q([0, 0], [12, 0], [12, 12], [0, 12]);
+  assert.equal(redact.handleAt(small, { x: 3, y: 1 }, 10).kind, 'corner');
+});
+
+await t('a corner goes where it is dragged; an edge moves as a whole and keeps its angle', () => {
+  const panel = Q([0, 0], [100, 10], [100, 110], [0, 100]);
+  const corner = redact.moveHandle(panel, { kind: 'corner', at: 2 }, { x: 100, y: 110 }, { x: 130, y: 140 }, 400, 600);
+  assert.deepEqual(corner.points, [[0, 0], [100, 10], [130, 140], [0, 100]]);
+
+  // The right edge, out by 20: both its corners, the left ones untouched.
+  const edge = redact.moveHandle(panel, { kind: 'edge', at: 1 }, { x: 100, y: 60 }, { x: 120, y: 60 }, 400, 600);
+  assert.deepEqual(edge.points, [[0, 0], [120, 10], [120, 110], [0, 100]]);
+
+  const whole = redact.moveHandle(panel, { kind: 'whole' }, { x: 50, y: 50 }, { x: 60, y: 70 }, 400, 600);
+  assert.deepEqual(whole.points, [[10, 20], [110, 30], [110, 130], [10, 120]]);
+
+  // Nothing leaves the picture, and a panel pushed against its edge keeps
+  // its shape rather than being squashed.
+  const pushed = redact.moveHandle(panel, { kind: 'whole' }, { x: 50, y: 50 }, { x: 0, y: 0 }, 400, 600);
+  assert.deepEqual(pushed.points, panel.points);
+  const far = redact.moveHandle(panel, { kind: 'corner', at: 0 }, { x: 0, y: 0 }, { x: -40, y: 900 }, 400, 600);
+  assert.deepEqual(far.points[0], [0, 600]);
+});
+
+await t('a panel is painted as its four corners, in its colour, in the picture\'s own pixels', () => {
   const { ctx, calls } = recorder();
   redact.paintShapes(ctx, [
-    { type: 'box', colour: 'black', x: 10, y: 20, w: 30, h: 40 },
-    { type: 'oval', colour: 'white', x: 100, y: 100, w: 50, h: 20 },
-    { type: 'brush', colour: 'black', size: 12, points: [[0, 0], [10, 10], [20, 5]] },
-    { type: 'brush', colour: 'white', size: 8, points: [[50, 50]] },
+    Q([10, 20], [90, 25], [85, 70], [12, 66]),
+    { ...Q([0, 0], [5, 0], [5, 5], [0, 5]), colour: 'white' },
   ]);
-  assert.deepEqual(calls.find((c) => c[0] === 'fillRect'), ['fillRect', 10, 20, 30, 40]);
-  const ellipse = calls.find((c) => c[0] === 'ellipse');
-  assert.deepEqual(ellipse.slice(1, 5), [125, 110, 25, 10]);
+  assert.deepEqual(calls.find((c) => c[0] === 'moveTo'), ['moveTo', 10, 20]);
+  assert.deepEqual(calls.filter((c) => c[0] === 'lineTo').slice(0, 3).map((c) => c.slice(1)),
+    [[90, 25], [85, 70], [12, 66]]);
+  assert.ok(calls.some((c) => c[0] === 'closePath'));
+  assert.ok(calls.some((c) => c[0] === 'fill'));
   assert.ok(calls.some((c) => c[0] === 'fillStyle=' && c[1] === '#ffffff'), 'white was never used');
-  assert.deepEqual(calls.filter((c) => c[0] === 'lineTo').map((c) => c.slice(1)), [[10, 10], [20, 5]]);
-  assert.ok(calls.some((c) => c[0] === 'lineWidth=' && c[1] === 12));
-  // A single dab is a filled dot, not a stroke of nothing.
-  assert.deepEqual(calls.find((c) => c[0] === 'arc').slice(1, 4), [50, 50, 4]);
 });
 
 await t('what is drawn while editing is what is painted on save', () => {
-  assert.match(redact.svgFor({ type: 'box', colour: 'black', x: 1, y: 2, w: 3, h: 4 }),
-    /<rect x="1" y="2" width="3" height="4" fill="#000000"\/>/);
-  assert.match(redact.svgFor({ type: 'oval', colour: 'white', x: 0, y: 0, w: 10, h: 6 }),
-    /<ellipse cx="5" cy="3" rx="5" ry="3" fill="#ffffff"\/>/);
-  assert.match(redact.svgFor({ type: 'brush', colour: 'black', size: 9, points: [[0, 0], [5, 5]] }),
-    /d="M0 0 L5 5"[^>]*stroke-width="9"/);
+  assert.match(redact.svgFor(Q([1, 2], [30, 2], [30, 40], [1, 40])),
+    /<polygon points="1,2 30,2 30,40 1,40" fill="#000000"\/>/);
 });
 
-await t('the eraser takes the shape on top, and a near miss on a thin line still counts', () => {
+await t('pressing inside a panel finds it -- the one on top where two overlap', () => {
   const shapes = [
-    { type: 'box', colour: 'black', x: 0, y: 0, w: 100, h: 100 },
-    { type: 'oval', colour: 'black', x: 40, y: 40, w: 20, h: 20 },
-    { type: 'brush', colour: 'black', size: 2, points: [[200, 0], [200, 100]] },
+    Q([0, 0], [100, 0], [100, 100], [0, 100]),
+    Q([40, 40], [60, 40], [60, 60], [40, 60]),
+    // A slanted one: its bounding box is not the panel.
+    Q([200, 0], [300, 0], [250, 100], [200, 100]),
   ];
   assert.equal(redact.shapeAt(shapes, { x: 50, y: 50 }), 1, 'not the topmost');
   assert.equal(redact.shapeAt(shapes, { x: 5, y: 5 }), 0);
-  assert.equal(redact.shapeAt(shapes, { x: 300, y: 300 }), -1);
-  assert.equal(redact.shapeAt(shapes, { x: 208, y: 50 }), -1);
-  assert.equal(redact.shapeAt(shapes, { x: 208, y: 50 }, 10), 2);
+  assert.equal(redact.shapeAt(shapes, { x: 210, y: 50 }), 2);
+  assert.equal(redact.shapeAt(shapes, { x: 290, y: 90 }), -1, 'the slant was ignored');
+  assert.equal(redact.shapeAt(shapes, { x: 500, y: 500 }), -1);
 });
 
 await t('a JPEG stays a JPEG; a GIF becomes a still PNG', () => {
@@ -202,11 +239,11 @@ await t('a picture too big for a phone canvas is refused before one is made', ()
 await t('the painter draws the picture at full size, then the shapes over it', async () => {
   painted = [];
   const out = await redact.bake(new window.Blob(['x'], { type: 'image/jpeg' }), [
-    { type: 'box', colour: 'black', x: 1, y: 1, w: 50, h: 50 },
+    Q([1, 1], [51, 1], [51, 51], [1, 51]),
   ]);
   const calls = painted[0];
   const draw = calls.findIndex((c) => c[0] === 'drawImage');
-  const fill = calls.findIndex((c) => c[0] === 'fillRect');
+  const fill = calls.findIndex((c) => c[0] === 'fill');
   assert.ok(draw >= 0 && fill > draw, 'the shapes were not painted over the picture');
   assert.deepEqual(calls[draw].slice(2), [0, 0, 400, 600]);
   assert.equal(out.type, 'image/jpeg');
@@ -220,7 +257,7 @@ console.log('\nin the book');
 await t('saving replaces the book\'s copy and keeps the original beside it', async () => {
   const id = await comic();
   const before = await store.get('images', [id, 'p2.jpg']);
-  const shapes = [{ type: 'box', colour: 'black', x: 0, y: 0, w: 40, h: 40 }];
+  const shapes = [Q([0, 0], [40, 0], [40, 40], [0, 40])];
   await redact.saveEdits(id, 'p2.jpg', shapes, { bakeWith: fakeBake });
 
   const after = await store.get('images', [id, 'p2.jpg']);
@@ -237,17 +274,17 @@ await t('editing again starts from the original, not from the last edit', async 
   const id = await comic();
   let seen = null;
   const watching = async (original, shapes) => { seen = await text(original); return fakeBake(original, shapes); };
-  await redact.saveEdits(id, 'p3.jpg', [{ type: 'box', colour: 'black', x: 0, y: 0, w: 9, h: 9 }], { bakeWith: watching });
-  await redact.saveEdits(id, 'p3.jpg', [{ type: 'oval', colour: 'white', x: 0, y: 0, w: 9, h: 9 }], { bakeWith: watching });
+  await redact.saveEdits(id, 'p3.jpg', [Q([0, 0], [9, 0], [9, 9], [0, 9])], { bakeWith: watching });
+  await redact.saveEdits(id, 'p3.jpg', [{ ...Q([2, 2], [9, 2], [9, 9], [2, 9]), colour: 'white' }], { bakeWith: watching });
   assert.equal(seen, 'page-3', 'the second edit was painted onto the first');
   const image = await store.get('images', [id, 'p3.jpg']);
   assert.equal(image.edits.length, 1);
-  assert.equal(image.edits[0].type, 'oval');
+  assert.equal(image.edits[0].colour, 'white');
 });
 
 await t('the original can always be put back', async () => {
   const id = await comic();
-  await redact.saveEdits(id, 'p2.jpg', [{ type: 'box', colour: 'black', x: 0, y: 0, w: 9, h: 9 }], { bakeWith: fakeBake });
+  await redact.saveEdits(id, 'p2.jpg', [Q([0, 0], [9, 0], [9, 9], [0, 9])], { bakeWith: fakeBake });
   await redact.restoreOriginal(id, 'p2.jpg');
   const image = await store.get('images', [id, 'p2.jpg']);
   assert.equal(await text(image.blob), 'page-2');
@@ -255,14 +292,14 @@ await t('the original can always be put back', async () => {
   assert.equal(image.edits, undefined);
 
   // Clearing every shape and saving is the same thing.
-  await redact.saveEdits(id, 'p2.jpg', [{ type: 'box', colour: 'black', x: 0, y: 0, w: 9, h: 9 }], { bakeWith: fakeBake });
+  await redact.saveEdits(id, 'p2.jpg', [Q([0, 0], [9, 0], [9, 9], [0, 9])], { bakeWith: fakeBake });
   await redact.saveEdits(id, 'p2.jpg', [], { bakeWith: fakeBake });
   assert.equal(await text((await store.get('images', [id, 'p2.jpg'])).blob), 'page-2');
 });
 
 await t('a cover that is the edited page follows it; one picked by hand does not', async () => {
   const id = await comic();
-  await redact.saveEdits(id, 'p1.jpg', [{ type: 'box', colour: 'black', x: 0, y: 0, w: 9, h: 9 }], { bakeWith: fakeBake });
+  await redact.saveEdits(id, 'p1.jpg', [Q([0, 0], [9, 0], [9, 9], [0, 9])], { bakeWith: fakeBake });
   let book = await store.get('books', id);
   assert.equal(await text(book.coverBlob), 'baked:1', 'the shelf still shows what was blacked out');
 
@@ -274,13 +311,13 @@ await t('a cover that is the edited page follows it; one picked by hand does not
   const picked = await store.get('books', chosen);
   picked.coverCustom = true;
   await store.put('books', picked);
-  await redact.saveEdits(chosen, 'p1.jpg', [{ type: 'box', colour: 'black', x: 0, y: 0, w: 9, h: 9 }], { bakeWith: fakeBake });
+  await redact.saveEdits(chosen, 'p1.jpg', [Q([0, 0], [9, 0], [9, 9], [0, 9])], { bakeWith: fakeBake });
   assert.equal(await text((await store.get('books', chosen)).coverBlob), 'page-1-original-bytes',
     'a cover chosen by hand was replaced');
 
   // And a different picture's edit leaves the cover alone.
   const other = await comic();
-  await redact.saveEdits(other, 'p2.jpg', [{ type: 'box', colour: 'black', x: 0, y: 0, w: 9, h: 9 }], { bakeWith: fakeBake });
+  await redact.saveEdits(other, 'p2.jpg', [Q([0, 0], [9, 0], [9, 9], [0, 9])], { bakeWith: fakeBake });
   assert.equal(await text((await store.get('books', other)).coverBlob), 'page-1-original-bytes');
 });
 
@@ -289,7 +326,7 @@ await t('a blacked-out animation is marked still, and moves again when put back'
   const row = await store.get('images', [id, 'p2.gif']);
   row.animated = true;
   await store.put('images', row);
-  await redact.saveEdits(id, 'p2.gif', [{ type: 'box', colour: 'black', x: 0, y: 0, w: 9, h: 9 }],
+  await redact.saveEdits(id, 'p2.gif', [Q([0, 0], [9, 0], [9, 9], [0, 9])],
     { bakeWith: async (o, s) => new window.Blob([`baked:${s.length}`], { type: 'image/png' }) });
   assert.equal((await store.get('images', [id, 'p2.gif'])).animated, false);
   await redact.restoreOriginal(id, 'p2.gif');
@@ -304,7 +341,7 @@ const JSZip = (await import('jszip')).default;
 
 await t('an exported EPUB carries the edited picture, not the original', async () => {
   const id = await comic();
-  await redact.saveEdits(id, 'p2.jpg', [{ type: 'box', colour: 'black', x: 0, y: 0, w: 9, h: 9 }], { bakeWith: fakeBake });
+  await redact.saveEdits(id, 'p2.jpg', [Q([0, 0], [9, 0], [9, 9], [0, 9])], { bakeWith: fakeBake });
   const out = await epub.buildEpub(id);
   const blob = out?.blob || out;
   const zip = await JSZip.loadAsync(await blobs.readArrayBuffer(blob));
@@ -324,7 +361,7 @@ await t('an edited GIF is written out as the PNG it now is', async () => {
 
 await t('a book built onto another takes its pictures as they are now', async () => {
   const id = await comic();
-  await redact.saveEdits(id, 'p3.jpg', [{ type: 'box', colour: 'black', x: 0, y: 0, w: 9, h: 9 }], { bakeWith: fakeBake });
+  await redact.saveEdits(id, 'p3.jpg', [Q([0, 0], [9, 0], [9, 9], [0, 9])], { bakeWith: fakeBake });
   const source = read('app/src/main/assets/www/js/build.js');
   assert.match(source, /blob: image\.blob,/, 'build copies something other than the current picture');
   assert.ok(typeof build.readShelfBook === 'function' || /readShelfBook/.test(source));
@@ -334,11 +371,16 @@ await t('a book built onto another takes its pictures as they are now', async ()
 
 console.log('\nthe editor');
 
-await t('the editor is drawn on, not scrolled, and stays light on black in either theme', () => {
+await t('the editor marks panels, does not scroll while marking, and stays light on black', () => {
   assert.match(html, /id="redact"[^>]*hidden/);
-  for (const tool of ['box', 'oval', 'brush', 'erase', 'move']) {
-    assert.match(html, new RegExp(`data-tool="${tool}"`), `no ${tool} tool`);
+  assert.match(html, /data-tool="panel"[^>]*>Mark panels/);
+  assert.match(html, /data-tool="move"/);
+  // The first version's drag-a-box, oval, brush and eraser are gone.
+  for (const tool of ['box', 'oval', 'brush', 'erase']) {
+    assert.ok(!new RegExp(`data-tool="${tool}"`).test(html), `the ${tool} tool is still there`);
   }
+  assert.match(html, /id="redact-delete"[^>]*>Delete panel/);
+  assert.match(html, /id="redact-loupe"/);
   assert.match(css, /#redact-svg \{[^}]*touch-action: none/);
   assert.match(css, /\.redact\[data-tool="move"\] #redact-svg \{ pointer-events: none; \}/);
   // Nothing in it loops.
@@ -351,8 +393,19 @@ const pointer = (type, x, y, id = 1) => {
   Object.defineProperty(event, 'pointerId', { value: id });
   return event;
 };
+const press = (svg, x, y) => {
+  svg.dispatchEvent(pointer('pointerdown', x, y));
+  svg.dispatchEvent(pointer('pointerup', x, y));
+};
+const drag = (svg, from, to) => {
+  svg.dispatchEvent(pointer('pointerdown', ...from));
+  svg.dispatchEvent(pointer('pointermove', (from[0] + to[0]) / 2, (from[1] + to[1]) / 2));
+  svg.dispatchEvent(pointer('pointermove', ...to));
+  svg.dispatchEvent(pointer('pointerup', ...to));
+};
+const panels = () => el('redact-svg').querySelectorAll('polygon.panel');
 
-await t('from the reel: open a picture, drag a box, save, and the book has it', async () => {
+await t('from the reel: press four corners, fit a corner and an edge, save, and the book has it', async () => {
   await import(www('app.js'));
   const reader = await import(www('reader.js'));
 
@@ -377,38 +430,53 @@ await t('from the reel: open a picture, drag a box, save, and the book has it', 
 
   assert.equal(document.querySelector('.viewer'), null, 'the viewer stayed open under the editor');
   assert.equal(el('redact').hidden, false, 'the editor never opened');
+  assert.match(el('redact-hint').textContent, /four corners/);
 
   // Shown at 200×300: half the picture's own size.
   const svg = el('redact-svg');
   svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 300, right: 200, bottom: 300 });
-  svg.dispatchEvent(pointer('pointerdown', 10, 20));
-  svg.dispatchEvent(pointer('pointermove', 60, 70));
-  // A second finger mid-stroke is not a second shape.
-  svg.dispatchEvent(pointer('pointerdown', 150, 150, 2));
-  svg.dispatchEvent(pointer('pointerup', 110, 120));
-  assert.equal(svg.querySelectorAll('rect').length, 1, 'the box was not drawn');
-  assert.match(el('redact-caption').textContent, /1 shape/);
 
-  // Undo, redo.
+  // Pressed top-left, top-right, bottom-left, bottom-right.
+  press(svg, 10, 20);
+  assert.equal(svg.querySelectorAll('circle.placed').length, 1);
+  assert.match(el('redact-hint').textContent, /3 to go/);
+  // A second finger landing while a corner is held is not another corner.
+  svg.dispatchEvent(pointer('pointerdown', 110, 20));
+  svg.dispatchEvent(pointer('pointerdown', 150, 150, 2));
+  svg.dispatchEvent(pointer('pointerup', 110, 20));
+  assert.equal(svg.querySelectorAll('circle.placed').length, 2);
+  press(svg, 10, 120);
+  assert.match(el('redact-hint').textContent, /1 to go/);
+  assert.equal(panels().length, 0, 'a panel appeared before its fourth corner');
+  press(svg, 110, 120);
+
+  assert.equal(panels().length, 1, 'four corners did not make a panel');
+  assert.equal(svg.querySelectorAll('circle.corner').length, 4, 'the new panel has no corners to adjust');
+  assert.equal(svg.querySelectorAll('circle.edge').length, 4, 'the new panel has no edges to adjust');
+  assert.match(el('redact-caption').textContent, /1 panel/);
+  assert.equal(el('redact-delete').disabled, false);
+
+  // The bottom-right corner, out a little; then the left edge, in.
+  drag(svg, [108, 118], [130, 140]);
+  drag(svg, [10, 70], [4, 70]);
+  // Undo takes back the edge, as one step however many moves it took.
   tap(el('redact-undo'));
-  assert.equal(svg.querySelectorAll('rect').length, 0);
   tap(el('redact-redo'));
-  assert.equal(svg.querySelectorAll('rect').length, 1);
 
   tap(el('redact-save'));
   await settle(300);
   assert.equal(el('redact').hidden, true, 'the editor did not close after saving');
 
   const image = await store.get('images', [id, 'p2.jpg']);
-  assert.deepEqual(image.edits, [{ type: 'box', colour: 'black', x: 20, y: 40, w: 200, h: 200 }],
-    'the box was not saved in the picture\'s own pixels');
+  assert.deepEqual(image.edits, [{ type: 'quad', colour: 'black', points: [[8, 40], [220, 40], [260, 280], [8, 240]] }],
+    'the panel was not saved in the picture\'s own pixels, or as adjusted');
   assert.match(await text(image.blob), /^painted:400x600:1$/);
   assert.equal(await text(image.original), 'page-2');
   assert.equal(reader.state.images.get('p2.jpg'), image.blob, 'the open book still shows the old picture');
   assert.match(el('toast').textContent, /Blacked out/);
 });
 
-await t('the eraser, the brush, and leaving without saving', async () => {
+await t('a panel is chosen by pressing inside it, recoloured, deleted; corners can be undone', async () => {
   const reader = await import(www('reader.js'));
   const id = reader.state.book.id;
   tap(document.querySelectorAll('#reel-grid img')[1]);
@@ -417,32 +485,42 @@ await t('the eraser, the brush, and leaving without saving', async () => {
 
   const svg = el('redact-svg');
   svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 600, right: 400, bottom: 600 });
-  // The saved box comes back to be changed.
-  assert.equal(svg.querySelectorAll('rect').length, 1, 'the earlier edit was not reopened');
+  // The saved panel comes back to be changed.
+  assert.equal(panels().length, 1, 'the earlier edit was not reopened');
   assert.equal(el('redact-restore').hidden, false, 'an edited picture offers no way back');
+  assert.equal(el('redact-delete').disabled, true, 'something is chosen before anything was pressed');
 
-  tap(el('redact-tool').querySelector('[data-tool="erase"]'));
-  svg.dispatchEvent(pointer('pointerdown', 50, 50));
-  svg.dispatchEvent(pointer('pointerup', 50, 50));
-  assert.equal(svg.querySelectorAll('rect').length, 0, 'the eraser did not take the box');
+  press(svg, 100, 150);
+  assert.equal(el('redact-delete').disabled, false, 'pressing inside did not choose the panel');
+  tap(el('redact-colour').querySelector('[data-colour="white"]'));
+  assert.match(panels()[0].getAttribute('fill'), /#ffffff/i, 'the chosen panel kept its colour');
+  tap(el('redact-undo'));
+  assert.match(panels()[0].getAttribute('fill'), /#000000/);
 
-  tap(el('redact-tool').querySelector('[data-tool="brush"]'));
-  assert.equal(el('redact-size-row').hidden, false);
-  svg.dispatchEvent(pointer('pointerdown', 10, 10));
-  svg.dispatchEvent(pointer('pointermove', 100, 10));
-  svg.dispatchEvent(pointer('pointermove', 200, 30));
-  svg.dispatchEvent(pointer('pointerup', 200, 30));
-  assert.equal(svg.querySelectorAll('path').length, 1, 'the brush stroke was not drawn');
+  press(svg, 100, 150);
+  tap(el('redact-delete'));
+  assert.equal(panels().length, 0, 'Delete panel left it there');
 
-  // Moving does not draw.
+  // Two corners of a new one; Undo takes the last corner, not a panel.
+  press(svg, 300, 300);
+  press(svg, 380, 300);
+  tap(el('redact-undo'));
+  assert.equal(svg.querySelectorAll('circle.placed').length, 1);
+
+  // Saving with a panel half marked says so rather than guessing.
+  tap(el('redact-save'));
+  await settle(50);
+  assert.equal(el('redact').hidden, false, 'saved with three corners missing');
+  assert.match(el('redact-hint').textContent, /1 of its 4 corners/);
+
+  // Moving does not mark.
   tap(el('redact-tool').querySelector('[data-tool="move"]'));
-  svg.dispatchEvent(pointer('pointerdown', 10, 10));
-  svg.dispatchEvent(pointer('pointerup', 300, 300));
-  assert.equal(svg.children.length, 1);
+  press(svg, 50, 50);
+  assert.equal(svg.querySelectorAll('circle.placed').length, 1);
 
-  // Cancel with something drawn asks first; back closes the question first.
+  // Cancel with something changed asks first; back closes the question first.
   tap(el('redact-cancel'));
-  assert.equal(el('redact-leave').hidden, false, 'unsaved shapes were thrown away without asking');
+  assert.equal(el('redact-leave').hidden, false, 'unsaved changes were thrown away without asking');
   assert.equal(window.Grimoire.onBack(), true);
   assert.equal(el('redact-leave').hidden, true);
   assert.equal(el('redact').hidden, false);
@@ -452,7 +530,7 @@ await t('the eraser, the brush, and leaving without saving', async () => {
 
   const image = await store.get('images', [id, 'p2.jpg']);
   assert.equal(image.edits.length, 1, 'leaving without saving changed the book');
-  assert.equal(image.edits[0].type, 'box');
+  assert.equal(image.edits[0].colour, 'black');
 });
 
 await t('restore from the editor puts the page back as it was', async () => {
@@ -515,14 +593,16 @@ await t('a page looked at in Take out can be blacked out instead of taken out', 
 
   const svg = el('redact-svg');
   svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 600, right: 400, bottom: 600 });
-  tap(el('redact-tool').querySelector('[data-tool="oval"]'));
-  svg.dispatchEvent(pointer('pointerdown', 100, 100));
-  svg.dispatchEvent(pointer('pointerup', 200, 160));
+  // A slanted panel.
+  press(svg, 100, 100);
+  press(svg, 200, 110);
+  press(svg, 190, 170);
+  press(svg, 95, 160);
   tap(el('redact-save'));
   await settle(300);
 
   const image = await store.get('images', [id, 'p3.jpg']);
-  assert.deepEqual(image.edits, [{ type: 'oval', colour: 'black', x: 100, y: 100, w: 100, h: 60 }]);
+  assert.deepEqual(image.edits, [{ type: 'quad', colour: 'black', points: [[100, 100], [200, 110], [190, 170], [95, 160]] }]);
   // Still looking at the same page, now showing the edit, and nothing picked.
   assert.equal(el('remove-look').hidden, false, 'saving threw away the page being looked at');
   assert.equal(el('remove-look-pick').textContent, 'Take this out');

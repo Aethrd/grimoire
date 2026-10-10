@@ -60,7 +60,7 @@ python3 tools/audit_assets.py    # fails if anything would hit the network
 | Settings | One screen, six panes: text, layout, theme, behaviour, translation, data |
 | Stats | Heat grid, streaks with freezes, script-aware word counts, JSON export |
 | Take out | Pick pages, image pages or chapters out of a book; recoverable until discarded |
-| Black out | Cover a panel or part of a picture with boxes, ovals or brush; painted into the file, original kept |
+| Black out | Mark a panel by its four corners and cover it; painted into the file, original kept |
 | Bin | Deleted books wait here with everything they had; delete for good frees the space |
 | Vault | Passphrase-gated shelf, filtered out of search, reel and stats |
 
@@ -182,14 +182,19 @@ So nothing is taken out unseen:
 Sometimes the page should stay and one panel should not: a spoiler in a
 colour insert, a watermark across the art, a translator's note pasted over a
 speech bubble. **Black out…** — in the reel's full-size viewer, and beside
-*Take this out* when looking at a page in Take out — opens the picture with
-boxes, ovals and a brush in black or white, an eraser, undo, and zoom.
+*Take this out* when looking at a page in Take out — opens the picture to mark
+panels on. **Press the four corners of a panel** — in any order; a panel is
+never joined up as a bow tie — and it is covered. Each corner can then be
+dragged to fit, or the dot in the middle of an edge to move that whole edge
+at its angle; a loupe shows what is under the finger while a corner is
+placed, because the finger is what hides it. Press inside a panel to choose
+it again, drag to move it, or delete it; black or white, undo, and zoom.
 
-Saving **paints the shapes into the picture itself**. The book's own copy is
+Saving **paints the panels into the picture itself**. The book's own copy is
 replaced, so the reader, the reel, an exported EPUB, a smaller copy and a book
 built onto this one all carry the edit; a mask laid over the page at reading
 time would vanish the moment the book left the app. The original is kept
-inside the app alongside the shapes, so an edit can be changed later — the
+inside the app alongside the panels, so an edit can be changed later — the
 editor always starts again from the original — or put back with **Restore
 original**. A comic whose cover is the edited page gets the edited cover too,
 unless the cover was picked by hand.

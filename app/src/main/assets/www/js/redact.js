@@ -1,9 +1,9 @@
 /* Blacking out part of a picture.
  *
  * A panel you would rather not see again, a watermark across a page, a
- * translator's note pasted over the art, a spoiler in a colour insert. Shapes
- * are drawn over the picture -- a box, an oval, a brush stroke -- in black or
- * white, and saving paints them into the picture itself.
+ * translator's note pasted over the art, a spoiler in a colour insert. Each
+ * panel is marked by pressing its four corners, in black or white, and
+ * saving paints them into the picture itself.
  *
  * Into the picture, not over it. The pixels the book stores are replaced, so
  * the reader, the reel and anything written out of the app -- an EPUB, a
@@ -11,14 +11,13 @@
  * over the page at reading time would vanish the moment the book left the
  * app, which is exactly when it was wanted.
  *
- * The original is kept beside it, with the shapes that were drawn, so the
+ * The original is kept beside it, with the panels that were marked, so the
  * edit can be changed later or taken back. That is a copy of one picture
  * per edited picture, held only inside the app; nothing exported carries it.
  */
 
 import * as store from './store.js';
 
-export const TOOLS = ['box', 'oval', 'brush', 'erase'];
 export const COLOURS = { black: '#000000', white: '#ffffff' };
 
 /* The most a phone is asked to hold in one canvas.
@@ -31,30 +30,80 @@ export const COLOURS = { black: '#000000', white: '#ffffff' };
 const MAX_PIXELS = 25_000_000;
 const MAX_SIDE = 32_000;
 
-/* ── shapes ──────────────────────────────────────────────────────────── */
+/* ── panels ──────────────────────────────────────────────────────────── */
+
+/* A panel is four corners, not a box.
+ *
+ * Comic panels are cut at angles as often as not -- a slanted gutter, a
+ * trapezoid for an action beat -- and a rectangle either misses the corner
+ * of one or eats into the next. Four corners pressed where the panel's
+ * corners are follow its edges exactly, and each corner, or a whole edge, can
+ * be dragged afterwards to fit.
+ *
+ * Coordinates are the picture's own pixels, so a panel means the same thing
+ * at every zoom and on every screen. */
+
+const round = (n) => Math.round(n * 10) / 10;
 
 /**
- * A box or oval from the two corners of a drag, whichever way it was dragged.
- * Coordinates are the picture's own pixels, so a shape means the same thing
- * at every zoom and on every screen.
+ * Four corners in the order that goes round the shape.
+ *
+ * Pressed in any order -- top-left, top-right, bottom-left, bottom-right is
+ * the natural reading order and, joined up as pressed, a bow tie. Sorted by
+ * angle around their middle they are a panel again.
  */
-export function fromDrag(tool, from, to, colour = 'black') {
-  const x = Math.min(from.x, to.x);
-  const y = Math.min(from.y, to.y);
+export function orderCorners(points) {
+  const cx = points.reduce((n, [x]) => n + x, 0) / points.length;
+  const cy = points.reduce((n, [, y]) => n + y, 0) / points.length;
+  const sorted = [...points].sort((a, b) =>
+    Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx));
+  // Started from the top-left-most corner, so the same panel always reads
+  // the same, however it was pressed.
+  let first = 0;
+  sorted.forEach(([x, y], at) => {
+    if (x + y < sorted[first][0] + sorted[first][1]) first = at;
+  });
+  return [...sorted.slice(first), ...sorted.slice(0, first)];
+}
+
+/** A panel from four pressed corners. */
+export function quad(points, colour = 'black') {
   return {
-    type: tool,
+    type: 'quad',
     colour,
-    x: Math.round(x),
-    y: Math.round(y),
-    w: Math.round(Math.abs(to.x - from.x)),
-    h: Math.round(Math.abs(to.y - from.y)),
+    points: orderCorners(points).map(([x, y]) => [round(x), round(y)]),
   };
 }
 
-/** A shape too small to have been meant: a tap rather than a drag. */
+/** The area a panel covers, for telling a panel from four taps in one spot. */
+export function area(points) {
+  let sum = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const [x1, y1] = points[i];
+    const [x2, y2] = points[(i + 1) % points.length];
+    sum += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(sum) / 2;
+}
+
+/** A shape too small to have been meant. */
 export function isTiny(shape) {
+  if (shape.type === 'quad') return area(shape.points) < 16;
   if (shape.type === 'brush') return !shape.points?.length;
   return shape.w < 3 || shape.h < 3;
+}
+
+/**
+ * Shapes as this version draws them.
+ *
+ * The first version of this drew boxes; a box is a panel whose corners
+ * happen to be square, so one saved then opens as a panel that can be
+ * reshaped like any other. */
+export function normalise(shapes) {
+  return (shapes || []).map((shape) => (shape.type === 'box'
+    ? quad([[shape.x, shape.y], [shape.x + shape.w, shape.y],
+      [shape.x + shape.w, shape.y + shape.h], [shape.x, shape.y + shape.h]], shape.colour)
+    : shape));
 }
 
 /** A point on the picture, from a point on the screen. */
@@ -66,20 +115,91 @@ export function toPicture(clientX, clientY, rect, width, height) {
   };
 }
 
+/** The middle of each edge, where an edge is taken hold of. */
+export function edgeMiddles(points) {
+  return points.map(([x1, y1], i) => {
+    const [x2, y2] = points[(i + 1) % points.length];
+    return [(x1 + x2) / 2, (y1 + y2) / 2];
+  });
+}
+
+/**
+ * Which part of a panel is under a finger: a corner, the middle of an edge,
+ * or nothing. Corners first -- on a small panel the two overlap, and a corner
+ * is the finer adjustment.
+ */
+export function handleAt(shape, { x, y }, reach) {
+  if (shape?.type !== 'quad') return null;
+  const nearest = (kind, points) => {
+    let best = null;
+    points.forEach(([hx, hy], at) => {
+      const d = Math.hypot(x - hx, y - hy);
+      if (d <= reach && (!best || d < best.d)) best = { kind, at, d };
+    });
+    return best && { kind: best.kind, at: best.at };
+  };
+  return nearest('corner', shape.points) || nearest('edge', edgeMiddles(shape.points));
+}
+
+/**
+ * A panel with one part of it moved.
+ *
+ * A corner goes where the finger is. An edge moves both its corners by how
+ * far the finger has come, so it stays the angle it was. The whole panel
+ * moves the same way. Nothing leaves the picture.
+ */
+export function moveHandle(shape, handle, from, to, width, height) {
+  const clampX = (n) => round(Math.max(0, Math.min(width, n)));
+  const clampY = (n) => round(Math.max(0, Math.min(height, n)));
+  const points = shape.points.map((p) => [...p]);
+  if (handle.kind === 'corner') {
+    points[handle.at] = [clampX(to.x), clampY(to.y)];
+  } else {
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    const moving = handle.kind === 'edge'
+      ? [handle.at, (handle.at + 1) % points.length]
+      : points.map((_, at) => at);
+    // Held at the edge of the picture as a whole, not squashed against it.
+    for (const at of moving) {
+      const [px, py] = shape.points[at];
+      dx = Math.max(-px, Math.min(width - px, dx));
+      dy = Math.max(-py, Math.min(height - py, dy));
+    }
+    for (const at of moving) {
+      points[at] = [clampX(shape.points[at][0] + dx), clampY(shape.points[at][1] + dy)];
+    }
+  }
+  return { ...shape, points };
+}
+
 /**
  * Paint shapes onto a 2D context whose coordinates are the picture's pixels.
  *
  * Kept apart from everything else so the same drawing serves the saved
- * picture and the test that checks it.
+ * picture and the test that checks it. Ovals and brush strokes are from the
+ * first version of this; they are no longer drawn, but one already saved
+ * still paints as it was.
  */
 export function paintShapes(ctx, shapes) {
-  for (const shape of shapes) {
+  for (const shape of normalise(shapes)) {
     const colour = COLOURS[shape.colour] || COLOURS.black;
     ctx.fillStyle = colour;
     ctx.strokeStyle = colour;
 
-    if (shape.type === 'box') {
-      ctx.fillRect(shape.x, shape.y, shape.w, shape.h);
+    if (shape.type === 'quad' && shape.points?.length >= 3) {
+      ctx.beginPath();
+      const [[x0, y0], ...rest] = shape.points;
+      ctx.moveTo(x0, y0);
+      for (const [x, y] of rest) ctx.lineTo(x, y);
+      ctx.closePath();
+      ctx.fill();
+      // A hairline of the same colour round it: a filled edge is
+      // anti-aliased, and on a black panel border that is a faint grey seam
+      // of the picture showing through.
+      ctx.lineWidth = 1;
+      ctx.lineJoin = 'miter';
+      ctx.stroke();
     } else if (shape.type === 'oval') {
       ctx.beginPath();
       ctx.ellipse(shape.x + shape.w / 2, shape.y + shape.h / 2,
@@ -89,16 +209,13 @@ export function paintShapes(ctx, shapes) {
       ctx.lineWidth = shape.size;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      if (shape.points.length === 1) {
-        // A dab: a stroke of one point draws nothing, so it is a dot instead.
-        const [[x, y]] = shape.points;
-        ctx.beginPath();
-        ctx.arc(x, y, shape.size / 2, 0, Math.PI * 2);
+      ctx.beginPath();
+      const [[x0, y0], ...rest] = shape.points;
+      if (!rest.length) {
+        ctx.arc(x0, y0, shape.size / 2, 0, Math.PI * 2);
         ctx.fill();
         continue;
       }
-      ctx.beginPath();
-      const [[x0, y0], ...rest] = shape.points;
       ctx.moveTo(x0, y0);
       for (const [x, y] of rest) ctx.lineTo(x, y);
       ctx.stroke();
@@ -109,9 +226,10 @@ export function paintShapes(ctx, shapes) {
 /** The same shapes as SVG, for drawing them over the picture while editing. */
 export function svgFor(shape) {
   const fill = COLOURS[shape.colour] || COLOURS.black;
-  if (shape.type === 'box') {
-    return `<rect x="${shape.x}" y="${shape.y}" width="${shape.w}" height="${shape.h}" fill="${fill}"/>`;
+  if (shape.type === 'quad') {
+    return `<polygon points="${shape.points.map(([x, y]) => `${x},${y}`).join(' ')}" fill="${fill}"/>`;
   }
+  if (shape.type === 'box') return svgFor(normalise([shape])[0]);
   if (shape.type === 'oval') {
     return `<ellipse cx="${shape.x + shape.w / 2}" cy="${shape.y + shape.h / 2}" `
       + `rx="${shape.w / 2}" ry="${shape.h / 2}" fill="${fill}"/>`;
@@ -129,11 +247,11 @@ export function svgFor(shape) {
 }
 
 /**
- * The topmost shape under a point, for the eraser; -1 for none.
+ * The topmost shape under a point; -1 for none.
  *
- * Topmost, because that is the one you can see: two boxes overlapping, and a
- * tap on the overlap takes away the one on top. `slack` is how far outside a
- * shape still counts -- a finger is wider than a thin brush line.
+ * Topmost, because that is the one you can see: two panels overlapping, and
+ * a tap on the overlap takes the one on top. `slack` is how far outside a
+ * shape still counts -- a finger is wider than a thin line.
  */
 export function shapeAt(shapes, point, slack = 0) {
   for (let at = shapes.length - 1; at >= 0; at -= 1) {
@@ -143,6 +261,11 @@ export function shapeAt(shapes, point, slack = 0) {
 }
 
 function covers(shape, { x, y }, slack) {
+  if (shape.type === 'quad') {
+    if (inside(shape.points, x, y)) return true;
+    const { points } = shape;
+    return points.some((p, i) => toSegment(x, y, p, points[(i + 1) % points.length]) <= slack);
+  }
   if (shape.type === 'box') {
     return x >= shape.x - slack && x <= shape.x + shape.w + slack
       && y >= shape.y - slack && y <= shape.y + shape.h + slack;
@@ -164,6 +287,17 @@ function covers(shape, { x, y }, slack) {
     }
   }
   return false;
+}
+
+/** Whether a point is inside a polygon: count the edges a ray to the right crosses. */
+function inside(points, x, y) {
+  let hit = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i, i += 1) {
+    const [xi, yi] = points[i];
+    const [xj, yj] = points[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
 }
 
 function toSegment(x, y, [ax, ay], [bx, by]) {

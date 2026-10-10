@@ -614,8 +614,8 @@
   </div>
 </div>
 
-<!-- Blacking out part of a picture. The shapes are drawn over it here and
-     painted into the picture itself on Save, so they go wherever the book
+<!-- Blacking out part of a picture. Each panel is marked by its four
+     corners here and painted into the picture itself on Save, so they go wherever the book
      goes -- an EPUB, a smaller copy, a book built onto this one. -->
 <div class="redact" id="redact" hidden>
   <div class="redact-head">
@@ -636,17 +636,10 @@
     <button class="btn danger" id="redact-leave-yes">Discard</button>
   </div>
   <div class="redact-tools">
-    <div class="seg" id="redact-tool">
-      <button data-tool="box" aria-pressed="true">Box</button>
-      <button data-tool="oval">Oval</button>
-      <button data-tool="brush">Brush</button>
-      <button data-tool="erase">Erase</button>
-      <button data-tool="move">Move</button>
-    </div>
     <div class="redact-row">
-      <div class="seg redact-colour" id="redact-colour">
-        <button data-colour="black" aria-pressed="true"><i class="swatch" style="background:#000"></i>Black</button>
-        <button data-colour="white"><i class="swatch" style="background:#fff"></i>White</button>
+      <div class="seg redact-mode" id="redact-tool">
+        <button data-tool="panel" aria-pressed="true">Mark panels</button>
+        <button data-tool="move">Move</button>
       </div>
       <button class="btn ghost redact-zoom" id="redact-zoom" title="Zoom">1×</button>
       <button class="icon-btn" id="redact-undo" title="Undo">
@@ -656,15 +649,19 @@
         <svg viewBox="0 0 24 24"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 0 0 0 10h3"/></svg>
       </button>
     </div>
-    <label class="redact-size" id="redact-size-row" hidden>
-      <span>Brush</span>
-      <input type="range" id="redact-size" min="6" max="80" step="2" value="24">
-    </label>
+    <div class="seg redact-colour" id="redact-colour">
+      <button data-colour="black" aria-pressed="true"><i class="swatch" style="background:#000"></i>Black</button>
+      <button data-colour="white"><i class="swatch" style="background:#fff"></i>White</button>
+    </div>
     <div class="redact-row redact-more">
-      <button class="btn ghost" id="redact-clear">Clear shapes</button>
+      <button class="btn ghost" id="redact-delete" disabled>Delete panel</button>
+      <button class="btn ghost" id="redact-clear">Clear all</button>
       <button class="btn ghost" id="redact-restore" hidden>Restore original</button>
     </div>
   </div>
+  <!-- What is under the finger, larger, while a corner is being placed: the
+       finger is exactly what hides the corner it is pressing. -->
+  <div class="redact-loupe" id="redact-loupe" hidden></div>
 </div>
 
 <!-- Importing a large archive takes a while, and a toast that says nothing
