@@ -496,6 +496,13 @@ function wireSelection() {
       return openRemove(books[0]);
     },
 
+    redact: async () => {
+      const books = await selectedBooks();
+      if (books.length !== 1) return toast('Choose one book to black out panels in');
+      clearSelection();
+      return openRedactPick(books[0]);
+    },
+
     delete: () => {
       resetConfirm();
       el('confirm-text').textContent =
@@ -793,6 +800,10 @@ async function openBookMenu(book) {
   choice('Open', 'Start reading', () => openBook(book));
   choice('Details', 'Title, author, series, cover', () => openDetails(book));
   choice('Take pages out', 'Credit pages, ads, afterwords', () => openRemove(book));
+  // Offered unless the book is known to have no pictures at all.
+  if (book.imageCount !== 0) {
+    choice('Black out panels', 'Cover part of a picture, in the file itself', () => openRedactPick(book));
+  }
 
   if (library.wasJoined(book) || book.builtFrom) {
     choice('Take apart', 'Undo the join, or divide it', () => offerTakeApart(book));
@@ -1716,6 +1727,17 @@ async function handleFiles(files, { transient = false } = {}) {
   }
   await refreshShelf();
 
+  /* What was skipped, said rather than counted as nothing.
+   *
+   * "0 books added" with a tick read as an import that had broken, when
+   * every book in the zip was simply on the shelf already. */
+  const besides = [
+    results.already ? `${results.already} already on your shelf` : null,
+    results.inVault ? `${results.inVault} already in the Vault` : null,
+    results.replaced ? `${results.replaced} replaced ${results.replaced === 1 ? 'its copy' : 'their copies'} in the Bin` : null,
+  ].filter(Boolean).join(' · ');
+  const note = besides ? ` · ${besides}` : '';
+
   if (results.failed.length) {
     // A parse failure is confined to its own file; the rest of the batch
     // still lands, and the reason is shown rather than swallowed.
@@ -1728,9 +1750,12 @@ async function handleFiles(files, { transient = false } = {}) {
     const why = refused.get(first.name);
     // Failed only if nothing at all came of it; some books in and one refused
     // is a finish with a note, not a failure.
-    toast(`${results.added} added · ${first.name}: ${
+    toast(`${results.added} added${note} · ${first.name}: ${
       why ? plainReason(why) : plainReason(first.reason)}`, 8000,
     { kind: results.added ? 'done' : 'failed' });
+  } else if (!results.added && besides) {
+    // Nothing new, and nothing wrong: not a failure, and not a tick either.
+    toast(`Nothing new to add · ${besides}`, 7000);
   } else {
     const folders = results.folders?.size || 0;
     const seconds = (results.elapsedMs || 0) / 1000;
@@ -1740,11 +1765,11 @@ async function handleFiles(files, { transient = false } = {}) {
     // time actually went on a real phone.
     const took = seconds > 2 ? ` · ${seconds.toFixed(0)}s, ${each.toFixed(1)}s a book` : '';
     const one = results.added === 1 && results.titles?.[0];
-    toast(one
+    toast((one
       ? `Added “${one}”${took}`
       : folders
         ? `${results.added} book${results.added === 1 ? '' : 's'} added across ${folders} folder${folders === 1 ? '' : 's'}${took}`
-        : `${results.added} book${results.added === 1 ? '' : 's'} added${took}`, 6000, { kind: 'done' });
+        : `${results.added} book${results.added === 1 ? '' : 's'} added${took}`) + note, 6000, { kind: 'done' });
   }
 
   /* A web novel saved a page per chapter is imported as it came -- a book per
@@ -3575,6 +3600,68 @@ function redactUp(event) {
   paintRedact();
 }
 
+/* ── which picture to black out ─────────────────────────────────────────
+ *
+ * The editor was reachable only by opening a book, finding the image reel in
+ * the reader's toolbar, opening a picture full size and spotting a button at
+ * the bottom of it -- four steps, none of which said black out, and it could
+ * not be found. So it has its own place: "Black out panels" in a book's menu
+ * and at the top of the reel, both opening every picture in the book to pick
+ * from. The editor opens over the list and comes back to it, so a run of
+ * pages can be done one after another.
+ */
+
+let picking = null;               // { book }
+const pickUrls = blobs.pool();
+
+async function openRedactPick(book) {
+  if (!book) return;
+  picking = { book };
+  el('redact-pick-of').textContent = library.displayTitle(book);
+  el('redact-pick').hidden = false;
+  await paintRedactPick();
+  el('redact-pick-body').scrollTop = 0;
+}
+
+function closeRedactPick() {
+  picking = null;
+  el('redact-pick').hidden = true;
+  el('redact-pick-body').innerHTML = '';
+  pickUrls.release();
+}
+
+async function paintRedactPick() {
+  if (!picking) return;
+  const body = el('redact-pick-body');
+  const keep = body.scrollTop;
+  const images = (await library.livePictures(picking.book.id))
+    .filter((image) => image.blob)
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  pickUrls.release();
+  body.innerHTML = '';
+  if (!images.length) {
+    body.innerHTML = '<p class="muted" style="padding:24px 0">This book has no pictures to black out.</p>';
+    return;
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'reel-grid';
+  images.forEach((image, at) => {
+    const figure = document.createElement('figure');
+    figure.className = 'reel-item';
+    figure.dataset.href = image.href;
+    figure.innerHTML = `
+      ${redact.isEdited(image) ? '<span class="edited">BLACKED OUT</span>' : ''}
+      <img src="${pickUrls.url(image.blob)}" alt="" loading="lazy">
+      <figcaption>Picture ${at + 1} · ch. ${(image.chapterIndex || 0) + 1}</figcaption>`;
+    figure.onclick = () => openRedact(picking.book.id, image.href);
+    grid.appendChild(figure);
+  });
+  body.appendChild(grid);
+  body.scrollTop = keep;
+}
+
 /** Everything showing this picture is shown the new one. */
 async function afterRedact(bookId, href, blob) {
   // The save has happened by now. Anything here failing is a picture on
@@ -3589,6 +3676,7 @@ async function afterRedact(bookId, href, blob) {
 
 async function showRedacted(bookId, href, blob) {
   reader.refreshPicture(bookId, href, blob);
+  if (picking && picking.book.id === bookId) await paintRedactPick();
   if (current === 'reel' && reader.state.book?.id === bookId) {
     await screens.openReel(bookId, jumpToImage);
   }
@@ -3722,6 +3810,11 @@ function wireRedact() {
   }
 
   screens.onRedact((bookId, href) => openRedact(bookId, href));
+  el('redact-pick-close').onclick = () => closeRedactPick();
+  el('reel-redact').onclick = () => {
+    if (reader.state.book) openRedactPick(reader.state.book);
+    else toast('Open a book first');
+  };
   el('remove-look-redact').onclick = () => {
     if (!looking || !removing) return;
     const pages = removeMode === 'pages';
@@ -4582,6 +4675,7 @@ window.Grimoire = {
       else leaveRedact();
       return true;
     }
+    if (!el('redact-pick').hidden) { closeRedactPick(); return true; }
     if (!el('remove-look').hidden) { closeRemoveLook(); return true; }
     if (!el('remove-confirm').hidden) { el('remove-confirm').hidden = true; return true; }
     if (!el('folder-actions').hidden) { el('folder-actions').hidden = true; return true; }
@@ -4644,6 +4738,12 @@ window.Grimoire = {
     const results = await handleFiles([file], { transient: true });
     // The copy has served its purpose either way.
     window.GrimoireNative?.clearHandoff?.();
+
+    // Already on the shelf: that copy is the one to open.
+    if (!results?.added && results?.existing?.length) {
+      const kept = await store.get('books', results.existing[0]);
+      if (kept && !kept.inVault) return openBook(kept);
+    }
 
     if (!results?.added) {
       // Never silent: this is the point at which the app had simply done

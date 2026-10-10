@@ -456,6 +456,64 @@ await t('an unknown file is read as text if it is text, and refused if not', asy
   assert.match(out.failed[0].reason, /not a kind of file/);
 });
 
+/* ── the same zip, again ─────────────────────────────────────────────── */
+
+console.log('\nthe same zip, again');
+
+await t('a zip whose books were deleted imports again, instead of "0 books added"', async () => {
+  /* Deleting puts a book in the Bin rather than destroying it, and the
+   * importer counted the binned copies as already having the books: every
+   * one skipped, "0 books added", nothing on the shelf -- while Build, which
+   * does not check, made a book of the same zip without complaint. */
+  const file = await zipFile('again.zip', {
+    'Again/Fiction/First.txt': 'FIRST\n\nOne.\n',
+    'Again/Fiction/Second.txt': 'SECOND\n\nTwo.\n',
+  });
+  const first = await library.importFiles([file], {});
+  assert.equal(first.added, 2);
+  const ids = (await store.all('books')).filter((b) => b.folder === 'Fiction' && /First|Second/.test(b.title)).map((b) => b.id);
+  assert.equal(ids.length, 2);
+  await library.binBooks(ids);
+
+  const again = await library.importFiles([file], {});
+  assert.equal(again.added, 2, 'the binned copies still counted as having the books');
+  assert.equal(again.replaced, 2);
+  const now = (await store.all('books')).filter((b) => /First|Second/.test(b.title));
+  assert.equal(now.length, 2, 'the binned copies were left beside the fresh ones');
+  assert.ok(now.every((b) => !b.binnedAt && b.folder === 'Fiction'));
+});
+
+await t('books already on the shelf are skipped, and counted as such', async () => {
+  const file = await zipFile('again.zip', {
+    'Again/Fiction/First.txt': 'FIRST\n\nOne.\n',
+    'Again/Fiction/Second.txt': 'SECOND\n\nTwo.\n',
+  });
+  const out = await library.importFiles([file], {});
+  assert.equal(out.added, 0);
+  assert.equal(out.already, 2);
+  assert.equal(out.existing.length, 2);
+});
+
+await t('Import offers every file, as Build does, and lets the contents decide', async () => {
+  // A type list here filters the system picker: a zip the phone files as
+  // application/x-zip-compressed or octet-stream was greyed out in Import
+  // and pickable in Build.
+  const fs = await import('node:fs');
+  const html = fs.readFileSync(new URL('../app/src/main/assets/www/index.html', import.meta.url), 'utf8');
+  assert.match(html, /<input type="file" id="file-input" multiple hidden accept="\*\/\*">/);
+});
+
+await t('a zip whose name has a dot in it is still opened as a zip', async () => {
+  // "Vol.3" ends in what looks like an extension; Build read the first
+  // bytes and opened it, the importer took ".3" at its word and refused it.
+  const zip = new JSZip();
+  zip.file('Saga/Vol 3/Part One.txt', 'PART ONE\n\nText.\n');
+  const file = new File([await zip.generateAsync({ type: 'nodebuffer' })], 'Saga Vol.3');
+  const out = await library.importFiles([file], {});
+  assert.equal(out.failed.length, 0, out.failed[0]?.reason);
+  assert.equal(out.added, 1);
+});
+
 /* ── the wait ────────────────────────────────────────────────────────── */
 
 console.log('\nthe wait');

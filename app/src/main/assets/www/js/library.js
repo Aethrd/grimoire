@@ -312,6 +312,25 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       pictures.push(original);
       continue;
     }
+    /* An extension that is not a format is not the end of it.
+     *
+     * "Vol.3", "Season 1.2", a download named by id with a dot in it: each
+     * ends in something that looks like an extension and is not one, and
+     * the importer took it at its word and refused a perfectly good zip --
+     * while Build, which reads the first bytes of everything, opened the
+     * same file without complaint. Read the first bytes here too. */
+    if (formatOf(original.name) === 'UNKNOWN') {
+      const sniffed = await nameWithFormat(`${original.name}_`, original).catch(() => null);
+      // Its fallback is "text", which is not an answer from the bytes: that
+      // is left to the text check below, which can also say no.
+      let found = sniffed && sniffed !== `${original.name}_` ? sniffed.split('.').pop() : null;
+      if (found === 'txt') found = null;
+      if (found) original = new File([original], `${original.name}.${found}`, { type: original.type });
+      if (IS_PICTURE.test(original.name)) {
+        pictures.push(original);
+        continue;
+      }
+    }
     if (formatOf(original.name) === 'UNKNOWN') {
       /* Read as text if it is text, as September did with anything it did
        * not recognise -- a story saved as ".text" or ".log" is still a
@@ -437,8 +456,33 @@ export async function importFiles(files, { onProgress, onDone, transient = false
     try {
       // A file the user picked twice is the same book, not a second copy.
       const fingerprint = entry.fingerprint || `${name}:${entry.file?.size}`;
-      const existing = (await store.byIndex('books', 'fingerprint', fingerprint))[0];
-      if (existing) continue;
+      /* Only a copy you can actually see counts as already having it.
+       *
+       * Every copy with this fingerprint counted -- including one in the Bin.
+       * Since deleting became binning, deleting a zip's books and importing
+       * the zip again skipped every one of them as a duplicate and reported
+       * "0 books added" with a tick: an import that did nothing and said it
+       * had worked. September deleted for good, so it never met this.
+       *
+       * A copy in the Bin is replaced by the fresh import -- the file was
+       * picked again, which is asking for it. A copy only passing through,
+       * opened from a file manager, is not on the shelf either. A copy that
+       * is on the shelf, or in the Vault, is skipped, and the result says so
+       * rather than counting it as nothing. */
+      const copies = await store.byIndex('books', 'fingerprint', fingerprint);
+      const kept = copies.find((book) => !book.binnedAt && !book.transient && !book.importing);
+      if (kept) {
+        if (kept.inVault) results.inVault = (results.inVault || 0) + 1;
+        else results.already = (results.already || 0) + 1;
+        if (!results.existing) results.existing = [];
+        results.existing.push(kept.id);
+        continue;
+      }
+      const binned = copies.filter((book) => book.binnedAt);
+      if (binned.length) {
+        await destroyBooks(binned.map((book) => book.id));
+        results.replaced = (results.replaced || 0) + binned.length;
+      }
 
       // Extracted only now, and only this one.
       const readAt = performance.now();

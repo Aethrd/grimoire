@@ -13,8 +13,9 @@
  * Peak memory becomes the largest single entry rather than the whole file.
  *
  * Inflating uses DecompressionStream, which WebView has had since Chrome 80.
- * Where it is missing, or where the archive uses anything unusual, the caller
- * falls back to JSZip and behaves as it always did.
+ * Zip64 archives -- over 4GB, or over 65,535 files -- are read the same way.
+ * Where DecompressionStream is missing, or where the archive uses anything
+ * unusual, the caller falls back to JSZip and behaves as it always did.
  */
 
 const EOCD_SIGNATURE = 0x06054b50;
@@ -52,13 +53,86 @@ function findEocd(view) {
   return -1;
 }
 
-const decoder = new TextDecoder('utf-8');
+const EOCD64_SIGNATURE = 0x06064b50;
+const ZIP64_EXTRA = 0x0001;
+const UNICODE_PATH_EXTRA = 0x7075;
+const MAX32 = 0xffffffff;
+
+/** A 64-bit little-endian number, exact as far as a file can be long. */
+const uint64 = (view, at) => view.getUint32(at, true) + view.getUint32(at + 4, true) * 0x1_0000_0000;
+
+/* Names, in whatever the zip was made with.
+ *
+ * A zip says its names are UTF-8 with a flag, and plenty that are never set
+ * it -- a zip made on a Korean or Japanese Windows writes names in that
+ * language's own code page. Read as UTF-8 those are question marks, and a
+ * library of folders comes out filed under nonsense. So: UTF-8 if the bytes
+ * are UTF-8, then the Unicode name some tools add beside the legacy one,
+ * then the code pages such zips are most often made in, then Latin. */
+const strict = (label) => {
+  try { return new TextDecoder(label, { fatal: true }); } catch { return null; }
+};
+const UTF8 = strict('utf-8');
+const LEGACY = ['euc-kr', 'shift_jis', 'gbk'].map(strict).filter(Boolean);
+const LATIN = new TextDecoder('windows-1252');
+
+function decodeName(raw, unicodePath) {
+  try { return UTF8.decode(raw); } catch { /* not UTF-8 */ }
+  if (unicodePath) return unicodePath;
+  for (const decoder of LEGACY) {
+    try { return decoder.decode(raw); } catch { /* not this one */ }
+  }
+  return LATIN.decode(raw);
+}
+
+/** The extra fields of one entry, by id. */
+function extras(view, start, length) {
+  const found = new Map();
+  let at = start;
+  while (at + 4 <= start + length) {
+    const id = view.getUint16(at, true);
+    const size = view.getUint16(at + 2, true);
+    if (at + 4 + size > start + length) break;
+    found.set(id, { at: at + 4, size });
+    at += 4 + size;
+  }
+  return found;
+}
+
+/**
+ * Where the central directory is, and how many entries it lists.
+ *
+ * Zip64 -- an archive over 4GB, or of more than 65,535 files, and what some
+ * tools write for anything they could not size in advance -- keeps the real
+ * numbers in a second record and leaves placeholders in the first. Those
+ * used to send the whole archive to JSZip, which reads every byte of it into
+ * memory first: for a library zip of a few gigabytes, the end of the app.
+ */
+async function locateDirectory(blob, tail, tailStart, eocd) {
+  const locatorAt = eocd - 20;
+  if (locatorAt >= 0 && tail.getUint32(locatorAt, true) === EOCD64_LOCATOR) {
+    const recordAt = uint64(tail, locatorAt + 8);
+    const record = recordAt >= tailStart
+      ? new DataView(tail.buffer, tail.byteOffset + (recordAt - tailStart), 56)
+      : await bytes(blob, recordAt, recordAt + 56);
+    if (record.byteLength < 56 || record.getUint32(0, true) !== EOCD64_SIGNATURE) return null;
+    // Split across several disks is not something a phone is handed.
+    if (record.getUint32(16, true) !== 0 || record.getUint32(20, true) !== 0) return null;
+    return { count: uint64(record, 32), size: uint64(record, 40), at: uint64(record, 48) };
+  }
+  if (tail.getUint16(eocd + 4, true) !== 0) return null;   // split volumes
+  return {
+    count: tail.getUint16(eocd + 10, true),
+    size: tail.getUint32(eocd + 12, true),
+    at: tail.getUint32(eocd + 16, true),
+  };
+}
 
 /**
  * Read the central directory and return an index of the entries.
  *
- * Returns null when the archive is anything other than the ordinary case --
- * zip64, split volumes, an unsupported compression method. The caller falls
+ * Returns null when the archive is anything this does not read -- split
+ * volumes, an unsupported compression method, encryption. The caller falls
  * back rather than this guessing.
  */
 export async function openZip(blob) {
@@ -69,14 +143,10 @@ export async function openZip(blob) {
   const eocd = findEocd(tail);
   if (eocd === -1) return null;
 
-  // A zip64 locator immediately before the record means the 32-bit fields
-  // below are placeholders. Rare, and not worth reimplementing.
-  if (eocd >= 20 && tail.getUint32(eocd - 20, true) === EOCD64_LOCATOR) return null;
-
-  const count = tail.getUint16(eocd + 10, true);
-  const directorySize = tail.getUint32(eocd + 12, true);
-  const directoryAt = tail.getUint32(eocd + 16, true);
-  if (directoryAt === 0xffffffff || count === 0xffff) return null;   // zip64
+  const located = await locateDirectory(blob, tail, tailStart, eocd);
+  if (!located) return null;
+  const { count, size: directorySize, at: directoryAt } = located;
+  if (directoryAt + directorySize > blob.size) return null;
 
   const directory = await bytes(blob, directoryAt, directoryAt + directorySize);
   const entries = new Map();
@@ -86,20 +156,57 @@ export async function openZip(blob) {
     if (at + 46 > directory.byteLength) return null;
     if (directory.getUint32(at, true) !== CENTRAL_SIGNATURE) return null;
 
+    const flags = directory.getUint16(at + 8, true);
     const method = directory.getUint16(at + 10, true);
-    const compressedSize = directory.getUint32(at + 20, true);
-    const size = directory.getUint32(at + 24, true);
+    let compressedSize = directory.getUint32(at + 20, true);
+    let size = directory.getUint32(at + 24, true);
     const nameLength = directory.getUint16(at + 28, true);
     const extraLength = directory.getUint16(at + 30, true);
     const commentLength = directory.getUint16(at + 32, true);
-    const localAt = directory.getUint32(at + 42, true);
+    let localAt = directory.getUint32(at + 42, true);
+    if (at + 46 + nameLength + extraLength > directory.byteLength) return null;
 
-    const name = decoder.decode(
-      new Uint8Array(directory.buffer, directory.byteOffset + at + 46, nameLength));
+    const extra = extras(directory, at + 46 + nameLength, extraLength);
 
+    /* The real sizes, where these are placeholders. The zip64 field holds
+     * only the ones that overflowed, in this order. */
+    if (size === MAX32 || compressedSize === MAX32 || localAt === MAX32) {
+      const field = extra.get(ZIP64_EXTRA);
+      if (!field) return null;
+      let read = field.at;
+      const next = () => {
+        if (read + 8 > field.at + field.size) throw new Error('short zip64 field');
+        const value = uint64(directory, read);
+        read += 8;
+        return value;
+      };
+      try {
+        if (size === MAX32) size = next();
+        if (compressedSize === MAX32) compressedSize = next();
+        if (localAt === MAX32) localAt = next();
+      } catch {
+        return null;
+      }
+    }
+
+    // Encrypted: there is nothing to read without the password.
+    if (flags & 0x1) return null;
     // 0 is stored, 8 is deflate. Anything else is not worth guessing at.
     if (method !== 0 && method !== 8) return null;
-    if (size === 0xffffffff || localAt === 0xffffffff) return null;   // zip64
+
+    const rawName = new Uint8Array(directory.buffer, directory.byteOffset + at + 46, nameLength);
+    let unicodePath = null;
+    const unicode = extra.get(UNICODE_PATH_EXTRA);
+    if (unicode && unicode.size > 5) {
+      try {
+        unicodePath = UTF8.decode(new Uint8Array(directory.buffer,
+          directory.byteOffset + unicode.at + 5, unicode.size - 5));
+      } catch { /* a broken one is no worse than none */ }
+    }
+    // Flagged UTF-8 is UTF-8, whatever else it might also decode as.
+    const name = flags & 0x800
+      ? new TextDecoder('utf-8').decode(rawName)
+      : decodeName(rawName, unicodePath);
 
     if (!name.endsWith('/')) {
       entries.set(name, { name, method, compressedSize, size, localAt });

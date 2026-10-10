@@ -608,5 +608,70 @@ await t('a page looked at in Take out can be blacked out instead of taken out', 
   assert.equal(el('remove-look-pick').textContent, 'Take this out');
 });
 
+/* ── finding it ──────────────────────────────────────────────────────── */
+
+console.log('\nfinding it');
+
+await t('a book\'s menu has "Black out panels", which lists its pictures to pick from', async () => {
+  const screensMod = await import(www('screens.js'));
+  const id = await comic(4);
+  const book = await store.get('books', id);
+  book.title = 'Pick from me';
+  await store.put('books', book);
+  await settle();
+
+  screensMod.initFind(() => {}, false);
+  el('find-input').value = 'Pick from me';
+  el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle(400);
+  el('find-results').querySelector(`[data-book="${id}"]`)
+    .dispatchEvent(new window.Event('touchstart', { bubbles: true }));
+  await settle(620);
+  const entry = [...el('folder-actions-list').children].find((b) => b.textContent.includes('Black out panels'));
+  assert.ok(entry, 'the book menu has no Black out panels');
+  tap(entry);
+  await settle(200);
+
+  assert.equal(el('redact-pick').hidden, false, 'nothing opened to pick a picture from');
+  const pictures = el('redact-pick-body').querySelectorAll('.reel-item');
+  assert.equal(pictures.length, 4);
+  assert.equal(el('redact-pick-body').querySelectorAll('.edited').length, 0);
+
+  // Picked, marked, saved -- and back to the list, which now says so.
+  tap(pictures[2]);
+  await settle(150);
+  assert.equal(el('redact').hidden, false, 'tapping a picture did not open the editor');
+  const svg = el('redact-svg');
+  svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 600, right: 400, bottom: 600 });
+  press(svg, 10, 10); press(svg, 100, 10); press(svg, 100, 100); press(svg, 10, 100);
+  tap(el('redact-save'));
+  await settle(300);
+  assert.equal(el('redact').hidden, true);
+  assert.equal(el('redact-pick').hidden, false, 'saving lost the list of pictures');
+  const marked = el('redact-pick-body').querySelectorAll('.reel-item')[2];
+  assert.ok(marked.querySelector('.edited'), 'the list does not show which pictures are done');
+  assert.ok(redact.isEdited(await store.get('images', [id, 'p3.jpg'])));
+
+  // Back leaves the list.
+  assert.equal(window.Grimoire.onBack(), true);
+  assert.equal(el('redact-pick').hidden, true);
+});
+
+await t('the shelf\'s selection actions and the image reel both have it too', async () => {
+  const html2 = read('app/src/main/assets/www/index.html');
+  assert.match(html2, /data-act="redact">[\s\S]*?<span>Black out<\/span>/);
+  assert.match(html2, /id="reel-redact"[^>]*>Black out…/);
+
+  const reader = await import(www('reader.js'));
+  tap(document.querySelector('[data-go="reel"]'));
+  await settle(300);
+  tap(el('reel-redact'));
+  await settle(200);
+  assert.equal(el('redact-pick').hidden, false);
+  assert.equal(el('redact-pick-of').textContent, (await store.get('books', reader.state.book.id)).title);
+  tap(el('redact-pick-close'));
+  assert.equal(el('redact-pick').hidden, true);
+});
+
 console.log(`\n${pass} assertions passed`);
 process.exit(0);

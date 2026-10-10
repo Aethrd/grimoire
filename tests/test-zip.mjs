@@ -114,4 +114,118 @@ await t('JSZip is still there for archives the reader will not take', () => {
   assert.match(open, /openZip\(file\)\.catch/);
 });
 
+/* ── zip64, and names that are not UTF-8 ─────────────────────────────── */
+
+console.log('\nlarge archives and other alphabets');
+
+const zlib = await import('node:zlib');
+
+/**
+ * A zip written by hand, so the parts JSZip never writes can be: zip64
+ * records with placeholders where the sizes go, and names in a code page.
+ */
+function handmade(entries, { zip64 = false, utf8Flag = true } = {}) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  const u16 = (n) => { const b = Buffer.alloc(2); b.writeUInt16LE(n); return b; };
+  const u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b; };
+  const u64 = (n) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b; };
+  for (const { name, body, deflate } of entries) {
+    const nameBytes = Buffer.isBuffer(name) ? name : Buffer.from(name, 'utf8');
+    const data = Buffer.from(body);
+    const stored = deflate ? zlib.deflateRawSync(data) : data;
+    const crc = zlib.crc32(data);
+    const flags = utf8Flag ? 0x800 : 0;
+    const method = deflate ? 8 : 0;
+    const local = Buffer.concat([
+      u32(0x04034b50), u16(45), u16(flags), u16(method), u16(0), u16(0), u32(crc),
+      u32(stored.length), u32(data.length), u16(nameBytes.length), u16(0), nameBytes,
+    ]);
+    const extra = zip64 ? Buffer.concat([u16(1), u16(24), u64(data.length), u64(stored.length), u64(offset)]) : Buffer.alloc(0);
+    central.push(Buffer.concat([
+      u32(0x02014b50), u16(45), u16(45), u16(flags), u16(method), u16(0), u16(0), u32(crc),
+      u32(zip64 ? 0xffffffff : stored.length), u32(zip64 ? 0xffffffff : data.length),
+      u16(nameBytes.length), u16(extra.length), u16(0), u16(0), u16(0), u32(0),
+      u32(zip64 ? 0xffffffff : offset), nameBytes, extra,
+    ]));
+    chunks.push(local, stored);
+    offset += local.length + stored.length;
+  }
+  const directory = Buffer.concat(central);
+  const tailParts = [directory];
+  if (zip64) {
+    const recordAt = offset + directory.length;
+    tailParts.push(Buffer.concat([
+      u32(0x06064b50), u64(44), u16(45), u16(45), u32(0), u32(0),
+      u64(entries.length), u64(entries.length), u64(directory.length), u64(offset),
+    ]));
+    tailParts.push(Buffer.concat([u32(0x07064b50), u32(0), u64(recordAt), u32(1)]));
+  }
+  tailParts.push(Buffer.concat([
+    u32(0x06054b50), u16(0), u16(0),
+    u16(zip64 ? 0xffff : entries.length), u16(zip64 ? 0xffff : entries.length),
+    u32(zip64 ? 0xffffffff : directory.length), u32(zip64 ? 0xffffffff : offset), u16(0),
+  ]));
+  return new File([Buffer.concat([...chunks, ...tailParts])], 'handmade.zip');
+}
+
+await t('a zip64 archive is read in place, not handed to JSZip whole', async () => {
+  const file = handmade([
+    { name: 'Shelf/Fiction/notes.txt', body: 'NOTES\n\nHello there.\n' },
+    { name: 'Shelf/Other/long.txt', body: 'x'.repeat(5000), deflate: true },
+  ], { zip64: true });
+  const zip = await zipreader.openZip(file);
+  assert.ok(zip, 'the streaming reader declined a zip64 archive -- back to loading all of it');
+  assert.deepEqual(zip.names().sort(), ['Shelf/Fiction/notes.txt', 'Shelf/Other/long.txt']);
+  assert.equal(zip.sizeOf('Shelf/Other/long.txt'), 5000);
+  assert.equal(await zip.text('Shelf/Fiction/notes.txt'), 'NOTES\n\nHello there.\n');
+  assert.equal(await zip.text('Shelf/Other/long.txt'), 'x'.repeat(5000));
+});
+
+await t('a zip64 library unpacks into its folders like any other', async () => {
+  const epub = fs.readFileSync(path.join(root, 'tests/fixtures/salt-almanac.epub'));
+  const file = handmade([
+    { name: 'Library/Fiction/One.epub', body: epub },
+    { name: 'Library/Novels/Story.txt', body: 'STORY\n\nHello.\n', deflate: true },
+  ], { zip64: true });
+  const archive = await parse.expandArchive(file);
+  assert.equal(archive.comic, false);
+  assert.deepEqual(archive.books.map((b) => `${b.folder}/${b.name}`).sort(), ['Fiction/One.epub', 'Novels/Story.txt']);
+  const book = archive.books.find((b) => b.name === 'One.epub');
+  assert.equal((await book.read()).size, epub.length);
+});
+
+await t('Info-ZIP\'s own zip64 output reads too', async () => {
+  // zip -fz, as a phone's or a PC's archiver writes for a large folder.
+  const { execFileSync } = await import('node:child_process');
+  const os = await import('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'z64-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'Shelf/Fiction'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Shelf/Fiction/notes.txt'), 'NOTES\n\nHi.\n');
+    execFileSync('zip', ['-q', '-r', '-fz', 'out.zip', 'Shelf'], { cwd: dir });
+    const zip = await zipreader.openZip(new File([fs.readFileSync(path.join(dir, 'out.zip'))], 'out.zip'));
+    assert.ok(zip, 'declined');
+    assert.equal(await zip.text('Shelf/Fiction/notes.txt'), 'NOTES\n\nHi.\n');
+  } catch (error) {
+    if (error.code === 'ENOENT') return;   // no zip tool on this machine: nothing to compare with
+    throw error;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+await t('folder names from a Korean Windows zip come out in Korean, not question marks', async () => {
+  // 마녀의 도시 in CP949, the code page Korean Windows writes zip names in.
+  const cp949 = Buffer.from([0xb8, 0xb6, 0xb3, 0xe0, 0xc0, 0xc7, 0x20, 0xb5, 0xb5, 0xbd, 0xc3]);
+  const name = Buffer.concat([cp949, Buffer.from('/01.txt')]);
+  const file = handmade([{ name, body: 'ONE\n\nText.\n' }], { utf8Flag: false });
+  const zip = await zipreader.openZip(file);
+  assert.deepEqual(zip.names(), ['마녀의 도시/01.txt']);
+  // Plain ASCII and flagged UTF-8 are as they were.
+  const plain = await zipreader.openZip(handmade([{ name: 'Books/a.txt', body: 'A' }], { utf8Flag: false }));
+  assert.deepEqual(plain.names(), ['Books/a.txt']);
+});
+
 console.log(`\n${pass} assertions passed`);
