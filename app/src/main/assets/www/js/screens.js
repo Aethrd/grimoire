@@ -94,7 +94,8 @@ function renderSort() {
 }
 
 async function previewTree() {
-  const all = (await store.all('books')).filter((b) => !b.inVault || vaultUnlocked);
+  const all = (await store.all('books'))
+    .filter((b) => !b.binnedAt && !b.importing && (!b.inVault || vaultUnlocked));
   const tree = groupBooks(sortBooks(all, draft.keys), draft.group);
   const host = el('group-preview');
   host.innerHTML = '';
@@ -696,9 +697,10 @@ async function runFind(query, onGoToMatch) {
    */
   if (!findInBook) {
     // The same books the shelf shows: nothing from the vault while it is
-    // locked, and nothing still being imported.
+    // locked, nothing still being imported, and nothing deleted -- a book in
+    // the bin is found in the bin, not offered back as if it were on the shelf.
     const books = (await store.all('books'))
-      .filter((b) => !b.importing && (!b.inVault || vaultUnlocked));
+      .filter((b) => !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
 
     const only = shelfScope === 'title' ? ['title', 'shown']
       : shelfScope === 'author' ? ['author']
@@ -759,9 +761,10 @@ async function runFind(query, onGoToMatch) {
    */
   if (!findInBook) {
     // The same books the shelf shows: nothing from the vault while it is
-    // locked, and nothing still being imported.
+    // locked, nothing still being imported, and nothing deleted -- a book in
+    // the bin is found in the bin, not offered back as if it were on the shelf.
     const books = (await store.all('books'))
-      .filter((b) => !b.importing && (!b.inVault || vaultUnlocked));
+      .filter((b) => !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
 
     const only = shelfScope === 'title' ? ['title', 'shown']
       : shelfScope === 'author' ? ['author']

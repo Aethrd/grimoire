@@ -1462,12 +1462,12 @@ async function renderBehaviourPane(body) {
     Math.round(settings.tapZone * 100), 12, 40, 1, '%',
     (value) => store.saveSettings({ tapZone: value / 100 })));
 
-  /* ── the chapter pad ──
+  /* ── the page pad ──
    *
-   * The footer is the one place a tall phone cannot be reached without
-   * regripping, and in a comic -- where a chapter is a volume -- turning a
-   * chapter is the control used most. So it can come off the footer and go
-   * where the hand actually is.
+   * Turning the page means reaching the edge of it, which on a tall phone in
+   * one hand is the far side of the screen. So the turn can float, and go
+   * where the hand actually is -- and carry on into the next chapter, so it
+   * is the only control reading needs.
    */
   const pad = { on: false, x: 88, y: 64, scale: 1, vertical: true, locked: true, side: 'right' };
   const own = { ...pad, ...(settings.chapterPad || {}) };
@@ -1475,17 +1475,18 @@ async function renderBehaviourPane(body) {
 
   const padBlock = document.createElement('section');
   padBlock.className = 'block';
-  padBlock.innerHTML = `<h2>Chapter buttons</h2>
+  padBlock.innerHTML = `<h2>Page buttons</h2>
     <p class="muted" style="font-size:12px;line-height:1.55">
-      A floating pair that can go anywhere on the page, at whatever size suits
-      your thumb. Copy chapter stays in the footer: that one is pressed with
-      two hands.</p>`;
+      A floating pair that turns the page, and carries on into the next
+      chapter at the end of one. It can go anywhere on the page, at whatever
+      size suits your thumb. The chapter buttons and Copy chapter stay in the
+      footer.</p>`;
 
-  padBlock.appendChild(row('Float them over the page', 'Instead of the footer',
+  padBlock.appendChild(row('Float them over the page', 'Turn pages from where your thumb is',
     toggle(own.on, async (on) => { await savePad({ on }); renderSettings(); })));
 
   if (own.on) {
-    padBlock.appendChild(row('Up is the next chapter', 'Stacked rather than side by side',
+    padBlock.appendChild(row('Up is the next page', 'Stacked rather than side by side',
       toggle(own.vertical !== false, async (vertical) => {
         await savePad({ vertical });
         renderSettings();
@@ -1582,7 +1583,8 @@ export function onFolderMenu(fn) { onFolderActions = fn; }
 
 export async function openFolders(onOpenFolder) {
   const books = await store.all('books');
-  const visible = books.filter((b) => !b.inVault || vaultUnlocked);
+  // Deleted books are in the bin, not in their folders.
+  const visible = books.filter((b) => !b.binnedAt && !b.importing && (!b.inVault || vaultUnlocked));
 
   const counts = new Map();
   for (const book of visible) {

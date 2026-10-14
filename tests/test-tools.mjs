@@ -173,11 +173,13 @@ await t('it is placed in percentages, so rotation does not lose it', async () =>
   assert.match(paint, /Math\.max\(6, Math\.min\(94/);
 });
 
-await t('the footer pair goes away when the pad is up', async () => {
+await t('the pad turns pages, so the footer keeps its chapter pair', async () => {
   const paint = app.slice(app.indexOf('function paintChapterPad'),
     app.indexOf('function wireChapterPad'));
-  assert.match(paint, /el\('chapter-prev'\)\.hidden = own\.on/);
-  assert.match(paint, /el\('chapter-next'\)\.hidden = own\.on/);
+  assert.match(paint, /el\('chapter-prev'\)\.hidden = false/);
+  assert.match(paint, /el\('chapter-next'\)\.hidden = false/);
+  assert.match(html, /id="pad-next" title="Next page"/);
+  assert.match(html, /id="pad-prev" title="Previous page"/);
 });
 
 await t('copy chapter stays in the footer', async () => {
@@ -405,7 +407,7 @@ await t('the pad controls appear without wiping the pane they are in', async () 
   const body = await behaviourPane();
   const text = body.textContent;
 
-  for (const want of ['Chapter buttons', 'Float them over the page', 'Up is the next chapter',
+  for (const want of ['Page buttons', 'Float them over the page', 'Up is the next page',
     'Side', 'Size', 'Down the page', 'Put it back where it started']) {
     assert.ok(text.includes(want), `the pane has no "${want}"`);
   }
@@ -434,7 +436,7 @@ await t('the pad controls collapse when the pad is off', async () => {
     'controls for a pad that is not on are still showing');
 });
 
-await t('the pad is drawn on the reader, where it was put, and turns chapters', async () => {
+await t('the pad is drawn on the reader, where it was put, and turns pages on into chapters', async () => {
   const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
   await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
 
@@ -470,17 +472,33 @@ await t('the pad is drawn on the reader, where it was put, and turns chapters', 
   assert.equal(pad.dataset.vertical, '', 'up is not the next chapter');
   assert.equal(pad.classList.contains('locked'), false);
 
-  // One control, not two: the footer pair goes away.
-  assert.equal(el('chapter-prev').hidden, true);
-  assert.equal(el('chapter-next').hidden, true);
-  // And it knows where it is in the book.
-  assert.equal(el('pad-prev').disabled, true, 'back is offered from the first chapter');
+  // It turns pages, so the footer keeps the chapter pair.
+  assert.equal(el('chapter-prev').hidden, false);
+  assert.equal(el('chapter-next').hidden, false);
+  // And it knows where it is in the book: nothing before the first page.
+  assert.equal(el('pad-prev').disabled, true, 'back is offered from the first page of the book');
   assert.equal(el('pad-next').disabled, false);
 
+  // A chapter of several pages: onward is the next page, not the next chapter.
+  // (jsdom lays nothing out, so the page count is given.)
   assert.equal(reader.state.chapterIndex, 0);
+  reader.state.pageCount = 3;
+  tap(el('pad-next'));
+  await settle(300);
+  assert.equal(reader.state.chapterIndex, 0, 'the pad skipped the rest of the chapter');
+  assert.equal(reader.state.page, 1, 'the pad did not turn the page');
+  assert.equal(el('pad-prev').disabled, false, 'back is not offered from the second page');
+  tap(el('pad-prev'));
+  await settle(300);
+  assert.equal(reader.state.page, 0);
+
+  // At the last page of a chapter, onward is the next chapter -- no "tap
+  // again", which guards against stray taps on the text, not button presses.
+  reader.state.pageCount = 1;
   tap(el('pad-next'));
   await settle(400);
-  assert.equal(reader.state.chapterIndex, 1, 'the pad does not turn the chapter');
+  assert.equal(reader.state.chapterIndex, 1, 'the pad stops at the end of the chapter');
+  // And back from the first page of a chapter is the end of the one before.
   tap(el('pad-prev'));
   await settle(400);
   assert.equal(reader.state.chapterIndex, 0);
@@ -488,6 +506,27 @@ await t('the pad is drawn on the reader, where it was put, and turns chapters', 
   /* Dragging cannot be driven here: jsdom has no layout, so a synthetic touch
    * carries no coordinates to drag by. The grip being the only handle, and
    * the lock stopping it, are checked against the source above. */
+});
+
+await t('search does not find deleted books', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  const kept = await aBook({ title: 'Quillfeather Kept' });
+  const gone = await aBook({ title: 'Quillfeather Gone' });
+  await library.binBooks([gone]);
+  screensMod.initFind(() => {}, false);
+  el('find-input').value = 'Quillfeather';
+  el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle(450);
+  const found = [...el('find-results').querySelectorAll('[data-book]')].map((n) => Number(n.dataset.book));
+  assert.ok(found.includes(kept), 'the book on the shelf was not found');
+  assert.ok(!found.includes(gone), 'a deleted book was found');
+  // Nor counted in its folder, nor caught by Select all, nor grouped.
+  const panelsSource = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panelsSource, /const visible = books\.filter\(\(b\) => !b\.binnedAt/);
+  assert.match(app, /!book\.importing && !book\.transient && !book\.binnedAt/);
+  const screensSource = read('app/src/main/assets/www/js/screens.js');
+  assert.equal((screensSource.match(/!b\.binnedAt/g) || []).length, 3);
 });
 
 /* ── a file the page is not allowed to read ──────────────────────────────

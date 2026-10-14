@@ -358,7 +358,7 @@ function wireSelection() {
      */
     const books = (await store.all('books')).filter((book) =>
       (!book.inVault || library.vaultUnlocked)
-      && !book.importing && !book.transient
+      && !book.importing && !book.transient && !book.binnedAt
       && (!activeFolder || book.folder === activeFolder));
 
     // A second press clears, so the same button undoes itself.
@@ -2013,16 +2013,18 @@ function hideEdgeHint() {
   edgeTimer = setTimeout(() => { hint.hidden = true; }, 260);
 }
 
-/* ── the chapter pad ─────────────────────────────────────────────────────
+/* ── the page pad ────────────────────────────────────────────────────────
  *
- * Turning a chapter lived in the footer, which on a tall phone is the one
- * place a thumb cannot reach without regripping -- and in a comic, where a
- * chapter is a volume, it is the control used most.
+ * Turning the page by tapping the edge of it means reaching across the
+ * screen, and on a tall phone held in one hand the far edge is out of reach.
+ * So the turn floats, and it goes where the hand is: dragged anywhere, made
+ * bigger or smaller, and flipped to whichever side the thumb is on. Vertical
+ * by default, with up as onward, because that is how a thumb reads a stack.
  *
- * So it floats, and it goes where the hand is: dragged anywhere, made bigger
- * or smaller, and flipped to whichever side the thumb is on. Vertical by
- * default, with up as onward, because that is how a thumb reads a stack --
- * the next chapter is the one above.
+ * It turns pages, and carries on into the next chapter at the end of one --
+ * so it is the only control reading needs. It used to turn whole chapters,
+ * which left the page itself to the far edge of the screen; the chapter
+ * buttons are in the footer, as they always were.
  *
  * Locked by default, which is the part that makes it usable at all: an
  * unlocked control sitting over the page is one that moves every time you
@@ -2050,29 +2052,40 @@ function paintChapterPad(settings) {
   pad.style.left = `${Math.max(2, Math.min(98, own.x))}%`;
   pad.style.top = `${Math.max(6, Math.min(94, own.y))}%`;
 
-  /* Up is the next chapter when it is vertical, and the right-hand button
-   * when it is not. The two buttons swap rather than the labels, so the arrow
-   * always points the way it goes. */
-  el('pad-next').disabled = !reader.hasNextChapter();
-  el('pad-prev').disabled = !reader.hasPrevChapter();
+  /* Up is the next page when it is vertical, and the right-hand button when
+   * it is not. The two buttons swap rather than the labels, so the arrow
+   * always points the way it goes. Only the very ends of the book stop it:
+   * the end of a chapter is a page turn like any other. */
+  el('pad-next').disabled = !reader.canTurn(1) && !reader.hasNextChapter();
+  el('pad-prev').disabled = !reader.canTurn(-1) && !reader.hasPrevChapter();
 
-  // The footer's own pair would be a second copy of the same control.
-  el('chapter-prev').hidden = own.on;
-  el('chapter-next').hidden = own.on;
+  // It turns pages now, so the footer keeps its chapter pair.
+  el('chapter-prev').hidden = false;
+  el('chapter-next').hidden = false;
+}
+
+/**
+ * Turn a page from the pad, and on into the next chapter (or back to the end
+ * of the previous one) where the chapter runs out.
+ *
+ * No "tap again to carry on" here, which the page edge asks for: that guards
+ * against a stray tap on the text, and a press on a button is not one.
+ */
+async function padTurn(direction) {
+  if (!reader.turn(direction)) {
+    if (direction > 0 && reader.hasNextChapter()) await reader.nextChapter();
+    else if (direction < 0 && reader.hasPrevChapter()) await reader.prevChapter(true);
+    else toast(`That is the ${direction > 0 ? 'end' : 'start'} of the book`);
+  }
+  paintReader();
 }
 
 function wireChapterPad() {
   const pad = el('chapter-pad');
   if (!pad) return;
 
-  el('pad-next').onclick = async () => {
-    await reader.nextChapter();
-    paintReader();
-  };
-  el('pad-prev').onclick = async () => {
-    await reader.prevChapter(true);
-    paintReader();
-  };
+  el('pad-next').onclick = () => padTurn(1);
+  el('pad-prev').onclick = () => padTurn(-1);
 
   /* Dragged by the grip, and only while unlocked.
    *

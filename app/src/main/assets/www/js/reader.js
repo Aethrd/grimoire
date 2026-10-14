@@ -1248,6 +1248,18 @@ export function turn(delta) {
 
 export function goToPage(page) { show(page, { animate: false }); }
 
+/** Whether a turn by `delta` stays inside this chapter -- the same test
+ *  turn() makes, asked without moving anything. */
+export function canTurn(delta) {
+  if (isScroll()) {
+    const limit = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    return delta > 0 ? viewport.scrollTop < limit - 1 : viewport.scrollTop > 1;
+  }
+  const pages = Number.isFinite(state.pageCount) ? state.pageCount : 1;
+  const next = state.page + delta;
+  return Number.isFinite(next) && next >= 0 && next < pages;
+}
+
 /* ── the scrub rail ───────────────────────────────────────────────────────
  * Paged mode has discrete pages, so the rail marks which one you are on.
  * Scroll mode has no pages, so it behaves as a scrollbar: a proportional
