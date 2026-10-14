@@ -14,6 +14,7 @@ import * as shrink from './shrink.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
 import * as redact from './redact.js';
+import * as frames from './frame.js';
 
 const el = (id) => document.getElementById(id);
 const { toast } = screens;
@@ -4990,6 +4991,7 @@ window.Grimoire = {
 
   /** Return true to swallow the back gesture. */
   onBack() {
+    if (frames.closeFrameEditor()) return true;
     // Above everything else, so it is the first thing back leaves.
     if (!el('redact').hidden) {
       if (!el('redact-leave').hidden) el('redact-leave').hidden = true;
@@ -5085,6 +5087,7 @@ window.Grimoire = {
 async function boot() {
   const settings = await store.settings();
   theme.apply(settings);
+  reader.setPictureFrame(settings.pictureFrame || null);
   activeFolder = settings.shelfFolder ?? null;
   // Anything a crash left half-written is cleared before the shelf is drawn.
   await library.sweepUnfinishedImports();

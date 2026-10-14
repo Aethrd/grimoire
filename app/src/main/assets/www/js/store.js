@@ -216,6 +216,8 @@ export const DEFAULT_SETTINGS = {
      crops nor distorts, so it is the default. */
   // screen | width | height | stretch | original | smart
   imageFit: 'screen',
+  // Where pictures go and what shape, as fractions of the screen; null for the whole page.
+  pictureFrame: null,
 
   /* Showing colour pages in grey.
    *

@@ -11,6 +11,7 @@ import { setVaultUnlocked, vaultUnlocked } from './library.js';
 import { toast } from './screens.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
+import * as frames from './frame.js';
 
 const el = (id) => document.getElementById(id);
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -1354,6 +1355,7 @@ async function renderBehaviourPane(body) {
     ['stretch', 'Stretch', 'Fills the space exactly, distorting to do it'],
     ['original', 'Original size', 'However large it is, scrollable'],
     ['smart', 'Smart fit', 'Width for tall strips, height for wide spreads'],
+    ['fill', 'Fill', 'Fills the space exactly, cropping rather than distorting'],
   ]) {
     const option = document.createElement('button');
     option.className = 'list-row';
@@ -1366,6 +1368,30 @@ async function renderBehaviourPane(body) {
     };
     pictures.appendChild(option);
   }
+
+  /* Where pictures go, and what shape -- drawn rather than typed. */
+  const frameRow = document.createElement('div');
+  frameRow.className = 'row';
+  const frameNow = settings.pictureFrame || null;
+  frameRow.innerHTML = `<span class="row-text"><b>Picture frame</b>
+    <small>${escape(frameNow
+      ? `${frames.describe(frameNow, window.innerWidth, window.innerHeight)} — pictures are fitted into the shape you drew`
+      : 'Pictures use the whole page. Draw a frame to give them a shape and place of your own')}</small></span>
+    <button class="btn ghost" id="picture-frame-edit">${frameNow ? 'Adjust…' : 'Draw…'}</button>`;
+  frameRow.querySelector('#picture-frame-edit').onclick = async () => {
+    // The book's own first picture, to see the frame's effect on.
+    const first = reader.state.images?.values?.().next?.().value || null;
+    const urls = blobs.pool();
+    const sample = first ? urls.url(first) : null;
+    const chosen = await frames.editFrame(frameNow, { sample, fit: settings.imageFit || 'screen' });
+    urls.release();
+    if (chosen === undefined) return;
+    await store.saveSettings({ pictureFrame: chosen });
+    reader.setPictureFrame(chosen);
+    reader.repaginate();
+    renderSettings();
+  };
+  pictures.appendChild(frameRow);
   body.appendChild(pictures);
 
   const grey = document.createElement('section');

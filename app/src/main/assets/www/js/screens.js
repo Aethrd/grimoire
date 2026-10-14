@@ -184,6 +184,7 @@ export async function openLayout(bookId) {
     ['stretch', 'Stretch'],
     ['original', 'Original'],
     ['smart', 'Smart'],
+    ['fill', 'Fill'],
   ]) {
     const chip = document.createElement('button');
     chip.className = 'chip';

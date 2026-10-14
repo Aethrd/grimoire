@@ -1044,4 +1044,120 @@ await t('a blurred book is blurred in Continue reading too', async () => {
   assert.ok(!el('continue-card').hasAttribute('data-blur'), 'the blur stayed after the cover was shown again');
 });
 
+/* ── the picture frame ───────────────────────────────────────────────── */
+
+console.log('\nthe picture frame');
+
+const frames = await import(new URL('../app/src/main/assets/www/js/frame.js', import.meta.url).href);
+
+await t('a preset is the largest frame of its shape the screen holds, centred', () => {
+  const f = frames.presetFrame(2 / 3, 400, 800);
+  const w = (f.r - f.l) * 400;
+  const h = (f.b - f.t) * 800;
+  assert.ok(Math.abs(w / h - 2 / 3) < 0.01, `shape ${w / h}`);
+  assert.ok(Math.abs(f.l - (1 - f.r)) < 0.001 && Math.abs(f.t - (1 - f.b)) < 0.001, 'not centred');
+  assert.ok(w <= 400 * 0.94 + 0.5 && h <= 800 * 0.94 + 0.5);
+  assert.equal(frames.describe(f, 400, 800), '2:3');
+  assert.equal(frames.describe(null, 400, 800), 'Whole page');
+});
+
+await t('a corner moves its two edges, an edge itself, the inside the whole frame -- never off the screen', () => {
+  const f = { l: 0.1, t: 0.1, r: 0.9, b: 0.9 };
+  assert.deepEqual(frames.dragFrame(f, 'tl', 0.05, 0.1), { l: 0.15, t: 0.2, r: 0.9, b: 0.9 });
+  assert.deepEqual(frames.dragFrame(f, 'r', -0.2, 0.3), { l: 0.1, t: 0.1, r: 0.7, b: 0.9 });
+  assert.deepEqual(frames.dragFrame(f, 'move', 0.5, -0.5), { l: 0.2, t: 0, r: 1, b: 0.8 });
+  // Not inside out, and not smaller than the least it can be.
+  const crushed = frames.dragFrame(f, 'br', -2, -2);
+  assert.ok(crushed.r - crushed.l >= 0.15 - 1e-9 && crushed.b - crushed.t >= 0.15 - 1e-9);
+  // What is under a finger.
+  assert.equal(frames.partAt(f, 40, 80, 400, 800), 'tl');
+  assert.equal(frames.partAt(f, 200, 80, 400, 800), 't');
+  assert.equal(frames.partAt(f, 200, 400, 400, 800), 'move');
+  assert.equal(frames.partAt(f, 5, 5, 400, 800), null);
+});
+
+const pointerAt = (type, x, y, id = 1) => {
+  const event = new window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+  Object.defineProperty(event, 'pointerId', { value: id });
+  return event;
+};
+
+await t('the frame is drawn by dragging its corners, over the whole screen', async () => {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const done = frames.editFrame({ l: 0.1, t: 0.1, r: 0.9, b: 0.9 });
+  const editor = document.querySelector('.frame-edit');
+  assert.ok(editor, 'no editor');
+  assert.equal(editor.querySelectorAll('.frame-edit-svg .corner').length, 4, 'not four corners');
+  assert.equal(editor.querySelectorAll('.frame-edit-svg .edge').length, 4);
+  assert.ok(editor.querySelectorAll('.frame-edit [data-preset]').length >= 4, 'no shapes to start from');
+
+  const svg = editor.querySelector('.frame-edit-svg');
+  svg.dispatchEvent(pointerAt('pointerdown', 0.1 * W, 0.1 * H));
+  assert.ok(editor.classList.contains('dragging'), 'the bar does not get out of the way');
+  svg.dispatchEvent(pointerAt('pointermove', 0.2 * W, 0.3 * H));
+  svg.dispatchEvent(pointerAt('pointerup', 0.2 * W, 0.3 * H));
+  assert.ok(!editor.classList.contains('dragging'));
+  tap(editor.querySelector('[data-act="save"]'));
+  const frame = await done;
+  assert.ok(Math.abs(frame.l - 0.2) < 0.001 && Math.abs(frame.t - 0.3) < 0.001, JSON.stringify(frame));
+  assert.equal(frame.r, 0.9);
+  assert.equal(document.querySelector('.frame-edit'), null, 'the editor stayed up');
+
+  // Cancel changes nothing; Whole page is "no frame".
+  const cancelled = frames.editFrame(frame);
+  tap(document.querySelector('.frame-edit [data-act="cancel"]'));
+  assert.equal(await cancelled, undefined);
+  const none = frames.editFrame(frame);
+  tap(document.querySelector('.frame-edit [data-act="none"]'));
+  assert.equal(await none, null);
+  // Back closes it.
+  const backed = frames.editFrame(frame);
+  assert.equal(window.Grimoire.onBack(), true);
+  assert.equal(await backed, undefined);
+});
+
+await t('every picture gets a box of the frame\'s size, where the frame was drawn', async () => {
+  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
+  const viewport = el('page-viewport');
+  const flow = el('page-flow');
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  viewport.getBoundingClientRect = () => ({ left: 0, top: 50, right: W, bottom: H - 100, width: W, height: H - 150 });
+  const pad = (side) => parseFloat(getComputedStyle(viewport)[side] || 0) || 0;
+  const roomTop = 50 + pad('paddingTop');
+  const roomBottom = H - 100 - pad('paddingBottom');
+  reader.setPictureFrame({ l: 0.25, t: 0.2, r: 0.75, b: 0.7 });
+  assert.ok(document.body.hasAttribute('data-frame'));
+  const top = Math.max(roomTop, 0.2 * H);
+  const bottom = Math.min(roomBottom, 0.7 * H);
+  assert.equal(flow.style.getPropertyValue('--pic-w'), `${Math.floor(0.75 * W - 0.25 * W)}px`);
+  assert.equal(flow.style.getPropertyValue('--pic-x'), `${Math.round(0.25 * W - pad('paddingLeft'))}px`);
+  assert.equal(flow.style.getPropertyValue('--pic-y'), `${Math.round(top - roomTop)}px`);
+  assert.equal(flow.style.getPropertyValue('--pic-h'), `${Math.floor(bottom - top)}px`);
+  // Trimmed by what the page can show: a frame running under the bars stops at them.
+  reader.setPictureFrame({ l: 0, t: 0, r: 1, b: 1 });
+  assert.equal(flow.style.getPropertyValue('--pic-y'), '0px');
+  assert.equal(flow.style.getPropertyValue('--pic-w'), `${Math.floor(W)}px`);
+  assert.equal(flow.style.getPropertyValue('--pic-h'), `${Math.floor(roomBottom - roomTop)}px`);
+  // None at all: the pictures use the page as before.
+  reader.setPictureFrame(null);
+  assert.ok(!document.body.hasAttribute('data-frame'));
+  assert.equal(flow.style.getPropertyValue('--pic-w'), '');
+  delete viewport.getBoundingClientRect;
+
+  assert.match(css, /body\[data-frame\] \.page-flow \.pic:not\(\.small\) \{[^}]*width: var\(--pic-w\); height: var\(--pic-h\)/);
+  assert.match(css, /body\[data-frame\]\[data-mode="paged"\] \.page-flow \.pic:not\(\.small\) \{[^}]*break-before: column/);
+  assert.match(css, /body\[data-frame\]\[data-images="fill"\] \.page-flow \.pic:not\(\.small\) img \{ object-fit: cover; \}/);
+});
+
+await t('Settings offers the frame, and Fill, beside the other fittings', async () => {
+  const pane = await behaviourPane();
+  assert.match(pane.textContent, /Picture frame/);
+  assert.match(pane.textContent, /Fill/);
+  assert.ok(pane.querySelector('#picture-frame-edit'), 'nothing to draw the frame with');
+  const defaults = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  assert.equal(defaults.DEFAULT_SETTINGS.pictureFrame, null);
+});
+
 console.log(`\n${pass} assertions passed`);

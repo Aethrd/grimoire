@@ -127,7 +127,74 @@ function viewportHeight() {
   return viewport.clientHeight;
 }
 
+/**
+ * The height of a page, for pictures to be sized against.
+ *
+ * The page, not the screen: with the reader's bars showing the page is a good
+ * deal shorter than the screen, and with them hidden it is nearly all of it.
+ * A picture sized against the screen was either cut off by the bars or left
+ * a band of empty page below it.
+ */
+function measurePage() {
+  const cs = getComputedStyle(viewport);
+  const inner = viewport.clientHeight - parseFloat(cs.paddingTop || 0) - parseFloat(cs.paddingBottom || 0);
+  if (inner > 0) flow.style.setProperty('--page-h', `${Math.floor(inner)}px`);
+  placeFrame(cs);
+}
+
+/* ── the picture frame ───────────────────────────────────────────────────
+ *
+ * Where on the screen pictures go, and what shape that is, chosen in
+ * Settings by dragging its four corners. Kept as fractions of the screen so
+ * it means the same thing on any phone and either way up.
+ *
+ * Turned into a box for each picture: its size, and how far it sits from the
+ * top-left of the page it is on. The box is held to what the page can show
+ * -- the screen's full width, the page's height -- so a frame drawn over the
+ * reader's bars is simply trimmed by them while they are up.
+ */
+let pictureFrame = null;
+
+/** @param frame {l, t, r, b} as fractions of the screen, or null for none. */
+export function setPictureFrame(frame) {
+  pictureFrame = frame && frame.r > frame.l && frame.b > frame.t ? { ...frame } : null;
+  document.body.toggleAttribute('data-frame', !!pictureFrame);
+  if (viewport && flow) placeFrame(getComputedStyle(viewport));
+}
+
+export const pictureFrameOf = () => pictureFrame;
+
+function placeFrame(cs) {
+  if (!pictureFrame) {
+    for (const name of ['--pic-x', '--pic-y', '--pic-w', '--pic-h']) flow.style.removeProperty(name);
+    return;
+  }
+  const box = viewport.getBoundingClientRect();
+  if (!box.width || !box.height) return;
+  const screenW = window.innerWidth || box.width;
+  const screenH = window.innerHeight || box.height;
+
+  // What a picture can occupy on this page: the full width (the text's
+  // margins do not apply to pictures) and the height inside the padding.
+  const padTop = parseFloat(cs.paddingTop || 0);
+  const padBottom = parseFloat(cs.paddingBottom || 0);
+  const padLeft = parseFloat(cs.paddingLeft || 0);
+  const room = { left: box.left, right: box.right, top: box.top + padTop, bottom: box.bottom - padBottom };
+
+  const left = Math.max(room.left, pictureFrame.l * screenW);
+  const right = Math.min(room.right, pictureFrame.r * screenW);
+  const top = Math.max(room.top, pictureFrame.t * screenH);
+  const bottom = Math.min(room.bottom, pictureFrame.b * screenH);
+  if (right - left < 20 || bottom - top < 20) return;
+
+  flow.style.setProperty('--pic-x', `${Math.round(left - (box.left + padLeft))}px`);
+  flow.style.setProperty('--pic-y', `${Math.round(top - room.top)}px`);
+  flow.style.setProperty('--pic-w', `${Math.floor(right - left)}px`);
+  flow.style.setProperty('--pic-h', `${Math.floor(bottom - top)}px`);
+}
+
 function relayout() {
+  measurePage();
   if (isScroll()) {
     flow.style.columnWidth = '';
     flow.style.columnGap = '';
@@ -398,12 +465,23 @@ function hydrateImages(section, index) {
       /* The shape of a picture is only known once it has loaded, and the
          smart fitting needs it: a tall strip wants the width, a wide spread
          wants the height, and anything near square is fitted whole. */
-      img.addEventListener('load', () => {
+      const shape = () => {
         const w = img.naturalWidth;
         const h = img.naturalHeight;
+        if (!w || !h) return;
         img.classList.toggle('landscape', w > h * 1.2);
         img.classList.toggle('tall', h > w * 1.4);
-      }, { once: true });
+        // Its shape, so it can be sized to fill the page whichever way it
+        // runs out of room first.
+        img.style.setProperty('--ar', (w / h).toFixed(4));
+        // A divider or an ornament keeps its own size -- and, in a picture
+        // frame, is not given a page of its own.
+        const small = w < 200 && h < 200;
+        img.classList.toggle('small', small);
+        img.parentElement?.classList.toggle('small', small);
+      };
+      if (img.complete && img.naturalWidth) shape();
+      else img.addEventListener('load', shape, { once: true });
     } else {
       img.remove();
     }

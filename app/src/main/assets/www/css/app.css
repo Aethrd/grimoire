@@ -451,41 +451,63 @@ section.block > h2 { margin-top: 18px; }
 .page-flow h1 { font-size: 1.5em; }
 .page-flow h2 { font-size: 1.25em; }
 .page-flow h3 { font-size: 1.1em; }
-.page-flow img { max-width: 100%; height: auto; display: block; margin: 1em auto; }
+.page-flow img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
 
 /* ── how pictures are fitted ─────────────────────────────────────────────
    A page of prose and a page of comic want different things from the same
-   rule, and a scan of a two-page spread wants a third again. */
+   rule, and a scan of a two-page spread wants a third again.
 
-/* Fit screen: the whole picture, inside the screen. Nothing cropped and
-   nothing distorted, which is why it is the default. */
+   Two measurements do the work, both kept up to date by the reader:
+
+     --page-h  the height of the page the picture is on, in pixels -- not
+               the screen. Pictures were sized against 88% of the *screen*,
+               which with the reader's bars showing is taller than the page
+               and with them hidden is well short of it.
+     --ar      the picture's own shape, width over height, set once it has
+               loaded -- so a picture can be sized to fill the page in
+               whichever direction it runs out of room first.
+
+   And the picture's box ignores the text's side margins. They are there so
+   lines of text are comfortable to read; around a picture they were a frame
+   of empty page on both sides, and with the page's own padding that came to
+   a quarter of the screen. */
+
+.page-flow .pic {
+  display: block;
+  margin: .5em calc(-1 * var(--read-margin));
+  max-width: none;
+}
+/* Small pictures -- a divider, an ornament, an icon in the text -- stay the
+   size they are. Blown up to the page they would be a smear. */
+.page-flow img.small { width: auto !important; height: auto !important;
+                       max-width: 100% !important; max-height: none !important; }
+
+/* Fit screen: the whole picture, as large as the page allows. Nothing cropped
+   and nothing distorted, which is why it is the default. */
 [data-images="screen"] .page-flow img {
-  max-width: 100%; max-height: 88vh; width: auto; height: auto;
+  width: min(100%, calc(var(--page-h, 88vh) * var(--ar, 0.7)));
+  height: auto;
+  max-width: 100%; max-height: var(--page-h, 88vh);
   object-fit: contain;
 }
 
-/* Fit width: exactly as wide as the column. A tall page runs on below the
-   screen, which is what a long strip wants. */
+/* Fit width: exactly as wide as the screen. A tall page runs on below, and
+   in paged mode it scrolls within its page. */
 [data-images="width"] .page-flow img {
   width: 100%; max-width: 100%; height: auto; max-height: none;
 }
 
-/* Fit height: exactly as tall as the screen. A wide page runs off the side
-   rather than being shrunk, so the flow scrolls sideways.
-
-   Sideways scrolling only in scroll mode. A paged layout is columns moved by
-   a transform, and a scroller on the same element fights the page turn: the
-   flow scrolls a little instead of the page moving, and a tap meant for the
-   middle lands on a surface that has quietly shifted under it. */
+/* Fit height: exactly as tall as the page. A wide page runs off the side
+   rather than being shrunk, and pans sideways. */
 [data-images="height"] .page-flow img {
-  height: 88vh; width: auto; max-width: none; max-height: none;
+  height: var(--page-h, 88vh); width: auto; max-width: none; max-height: none;
 }
 body[data-mode="scroll"][data-images="height"] .page-flow { overflow-x: auto; }
 
-/* Stretch: fills the space exactly, distorting to do it. Named honestly so
+/* Stretch: fills the page exactly, distorting to do it. Named honestly so
    nobody picks it by accident. */
 [data-images="stretch"] .page-flow img {
-  width: 100%; height: 80vh; object-fit: fill; max-width: none; max-height: none;
+  width: 100%; height: var(--page-h, 80vh); object-fit: fill; max-width: none; max-height: none;
 }
 
 /* Original: the size the picture actually is, scrollable if it overflows. */
@@ -495,65 +517,82 @@ body[data-mode="scroll"][data-images="height"] .page-flow { overflow-x: auto; }
 body[data-mode="scroll"][data-images="original"] .page-flow { overflow-x: auto; }
 
 /* Smart: the page decides. A tall strip takes the width, a wide spread takes
-   the height, anything near square is fitted whole -- the choice a reader
-   would make page by page if asked. The classes are set by the reader once a
-   picture has loaded and its shape is known. */
-[data-images="smart"] .page-flow img { max-width: 100%; max-height: 88vh; object-fit: contain; }
+   the height, anything else is fitted whole -- the choice a reader would make
+   page by page if asked. The classes are set by the reader once a picture has
+   loaded and its shape is known. */
+[data-images="smart"] .page-flow img {
+  width: min(100%, calc(var(--page-h, 88vh) * var(--ar, 0.7)));
+  height: auto; max-width: 100%; max-height: var(--page-h, 88vh); object-fit: contain;
+}
 [data-images="smart"] .page-flow img.tall { width: 100%; height: auto; max-height: none; }
-[data-images="smart"] .page-flow img.landscape { height: 88vh; width: auto; max-width: none; }
+[data-images="smart"] .page-flow img.landscape {
+  height: var(--page-h, 88vh); width: auto; max-width: none; max-height: none;
+}
 body[data-mode="scroll"][data-images="smart"] .page-flow { overflow-x: auto; }
 
-/* A picture's own box.
+/* Paged mode keeps every picture inside its page.
  *
- * Transparent and the size of what is in it by default, so nothing changes
- * for the fitting modes that never needed more room than the page. It earns
- * its keep in the three that do. */
-.pic { display: block; margin: 0 auto; max-width: 100%; }
-
-/* Paged mode keeps every picture inside its column.
- *
- * A page is one column of a fixed width and the viewport clips what leaves
- * it. Fit height, Original and Smart all allow a picture to be wider than
- * that -- which is the point of them, and works in scroll mode where the flow
- * can scroll sideways. In paged mode the overflow is simply cut off, and a
- * picture wider than the column disappears entirely rather than being shown
- * partly: the mode looked broken because nothing appeared at all.
- *
- * So in paged mode those modes fall back to fitting, which is the nearest
- * thing to what was asked for that a page can actually show.
- */
-body[data-mode="paged"] .page-flow img {
-  max-width: 100%;
-  max-height: 88vh;
-}
-
-/* Except where the setting is asking for more room than a page has.
- *
- * Fit height, Original and Smart exist to let a picture be larger than the
- * screen. Clamping them to the page made them identical to Fit screen, so
- * four of the six settings did the same thing. The box scrolls instead: the
- * page keeps its shape and the picture can be panned inside it. */
+ * A page is one column of a fixed size and the viewport clips what leaves
+ * it, so a picture larger than the page would simply be cut off. Where the
+ * setting asks for more room than a page has -- Fit width on a tall page,
+ * Fit height on a wide one, Original, and Smart's two stretches -- the
+ * picture's box is held to the page and the picture pans inside it. The page
+ * keeps its shape; nothing is lost off its edge. */
+body[data-mode="paged"][data-images="width"] .pic,
 body[data-mode="paged"][data-images="height"] .pic,
 body[data-mode="paged"][data-images="original"] .pic,
 body[data-mode="paged"][data-images="smart"] .pic {
-  max-width: 100%;
-  max-height: 88vh;
+  max-height: var(--page-h, 88vh);
   overflow: auto;
   -webkit-overflow-scrolling: touch;
   /* So a drag inside the picture pans it rather than turning the page. */
   touch-action: pan-x pan-y;
 }
-body[data-mode="paged"][data-images="height"] .pic img,
-body[data-mode="paged"][data-images="original"] .pic img,
-body[data-mode="paged"][data-images="smart"] .pic img {
-  max-width: none;
-  max-height: none;
+
+/* Fill: the page, completely, cropping what does not fit rather than
+   distorting it. Most useful with a picture frame of a chosen shape. */
+[data-images="fill"] .page-flow img {
+  width: 100%; height: var(--page-h, 88vh); object-fit: cover; max-width: none; max-height: none;
 }
-/* Smart still decides by shape: the width for a tall strip, the height for a
-   wide spread, the whole thing for anything near square. */
-body[data-mode="paged"][data-images="smart"] .pic img { max-width: 100%; max-height: 88vh; }
-body[data-mode="paged"][data-images="smart"] .pic img.tall { width: 100%; max-height: none; height: auto; }
-body[data-mode="paged"][data-images="smart"] .pic img.landscape { height: 88vh; width: auto; max-width: none; }
+
+/* ── a picture frame ─────────────────────────────────────────────────────
+   Settings can mark out where on the screen pictures go -- four corners
+   dragged to any shape. Then every picture gets a box of exactly that size,
+   at that place on its page, and the fitting decides what happens inside the
+   box: shown whole, filled and cropped, stretched, or panned. A picture
+   starts a page of its own, so the box is where the frame was drawn. */
+body[data-frame] .page-flow .pic:not(.small) {
+  width: var(--pic-w); height: var(--pic-h);
+  margin: var(--pic-y) 0 0 var(--pic-x);
+  max-width: none; max-height: none;
+  overflow: hidden;
+}
+body[data-frame][data-mode="paged"] .page-flow .pic:not(.small) {
+  break-before: column; -webkit-column-break-before: always;
+  break-after: column; -webkit-column-break-after: always;
+}
+body[data-frame][data-mode="scroll"] .page-flow .pic:not(.small) {
+  margin-top: .5em; margin-bottom: .5em;
+}
+/* Inside the box. */
+body[data-frame] .page-flow .pic:not(.small) img {
+  width: 100%; height: 100%; max-width: none; max-height: none;
+  object-fit: contain; margin: 0;
+}
+body[data-frame][data-images="fill"] .page-flow .pic:not(.small) img { object-fit: cover; }
+body[data-frame][data-images="stretch"] .page-flow .pic:not(.small) img { object-fit: fill; }
+/* The ones that pan: the box scrolls, the picture keeps its own proportions. */
+body[data-frame][data-images="width"] .page-flow .pic:not(.small),
+body[data-frame][data-images="height"] .page-flow .pic:not(.small),
+body[data-frame][data-images="original"] .page-flow .pic:not(.small),
+body[data-frame][data-images="smart"] .page-flow .pic:not(.small) {
+  overflow: auto; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y;
+}
+body[data-frame][data-images="width"] .page-flow .pic:not(.small) img,
+body[data-frame][data-images="smart"] .page-flow .pic:not(.small) img.tall { width: 100%; height: auto; }
+body[data-frame][data-images="height"] .page-flow .pic:not(.small) img,
+body[data-frame][data-images="smart"] .page-flow .pic:not(.small) img.landscape { height: 100%; width: auto; }
+body[data-frame][data-images="original"] .page-flow .pic:not(.small) img { width: auto; height: auto; }
 
 .page-flow blockquote { margin: 1em 0; padding-left: 1em;
                         border-left: 2px solid var(--accent-400); }
@@ -2068,3 +2107,59 @@ body[data-view="reader"] .stepper {
 .redact-chip button + button { border-left: 1px solid rgba(0, 0, 0, .18); }
 .redact-chip button:active { background: rgba(0, 0, 0, .12); }
 .redact-chip svg { width: 18px; height: 18px; }
+
+/* ── drawing the picture frame ────────────────────────────────────────── */
+
+.frame-edit {
+  position: fixed; inset: 0; z-index: 47;
+  background: #000; color: #eee;
+}
+.frame-edit-svg {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  fill: none; stroke: none;
+  /* Dragging corners, not scrolling. */
+  touch-action: none;
+}
+.frame-edit-svg .shade { fill: rgba(0, 0, 0, .55); }
+.frame-edit-svg .outline { fill: none; stroke: var(--accent); stroke-width: 2px; }
+.frame-edit-svg .corner { fill: #fff; stroke: var(--accent); stroke-width: 2px; }
+.frame-edit-svg .edge { fill: var(--accent); stroke: #fff; stroke-width: 1.5px; }
+
+/* The picture inside, fitted the way pictures are fitted, so the shape's
+   effect is seen rather than imagined. */
+.frame-edit-sample {
+  position: absolute; display: block;
+  object-fit: contain; background: #1a1a1a;
+}
+.frame-edit-sample[data-fit="fill"] { object-fit: cover; }
+.frame-edit-sample[data-fit="stretch"] { object-fit: fill; }
+.frame-edit-sample.blank {
+  display: grid; place-items: center;
+  background: repeating-linear-gradient(45deg, #1d1d24 0 14px, #24242c 14px 28px);
+  color: #aaa; font-family: var(--font-heading); font-size: 13px; font-weight: 600;
+}
+
+.frame-edit-bar {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 10px 12px;
+  padding-bottom: calc(var(--safe-bottom) + 12px);
+  background: rgba(14, 14, 18, .92);
+  border-top: 1px solid rgba(255, 255, 255, .12);
+  transition: opacity .15s ease;
+}
+.frame-edit-bar.top {
+  top: 0; bottom: auto;
+  padding-top: calc(var(--safe-top) + 10px); padding-bottom: 10px;
+  border-top: 0; border-bottom: 1px solid rgba(255, 255, 255, .12);
+}
+/* Out of the way while a corner is being placed under it. */
+.frame-edit.dragging .frame-edit-bar { opacity: 0; pointer-events: none; }
+.frame-edit-row { display: flex; align-items: center; gap: 8px; }
+.frame-edit-caption { flex: 1; font-family: var(--font-heading); font-size: 13px; }
+.frame-edit-hint { margin: 2px 0 6px; font-size: 11px; color: #aaa; line-height: 1.45; }
+.frame-edit .icon-btn { color: #eee; }
+.frame-edit .chip { color: #eee; border-color: rgba(255, 255, 255, .28); }
+.frame-edit .chip-row { padding: 2px 0 8px; }
+.frame-edit .btn.ghost { color: #eee; border-color: rgba(255, 255, 255, .28); }
+.frame-edit-actions { display: flex; gap: 8px; }
+.frame-edit-actions .btn { flex: 1; text-align: center; }
