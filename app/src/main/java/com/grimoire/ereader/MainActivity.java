@@ -89,9 +89,8 @@ public class MainActivity extends AppCompatActivity {
                      * the URI kept here there is nothing to retry with: the
                      * page is given a File and never learns where it came
                      * from. */
-                    lastPicked.clear();
                     if (result != null) {
-                        java.util.Collections.addAll(lastPicked, result);
+                        remember(result);
                         for (Uri uri : result) {
                             try {
                                 getContentResolver().takePersistableUriPermission(
@@ -431,11 +430,84 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    /* What the picker last handed over, by URI.
+    /* Everything the picker has handed over, by URI -- not only the latest.
      *
-     * Only the most recent pick: this exists to retry a file the page has in
-     * front of it right now, not to hold on to anything. */
-    private final java.util.List<Uri> lastPicked = new java.util.ArrayList<>();
+     * This exists to read a file the page could not read itself, and the page
+     * may still be working through an earlier pick when a later one arrives:
+     * a second folder chosen while the first is importing. Keeping only the
+     * latest pick meant every remaining file of the first import could no
+     * longer be found, and the whole of it failed; and where the latest pick
+     * was a single file, that one file was handed back for every request --
+     * imported again and again under other files' names. */
+    private static final class Picked {
+        final Uri uri;
+        String name;            // looked up once, when first needed
+        long size = -2;         // -2: not looked up yet
+        Picked(Uri uri) { this.uri = uri; }
+    }
+
+    private final java.util.List<Picked> picked = new java.util.ArrayList<>();
+    /** Enough for several large folders; the oldest go first beyond it. */
+    private static final int PICKED_KEPT = 5000;
+
+    private void remember(Uri[] uris) {
+        synchronized (picked) {
+            for (Uri uri : uris) {
+                picked.removeIf(p -> p.uri.equals(uri));
+                picked.add(new Picked(uri));
+            }
+            while (picked.size() > PICKED_KEPT) picked.remove(0);
+        }
+    }
+
+    private String nameOf(Picked p) {
+        if (p.name == null) {
+            String its = bridge != null ? bridge.displayName(p.uri.toString()) : null;
+            p.name = its != null ? its : "";
+        }
+        return p.name;
+    }
+
+    private long sizeOf(Picked p) {
+        if (p.size == -2) p.size = sizeOf(p.uri);
+        return p.size;
+    }
+
+    /**
+     * The picked file a page's File stands for, matched on its name and its
+     * size, newest pick first. Null rather than a guess: a wrong file staged
+     * under this name is worse than a file reported unreadable.
+     */
+    private Uri findPicked(String name, long size) {
+        java.util.List<Picked> all;
+        synchronized (picked) { all = new java.util.ArrayList<>(picked); }
+        java.util.Collections.reverse(all);
+
+        Uri byName = null;
+        int named = 0;
+        for (Picked p : all) {
+            if (name == null || !name.equals(nameOf(p))) continue;
+            long its = sizeOf(p);
+            if (size > 0 && its == size) return p.uri;      // name and size: certain
+            if (size <= 0 || its < 0) { named += 1; if (byName == null) byName = p.uri; }
+        }
+        // The name alone, where the size could not be compared and only one
+        // file has that name.
+        if (named == 1) return byName;
+
+        // The size alone, where the provider does not give names -- and only
+        // if exactly one picked file is that size.
+        if (size > 0) {
+            Uri only = null;
+            for (Picked p : all) {
+                if (sizeOf(p) != size) continue;
+                if (only != null) return null;
+                only = p.uri;
+            }
+            return only;
+        }
+        return null;
+    }
 
     /**
      * Copy a picked file into the app's own storage and tell the page where.
@@ -444,28 +516,10 @@ public class MainActivity extends AppCompatActivity {
      * Reading it here instead works because the grant belongs to this
      * process; serving it back over the asset origin works because that is
      * an ordinary same-origin fetch with no content provider in the middle.
-     *
-     * Matched by name first and size second, because a File is all the page
-     * has and it carries nothing that identifies the URI it came from. A
-     * single pick needs neither.
      */
     void stageForRead(String id, String name, long size) {
         staging.execute(() -> {
-            Uri found = null;
-
-            if (lastPicked.size() == 1) {
-                found = lastPicked.get(0);
-            } else {
-                for (Uri uri : lastPicked) {
-                    String its = bridge != null ? bridge.displayName(uri.toString()) : null;
-                    if (its != null && its.equals(name)) { found = uri; break; }
-                }
-                if (found == null && size > 0) {
-                    for (Uri uri : lastPicked) {
-                        if (sizeOf(uri) == size) { found = uri; break; }
-                    }
-                }
-            }
+            Uri found = findPicked(name, size);
 
             if (found == null) {
                 settleStage(id, false, "that file is no longer the one being opened");

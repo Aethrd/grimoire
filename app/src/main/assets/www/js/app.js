@@ -1660,6 +1660,13 @@ async function rescueFile(file, job = null) {
     const copy = await fetch(url);
     if (!copy.ok) throw new Error(`could not fetch the staged copy (${copy.status})`);
     const blob = await copy.blob();
+    /* The same file, or nothing. The shell finds the file by its name and
+     * size; a copy that comes back a different size is some other file, and
+     * imported under this one's name it was a duplicate of a book already
+     * on the shelf wearing the wrong title. */
+    if (file.size > 0 && blob.size !== file.size) {
+      throw new Error('the copy Android handed back was a different file');
+    }
     return new File([blob], file.name, { type: file.type || blob.type });
   } catch (error) {
     /* Remembered by name so the failure is reported as what it was. Left to
@@ -1691,10 +1698,39 @@ function plainReason(reason) {
   return text;
 }
 
-async function handleFiles(files, { transient = false } = {}) {
-  if (!files.length) return;
+/* ── one import at a time ─────────────────────────────────────────────────
+ *
+ * Picking a second folder while the first was still importing started a
+ * second import alongside it. The two fought over the same storage, the same
+ * memory and -- worst -- the same record of what had been picked, and the
+ * first was the one that lost: its remaining files could no longer be read
+ * and the whole of it failed. And both checked for duplicates before either
+ * had written anything, so picking the same folder again in the meantime
+ * imported it twice.
+ *
+ * So imports queue. A pick made while one is running gets its own bar at
+ * once, saying it is waiting, and starts when the one before it finishes --
+ * and by then the one before it has written everything it was going to, so
+ * the duplicate check sees it.
+ */
+let importQueue = Promise.resolve();
+let importsWaiting = 0;
 
-  const done = progress.start('Opening…');
+function handleFiles(files, options = {}) {
+  if (!files.length) return Promise.resolve();
+  const job = progress.start(importsWaiting ? 'Waiting for the import before it' : 'Opening…');
+  if (importsWaiting) {
+    job.say(null, 0, `${files.length} file${files.length === 1 ? '' : 's'} queued`);
+  }
+  importsWaiting += 1;
+  const run = importQueue.then(() => importNow(files, options, job));
+  // The next one waits for this to finish, however it finishes.
+  importQueue = run.catch(() => {}).then(() => { importsWaiting -= 1; });
+  return run;
+}
+
+async function importNow(files, { transient = false } = {}, done) {
+  done.say('Opening…', 0, '');
 
   /* The shelf is refreshed as books land rather than only at the end, so an
      import can be watched -- and used -- while it runs. Not per book: on a

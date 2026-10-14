@@ -581,7 +581,7 @@ await t('when nothing can read it, the reason is one somebody can act on', async
 await t('Chromium\'s own sentence is never what the person is shown', async () => {
   // Accurate and useless: it names no cause the person controls and suggests
   // nothing to do about it.
-  const plain = app.slice(app.indexOf('function plainReason'), app.indexOf('async function handleFiles'));
+  const plain = app.slice(app.indexOf('function plainReason'), app.indexOf('function handleFiles'));
   assert.match(plain, /NotReadableError/);
   assert.match(plain, /copy it into a folder of your own/);
 });
@@ -589,12 +589,18 @@ await t('Chromium\'s own sentence is never what the person is shown', async () =
 await t('the shell keeps what was picked, so there is something to retry with', async () => {
   /* The page is handed a File and never learns which URI it came from, so
    * without the URI kept on this side a refused read has nothing to retry. */
-  assert.match(activity, /lastPicked/);
   assert.match(activity, /void stageForRead\(String id, String name, long size\)/);
-  // Matched by name first and size second, because a File carries nothing
-  // else that identifies it.
-  assert.match(activity, /its\.equals\(name\)/);
-  assert.match(activity, /sizeOf\(uri\) == size/);
+  // Matched on name and size together, because a File carries nothing else
+  // that identifies it -- and never by guessing.
+  assert.match(activity, /name\.equals\(nameOf\(p\)\)/);
+  assert.match(activity, /its == size\) return p\.uri/);
+  /* Every pick kept, not only the latest. Clearing it on each pick lost the
+   * files of an import still running when a second folder was chosen; and
+   * a single-file pick was handed back for every request, so other files
+   * were imported as copies of it. */
+  assert.doesNotMatch(activity, /lastPicked\.clear\(\)/);
+  assert.doesNotMatch(activity, /size\(\) == 1\) \{\s*found = /);
+  assert.match(activity, /remember\(result\)/);
   // Copied on the staging thread: a bridge method blocks the page on its
   // return value, and a six-hundred-megabyte volume would stall the renderer.
   assert.match(activity, /staging\.execute/);
@@ -667,7 +673,7 @@ await t('an import of chapter files says Build can join them', async () => {
 
 console.log('\nseveral operations at once');
 
-await t('two imports at once are two bars, and both results are shown', async () => {
+await t('two imports at once are two bars -- one running, one waiting -- and both results are shown', async () => {
   const pick = (files) => {
     Object.defineProperty(el('file-input'), 'files', { value: files, configurable: true });
     el('file-input').dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -693,13 +699,16 @@ await t('two imports at once are two bars, and both results are shown', async ()
   pick(novels('Beta', 20));
   await settle(60);
 
-  /* Mid-flight: a row each, each saying what its own import is doing, rather
-   * than "2 things at once" and no bar at all. */
+  /* Mid-flight: a row each. The first says what it is doing; the second
+   * says it is waiting for it, and how much it has waiting -- the two no
+   * longer run side by side and break each other. */
   const rows = [...el('jobs').querySelectorAll('.job')];
   assert.equal(rows.length, 2, 'the two imports do not have a row each');
   const labels = rows.map((row) => row.querySelector('.job-label').textContent);
-  assert.ok(labels.some((l) => /Alpha/.test(l)) && labels.some((l) => /Beta/.test(l)),
+  assert.ok(labels.some((l) => /Alpha/.test(l)) && labels.some((l) => /Waiting for the import before it/.test(l)),
     `the rows do not say which import they are: ${labels.join(' / ')}`);
+  assert.ok(rows.some((row) => /20 files queued/.test(row.querySelector('.job-count').textContent)),
+    'the waiting import does not say what it is waiting with');
   for (const row of rows) assert.ok(row.querySelector('.bar-fill').style.width, 'a row has no bar');
 
   for (let i = 0; i < 120 && el('jobs').querySelectorAll('.job:not(.done):not(.failed)').length; i++) {
@@ -824,6 +833,71 @@ await t('choosing something does not throw you back to the top of the pane', asy
   clamp.disconnect();
   delete body.scrollTop;
   await panelsMod.openSettings(() => {});
+});
+
+/* ── one import at a time ────────────────────────────────────────────── */
+
+console.log('\none import at a time');
+
+const queuedFile = (name, words) => new window.File([`${name.toUpperCase()}\n\n${words}\n`], `${name}.txt`);
+const pickFiles = (files) => {
+  const input = el('file-input');
+  Object.defineProperty(input, 'files', { value: files, configurable: true });
+  input.dispatchEvent(new window.Event('change', { bubbles: true }));
+};
+const untilIdle = async () => {
+  for (let i = 0; i < 200; i++) {
+    await settle(100);
+    if (el('import-progress').hidden) return;
+  }
+};
+const shelfCount = async (pattern) => (await store.all('books')).filter((b) => pattern.test(b.fingerprint)).length;
+
+await t('a second folder picked mid-import waits its turn instead of breaking the first', async () => {
+  delete window.GrimoireNative;
+  const first = Array.from({ length: 6 }, (_, i) => queuedFile(`queue first ${i + 1}`, `Text ${i}.`));
+  const second = Array.from({ length: 4 }, (_, i) => queuedFile(`queue second ${i + 1}`, `More ${i}.`));
+  pickFiles(first);
+  await settle(5);
+  pickFiles(second);
+  await settle(5);
+  const labels = [...document.querySelectorAll('#jobs .job-label')].map((n) => n.textContent);
+  assert.ok(labels.some((l) => /Waiting for the import before it/.test(l)),
+    `the second pick did not queue: ${labels.join(' | ')}`);
+  await untilIdle();
+  assert.equal(await shelfCount(/^queue first/), 6, 'the first import did not finish');
+  assert.equal(await shelfCount(/^queue second/), 4, 'the second import did not run');
+});
+
+await t('picking the same folder again and again while it imports makes no duplicates', async () => {
+  const folder = () => Array.from({ length: 5 }, (_, i) => queuedFile(`spam ${i + 1}`, `Same ${i}.`));
+  for (let i = 0; i < 4; i++) { pickFiles(folder()); await settle(2); }
+  await untilIdle();
+  const books = (await store.all('books')).filter((b) => /^spam /.test(b.fingerprint));
+  assert.equal(books.length, 5, `${books.length} books for 5 files`);
+  assert.equal(new Set(books.map((b) => b.fingerprint)).size, 5);
+});
+
+await t('a copy from the shell that is not the same file is refused, not imported under its name', async () => {
+  const fsMod = await import('node:fs');
+  const bytes = fsMod.readFileSync(path.join(root, 'tests/fixtures/comic.cbz'));
+  window.GrimoireNative = {
+    stageForRead(stageId) {
+      setTimeout(() => window.Grimoire.settleFile(stageId, true, 'handoff://somebody-else'), 10);
+    },
+  };
+  // The shell hands back a different file -- the one picked most recently.
+  globalThis.fetch = async () => ({
+    ok: true, status: 200,
+    blob: async () => new window.Blob([bytes.subarray(0, bytes.length - 100)], { type: 'application/zip' }),
+  });
+  pickFiles([refusing('wanted volume.zip', bytes.length)]);
+  await untilIdle();
+  await settle(200);
+  assert.equal((await store.all('books')).find((b) => b.title === 'wanted volume'), undefined,
+    'another file was imported under this one\'s name');
+  assert.match(el('toast').textContent, /wanted volume\.zip/);
+  delete window.GrimoireNative;
 });
 
 /* ── blurred covers, kept ────────────────────────────────────────────── */
