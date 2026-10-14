@@ -694,20 +694,34 @@ await t('two imports at once are two bars -- one running, one waiting -- and bot
     if (now.some((l) => /30 books added/.test(l)) && now.some((l) => /20 books added/.test(l))) together = true;
   });
   watch.observe(el('toast'), { childList: true, subtree: true, characterData: true });
-  pick(novels('Alpha', 30));
-  await settle(30);
-  pick(novels('Beta', 20));
-  await settle(60);
 
-  /* Mid-flight: a row each. The first says what it is doing; the second
-   * says it is waiting for it, and how much it has waiting -- the two no
-   * longer run side by side and break each other. */
+  /* When the second began, measured against when the first finished --
+   * rather than by looking at the bars a fixed time later, which on a fast
+   * machine finds both imports already done and proves nothing either way. */
+  let firstDoneAt = null;
+  let secondStartedAt = null;
+  const order = new window.MutationObserver(() => {
+    if (!firstDoneAt && [...seen].some((l) => /30 books added/.test(l))) firstDoneAt = performance.now();
+    const reading = [...el('jobs').querySelectorAll('.job-label')].some((n) => /Reading Beta/.test(n.textContent));
+    if (reading && !secondStartedAt) secondStartedAt = performance.now();
+  });
+  order.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+  // Picked one straight after the other, so the second always arrives while
+  // the first is running, however fast the machine.
+  pick(novels('Alpha', 30));
+  pick(novels('Beta', 20));
+
+  /* At once: a row each. The first is under way; the second says it is
+   * waiting for it, and how much it has waiting -- the two no longer run
+   * side by side and break each other. */
   const rows = [...el('jobs').querySelectorAll('.job')];
   assert.equal(rows.length, 2, 'the two imports do not have a row each');
   const labels = rows.map((row) => row.querySelector('.job-label').textContent);
-  assert.ok(labels.some((l) => /Alpha/.test(l)) && labels.some((l) => /Waiting for the import before it/.test(l)),
-    `the rows do not say which import they are: ${labels.join(' / ')}`);
-  assert.ok(rows.some((row) => /20 files queued/.test(row.querySelector('.job-count').textContent)),
+  assert.ok(/Waiting for the import before it/.test(labels[1]),
+    `the second import did not wait for the first: ${labels.join(' / ')}`);
+  assert.ok(!/Waiting/.test(labels[0]), `the first import is waiting on nothing: ${labels.join(' / ')}`);
+  assert.match(rows[1].querySelector('.job-count').textContent, /20 files queued/,
     'the waiting import does not say what it is waiting with');
   for (const row of rows) assert.ok(row.querySelector('.bar-fill').style.width, 'a row has no bar');
 
@@ -716,9 +730,13 @@ await t('two imports at once are two bars -- one running, one waiting -- and bot
   }
   assert.ok([...el('jobs').querySelectorAll('.job')].every((row) => row.classList.contains('done')));
 
-  // Both results, each marked finished.
+  // Both results, each marked finished -- and the second only begun once
+  // the first was done.
   await settle(50);
   watch.disconnect();
+  order.disconnect();
+  assert.ok(firstDoneAt && secondStartedAt, 'the order of the two could not be seen');
+  assert.ok(secondStartedAt >= firstDoneAt, 'the second import started before the first had finished');
   const said = [...seen];
   assert.ok(said.some((l) => /✓30 books added/.test(l)), `a result was never shown: ${said.join(' | ')}`);
   assert.ok(said.some((l) => /✓20 books added/.test(l)), `a result was never shown: ${said.join(' | ')}`);
@@ -858,9 +876,7 @@ await t('a second folder picked mid-import waits its turn instead of breaking th
   const first = Array.from({ length: 6 }, (_, i) => queuedFile(`queue first ${i + 1}`, `Text ${i}.`));
   const second = Array.from({ length: 4 }, (_, i) => queuedFile(`queue second ${i + 1}`, `More ${i}.`));
   pickFiles(first);
-  await settle(5);
   pickFiles(second);
-  await settle(5);
   const labels = [...document.querySelectorAll('#jobs .job-label')].map((n) => n.textContent);
   assert.ok(labels.some((l) => /Waiting for the import before it/.test(l)),
     `the second pick did not queue: ${labels.join(' | ')}`);
