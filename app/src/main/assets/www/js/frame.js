@@ -129,9 +129,56 @@ export function partAt(frame, x, y, screenW, screenH, reach = REACH) {
 /** The frame's shape in words: "2:3", or the nearest plain ratio. */
 export function describe(frame, screenW, screenH) {
   if (!frame) return 'Whole page';
+  const ratio = frame.shape || ((frame.r - frame.l) * screenW) / ((frame.b - frame.t) * screenH);
+  const near = (value) => Math.abs(value - ratio) / value < 0.015;
+  const named = PRESETS.find(([, value]) => near(value));
+  if (named) return named[0];
+  // A preset turned on its side is named that way round: 16:9 lying down
+  // stood up is 9:16, and 2:3 turned is 3:2.
+  const turned = PRESETS.find(([, value]) => near(1 / value));
+  if (turned) return turned[0].split(':').reverse().join(':');
+  return `${ratio.toFixed(2)} : 1`;
+}
+
+/**
+ * The shape of a frame, width over height in pixels, as it stands upright.
+ * Kept with the frame, so turning the screen gives exactly the shape turned
+ * -- 16:9 lying down is 9:16 standing up, not "about" -- even though the
+ * screen itself is not exactly the same size both ways round (the navigation
+ * bar moves to the side).
+ */
+export function shapeOf(frame, screenW, screenH, turn = 0) {
   const ratio = ((frame.r - frame.l) * screenW) / ((frame.b - frame.t) * screenH);
-  const named = PRESETS.find(([, value]) => Math.abs(value - ratio) / value < 0.015);
-  return named ? named[0] : `${ratio.toFixed(2)} : 1`;
+  return Math.round((turn % 180 ? 1 / ratio : ratio) * 10000) / 10000;
+}
+
+/** A kept frame's shape in words, the way round the screen is now. */
+export function describeKept(frame, turn = screenTurn()) {
+  if (!frame) return 'Whole page';
+  const W = window.innerWidth || 360;
+  const H = window.innerHeight || 640;
+  const shape = frame.ratio ? (turn % 180 ? 1 / frame.ratio : frame.ratio) : 0;
+  return describe({ ...toScreen(frame, turn), shape }, W, H);
+}
+
+/**
+ * A box held to a shape: the longer way shrunk, about its middle, until the
+ * box is exactly that shape. The corners stay the corners of the shape.
+ */
+export function holdShape(box, ratio) {
+  if (!ratio) return box;
+  let { left, top, right, bottom } = box;
+  const w = right - left;
+  const h = bottom - top;
+  if (!w || !h || Math.abs(w / h - ratio) / ratio < 0.001) return box;
+  if (w / h > ratio) {
+    const cx = (left + right) / 2;
+    left = cx - (h * ratio) / 2; right = cx + (h * ratio) / 2;
+  } else {
+    const cy = (top + bottom) / 2;
+    top = cy - (w / ratio) / 2; bottom = cy + (w / ratio) / 2;
+  }
+  return { left, top, right, bottom };
 }
 
 /**
@@ -150,7 +197,20 @@ export function editFrame(initial, { sample = null, fit = 'screen' } = {}) {
     const H = () => window.innerHeight || 640;
     // Drawn as the screen runs now; turned back upright when it is kept.
     let turn = screenTurn();
-    let frame = tidy(initial ? toScreen(initial, turn) : presetFrame(2 / 3, W(), H()));
+    // A kept frame, turned to the screen as it is now and held to exactly
+    // its shape -- what reading will show, so what is dragged is that.
+    const shown = (kept, now) => {
+      const f = toScreen(kept, now);
+      if (!kept.ratio) return f;
+      const w = W(); const h = H();
+      const box = holdShape({ left: f.l * w, top: f.t * h, right: f.r * w, bottom: f.b * h },
+        now % 180 ? 1 / kept.ratio : kept.ratio);
+      return { l: box.left / w, t: box.top / h, r: box.right / w, b: box.bottom / h };
+    };
+    let frame = tidy(initial ? shown(initial, turn) : presetFrame(2 / 3, W(), H()));
+    // The screen's size the frame was last drawn at, for its shape once the
+    // screen has turned and changed size underneath it.
+    let drawnAt = { w: W(), h: H() };
     let drag = null;
     let barAtTop = false;
 
@@ -203,8 +263,9 @@ export function editFrame(initial, { sample = null, fit = 'screen' } = {}) {
       const now = screenTurn();
       if (now !== turn) {
         if (drag) { drag = null; host.classList.remove('dragging'); }
-        frame = toScreen(toUpright(frame, turn), now);
+        frame = tidy(shown({ ...toUpright(frame, turn), ratio: shapeOf(frame, drawnAt.w, drawnAt.h, turn) }, now));
         turn = now;
+        drawnAt = { w: W(), h: H() };
       }
       paint();
     }
@@ -229,6 +290,7 @@ export function editFrame(initial, { sample = null, fit = 'screen' } = {}) {
       if (!drag || drag.pointer !== event.pointerId) return;
       event.preventDefault();
       frame = dragFrame(drag.from, drag.part, (event.clientX - drag.x) / W(), (event.clientY - drag.y) / H());
+      drawnAt = { w: W(), h: H() };
       paint();
     });
     const end = (event) => {
@@ -244,12 +306,16 @@ export function editFrame(initial, { sample = null, fit = 'screen' } = {}) {
       if (!chip) return;
       const ratio = PRESETS.find(([name]) => name === chip.dataset.preset)[1];
       frame = presetFrame(ratio, W(), H());
+      drawnAt = { w: W(), h: H() };
       paint();
     };
     host.querySelector('.frame-edit-flip').onclick = () => { barAtTop = !barAtTop; paint(); };
     host.querySelector('[data-act="cancel"]').onclick = () => finish(undefined);
     host.querySelector('[data-act="none"]').onclick = () => finish(null);
-    host.querySelector('[data-act="save"]').onclick = () => finish(toUpright(frame, screenTurn()));
+    host.querySelector('[data-act="save"]').onclick = () => {
+      const now = screenTurn();
+      finish({ ...toUpright(frame, now), ratio: shapeOf(frame, W(), H(), now) });
+    };
     // Back, or anything else that wants the screen, cancels.
     host.cancel = () => finish(undefined);
 

@@ -1259,7 +1259,7 @@ await t('the frame belongs to the glass: turned with the screen, same shape, sam
   const source = fs.readFileSync(new URL('../app/src/main/assets/www/js/frame.js', import.meta.url), 'utf8');
   assert.ok(!/deviceorientation|devicemotion/i.test(source), 'the frame follows the sensors, not the screen');
   const readerSource = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
-  assert.match(readerSource, /const frame = frames\.toScreen\(pictureFrame\)/);
+  assert.match(readerSource, /const frame = frames\.toScreen\(pictureFrame, turn\)/);
 });
 
 await t('the editor draws the frame as the screen runs now and keeps it upright', async () => {
@@ -1273,10 +1273,56 @@ await t('the editor draws the frame as the screen runs now and keeps it upright'
     const W = window.innerWidth; const H = window.innerHeight;
     assert.equal(+outline.getAttribute('x'), 0.1 * W);
     assert.equal(+outline.getAttribute('y'), 0.4 * H);
-    // ...and saved upright again, unchanged.
+    // ...and saved upright again, unchanged, with its exact shape.
     document.querySelector('.frame-edit [data-act="save"]').click();
-    assert.deepEqual(await editing, upright);
+    const saved = await editing;
+    assert.deepEqual({ l: saved.l, t: saved.t, r: saved.r, b: saved.b }, upright);
+    assert.equal(saved.ratio, frames.shapeOf(frames.toScreen(upright, 90), W, H, 90));
   } finally {
+    if (real) Object.defineProperty(window.screen, 'orientation', real);
+    else delete window.screen.orientation;
+  }
+});
+
+await t('16:9 drawn sideways is exactly 9:16 upright -- the corners stay the corners of the shape', async () => {
+  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
+  const real = Object.getOwnPropertyDescriptor(window.screen, 'orientation');
+  const realW = window.innerWidth; const realH = window.innerHeight;
+  const size = (w, h) => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: w });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: h });
+  };
+  const viewport = el('page-viewport');
+  const flow = el('page-flow');
+  try {
+    // Sideways, with the navigation bar at the side: 805 x 393, not 851 x 393.
+    Object.defineProperty(window.screen, 'orientation', { configurable: true, value: { angle: 90 } });
+    size(805, 393);
+    const editing = frames.editFrame(null);
+    document.querySelector('.frame-edit [data-preset="16:9"]').click();
+    assert.match(document.querySelector('.frame-edit-caption').textContent, /16:9/);
+    document.querySelector('.frame-edit [data-act="save"]').click();
+    const saved = await editing;
+    assert.ok(Math.abs(saved.ratio - 9 / 16) < 0.001, `kept as ${saved.ratio}, not 9:16 upright`);
+
+    // Upright again, a little taller than the sideways screen was wide.
+    Object.defineProperty(window.screen, 'orientation', { configurable: true, value: { angle: 0 } });
+    size(393, 851);
+    assert.equal(frames.describeKept(saved), '9:16');
+    assert.equal(frames.describeKept(saved, 90), '16:9');
+    viewport.getBoundingClientRect = () => ({ left: 0, top: 0, right: 393, bottom: 851, width: 393, height: 851 });
+    reader.setPictureFrame(saved);
+    const w = parseFloat(flow.style.getPropertyValue('--pic-w'));
+    const h = parseFloat(flow.style.getPropertyValue('--pic-h'));
+    assert.ok(Math.abs(w / h - 9 / 16) < 0.01, `upright it is ${w} x ${h}, not 9:16`);
+    // And the turned preset is named that way round in Settings.
+    assert.equal(frames.describe({ l: 0, t: 0, r: 1, b: 1 }, 1600, 900), '16:9');
+    assert.equal(frames.describe({ l: 0, t: 0, r: 1, b: 1 }, 900, 1600), '9:16');
+    assert.equal(frames.describe({ l: 0, t: 0, r: 1, b: 1 }, 1500, 1000), '3:2');
+  } finally {
+    reader.setPictureFrame(null);
+    delete viewport.getBoundingClientRect;
+    size(realW, realH);
     if (real) Object.defineProperty(window.screen, 'orientation', real);
     else delete window.screen.orientation;
   }

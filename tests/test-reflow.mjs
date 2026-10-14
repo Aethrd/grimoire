@@ -373,15 +373,40 @@ await (async () => {
   };
 
   await t('no picture can escape the page in paged mode', () => {
+    /* Every fitting either holds the picture to the page, or holds its box to
+     * the page and lets the picture pan inside it. Sized against the page
+     * itself (--page-h), not against 88% of the screen: with the reader's bars
+     * up the page is shorter than that and a picture ran off its bottom; with
+     * them down it is taller, and a band of it went unused. */
+    const box = document.createElement('span');
+    box.className = 'pic';
+    picture.replaceWith(box);
+    box.appendChild(picture);
     for (const fit of ['screen', 'width', 'height', 'stretch', 'original', 'smart']) {
-      const { maxWidth, maxHeight } = fitted('paged', fit);
-      assert.equal(maxWidth, '100%', `${fit} lets a picture out of the column`);
-      assert.equal(maxHeight, '88vh', `${fit} lets a picture past the screen`);
+      for (const shape of ['', 'landscape', 'tall']) {
+        if (shape && fit !== 'smart') continue;
+        const { maxWidth, maxHeight } = fitted('paged', fit, shape);
+        const img = window.getComputedStyle(picture);
+        const outside = window.getComputedStyle(box);
+        const held = /--page-h/.test(`${maxHeight} ${img.height}`) && /100%|min\(100%/.test(`${maxWidth} ${img.width}`);
+        const pans = outside.overflow === 'auto' && /--page-h/.test(outside.maxHeight);
+        assert.ok(held || pans, `${fit}${shape ? ` (${shape})` : ''} lets a picture out of the page`);
+      }
     }
-    // Including the shapes smart fitting singles out.
-    for (const shape of ['landscape', 'tall']) {
-      assert.equal(fitted('paged', 'smart', shape).maxWidth, '100%', shape);
-    }
+    box.replaceWith(picture);
+  });
+
+  await t('a picture fills the width of the screen, not the width of the text', () => {
+    // The text's side margins framed every picture in empty page.
+    assert.match(css, /\.page-flow \.pic \{[^}]*margin: [^;]*calc\(-1 \* var\(--read-margin\)\)/);
+    // And Fit screen is sized from the picture's own shape, so it fills the
+    // page whichever way it runs out of room first.
+    assert.match(css, /\[data-images="screen"\] \.page-flow img \{[^}]*width: min\(100%, calc\(var\(--page-h, 88vh\) \* var\(--ar/);
+    const js = read('app/src/main/assets/www/js/reader.js');
+    assert.match(js, /flow\.style\.setProperty\('--page-h'/);
+    assert.match(js, /img\.style\.setProperty\('--ar'/);
+    // Small pictures -- ornaments, dividers -- keep their own size.
+    assert.match(css, /\.page-flow img\.small \{/);
   });
 
   await t('colour pages can be shown in grey, and put back', () => {
@@ -465,7 +490,8 @@ await (async () => {
     };
 
     const shapes = ['screen', 'width', 'height', 'stretch', 'original', 'smart'].map(shapeOf);
-    // The three that need room say so by scrolling their box.
+    // The four that need room say so by scrolling their box.
+    assert.equal(shapeOf('width').split('/')[0], 'auto');
     assert.equal(shapeOf('original').split('/')[0], 'auto');
     assert.equal(shapeOf('height').split('/')[0], 'auto');
     assert.equal(shapeOf('smart').split('/')[0], 'auto');

@@ -193,11 +193,14 @@ function placeFrame(cs) {
 
   // The frame belongs to the glass: turned with the phone, it is the same
   // shape on the same part of the screen, now running the other way.
-  const frame = frames.toScreen(pictureFrame);
-  let left = frame.l * screenW;
-  let right = frame.r * screenW;
-  let top = frame.t * screenH;
-  let bottom = frame.b * screenH;
+  const turn = frames.screenTurn();
+  const frame = frames.toScreen(pictureFrame, turn);
+  // Exactly the shape that was drawn, turned: the screen is not quite the
+  // same size both ways round, so the fractions alone would drift from it.
+  const shape = pictureFrame.ratio ? (turn % 180 ? 1 / pictureFrame.ratio : pictureFrame.ratio) : 0;
+  let { left, top, right, bottom } = frames.holdShape({
+    left: frame.l * screenW, right: frame.r * screenW, top: frame.t * screenH, bottom: frame.b * screenH,
+  }, shape);
 
   /* Where it does not fit -- the reader's bars are up, or a phone on its
      side has little height to spare -- it is made smaller, not cut down: the
