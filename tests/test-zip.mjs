@@ -275,35 +275,67 @@ async function manyChapters(count) {
   return new File([await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })], 'many.epub');
 }
 
-await t('a book of hundreds of chapters is read from the file once, not once a chapter', async () => {
+await t('a book of hundreds of chapters is read in a few pieces, not once a chapter', async () => {
   /* Not A Regressor: 448 chapters, and a mass import sat on it long enough
    * to look stuck. Every chapter was several reads of the file, each one a
-   * round trip out of the page on a phone. Now a book this size is read
-   * whole, once, and its chapters come from memory. */
+   * round trip out of the page on a phone. Now the file is read a piece at a
+   * time and the chapters come out of the pieces. */
   const file = await manyChapters(300);
   const { blob, reads } = counted(file);
   fileReads = reads;
   const zip = await zipreader.openZip(blob);
   for (let i = 1; i <= 300; i++) assert.match(await zip.text(`OEBPS/text/ch${i}.xhtml`), new RegExp(`Chapter ${i} `));
   fileReads = null;
-  assert.ok(reads.count <= 3, `${reads.count} reads of the file for 300 chapters`);
+  assert.ok(reads.count <= 4, `${reads.count} reads of the file for 300 chapters`);
 });
 
-await t('an archive too big to hold is still read a piece at a time, and reads the same', async () => {
-  const file = await manyChapters(20);
+await t('a book bigger than any one piece is read in pieces, and memory stays bounded', async () => {
+  /* The 79MB Viking book was past the size that used to be read whole, so it
+   * got none of that: a thousand entries, four round trips each. Pieces
+   * work at any size, and only a few are held at once. */
+  const file = await manyChapters(200);
   const { blob, reads } = counted(file);
   fileReads = reads;
-  const zip = await zipreader.openZip(blob, { inMemory: 0 });
+  // Pieces of 2KB, four kept: the same reading, scaled down to be watched.
+  const zip = await zipreader.openZip(blob, { chunk: 2048, keep: 4 });
   const held = await zipreader.openZip(file);
-  for (let i = 1; i <= 20; i++) {
+  for (let i = 1; i <= 200; i++) {
     const name = `OEBPS/text/ch${i}.xhtml`;
     assert.equal(await zip.text(name), await held.text(name));
   }
   fileReads = null;
-  assert.ok(reads.count > 20, 'a large archive was read whole');
-  const stored = await build({ 'a.txt': 'plain' }, { store: true });
-  assert.equal(await (await zipreader.openZip(stored, { inMemory: 0 })).text('a.txt'), 'plain');
-  assert.equal(await (await zipreader.openZip(stored)).text('a.txt'), 'plain');
+  const pieces = Math.ceil(file.size / 2048);
+  assert.ok(reads.count <= pieces + 4, `${reads.count} reads for a file of ${pieces} pieces`);
+  assert.ok(reads.count > 4, 'the whole file was read at once');
+
+  // An entry that straddles pieces, stored and compressed, still reads whole.
+  const big = 'x'.repeat(5000) + 'END';
+  const stored = await build({ 'a.txt': 'plain', 'big.txt': big }, { store: true });
+  const deflated = await build({ 'a.txt': 'plain', 'big.txt': big });
+  for (const archive of [stored, deflated]) {
+    const tiny = await zipreader.openZip(archive, { chunk: 1000, keep: 2 });
+    assert.equal(await tiny.text('a.txt'), 'plain');
+    assert.equal(await tiny.text('big.txt'), big);
+  }
+});
+
+await t('a stored picture is a slice of the file, not a copy of it', async () => {
+  // Copying every page into the page and back out again is what made comics
+  // slower to import; a stored entry costs nothing until it is written.
+  const png = new Uint8Array(4000).fill(7);
+  const archive = await build({ 'p.png': png }, { store: true });
+  const sliced = [];
+  const wrapped = new Proxy(archive, {
+    get(target, key) {
+      if (key === 'slice') return (...args) => { const s = target.slice(...args); sliced.push(s.size); return s; };
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const viaSlices = await zipreader.openZip(wrapped);
+  const out = await viaSlices.blob('p.png', 'image/png');
+  assert.equal(out.size, 4000);
+  assert.ok(sliced.includes(4000), 'the picture was not taken as a slice of the file');
 });
 
 await t('the whole book imports, chapter titles and all', async () => {

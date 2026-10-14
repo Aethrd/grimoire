@@ -10,7 +10,8 @@
  * A zip is random-access by design: the central directory at the end lists
  * every entry and where it starts. So the directory is read from the tail of
  * the Blob, and each entry is sliced and inflated only when it is asked for.
- * Peak memory becomes the largest single entry rather than the whole file.
+ * Peak memory becomes the largest single entry, or a few pieces of the file,
+ * rather than the whole file.
  *
  * Inflating uses DecompressionStream, which WebView has had since Chrome 80.
  * Zip64 archives -- over 4GB, or over 65,535 files -- are read the same way.
@@ -136,9 +137,10 @@ async function locateDirectory(blob, tail, tailStart, eocd) {
  * back rather than this guessing.
  */
 /**
- * @param options.inMemory  the size up to which the archive is read whole
+ * @param options.chunk  the size of a piece of the file read at once
+ * @param options.keep   how many pieces are held at a time
  */
-export async function openZip(blob, { inMemory = IN_MEMORY } = {}) {
+export async function openZip(blob, { chunk = CHUNK, keep = KEEP } = {}) {
   if (!canStream()) return null;
 
   const tailStart = Math.max(0, blob.size - TAIL_BYTES);
@@ -217,26 +219,33 @@ export async function openZip(blob, { inMemory = IN_MEMORY } = {}) {
     at += 46 + nameLength + extraLength + commentLength;
   }
 
-  /* Held whole, where it is small enough to be.
-   *
-   * Every entry read from a Blob is several round trips -- the local header,
-   * then the data, then the inflated result turned back into text -- and on
-   * a phone each one goes out of the page to the browser process and back.
-   * An EPUB of four hundred chapters was some two thousand of them in a row:
-   * three seconds on a desktop, most of it waiting, and long enough on a
-   * phone that a mass import sat on that one book and looked stuck. A book
-   * of a few megabytes costs nothing to hold, and then every entry is read
-   * from memory instead. The large archives this reader exists for are still
-   * read a piece at a time. */
-  const whole = blob.size <= inMemory
-    ? new Uint8Array(await bytesOf(blob))
-    : null;
-
-  return { entries, blob, ...readers(blob, entries, whole) };
+  return { entries, blob, ...readers(blob, entries, { chunk, keep }) };
 }
 
-/** Archives up to this size are read once, into memory, and served from there. */
-export const IN_MEMORY = 48 * 1024 * 1024;
+/* ── reading entries ─────────────────────────────────────────────────────
+ *
+ * Every read of a Blob on a phone goes out of the page to the browser process
+ * and back, and reading an entry one Blob call at a time was four of those
+ * -- the local header, the data, the inflate, the text -- for every chapter
+ * and every picture. A book of a thousand entries was four thousand round
+ * trips in a row: seconds of waiting on a desktop, long enough on a phone
+ * that a mass import looked stuck.
+ *
+ * So the file is read in pieces of a megabyte, each read once and kept for a
+ * while: a chapter, its header, and the next few chapters usually share one.
+ * A handful of pieces are kept, so memory stays bounded however large the
+ * book -- a 79MB one is read in about eighty calls instead of four thousand.
+ *
+ * Pictures are not copied at all where they can be helped. A picture stored
+ * uncompressed, as nearly all are, is handed on as a slice of the file
+ * itself, which costs nothing until it is written to storage -- and then is
+ * read once, there, rather than into the page and out again.
+ */
+
+/** The size of a piece of the file read at once. */
+export const CHUNK = 1024 * 1024;
+/** How many pieces are kept at a time. */
+const KEEP = 12;
 
 function bytesOf(blob) {
   if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer();
@@ -261,51 +270,89 @@ async function inflate(data) {
 
 const UTF8_LOOSE = new TextDecoder('utf-8');
 
-function readers(blob, entries, whole = null) {
-  /** An entry's bytes, from memory: the archive is already here. */
-  function fromMemory(entry) {
-    const header = new DataView(whole.buffer, whole.byteOffset + entry.localAt, 30);
-    const start = entry.localAt + 30 + header.getUint16(26, true) + header.getUint16(28, true);
-    const data = whole.subarray(start, start + entry.compressedSize);
-    return entry.method === 0 ? Promise.resolve(data) : inflate(data);
+function readers(blob, entries, { chunk = CHUNK, keep = KEEP } = {}) {
+  /* Pieces of the file, by number, most recently used last. A piece being
+   * fetched is kept as its promise, so two entries wanting the same piece at
+   * once share the one read. */
+  const pieces = new Map();
+
+  function piece(n) {
+    let held = pieces.get(n);
+    if (held) {
+      pieces.delete(n);
+      pieces.set(n, held);
+      return held;
+    }
+    const start = n * chunk;
+    held = bytesOf(blob.slice(start, Math.min(blob.size, start + chunk)))
+      .then((buffer) => new Uint8Array(buffer));
+    held.catch(() => pieces.delete(n));
+    pieces.set(n, held);
+    while (pieces.size > keep) pieces.delete(pieces.keys().next().value);
+    return held;
+  }
+
+  /** Bytes [start, end) of the file, from the pieces that hold them. */
+  async function range(start, end) {
+    const first = Math.floor(start / chunk);
+    const last = Math.floor((end - 1) / chunk);
+    if (first === last) {
+      const held = await piece(first);
+      return held.subarray(start - first * chunk, end - first * chunk);
+    }
+    const parts = await Promise.all(
+      Array.from({ length: last - first + 1 }, (_, i) => piece(first + i)));
+    const out = new Uint8Array(end - start);
+    let at = 0;
+    parts.forEach((part, i) => {
+      const from = i === 0 ? start - first * chunk : 0;
+      const to = i === parts.length - 1 ? end - last * chunk : part.length;
+      out.set(part.subarray(from, to), at);
+      at += to - from;
+    });
+    return out;
   }
 
   /**
-   * The local header repeats the name and extra field, and its lengths do not
-   * have to match the central directory's, so the data offset can only be
-   * found by reading it.
+   * Where an entry's data starts. The local header repeats the name and extra
+   * field, and its lengths do not have to match the central directory's, so
+   * the offset can only be found by reading it -- from a piece, usually one
+   * already here.
    */
   async function dataRange(entry) {
-    const header = await bytes(blob, entry.localAt, entry.localAt + 30);
-    const nameLength = header.getUint16(26, true);
-    const extraLength = header.getUint16(28, true);
-    const start = entry.localAt + 30 + nameLength + extraLength;
+    const header = await range(entry.localAt, Math.min(blob.size, entry.localAt + 30));
+    const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+    const start = entry.localAt + 30 + view.getUint16(26, true) + view.getUint16(28, true);
     return [start, start + entry.compressedSize];
   }
 
-  async function raw(name) {
-    const entry = entries.get(name);
-    if (!entry) return null;
+  /** An entry's bytes, inflated, in memory. Only for entries small enough to hold. */
+  async function inMemory(entry) {
+    const [start, end] = await dataRange(entry);
+    const data = entry.compressedSize ? await range(start, end) : new Uint8Array(0);
+    return entry.method === 0 ? data : inflate(data);
+  }
+
+  /** An entry as a Blob without bringing it into the page: a slice, or a stream. */
+  async function streamed(entry) {
     const [start, end] = await dataRange(entry);
     const slice = blob.slice(start, end);
     if (entry.method === 0) return slice;
-
     // deflate-raw: the zip payload has no zlib header around it.
-    const inflate = new DecompressionStream('deflate-raw');
-    // Blob.stream() keeps even the compressed bytes off the heap. Where it is
-    // missing, reading the compressed extent is still far better than the
-    // whole archive.
     const source = typeof slice.stream === 'function'
       ? slice.stream()
       : new ReadableStream({
         async start(controller) {
-          const view = await bytes(slice, 0, slice.size);
-          controller.enqueue(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+          controller.enqueue(new Uint8Array(await bytesOf(slice)));
           controller.close();
         },
       });
-    return new Response(source.pipeThrough(inflate)).blob();
+    return new Response(source.pipeThrough(new DecompressionStream('deflate-raw'))).blob();
   }
+
+  /* Small enough to read through the pieces: a chapter, a stylesheet, a
+   * table of contents. A large entry is read on its own, as before. */
+  const small = (entry) => entry.compressedSize <= chunk;
 
   return {
     has: (name) => entries.has(name),
@@ -314,22 +361,22 @@ function readers(blob, entries, whole = null) {
 
     /** The entry as a Blob of the given type, or null if it is not there. */
     async blob(name, type) {
-      if (whole) {
-        const entry = entries.get(name);
-        return entry ? new Blob([await fromMemory(entry)], { type }) : null;
-      }
-      const data = await raw(name);
-      return data ? new Blob([data], { type }) : null;
+      const entry = entries.get(name);
+      if (!entry) return null;
+      // Stored: a slice of the file, which nothing has to copy. Compressed
+      // and small: inflated from the piece it is in. Otherwise streamed.
+      const data = entry.method !== 0 && small(entry)
+        ? await inMemory(entry)
+        : await streamed(entry);
+      return new Blob([data], { type });
     },
 
     /** The entry decoded as UTF-8 text. */
     async text(name) {
-      if (whole) {
-        const entry = entries.get(name);
-        return entry ? UTF8_LOOSE.decode(await fromMemory(entry)) : null;
-      }
-      const data = await raw(name);
-      if (!data) return null;
+      const entry = entries.get(name);
+      if (!entry) return null;
+      if (small(entry)) return UTF8_LOOSE.decode(await inMemory(entry));
+      const data = await streamed(entry);
       if (typeof data.text === 'function') return data.text();
       return new Promise((resolve, reject) => {
         const fr = new FileReader();
