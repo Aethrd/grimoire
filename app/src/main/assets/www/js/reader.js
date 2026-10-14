@@ -18,6 +18,7 @@ import * as store from './store.js';
 import { countWords, chapterHtml } from './parse.js';
 import { pool } from './blobs.js';
 import * as translate from './translate.js';
+import * as frames from './frame.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -150,16 +151,25 @@ function measurePage() {
  *
  * Turned into a box for each picture: its size, and how far it sits from the
  * top-left of the page it is on. The box is held to what the page can show
- * -- the screen's full width, the page's height -- so a frame drawn over the
- * reader's bars is simply trimmed by them while they are up.
+ * -- the screen's full width, the page's height -- and where the frame is
+ * more than that it is shrunk to fit, keeping its shape.
  */
 let pictureFrame = null;
+let watchingTurns = false;
 
-/** @param frame {l, t, r, b} as fractions of the screen, or null for none. */
+/** @param frame {l, t, r, b} as fractions of the screen held upright, or null. */
 export function setPictureFrame(frame) {
   pictureFrame = frame && frame.r > frame.l && frame.b > frame.t ? { ...frame } : null;
   document.body.toggleAttribute('data-frame', !!pictureFrame);
   if (viewport && flow) placeFrame(getComputedStyle(viewport));
+  /* Turned straight from one side to the other, the screen keeps its size and
+     nothing re-flows -- but the frame has moved to the other end of it. */
+  if (!watchingTurns && window.screen?.orientation?.addEventListener) {
+    watchingTurns = true;
+    window.screen.orientation.addEventListener('change', () => {
+      if (pictureFrame && viewport && flow) placeFrame(getComputedStyle(viewport));
+    });
+  }
 }
 
 export const pictureFrameOf = () => pictureFrame;
@@ -181,10 +191,31 @@ function placeFrame(cs) {
   const padLeft = parseFloat(cs.paddingLeft || 0);
   const room = { left: box.left, right: box.right, top: box.top + padTop, bottom: box.bottom - padBottom };
 
-  const left = Math.max(room.left, pictureFrame.l * screenW);
-  const right = Math.min(room.right, pictureFrame.r * screenW);
-  const top = Math.max(room.top, pictureFrame.t * screenH);
-  const bottom = Math.min(room.bottom, pictureFrame.b * screenH);
+  // The frame belongs to the glass: turned with the phone, it is the same
+  // shape on the same part of the screen, now running the other way.
+  const frame = frames.toScreen(pictureFrame);
+  let left = frame.l * screenW;
+  let right = frame.r * screenW;
+  let top = frame.t * screenH;
+  let bottom = frame.b * screenH;
+
+  /* Where it does not fit -- the reader's bars are up, or a phone on its
+     side has little height to spare -- it is made smaller, not cut down: the
+     shape is what was chosen, so a 2:3 frame stays 2:3. As near to where it
+     was drawn as the page allows. */
+  const roomW = room.right - room.left;
+  const roomH = room.bottom - room.top;
+  const scale = Math.min(1, roomW / (right - left), roomH / (bottom - top));
+  if (scale < 1) {
+    const w = (right - left) * scale;
+    const h = (bottom - top) * scale;
+    const cx = (left + right) / 2;
+    const cy = (top + bottom) / 2;
+    left = cx - w / 2; right = cx + w / 2; top = cy - h / 2; bottom = cy + h / 2;
+  }
+  const shiftX = Math.max(0, room.left - left) - Math.max(0, right - room.right);
+  const shiftY = Math.max(0, room.top - top) - Math.max(0, bottom - room.bottom);
+  left += shiftX; right += shiftX; top += shiftY; bottom += shiftY;
   if (right - left < 20 || bottom - top < 20) return;
 
   flow.style.setProperty('--pic-x', `${Math.round(left - (box.left + padLeft))}px`);

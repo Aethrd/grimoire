@@ -6,7 +6,12 @@
  * the top-left of the glass is the top-left of the glass when reading.
  *
  * Kept as fractions of the screen, {l, t, r, b}, so a frame means the same
- * on any phone and survives the phone being turned round.
+ * on any phone. And kept the way up the phone is held upright, so it belongs
+ * to the glass rather than to whichever way the picture happens to be shown:
+ * turn the phone on its side and the frame turns with it, the same shape on
+ * the same part of the screen, and the pictures inside it are shown the right
+ * way up for a phone held sideways. A frame drawn with the phone sideways is
+ * kept the same way, so it stands upright when the phone does.
  *
  * Corners drag the two edges that meet there; the dot in the middle of an
  * edge drags that edge alone; dragging inside moves the frame whole. A preset
@@ -23,6 +28,47 @@ export const PRESETS = [
 
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const round = (n) => Math.round(n * 10000) / 10000;
+
+/* ── which way up ─────────────────────────────────────────────────────── */
+
+/**
+ * How far the screen is turned from the way the phone is held upright, in
+ * degrees: 0, 90 (turned anticlockwise, its top to the left), 180 or 270
+ * (clockwise, its top to the right).
+ */
+export function screenTurn() {
+  const angle = typeof window !== 'undefined' ? window.screen?.orientation?.angle : undefined;
+  if (Number.isFinite(angle)) return ((Math.round(angle / 90) * 90) % 360 + 360) % 360;
+  // Older WebViews: the deprecated window.orientation says -90 for 270.
+  const legacy = typeof window !== 'undefined' ? window.orientation : undefined;
+  if (Number.isFinite(legacy)) return ((legacy % 360) + 360) % 360;
+  return 0;
+}
+
+/**
+ * A frame kept upright, as it is on the screen at a turn: the same piece of
+ * glass, described the way the screen now runs.
+ *
+ * Turned anticlockwise, the phone's top edge is the screen's left, and its
+ * right edge the screen's top -- so across the screen now is down the phone,
+ * and down the screen now is leftwards along it.
+ */
+export function toScreen(frame, turn = screenTurn()) {
+  if (!frame) return null;
+  const { l, t, r, b } = frame;
+  const shape = {
+    0: { l, t, r, b },
+    90: { l: t, t: 1 - r, r: b, b: 1 - l },
+    180: { l: 1 - r, t: 1 - b, r: 1 - l, b: 1 - t },
+    270: { l: 1 - b, t: l, r: 1 - t, b: r },
+  }[turn] || { l, t, r, b };
+  return { l: round(shape.l), t: round(shape.t), r: round(shape.r), b: round(shape.b) };
+}
+
+/** The other way: a frame as it is on the screen now, kept upright. */
+export function toUpright(frame, turn = screenTurn()) {
+  return toScreen(frame, (360 - turn) % 360);
+}
 
 /** The largest frame of a shape (width over height) the screen holds, centred. */
 export function presetFrame(ratio, screenW, screenH, inset = 0.03) {
@@ -91,18 +137,20 @@ export function describe(frame, screenW, screenH) {
 /**
  * Open the editor over everything.
  *
- * @param initial  the frame in use, or null for none
+ * @param initial  the frame in use, kept upright (see toScreen), or null
  * @param options.sample  a picture to show inside the frame, so its effect
  *                        can be seen rather than imagined
  * @param options.fit     how pictures are fitted, so the sample is shown that way
- * @returns a promise of the new frame, null for "no frame", or undefined if
- *          the editor was cancelled.
+ * @returns a promise of the new frame, kept upright, null for "no frame", or
+ *          undefined if the editor was cancelled.
  */
 export function editFrame(initial, { sample = null, fit = 'screen' } = {}) {
   return new Promise((resolve) => {
     const W = () => window.innerWidth || 360;
     const H = () => window.innerHeight || 640;
-    let frame = tidy(initial || presetFrame(2 / 3, W(), H()));
+    // Drawn as the screen runs now; turned back upright when it is kept.
+    let turn = screenTurn();
+    let frame = tidy(initial ? toScreen(initial, turn) : presetFrame(2 / 3, W(), H()));
     let drag = null;
     let barAtTop = false;
 
@@ -149,8 +197,21 @@ export function editFrame(initial, { sample = null, fit = 'screen' } = {}) {
       bar.classList.toggle('top', barAtTop);
     }
 
+    // Turned while drawing: the frame turns with the phone, as it will when
+    // reading, rather than being stretched to the new shape of the screen.
+    function turned() {
+      const now = screenTurn();
+      if (now !== turn) {
+        if (drag) { drag = null; host.classList.remove('dragging'); }
+        frame = toScreen(toUpright(frame, turn), now);
+        turn = now;
+      }
+      paint();
+    }
+
     function finish(value) {
-      window.removeEventListener('resize', paint);
+      window.removeEventListener('resize', turned);
+      window.screen?.orientation?.removeEventListener?.('change', turned);
       host.remove();
       resolve(value);
     }
@@ -188,11 +249,14 @@ export function editFrame(initial, { sample = null, fit = 'screen' } = {}) {
     host.querySelector('.frame-edit-flip').onclick = () => { barAtTop = !barAtTop; paint(); };
     host.querySelector('[data-act="cancel"]').onclick = () => finish(undefined);
     host.querySelector('[data-act="none"]').onclick = () => finish(null);
-    host.querySelector('[data-act="save"]').onclick = () => finish(frame);
+    host.querySelector('[data-act="save"]').onclick = () => finish(toUpright(frame, screenTurn()));
     // Back, or anything else that wants the screen, cancels.
     host.cancel = () => finish(undefined);
 
-    window.addEventListener('resize', paint);
+    window.addEventListener('resize', turned);
+    // Straight from one side to the other the screen keeps its size, so no
+    // resize says anything happened.
+    window.screen?.orientation?.addEventListener?.('change', turned);
     paint();
   });
 }

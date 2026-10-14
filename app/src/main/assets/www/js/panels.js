@@ -1375,7 +1375,7 @@ async function renderBehaviourPane(body) {
   const frameNow = settings.pictureFrame || null;
   frameRow.innerHTML = `<span class="row-text"><b>Picture frame</b>
     <small>${escape(frameNow
-      ? `${frames.describe(frameNow, window.innerWidth, window.innerHeight)} — pictures are fitted into the shape you drew`
+      ? `${frames.describe(frames.toScreen(frameNow), window.innerWidth, window.innerHeight)} — pictures are fitted into the shape you drew`
       : 'Pictures use the whole page. Draw a frame to give them a shape and place of your own')}</small></span>
     <button class="btn ghost" id="picture-frame-edit">${frameNow ? 'Adjust…' : 'Draw…'}</button>`;
   frameRow.querySelector('#picture-frame-edit').onclick = async () => {

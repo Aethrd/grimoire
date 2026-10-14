@@ -1135,11 +1135,16 @@ await t('every picture gets a box of the frame\'s size, where the frame was draw
   assert.equal(flow.style.getPropertyValue('--pic-x'), `${Math.round(0.25 * W - pad('paddingLeft'))}px`);
   assert.equal(flow.style.getPropertyValue('--pic-y'), `${Math.round(top - roomTop)}px`);
   assert.equal(flow.style.getPropertyValue('--pic-h'), `${Math.floor(bottom - top)}px`);
-  // Trimmed by what the page can show: a frame running under the bars stops at them.
+  // More than the page can show -- running under the bars -- it is shrunk to
+  // fit rather than cut down, so it keeps the shape that was drawn.
   reader.setPictureFrame({ l: 0, t: 0, r: 1, b: 1 });
+  const scale = (roomBottom - roomTop) / H;
   assert.equal(flow.style.getPropertyValue('--pic-y'), '0px');
-  assert.equal(flow.style.getPropertyValue('--pic-w'), `${Math.floor(W)}px`);
   assert.equal(flow.style.getPropertyValue('--pic-h'), `${Math.floor(roomBottom - roomTop)}px`);
+  assert.equal(flow.style.getPropertyValue('--pic-w'), `${Math.floor(W * scale)}px`);
+  assert.equal(flow.style.getPropertyValue('--pic-x'), `${Math.round((W - W * scale) / 2 - pad('paddingLeft'))}px`);
+  const shown = parseFloat(flow.style.getPropertyValue('--pic-w')) / parseFloat(flow.style.getPropertyValue('--pic-h'));
+  assert.ok(Math.abs(shown - W / H) < 0.01, `the frame changed shape to fit: ${shown} for ${W / H}`);
   // None at all: the pictures use the page as before.
   reader.setPictureFrame(null);
   assert.ok(!document.body.hasAttribute('data-frame'));
@@ -1216,6 +1221,65 @@ await t('a picture drawn through SVG comes in as a picture', async () => {
   assert.match(second, /data-img="OEBPS\/img\/plain\.png"/);
   assert.match(second, /data-img="OEBPS\/img\/plate\.png"/);
   assert.ok(!/<svg|<image/i.test(second), 'SVG got through the sanitiser');
+});
+
+await t('the frame belongs to the glass: turned with the screen, same shape, same place', async () => {
+  // Drawn upright: a 2:3 frame in the upper-left of the phone.
+  const upright = { l: 0.1, t: 0.1, r: 0.6, b: 0.5 };
+  assert.deepEqual(frames.toScreen(upright, 0), upright);
+  // Screen turned anticlockwise (top of the phone to the left): the phone's
+  // top-left corner is now bottom-left, and the frame runs across, not down.
+  assert.deepEqual(frames.toScreen(upright, 90), { l: 0.1, t: 0.4, r: 0.5, b: 0.9 });
+  // Clockwise (top to the right): the same corner is now top-right.
+  assert.deepEqual(frames.toScreen(upright, 270), { l: 0.5, t: 0.1, r: 0.9, b: 0.6 });
+  assert.deepEqual(frames.toScreen(upright, 180), { l: 0.4, t: 0.5, r: 0.9, b: 0.9 });
+  // And back: whatever way it is drawn, it is kept upright.
+  for (const turn of [0, 90, 180, 270]) {
+    assert.deepEqual(frames.toUpright(frames.toScreen(upright, turn), turn), upright);
+  }
+  // On a phone (393 x 851 upright, 851 x 393 sideways) the shape survives the
+  // turn: a tall frame upright is the same frame lying down.
+  const W = 393; const H = 851;
+  const tall = frames.presetFrame(2 / 3, W, H);
+  const lying = frames.toScreen(tall, 90);
+  const ratio = ((lying.r - lying.l) * H) / ((lying.b - lying.t) * W);
+  assert.ok(Math.abs(ratio - 3 / 2) < 0.01, `the frame changed shape when turned: ${ratio}`);
+  // The turn is what the screen reports -- the rotation the phone has
+  // actually made, not how it is being held. Rotation lock means no turn.
+  const real = Object.getOwnPropertyDescriptor(window.screen, 'orientation');
+  try {
+    Object.defineProperty(window.screen, 'orientation', { configurable: true, value: { angle: 270 } });
+    assert.equal(frames.screenTurn(), 270);
+    Object.defineProperty(window.screen, 'orientation', { configurable: true, value: { angle: 0 } });
+    assert.equal(frames.screenTurn(), 0);
+  } finally {
+    if (real) Object.defineProperty(window.screen, 'orientation', real);
+    else delete window.screen.orientation;
+  }
+  const source = fs.readFileSync(new URL('../app/src/main/assets/www/js/frame.js', import.meta.url), 'utf8');
+  assert.ok(!/deviceorientation|devicemotion/i.test(source), 'the frame follows the sensors, not the screen');
+  const readerSource = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
+  assert.match(readerSource, /const frame = frames\.toScreen\(pictureFrame\)/);
+});
+
+await t('the editor draws the frame as the screen runs now and keeps it upright', async () => {
+  const real = Object.getOwnPropertyDescriptor(window.screen, 'orientation');
+  Object.defineProperty(window.screen, 'orientation', { configurable: true, value: { angle: 90 } });
+  try {
+    const upright = { l: 0.1, t: 0.1, r: 0.6, b: 0.5 };
+    const editing = frames.editFrame(upright);
+    // Shown turned...
+    const outline = document.querySelector('.frame-edit-svg .outline');
+    const W = window.innerWidth; const H = window.innerHeight;
+    assert.equal(+outline.getAttribute('x'), 0.1 * W);
+    assert.equal(+outline.getAttribute('y'), 0.4 * H);
+    // ...and saved upright again, unchanged.
+    document.querySelector('.frame-edit [data-act="save"]').click();
+    assert.deepEqual(await editing, upright);
+  } finally {
+    if (real) Object.defineProperty(window.screen, 'orientation', real);
+    else delete window.screen.orientation;
+  }
 });
 
 await t('Settings offers the frame, and Fill, beside the other fittings', async () => {
