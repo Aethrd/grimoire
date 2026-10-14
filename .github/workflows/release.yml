@@ -63,7 +63,7 @@ jobs:
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
             echo "signed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::No KEYSTORE_BASE64 secret. Signing with the debug key -- this APK will NOT install over a previous one. See docs/RELEASING.md."
+            echo "::warning::No KEYSTORE_BASE64 secret. Signing with the shared key in app/signing -- fine for sideloading, and it installs over earlier builds signed the same way. See docs/RELEASING.md."
             echo "signed=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -104,7 +104,7 @@ jobs:
           SIGNER=$(find "$ANDROID_HOME"/build-tools -name apksigner | sort -r | head -1)
           "$SIGNER" verify --print-certs "$APK" | tee /tmp/certs.txt || true
           if grep -qi "CN=Android Debug" /tmp/certs.txt; then
-            echo "::warning::Signed with the debug key; this APK will not install over a differently-signed one."
+            echo "::warning::Signed with a machine's own debug key; this APK will not install over a differently-signed one."
           fi
 
           {

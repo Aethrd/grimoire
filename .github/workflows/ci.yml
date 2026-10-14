@@ -68,8 +68,15 @@ jobs:
           npm ci
           node tests/run.mjs
 
+      # Each build numbered higher than the last, so Android takes it as an
+      # update; the run number only ever goes up. Installing over the app
+      # also needs the same signing key every time, which the committed
+      # app/signing/grimoire.keystore provides.
       - name: Assemble debug
-        run: gradle --no-daemon assembleDebug
+        run: |
+          gradle --no-daemon assembleDebug \
+            -PversionCode=${{ github.run_number }} \
+            -PversionName=0.1.${{ github.run_number }}
 
       # checkDuplicateClasses names the clashing classes but not the dependency
       # that dragged them in, which is the only thing you actually need. Print
@@ -105,6 +112,7 @@ jobs:
           for apk in app/build/outputs/apk/debug/*.apk; do
             echo "- \`$(basename "$apk")\` — $(du -h "$apk" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
           done
+          echo "- version 0.1.${{ github.run_number }} — installs over any earlier build signed with app/signing/grimoire.keystore" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Lint
         run: gradle --no-daemon lintDebug
