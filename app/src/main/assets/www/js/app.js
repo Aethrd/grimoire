@@ -2571,7 +2571,7 @@ async function openDivide(book, mode) {
    * which is how volumes actually fall. A book of one chapter has no
    * boundaries to use, so it only has the second.
    */
-  const pages = library.pagesOf(chapters);
+  const pages = library.pagesOf(chapters, await library.readUnits(chapters));
   const canCutChapters = chapters.length > 1;
   const canCutPages = pages.length > 1;
 
@@ -2583,6 +2583,7 @@ async function openDivide(book, mode) {
 
   dividing = { book, chapters, pictures, pages, canCutChapters, canCutPages };
   divideCuts = new Set();
+  divideShown = null;
   await show('divide');
 }
 
@@ -2620,6 +2621,7 @@ function renderModeChips() {
     chip.onclick = () => {
       if (divideMode === mode) return;
       divideMode = mode;
+      divideShown = null;
       // Cuts are positions in one list or the other; they do not carry over.
       divideCuts = new Set();
       renderDivide();
@@ -2660,7 +2662,9 @@ function evenlyCut(parts, total) {
   return true;
 }
 
-function renderDivide() {
+let divideShown = null;         // { from, to }: the rows of the list on screen
+
+function renderDivide({ around = null } = {}) {
   if (!dividing) return;
   const { book, chapters } = dividing;
   const body = el('divide-body');
@@ -2694,15 +2698,28 @@ function renderDivide() {
    * the same size -- and a list of chapters with a few lines drawn through it
    * does not show what you have actually made. A part number against every
    * chapter does. */
-  let part = 1;
+  /* A stretch of the list at a time, as on the Take out screen: dividing a
+   * novel at its paragraphs is tens of thousands of rows, each with a cut
+   * above it. The part numbers carry on from the rows not drawn. */
+  divideShown = stretchOf(divideShown, rows.length, around);
+  const { from, to } = divideShown;
+  const partAt = (at) => 1 + [...divideCuts].filter((n) => n > 0 && n <= at).length;
 
-  rows.forEach((row, at) => {
+  const holder = document.createElement('div');
+  body.appendChild(holder);
+  if (from > 0) {
+    holder.appendChild(earlierRows(body, from, () => {
+      divideShown = { from: Math.max(0, from - STRETCH), to: divideShown.to };
+      renderDivide();
+    }));
+  }
+
+  const drawRow = (at, into, before = null) => {
+    const row = rows[at];
     // A cut sits between two of them, so one is offered above every row
     // except the first.
-    if (at > 0) {
-      if (divideCuts.has(at)) part += 1;
-      body.appendChild(cutControl(at));
-    }
+    if (at > 0) into.insertBefore(cutControl(at), before);
+    const part = partAt(at);
 
     const line = document.createElement('div');
     line.className = 'divide-chapter';
@@ -2718,8 +2735,21 @@ function renderDivide() {
 
     line.innerHTML = `<span class="divide-part">${divideCuts.size ? part : ''}</span>`
       + `<b>${escapeText(label)}</b><small>${escapeText(note)}</small>`;
-    body.appendChild(line);
-  });
+    line.dataset.at = String(at);
+    into.insertBefore(line, before);
+  };
+
+  for (let at = from; at < to; at++) drawRow(at, holder);
+  if (to < rows.length) {
+    moreRows(body, holder, {
+      left: () => rows.length - divideShown.to,
+      add: (more) => {
+        const end = Math.min(rows.length, divideShown.to + STRETCH);
+        for (let at = divideShown.to; at < end; at++) drawRow(at, holder, more);
+        divideShown = { from: divideShown.from, to: end };
+      },
+    });
+  }
 
   /* The shape of the division, in the footer.
    *
@@ -2795,7 +2825,7 @@ function cutControl(at) {
     if (to === at || divideCuts.has(to)) return;
     divideCuts.delete(at);
     divideCuts.add(to);
-    renderDivide();
+    renderDivide({ around: to });
   };
 
   // Labelled, so it reads as a control rather than a stray line.
@@ -2938,15 +2968,24 @@ async function openRemove(book, mode, { from = null, focus = null, pick = null }
     return toast('There is nothing in that book to take out');
   }
 
-  removeMode = mode || (look.canPages ? 'pages' : 'chapters');
+  /* Pages for a book of pictures, chapters for a book of words.
+   *
+   * A "page" of prose is a paragraph, and a novel has tens of thousands of
+   * them: offered first, that was a list nobody could use and a screen that
+   * took so long to draw the app looked frozen. The chapters are what is
+   * wanted out of a novel; the paragraphs are still a tap away. */
+  const pictured = look.pages.filter((page) => page.picture).length;
+  const mostlyPictures = look.pages.length > 0 && pictured * 2 >= look.pages.length;
+  removeMode = mode || (look.canPages && (mostlyPictures || !look.canChapters) ? 'pages' : 'chapters');
   if (removeMode === 'pages' && !look.canPages) removeMode = 'chapters';
   if (removeMode === 'chapters' && !look.canChapters) removeMode = 'pages';
 
   removing = look;
   removeOrigin = from;
   removePicked = new Set(pick || []);
+  removeShown = null;
   removeThumbs.release();
-  renderRemove();
+  renderRemove({ around: focus });
   await show('remove');
   // Opened at the part of the book that was on screen, not at page one of six
   // hundred.
@@ -2973,6 +3012,7 @@ function renderRemoveModes() {
       removeMode = mode;
       // A pick is a position in one list or the other; they do not carry over.
       removePicked = new Set();
+      removeShown = null;
       renderRemove();
     };
     row.appendChild(chip);
@@ -3031,7 +3071,84 @@ function renderRemovePicks() {
   row.appendChild(note);
 }
 
-function renderRemove() {
+/* ── long lists, a stretch at a time ─────────────────────────────────────
+ *
+ * The lists on these screens can be enormous: every page of a long comic, or
+ * every paragraph of a novel -- twenty-four thousand rows for one web novel,
+ * which is a quarter of a million elements built in one go and built again
+ * on every tap. On a phone the app simply stopped. So a list shows a stretch
+ * of rows and adds the next as it is scrolled to, and opens at the stretch
+ * that was asked for rather than at the top.
+ */
+const STRETCH = 120;
+
+/** The rows to draw: the stretch already shown, or one around `around`. */
+function stretchOf(shown, total, around = null) {
+  let { from, to } = shown || { from: 0, to: 0 };
+  if (!shown || (around != null && (around < from || around >= to))) {
+    from = around == null ? 0 : Math.max(0, around - 40);
+    to = from + STRETCH;
+  }
+  from = Math.max(0, Math.min(from, total - 1));
+  to = Math.min(total, Math.max(to, from + Math.min(STRETCH, total)));
+  return { from, to };
+}
+
+/**
+ * The control at the bottom of a stretch: shows the next one when tapped, or
+ * by itself when it is scrolled near.
+ */
+function moreRows(scroller, holder, { left, add }) {
+  const more = document.createElement('button');
+  more.className = 'list-more';
+  const label = () => { more.textContent = `Show more · ${left()} after these`; };
+  label();
+
+  let watch = null;
+  const extend = () => {
+    add(more);
+    if (left() <= 0) {
+      watch?.disconnect();
+      more.remove();
+      return;
+    }
+    label();
+    // Looked at again, so a stretch too short to push it out of reach is
+    // followed by the next straight away.
+    if (watch) { watch.unobserve(more); watch.observe(more); }
+  };
+  more.onclick = extend;
+
+  if (typeof IntersectionObserver === 'function') {
+    watch = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) extend();
+    }, { root: scroller, rootMargin: '600px' });
+    watch.observe(more);
+  }
+  holder.appendChild(more);
+  return more;
+}
+
+/** The control at the top of a stretch that does not start at the beginning. */
+function earlierRows(scroller, count, show) {
+  const earlier = document.createElement('button');
+  earlier.className = 'list-more';
+  earlier.textContent = `Show ${Math.min(STRETCH, count)} before these · ${count} in all`;
+  earlier.onclick = () => {
+    // Kept still: the rows added above should not shove the one in view away.
+    const first = earlier.nextElementSibling;
+    const at = first?.dataset.at;
+    const top = first ? first.getBoundingClientRect().top : 0;
+    show();
+    const again = at != null ? scroller.querySelector(`[data-at="${at}"]`) : null;
+    if (again) scroller.scrollTop += again.getBoundingClientRect().top - top;
+  };
+  return earlier;
+}
+
+let removeShown = null;         // { from, to }: the rows of the list on screen
+
+function renderRemove({ around = null } = {}) {
   if (!removing) return;
   const { book } = removing;
   const body = el('remove-body');
@@ -3065,13 +3182,38 @@ function renderRemove() {
    * same way means one of them is useless. */
   const holder = document.createElement('div');
   holder.className = allPictures ? 'remove-grid' : 'remove-list';
+  const make = (at) => (allPictures ? removeCell(rows[at], at) : removeLine(rows[at], at, pages));
 
-  rows.forEach((row, at) => {
-    holder.appendChild(allPictures ? removeCell(row, at) : removeLine(row, at, pages));
-  });
+  removeShown = stretchOf(removeShown, rows.length, around);
+  const { from, to } = removeShown;
+  if (from > 0) {
+    holder.appendChild(earlierRows(body, from, () => {
+      removeShown = { from: Math.max(0, from - STRETCH), to: removeShown.to };
+      renderRemove();
+    }));
+  }
+  for (let at = from; at < to; at++) holder.appendChild(make(at));
+  if (to < rows.length) {
+    moreRows(body, holder, {
+      left: () => rows.length - removeShown.to,
+      add: (more) => {
+        const end = Math.min(rows.length, removeShown.to + STRETCH);
+        const batch = document.createDocumentFragment();
+        for (let at = removeShown.to; at < end; at++) batch.appendChild(make(at));
+        holder.insertBefore(batch, more);
+        removeShown = { from: removeShown.from, to: end };
+      },
+    });
+  }
   body.appendChild(holder);
+  removeFooter();
+}
 
-  const left = rows.length - removePicked.size;
+/** The footer's count and buttons, which are all a pick changes. */
+function removeFooter() {
+  if (!removing) return;
+  const total = (removeMode === 'pages' ? removing.pages : removing.rows).length;
+  const left = total - removePicked.size;
   el('remove-count').textContent = removePicked.size
     ? `${removePicked.size} out · ${left} left`
     : `Nothing picked`;
@@ -3174,10 +3316,15 @@ function removeLine(row, at, pages) {
   return line;
 }
 
+/* A pick changes one row and the footer, so that is all that is redrawn --
+   not the list, which on a long book was the whole of the delay. */
 function toggleRemove(at) {
   if (removePicked.has(at)) removePicked.delete(at);
   else removePicked.add(at);
-  renderRemove();
+  const row = el('remove-body').querySelector(`[data-at="${at}"]`);
+  if (row) row.setAttribute('aria-pressed', String(removePicked.has(at)));
+  else renderRemove({ around: at });
+  removeFooter();
 }
 
 /* ── looking at one of them properly ─────────────────────────────────────
@@ -3210,9 +3357,11 @@ function openRemoveLook(at, only = null) {
 }
 
 function closeRemoveLook() {
+  // Back at the one last looked at, which may be far from where it started.
+  const last = looking ? looking.of[looking.cursor] : null;
   looking = null;
   el('remove-look').hidden = true;
-  renderRemove();
+  renderRemove({ around: last });
 }
 
 function paintRemoveLook() {
@@ -4341,6 +4490,7 @@ async function reopenRemove(bookId) {
   removeThumbs.release();
   removing = await trim.inspect(bookId);
   removePicked = new Set();
+  removeShown = null;
   if (removeMode === 'pages' && !removing.canPages) removeMode = 'chapters';
   if (removeMode === 'chapters' && !removing.canChapters) removeMode = 'pages';
   renderRemove();

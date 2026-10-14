@@ -1672,6 +1672,16 @@ body[data-view="reader"] .stepper {
 
 .remove-list { display: block; }
 
+/* The ends of a long list drawn a stretch at a time (see STRETCH in app.js):
+   more of it, before or after. Across the whole grid, not one cell of it. */
+.list-more {
+  display: block; grid-column: 1 / -1;
+  width: 100%; min-height: 44px; margin: 8px 0; padding: 10px;
+  border: 1px dashed var(--hairline); border-radius: var(--radius-sm);
+  background: none; color: var(--muted);
+  font: inherit; font-size: 12px; text-align: center;
+}
+
 .remove-row {
   display: flex; align-items: center; gap: 10px;
   width: 100%; padding: 9px 2px; text-align: left;

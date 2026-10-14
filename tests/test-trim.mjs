@@ -715,4 +715,122 @@ await t('the bin screen lists what was deleted and puts it back', async () => {
   assert.equal(back.folder, 'Manhwa', 'it came back without its folder');
 });
 
+console.log('\na long book');
+
+/** A web novel's worth of prose: many chapters of many paragraphs. */
+async function longNovel(title, chapters = 6, paragraphs = 150) {
+  const id = await store.add('books', {
+    title, fingerprint: `long:${++seed}`, addedAt: 1, chapters, lang: 'en',
+  });
+  for (let index = 0; index < chapters; index++) {
+    const html = Array.from({ length: paragraphs },
+      (_, n) => `<p>Chapter ${index + 1}, paragraph ${n + 1}: the road ran on past the mill.</p>`).join('');
+    await store.put('chapters', { bookId: id, index, title: `Chapter ${index + 1}`, words: paragraphs * 11, html });
+  }
+  return id;
+}
+
+await t('a long novel opens on its chapters, and its paragraphs a stretch at a time', async () => {
+  /* The book that froze the app: two hundred chapters, twenty-four thousand
+   * paragraphs, every one of them a row built at once and rebuilt on every
+   * tap. Proven here at a smaller size, by the shape of what is drawn. */
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const el = (id) => document.getElementById(id);
+  const tap = (node) => node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const settle = (ms = 140) => new Promise((r) => setTimeout(r, ms));
+
+  const id = await longNovel('Endless Road');
+  await settle();
+  screensMod.initFind(() => {}, false);
+  el('find-input').value = 'Endless Road';
+  el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle(400);
+  const tile = el('find-results').querySelector(`[data-book="${id}"]`);
+  tile.dispatchEvent(new window.Event('touchstart', { bubbles: true }));
+  await settle(620);
+  tap([...el('folder-actions-list').children].find((b) => b.textContent.includes('Take pages out')));
+  await settle(400);
+
+  // Prose opens on what is wanted out of prose: chapters, not paragraphs.
+  const rows = () => [...el('remove-body').querySelectorAll('.remove-row')];
+  assert.equal(rows().length, 6, 'a novel opened on its paragraphs');
+  const modes = [...el('remove-mode').children];
+  assert.equal(modes.find((c) => c.textContent === 'Chapters').getAttribute('aria-pressed'), 'true');
+
+  // The paragraphs are still there, but not nine hundred rows at once.
+  tap(modes.find((c) => c.textContent === 'Pages'));
+  await settle(200);
+  assert.ok(rows().length <= 150, `${rows().length} rows drawn at once`);
+  assert.match(el('remove-count').textContent, /Nothing picked/);
+  assert.match(el('remove-of').textContent, /900 sections/, 'the count is of the whole book, not the stretch');
+
+  // A pick changes its row and the footer, and nothing else is rebuilt.
+  const third = rows()[2];
+  tap(third);
+  await settle(60);
+  assert.equal(third.isConnected, true, 'the list was rebuilt for one pick');
+  assert.equal(third.getAttribute('aria-pressed'), 'true');
+  assert.equal(el('remove-count').textContent, '1 out · 899 left');
+
+  // More of it, from the end of the stretch -- with the pick still showing.
+  const before = rows().length;
+  const more = el('remove-body').querySelector('.list-more');
+  assert.ok(more, 'nothing offers the rest of the book');
+  assert.match(more.textContent, /after these/);
+  tap(more);
+  await settle(60);
+  assert.ok(rows().length > before, 'the rest of the book never arrives');
+  assert.equal(third.isConnected, true);
+  assert.equal(rows()[rows().length - 1].dataset.at, String(rows().length - 1), 'rows came in out of order');
+
+  // Inverting picks the whole book, drawn or not.
+  tap([...el('remove-picks').children].find((c) => c.textContent === 'Invert'));
+  await settle(100);
+  assert.equal(el('remove-count').textContent, '899 out · 1 left');
+});
+
+await t('a long novel divides by paragraph without drawing every one', async () => {
+  const el = (id) => document.getElementById(id);
+  const tap = (node) => node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const settle = (ms = 140) => new Promise((r) => setTimeout(r, ms));
+  const id = await longNovel('Endless Divide');
+  await settle();
+  el('find-input').value = 'Endless Divide';
+  el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle(400);
+  el('find-results').querySelector(`[data-book="${id}"]`).dispatchEvent(new window.Event('touchstart', { bubbles: true }));
+  await settle(620);
+  const menu = [...el('folder-actions-list').children];
+  tap(menu.find((b) => /Divide at pages/.test(b.textContent)) || menu.find((b) => /^Divide/.test(b.textContent)));
+  await settle(400);
+  const byPage = [...el('divide-mode').children].find((c) => c.textContent === 'By page');
+  if (byPage && byPage.getAttribute('aria-pressed') !== 'true') { tap(byPage); await settle(200); }
+
+  const lines = () => el('divide-body').querySelectorAll('.divide-chapter');
+  assert.ok(lines().length <= 150, `${lines().length} rows drawn at once`);
+  assert.match(el('divide-of').textContent, /900 sections/);
+
+  // Into two: the cut lands far past what is drawn, and the parts still add up.
+  tap([...el('divide-into').children].find((c) => c.textContent === '2'));
+  await settle(100);
+  assert.equal(el('divide-count').textContent, '2 parts · 450, 450 sections');
+  // The rows drawn are numbered by the part they fall in.
+  assert.equal(lines()[0].querySelector('.divide-part').textContent, '1');
+  assert.ok(lines().length <= 150);
+});
+
+await t('paragraphs put back bring their words back to the count', async () => {
+  const id = await longNovel('Counted', 2, 20);
+  const words = async () => (await store.get('books', id)).words;
+  await trim.removePages(id, [3, 25]);
+  const less = await words();
+  await trim.putBack(id);
+  const back = await words();
+  assert.ok(back > less, `put back, the book still counts ${back} words, as it did with them out`);
+  const text = (await chaptersOf(id)).map((c) => c.html).join('');
+  assert.match(text, /Chapter 1, paragraph 4:/);
+  assert.match(text, /Chapter 2, paragraph 6:/);
+});
+
 console.log(`\n${pass} assertions passed`);

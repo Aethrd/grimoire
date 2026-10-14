@@ -1572,10 +1572,33 @@ export async function fragmentChapter(bookId, cuts, { name, onProgress } = {}) {
  * first -- each page still knows its chapter, so the parts can be rebuilt
  * with their chapter structure intact.
  */
-export function pagesOf(chapters) {
-  const pages = [];
+/**
+ * The blocks of every chapter, read a few chapters at a time.
+ *
+ * Splitting a long novel into its paragraphs is a parse of every chapter --
+ * the better part of a second on a computer and several on a phone -- and
+ * done in one go nothing else can happen meanwhile: the screen freezes and
+ * taps are lost. So the work is handed back to the app every forty
+ * milliseconds or so, and it carries on from there.
+ */
+export async function readUnits(chapters) {
+  const units = [];
+  let since = performance.now();
   for (const chapter of chapters) {
-    for (const unit of unitsOf(chapterHtml(chapter))) {
+    units.push(unitsOf(chapterHtml(chapter)));
+    if (performance.now() - since > 40) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      since = performance.now();
+    }
+  }
+  return units;
+}
+
+/** @param unitsByChapter  each chapter's blocks, where already read. */
+export function pagesOf(chapters, unitsByChapter = null) {
+  const pages = [];
+  for (const [n, chapter] of chapters.entries()) {
+    for (const unit of unitsByChapter?.[n] || unitsOf(chapterHtml(chapter))) {
       pages.push({
         ...unit,
         chapterIndex: chapter.index,

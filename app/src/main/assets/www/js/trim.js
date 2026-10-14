@@ -31,8 +31,8 @@
  */
 
 import * as store from './store.js';
-import { chapterHtml, countWords } from './parse.js';
-import { unitsOf, pagesOf } from './library.js';
+import { chapterHtml, countWords, plainTextOf } from './parse.js';
+import { unitsOf, pagesOf, readUnits } from './library.js';
 
 /* ── what there is to take out ────────────────────────────────────────── */
 
@@ -54,13 +54,23 @@ export async function inspect(bookId) {
   const images = await store.byIndex('images', 'bookId', bookId);
   const live = images.filter((image) => !image.removed);
 
-  const pages = removablePages(chapters);
+  /* Each chapter read once, with a breath between them.
+   *
+   * The chapter list and the page list are both made from the same blocks,
+   * and each used to read the whole book for itself -- a long novel parsed
+   * twice over, two hundred chapters at a time, with nothing else allowed to
+   * happen until it finished. On a phone that is a frozen screen for several
+   * seconds. Read once, and handed back to the app every few chapters so a
+   * tap or a progress bar is not left waiting behind it. */
+  const units = await readUnits(chapters);
+
+  const pages = removablePages(chapters, units);
 
   return {
     book,
     chapters,
     pages,
-    rows: removableChapters(chapters),
+    rows: removableChapters(chapters, units),
     // Blobs, so a page can be looked at rather than read about. The same
     // reason the divide screen carries them.
     pictures: new Map(live.filter((i) => i.blob).map((i) => [i.href, i.blob])),
@@ -71,9 +81,9 @@ export async function inspect(bookId) {
 }
 
 /** The chapters of a book, described well enough to choose between. */
-export function removableChapters(chapters) {
-  return chapters.map((chapter) => {
-    const units = unitsOf(chapterHtml(chapter));
+export function removableChapters(chapters, unitsByChapter = null) {
+  return chapters.map((chapter, n) => {
+    const units = unitsByChapter?.[n] || unitsOf(chapterHtml(chapter));
     const text = units.map((u) => u.text).filter(Boolean).join(' ');
     return {
       index: chapter.index,
@@ -104,8 +114,8 @@ export function removableChapters(chapters) {
  * two cannot drift apart -- the position in the flattened list, which is what
  * "page 412" means to someone looking at a comic.
  */
-export function removablePages(chapters) {
-  return pagesOf(chapters).map((page, at) => ({ ...page, at }));
+export function removablePages(chapters, unitsByChapter = null) {
+  return pagesOf(chapters, unitsByChapter).map((page, at) => ({ ...page, at }));
 }
 
 /* ── taking it out ────────────────────────────────────────────────────── */
@@ -301,7 +311,8 @@ async function load(bookId) {
   if (!book) throw new Error('That book is no longer in the library.');
   const chapters = (await store.byIndex('chapters', 'bookId', bookId))
     .sort((a, b) => a.index - b.index);
-  return { book, chapters, pages: removablePages(chapters) };
+  // Read a few chapters at a time; see readUnits.
+  return { book, chapters, pages: removablePages(chapters, await readUnits(chapters)) };
 }
 
 /* ── what you are about to lose ──────────────────────────────────────────
@@ -325,9 +336,10 @@ export async function preview(bookId, mode, picks) {
    * out with the removal. Both are read from the store exactly as commit()
    * reads them, and neither is written. */
   const images = await store.byIndex('images', 'bookId', bookId);
+  const nextUnits = await readUnits(plan.next);
   const used = new Set();
-  for (const chapter of plan.next) {
-    for (const unit of unitsOf(chapterHtml(chapter))) {
+  for (const units of nextUnits) {
+    for (const unit of units) {
       if (unit.picture) used.add(unit.picture);
     }
   }
@@ -336,7 +348,7 @@ export async function preview(bookId, mode, picks) {
   const marks = (await store.byIndex('marks', 'bookId', bookId)).filter((mark) =>
     plan.dropped.includes(mark.chapterIndex) || plan.touched.has(mark.chapterIndex));
 
-  const pagesLeft = plan.next.reduce((n, c) => n + unitsOf(chapterHtml(c)).length, 0);
+  const pagesLeft = nextUnits.reduce((n, units) => n + units.length, 0);
 
   return {
     mode,
@@ -416,12 +428,13 @@ async function commit(book, before, next, { onProgress, record, moved, touched, 
   onProgress?.('Settling the pictures', 0.7);
 
   const images = await store.byIndex('images', 'bookId', bookId);
+  // chapterHtml (inside readUnits), not .html: a chapter kept whole still
+  // holds its source rather than resolved markup, and reading the wrong field
+  // makes every picture in it look unreferenced.
+  const nextUnits = await readUnits(next);
   const used = new Map();
-  next.forEach((chapter, index) => {
-    // chapterHtml, not .html: a chapter kept whole still holds its source
-    // rather than resolved markup, and reading the wrong field makes every
-    // picture in it look unreferenced.
-    for (const unit of unitsOf(chapterHtml(chapter))) {
+  nextUnits.forEach((units, index) => {
+    for (const unit of units) {
       if (unit.picture && !used.has(unit.picture)) used.set(unit.picture, index);
     }
   });
@@ -505,7 +518,7 @@ async function commit(book, before, next, { onProgress, record, moved, touched, 
     pictures: record.pictures.length,
     marks: record.marks.length,
     chapters: next.length,
-    pages: next.reduce((n, c) => n + unitsOf(c.html).length, 0),
+    pages: nextUnits.reduce((n, units) => n + units.length, 0),
   };
 }
 
@@ -548,7 +561,7 @@ export async function putBack(bookId, { onProgress } = {}) {
 
   const next = record.mode === 'chapters'
     ? restoreChapters(chapters, record, book)
-    : restorePages(chapters, record, book);
+    : restorePages(chapters, record, book, await readUnits(chapters));
 
   onProgress?.('Putting it back', 0.5);
 
@@ -621,8 +634,8 @@ function restoreChapters(chapters, record) {
 }
 
 /** Removed pages go back at the page numbers they were taken from. */
-function restorePages(chapters, record, book) {
-  const pages = pagesOf(chapters).map((page) => ({
+function restorePages(chapters, record, book, unitsByChapter = null) {
+  const pages = pagesOf(chapters, unitsByChapter).map((page) => ({
     html: page.html,
     text: page.text,
     chapterIndex: page.chapterIndex,
@@ -632,7 +645,9 @@ function restorePages(chapters, record, book) {
   for (const page of [...record.pages].sort((a, b) => a.at - b.at)) {
     pages.splice(Math.min(page.at, pages.length), 0, {
       html: page.html,
-      text: '',
+      // Its words, so the book's count comes back with it rather than
+      // staying short by however many went out.
+      text: plainTextOf(page.html || ''),
       chapterIndex: page.chapterIndex,
       chapterTitle: page.chapterTitle,
     });
@@ -680,8 +695,9 @@ async function renumber(bookId, chapters) {
 
   let order = 0;
   const writes = [];
+  const units = await readUnits(chapters.map((chapter) => ({ html: chapter.html || '' })));
   chapters.forEach((chapter, index) => {
-    for (const unit of unitsOf(chapter.html)) {
+    for (const unit of units[index]) {
       const image = unit.picture ? byHref.get(unit.picture) : null;
       if (image && !writes.some((w) => w.href === image.href)) {
         writes.push({ ...image, chapterIndex: index, order: order++, removed: false });
