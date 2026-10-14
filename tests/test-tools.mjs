@@ -503,6 +503,43 @@ await t('the pad is drawn on the reader, where it was put, and turns pages on in
   await settle(400);
   assert.equal(reader.state.chapterIndex, 0);
 
+  /* Pressed the way a finger presses it, not only clicked.
+   *
+   * The pad sits inside the page, so a touch on it used to reach the page's
+   * own tap handler too -- on the right edge, the forward zone. Next turned
+   * two pages and Previous none at all, and a click alone never showed it. */
+  const host = el('page-host');
+  const realRect = host.getBoundingClientRect;
+  host.getBoundingClientRect = () => ({ left: 0, top: 0, right: 400, bottom: 800, width: 400, height: 800 });
+  const press = async (button) => {
+    const at = { clientX: 380, clientY: 500, identifier: 1, target: button };
+    const touch = (type, list) => {
+      const event = new window.Event(type, { bubbles: true });
+      Object.defineProperty(event, 'touches', { value: list });
+      Object.defineProperty(event, 'changedTouches', { value: [at] });
+      button.dispatchEvent(event);
+    };
+    touch('touchstart', [at]);
+    touch('touchend', []);
+    tap(button);
+    await settle(300);
+  };
+  try {
+    reader.state.pageCount = 5;
+    reader.goToPage(1);
+    await settle(100);
+    const turnBySideTap = (await store.settings()).turnBySideTap;
+    await store.saveSettings({ turnBySideTap: true });
+    await press(el('pad-next'));
+    assert.equal(reader.state.page, 2, 'one press of Next did not turn exactly one page');
+    await press(el('pad-prev'));
+    assert.equal(reader.state.page, 1, 'one press of Previous did not turn exactly one page back');
+    await store.saveSettings({ turnBySideTap });
+  } finally {
+    host.getBoundingClientRect = realRect;
+  }
+  assert.match(app, /const onControl = \(e\) => !!e\.target\?\.closest\?\.\('#chapter-pad, #scrub-rail, #edge-hint'\)/);
+
   /* Dragging cannot be driven here: jsdom has no layout, so a synthetic touch
    * carries no coordinates to drag by. The grip being the only handle, and
    * the lock stopping it, are checked against the source above. */

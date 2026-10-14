@@ -4780,8 +4780,17 @@ function wireReader() {
    */
   let tapX = 0, tapY = 0, tapAt = 0, moved = false;
 
+  /* A touch on one of the controls floating over the page is that control's.
+   *
+   * They sit inside the page, so every tap on them also arrived here as a tap
+   * on the page -- and the page buttons live on the right edge, which is the
+   * forward tap zone. Next turned two pages, Previous turned one back and one
+   * forward and so did nothing, and in scroll mode each press showed or hid
+   * the bars instead of moving the text. */
+  const onControl = (e) => !!e.target?.closest?.('#chapter-pad, #scrub-rail, #edge-hint');
+
   host.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) { moved = true; return; }
+    if (e.touches.length !== 1 || onControl(e)) { moved = true; return; }
     moveGuides(e.touches[0].clientY);
     tapX = e.touches[0].clientX;
     tapY = e.touches[0].clientY;
@@ -4832,11 +4841,14 @@ function wireReader() {
   }, { passive: true });
 
   // Swipe, independently toggleable from side taps in settings.
-  let startX = 0, startY = 0, startAt = 0;
+  let startX = 0, startY = 0, startAt = 0, startOnControl = false;
   host.addEventListener('touchstart', (e) => {
     startX = e.touches[0].clientX; startY = e.touches[0].clientY; startAt = Date.now();
+    startOnControl = onControl(e);
   }, { passive: true });
   host.addEventListener('touchend', async (e) => {
+    // Not a swipe of the page: a drag of the pad's grip or along the rail.
+    if (startOnControl) return;
     // Scroll mode already has a gesture for moving through the text, and
     // hijacking horizontal swipes on top of it fights the scroller.
     if (reader.state.mode === 'scroll') return;
