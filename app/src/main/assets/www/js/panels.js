@@ -1085,7 +1085,7 @@ export async function openVault(onVaultChange, host) {
         // Said plainly, including what could not be matched: a backup restored
         // before the books are back is half a restore, and should say so.
         toast(report.missing
-          ? `${report.books} books restored · ${report.missing} not on the shelf yet — import the files, then restore again`
+          ? `${report.books} books restored · ${report.missing} not on the shelf yet — they get their covers, blurs, places and marks back as you import them`
           : `${report.books} books, ${report.marks} marks and ${report.events} sessions restored`, 8000);
         onVaultChange?.();
         openVault(onVaultChange, body);

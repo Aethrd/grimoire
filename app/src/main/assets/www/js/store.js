@@ -470,7 +470,7 @@ export async function exportBackup() {
   const books = await all('books');
   const byId = new Map(books.map((b) => [b.id, b]));
 
-  return {
+  const out = {
     format: 'grimoire-backup',
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
@@ -519,6 +519,178 @@ export async function exportBackup() {
       .map((m) => ({ ...m, fingerprint: byId.get(m.bookId)?.fingerprint }))
       .filter((m) => m.fingerprint),
   };
+
+  /* Carried on, not dropped: a restore still waiting for some of its books
+   * to be imported holds things no other copy of the app has. A backup made
+   * in the meantime keeps them. */
+  const pending = await pendingRestore();
+  const present = new Set(out.books.map((b) => b.fingerprint));
+  for (const [fingerprint, record] of Object.entries(pending.books)) {
+    if (present.has(fingerprint)) continue;
+    if (record.saved) out.books.push(record.saved);
+    if (record.cover) out.covers.push({ fingerprint, dataUrl: record.cover });
+    out.positions.push(...record.positions);
+    out.marks.push(...record.marks);
+  }
+  return out;
+}
+
+/* ── a restore, one book at a time ─────────────────────────────────────── */
+
+/** Everything a backup says about each book, gathered by fingerprint. */
+function recordsOf(data) {
+  const records = new Map();
+  const of = (fingerprint) => {
+    if (!records.has(fingerprint)) records.set(fingerprint, { saved: null, cover: null, positions: [], marks: [] });
+    return records.get(fingerprint);
+  };
+  for (const saved of data.books || []) if (saved.fingerprint) of(saved.fingerprint).saved = saved;
+  for (const cover of data.covers || []) if (cover.fingerprint && cover.dataUrl) of(cover.fingerprint).cover = cover.dataUrl;
+  for (const position of data.positions || []) if (position.fingerprint) of(position.fingerprint).positions.push(position);
+  for (const mark of data.marks || []) if (mark.fingerprint) of(mark.fingerprint).marks.push(mark);
+  return records;
+}
+
+/**
+ * Put one book's record back onto it: what was done to it, its cover if one
+ * was chosen, where it was read to, and its marks.
+ *
+ * @returns how many marks were added.
+ */
+async function restoreInto(book, record, report = null) {
+  const { saved } = record;
+  if (saved) {
+    for (const field of BOOK_FIELDS) {
+      if (saved[field] !== undefined) book[field] = saved[field];
+    }
+    /* Absent means it was not in the bin, not "leave it as it is".
+     *
+     * Every other field here is additive, and for the bin that is wrong: a
+     * book put back on the shelf after the backup was made would come out of
+     * a restore still in the bin, because nothing was written to say
+     * otherwise. A restore is meant to reproduce what was recorded. The same
+     * goes for a blur taken off since. */
+    if (saved.binnedAt === undefined) delete book.binnedAt;
+    if (saved.coverBlur === undefined) delete book.coverBlur;
+  }
+
+  if (record.cover) {
+    try {
+      const blob = dataUrlToBlob(record.cover);
+      book.coverBlob = blob;
+      book.coverBytes = blob.size;
+      book.coverCustom = true;
+      if (report) report.covers = (report.covers || 0) + 1;
+    } catch {
+      // A cover that will not decode is not worth failing a restore over.
+    }
+  }
+  await put('books', book);
+
+  for (const position of record.positions) {
+    const { fingerprint, ...row } = position;
+    await put('positions', { ...row, bookId: book.id });
+  }
+
+  /* Restoring twice must not leave two of everything.
+   *
+   * Marks were added outright, so a second restore -- after a failed one, or
+   * simply to be sure -- doubled every bookmark. A mark carries enough to
+   * recognise itself: where it sits in its book. */
+  let added = 0;
+  if (record.marks.length) {
+    const seen = new Set((await byIndex('marks', 'bookId', book.id))
+      .map((m) => `${m.kind}:${m.chapterIndex}:${m.anchor}`));
+    for (const mark of record.marks) {
+      const { fingerprint, id, ...row } = mark;
+      const signature = `${row.kind}:${row.chapterIndex}:${row.anchor}`;
+      if (seen.has(signature)) continue;
+      seen.add(signature);
+      await add('marks', { ...row, bookId: book.id });
+      added += 1;
+    }
+  }
+  return added;
+}
+
+/* What a restore could not hand over yet, kept until the book arrives.
+ * Held beside the settings rather than in them: it can carry marks and
+ * covers, and the settings are read on every screen. */
+const PENDING_KEY = 'pendingRestore';
+let pendingCache = null;
+
+async function pendingRestore() {
+  if (!pendingCache) {
+    const row = await get('settings', PENDING_KEY);
+    pendingCache = row?.value || { books: {}, leaders: {} };
+    if (!pendingCache.books) pendingCache.books = {};
+    if (!pendingCache.leaders) pendingCache.leaders = {};
+  }
+  return pendingCache;
+}
+
+async function savePending(pending) {
+  pendingCache = pending;
+  if (!Object.keys(pending.books).length && !Object.keys(pending.leaders).length) {
+    await del('settings', PENDING_KEY);
+  } else {
+    await put('settings', { key: PENDING_KEY, value: pending });
+  }
+}
+
+/** How many books a restore is still waiting to see imported. */
+export async function pendingRestoreCount() {
+  const pending = await pendingRestore();
+  return Object.values(pending.books).filter((record) => record.saved).length;
+}
+
+/**
+ * A book has just been imported: give it whatever a restore was holding for
+ * it, and join it to its bundle if that was waiting too.
+ *
+ * Cheap when there is nothing waiting, which is nearly always: one lookup in
+ * memory.
+ *
+ * @returns whether anything was restored onto it.
+ */
+export async function restorePending(book) {
+  if (!book?.fingerprint || book.transient) return false;
+  const pending = await pendingRestore();
+  const record = pending.books[book.fingerprint];
+  const members = pending.leaders[book.fingerprint];
+  if (!record && !members) return false;
+
+  if (record) {
+    delete pending.books[book.fingerprint];
+    await restoreInto(book, record);
+    const leaderPrint = record.saved?.bundleLeader;
+    if (leaderPrint) {
+      const leader = leaderPrint === book.fingerprint
+        ? book
+        : (await byIndex('books', 'fingerprint', leaderPrint)).find((b) => !b.transient);
+      if (leader) {
+        book.bundleId = leader.id;
+        await put('books', book);
+      } else {
+        if (!pending.leaders[leaderPrint]) pending.leaders[leaderPrint] = [];
+        pending.leaders[leaderPrint].push(book.fingerprint);
+      }
+    }
+  }
+
+  if (members) {
+    delete pending.leaders[book.fingerprint];
+    for (const fingerprint of members) {
+      for (const member of await byIndex('books', 'fingerprint', fingerprint)) {
+        if (member.transient) continue;
+        member.bundleId = book.id;
+        await put('books', member);
+      }
+    }
+  }
+
+  await savePending(pending);
+  return !!record;
 }
 
 /**
@@ -552,81 +724,44 @@ export async function importBackup(data) {
 
   const books = await all('books');
   const byFingerprint = new Map(books.map((b) => [b.fingerprint, b]));
+  const pending = await pendingRestore();
+  const records = recordsOf(data);
 
-  for (const saved of data.books || []) {
-    const book = byFingerprint.get(saved.fingerprint);
-    if (!book) { report.missing += 1; continue; }
-    for (const field of BOOK_FIELDS) {
-      if (saved[field] !== undefined) book[field] = saved[field];
-    }
-
-    /* Absent means it was not in the bin, not "leave it as it is".
-     *
-     * Every other field here is additive, and for the bin that is wrong: a
-     * book put back on the shelf after the backup was made would come out of
-     * a restore still in the bin, because nothing was written to say
-     * otherwise. A restore is meant to reproduce what was recorded.
-     */
-    if (saved.binnedAt === undefined) delete book.binnedAt;
-
-    await put('books', book);
-    report.books += 1;
-  }
-
-  // A second pass: a bundle's leader may not have existed on the first.
-  for (const saved of data.books || []) {
-    if (!saved.bundleLeader) continue;
-    const book = byFingerprint.get(saved.fingerprint);
-    const leader = byFingerprint.get(saved.bundleLeader);
-    if (!book || !leader) continue;
-    book.bundleId = leader.id;
-    await put('books', book);
-  }
-
-  for (const cover of data.covers || []) {
-    const book = byFingerprint.get(cover.fingerprint);
-    if (!book || !cover.dataUrl) continue;
-    try {
-      const blob = dataUrlToBlob(cover.dataUrl);
-      book.coverBlob = blob;
-      book.coverBytes = blob.size;
-      book.coverCustom = true;
-      await put('books', book);
-      report.covers = (report.covers || 0) + 1;
-    } catch {
-      // A cover that will not decode is not worth failing a restore over.
-    }
-  }
-
-  for (const position of data.positions || []) {
-    const book = byFingerprint.get(position.fingerprint);
-    if (!book) continue;
-    const { fingerprint, ...row } = position;
-    await put('positions', { ...row, bookId: book.id });
-  }
-
-  /* Restoring twice must not leave two of everything.
+  /* A book not on the shelf yet is kept for when it is.
    *
-   * Marks and log entries were added outright, so a second restore -- after a
-   * failed one, or simply to be sure -- doubled every bookmark and every
-   * reading session. Both carry enough to recognise themselves: a mark is
-   * where it sits in a book, and a session is when it happened.
-   */
-  const markSeen = new Set((await all('marks'))
-    .map((m) => `${m.bookId}:${m.kind}:${m.chapterIndex}:${m.anchor}`));
-
-  for (const mark of data.marks || []) {
-    const book = byFingerprint.get(mark.fingerprint);
-    if (!book) continue;
-    const { fingerprint, id, ...row } = mark;
-
-    const signature = `${book.id}:${row.kind}:${row.chapterIndex}:${row.anchor}`;
-    if (markSeen.has(signature)) continue;
-    markSeen.add(signature);
-
-    await add('marks', { ...row, bookId: book.id });
-    report.marks += 1;
+   * A restore used to be an instant: whatever was on the shelf at that moment
+   * got its blur, its folder, its place and its marks back, and everything
+   * else was counted as missing and dropped. Restoring first and importing
+   * second -- the natural order after a reinstall -- lost all of it, blurred
+   * covers included. What cannot be matched now is held, and handed over as
+   * each book is imported. */
+  for (const [fingerprint, record] of records) {
+    const book = byFingerprint.get(fingerprint);
+    if (!book) {
+      pending.books[fingerprint] = record;
+      if (record.saved) report.missing += 1;
+      continue;
+    }
+    report.marks += await restoreInto(book, record, report);
+    if (record.saved) report.books += 1;
   }
+
+  // Bundles last: a bundle's leader may not have existed on the first pass,
+  // and may not exist until it is imported.
+  for (const [fingerprint, record] of records) {
+    const leaderPrint = record.saved?.bundleLeader;
+    const book = byFingerprint.get(fingerprint);
+    if (!leaderPrint || !book) continue;
+    const leader = byFingerprint.get(leaderPrint);
+    if (leader) {
+      book.bundleId = leader.id;
+      await put('books', book);
+    } else {
+      if (!pending.leaders[leaderPrint]) pending.leaders[leaderPrint] = [];
+      pending.leaders[leaderPrint].push(fingerprint);
+    }
+  }
+  await savePending(pending);
 
   // The log is keyed by book too, but a reading history is worth keeping even
   // for books no longer on the shelf.

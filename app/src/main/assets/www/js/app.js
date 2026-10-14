@@ -1740,6 +1740,7 @@ async function handleFiles(files, { transient = false } = {}) {
     results.already ? `${results.already} already on your shelf` : null,
     results.inVault ? `${results.inVault} already in the Vault` : null,
     results.replaced ? `${results.replaced} replaced ${results.replaced === 1 ? 'its copy' : 'their copies'} in the Bin` : null,
+    results.restored ? `${results.restored} given back what your backup held for ${results.restored === 1 ? 'it' : 'them'}` : null,
   ].filter(Boolean).join(' · ');
   const note = besides ? ` · ${besides}` : '';
 

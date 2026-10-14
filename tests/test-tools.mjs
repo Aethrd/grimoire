@@ -826,4 +826,132 @@ await t('choosing something does not throw you back to the top of the pane', asy
   await panelsMod.openSettings(() => {});
 });
 
+/* ── blurred covers, kept ────────────────────────────────────────────── */
+
+console.log('\nblurred covers, kept');
+
+const storyFile = (name, words) => new window.File([`${name.toUpperCase()}\n\n${words}\n`], `${name}.txt`);
+const byPrint = async (fingerprint) => (await store.byIndex('books', 'fingerprint', fingerprint))[0];
+// Fingerprints are the file's name and size, as the importer makes them.
+const VEILED = `veiled.txt:${storyFile('veiled', 'Behind a curtain.').size}`;
+const OPEN = `open.txt:${storyFile('open', 'In plain sight.').size}`;
+const LEAD = `lead.txt:${storyFile('lead', 'First edition.').size}`;
+const FOLLOW = `follow.txt:${storyFile('follow', 'Second edition.').size}`;
+
+await t('a backup restored before the books are imported still blurs them as they arrive', async () => {
+  /* After a reinstall the obvious order is restore, then import -- and the
+   * restore found no books, counted them all as missing, and dropped what it
+   * held for them. The blurs were the first thing anyone noticed. */
+  await library.importFiles([storyFile('veiled', 'Behind a curtain.'), storyFile('open', 'In plain sight.')], {});
+  const veiled = await byPrint(VEILED);
+  const open = await byPrint(OPEN);
+  assert.ok(veiled && open, 'the two books did not import as expected');
+  await library.blurCovers([veiled.id], true);
+  veiled.folder = 'Private';
+  veiled.status = 'reading';
+  await store.put('books', { ...(await store.get('books', veiled.id)), folder: 'Private', status: 'reading' });
+  await store.put('positions', { bookId: veiled.id, chapterIndex: 0, anchor: 5, percent: 0.4, pageInBook: 2, totalPages: 5 });
+  await store.addMark({ bookId: veiled.id, kind: 'bookmark', chapterIndex: 0, anchor: 3, end: 3, at: 1 });
+
+  const backup = JSON.parse(JSON.stringify(await store.exportBackup()));
+
+  // The reinstall: the books are gone.
+  await store.deleteBook(veiled.id);
+  await store.deleteBook(open.id);
+
+  // Restore first.
+  const report = await store.importBackup(backup);
+  assert.ok(report.missing >= 2, 'the books were not counted as still to come');
+  assert.ok(await store.pendingRestoreCount() >= 2, 'nothing was held for the books');
+
+  // A backup made in the meantime does not lose what is being held.
+  const between = await store.exportBackup();
+  assert.ok(between.books.some((b) => b.fingerprint === VEILED && b.coverBlur),
+    'a backup made while waiting dropped the blur');
+
+  // Then import.
+  const out = await library.importFiles([storyFile('veiled', 'Behind a curtain.'), storyFile('open', 'In plain sight.')], {});
+  assert.equal(out.added, 2);
+  assert.ok(out.restored >= 2, 'the import did not say it restored anything');
+
+  const back = await byPrint(VEILED);
+  assert.equal(back.coverBlur, true, 'the blur did not come back');
+  assert.equal(back.folder, 'Private');
+  assert.equal(back.status, 'reading');
+  assert.equal((await store.get('positions', back.id))?.anchor, 5, 'the place in the book did not come back');
+  assert.equal((await store.byIndex('marks', 'bookId', back.id)).length, 1, 'the bookmark did not come back');
+  assert.ok(!(await byPrint(OPEN)).coverBlur, 'a cover that was never blurred came back blurred');
+  assert.equal(await store.pendingRestoreCount(), 0, 'what was held was not let go');
+
+  // And restoring it again changes nothing and doubles nothing.
+  await store.importBackup(backup);
+  assert.equal((await store.byIndex('marks', 'bookId', back.id)).length, 1);
+  assert.equal((await byPrint(VEILED)).coverBlur, true);
+});
+
+await t('restoring with the books already there still works as it did', async () => {
+  const [book] = (await store.all('books')).filter((b) => b.fingerprint === VEILED);
+  const backup = JSON.parse(JSON.stringify(await store.exportBackup()));
+  await library.blurCovers([book.id], false);
+  assert.ok(!(await store.get('books', book.id)).coverBlur);
+  const report = await store.importBackup(backup);
+  assert.equal(report.missing, 0);
+  assert.equal((await store.get('books', book.id)).coverBlur, true);
+
+  // A blur taken off after the backup was made: the backup is what comes back.
+  const unblurred = JSON.parse(JSON.stringify(backup));
+  delete unblurred.books.find((b) => b.fingerprint === VEILED).coverBlur;
+  await store.importBackup(unblurred);
+  assert.ok(!(await store.get('books', book.id)).coverBlur, 'a restore could not take a blur off');
+});
+
+await t('a bundle waiting on its leader is joined when the leader arrives', async () => {
+  await library.importFiles([storyFile('lead', 'First edition.'), storyFile('follow', 'Second edition.')], {});
+  const lead = await byPrint(LEAD);
+  const follow = await byPrint(FOLLOW);
+  assert.ok(lead && follow);
+  await store.put('books', { ...lead, bundleId: lead.id });
+  await store.put('books', { ...follow, bundleId: lead.id });
+  const backup = JSON.parse(JSON.stringify(await store.exportBackup()));
+  await store.deleteBook(lead.id);
+  await store.deleteBook(follow.id);
+  await store.importBackup(backup);
+
+  // The member first, the leader after it.
+  await library.importFiles([storyFile('follow', 'Second edition.')], {});
+  await library.importFiles([storyFile('lead', 'First edition.')], {});
+  const newLead = await byPrint(LEAD);
+  const newFollow = await byPrint(FOLLOW);
+  assert.equal(newFollow.bundleId, newLead.id, 'the member was not joined to its leader');
+  assert.equal(newLead.bundleId, newLead.id);
+});
+
+await t('a blurred book is blurred in Continue reading too', async () => {
+  assert.match(css, /\.continue-card\[data-blur\] \.continue-cover img \{[^}]*filter: blur/);
+  const lib = read('app/src/main/assets/www/js/library.js');
+  assert.match(lib, /card\.toggleAttribute\('data-blur', !!book\.coverBlur\)/);
+
+  // Drawn for real: the book read last is the blurred one.
+  await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const book = await byPrint(VEILED);
+  await library.blurCovers([book.id], true);
+  await store.put('books', { ...(await store.get('books', book.id)), coverBlob: new window.Blob(['x'], { type: 'image/png' }), coverBytes: 1, lastOpenedAt: Date.now() + 1000 });
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(400);
+  const card = el('continue-card');
+  assert.equal(card.hidden, false);
+  assert.match(el('continue-title').textContent, /VEILED|veiled/i);
+  assert.ok(card.hasAttribute('data-blur'), 'the blurred cover is shown plainly at the top of the shelf');
+  assert.ok(el('continue-cover').querySelector('img'), 'the cover is not drawn as a picture that can be blurred');
+
+  await library.blurCovers([book.id], false);
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(400);
+  assert.ok(!el('continue-card').hasAttribute('data-blur'), 'the blur stayed after the cover was shown again');
+});
+
 console.log(`\n${pass} assertions passed`);

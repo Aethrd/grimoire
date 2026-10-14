@@ -593,6 +593,14 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       } catch (error) {
         console.warn('Could not record the import of', name, error);
       }
+      /* Anything a backup restored before this book was here -- its blur,
+       * its folder, its place, its marks -- arrives with it now. */
+      try {
+        const fresh = await store.get('books', bookId);
+        if (fresh && await store.restorePending(fresh)) results.restored = (results.restored || 0) + 1;
+      } catch (error) {
+        console.warn('Could not restore what a backup held for', name, error);
+      }
       results.added += 1;
       // Named, so a result can say which book -- two imports finishing
       // together are otherwise two identical "1 book added" lines.
@@ -892,7 +900,13 @@ async function renderContinueCard(books, onOpen) {
   card.hidden = false;
   el('continue-title').textContent = displayTitle(book);
   el('continue-title').classList.toggle('translated-text', isTranslatedTitle(book));
-  el('continue-cover').style.backgroundImage = coverUrl ? `url("${coverUrl}")` : '';
+  /* The cover as a picture rather than a background, so a blurred one can
+   * be blurred here too. It was the one place a blurred book still showed
+   * its cover -- at the top of the shelf, above every tile that hid it. */
+  const cover = el('continue-cover');
+  cover.style.backgroundImage = '';
+  cover.innerHTML = coverUrl ? `<img src="${coverUrl}" alt="">` : '';
+  card.toggleAttribute('data-blur', !!book.coverBlur);
   el('continue-meta').textContent = position
     ? `Ch. ${position.chapterIndex + 1} · p. ${position.pageInBook} of ${position.totalPages} · ${Math.round(position.percent * 100)}%`
     : 'Not started';

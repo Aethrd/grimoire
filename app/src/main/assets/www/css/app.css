@@ -334,7 +334,11 @@ section.block > h2 { margin-top: 18px; }
   text-align: left;
 }
 .continue-cover { flex: none; width: 40px; height: 60px; border-radius: var(--radius-sm);
-                  background: var(--accent-400); background-size: cover; background-position: center; }
+                  background: var(--accent-400); background-size: cover; background-position: center;
+                  overflow: hidden; display: block; }
+.continue-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* Blurred here as on its tile: the card is the first thing on the shelf. */
+.continue-card[data-blur] .continue-cover img { filter: blur(6px); transform: scale(1.15); }
 .continue-body { flex: 1; min-width: 0; display: block; }
 .continue-title { font-family: var(--font-heading); font-weight: 700;
                   font-size: 14px; line-height: 1.25; margin-top: 3px;
