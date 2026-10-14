@@ -2,8 +2,8 @@
  *
  * A panel you would rather not see again, a watermark across a page, a
  * translator's note pasted over the art, a spoiler in a colour insert. Each
- * panel is marked by pressing its four corners, in black or white, and
- * saving paints them into the picture itself.
+ * is marked by pressing points round its outline, as many as it needs, in
+ * black or white, and saving paints them into the picture itself.
  *
  * Into the picture, not over it. The pixels the book stores are replaced, so
  * the reader, the reel and anything written out of the app -- an EPUB, a
@@ -32,13 +32,14 @@ const MAX_SIDE = 32_000;
 
 /* ── panels ──────────────────────────────────────────────────────────── */
 
-/* A panel is four corners, not a box.
+/* A panel is its corners, not a box.
  *
  * Comic panels are cut at angles as often as not -- a slanted gutter, a
  * trapezoid for an action beat -- and a rectangle either misses the corner
- * of one or eats into the next. Four corners pressed where the panel's
- * corners are follow its edges exactly, and each corner, or a whole edge, can
- * be dragged afterwards to fit.
+ * of one or eats into the next. Points pressed round the outline follow its
+ * edges exactly -- three for a triangle, six for a hexagon, as many as the
+ * shape needs -- and each point, or a whole edge, can be dragged afterwards
+ * to fit.
  *
  * Coordinates are the picture's own pixels, so a panel means the same thing
  * at every zoom and on every screen. */
@@ -75,6 +76,24 @@ export function quad(points, colour = 'black') {
   };
 }
 
+/**
+ * A shape from points pressed one after another, joined in the order they
+ * were pressed: three points spaced unevenly are an uneven triangle, six are
+ * a six-sided shape with those six corners. Traced round the outline of
+ * what is to be covered, which is how anyone marks a shape by hand -- so
+ * the order is kept, and a shape that dents inward stays dented.
+ */
+export function poly(points, colour = 'black') {
+  return {
+    type: 'poly',
+    colour,
+    points: points.map(([x, y]) => [round(x), round(y)]),
+  };
+}
+
+/** A shape drawn with corners: what this version draws, and the panels before it. */
+export const isPolygon = (shape) => shape?.type === 'poly' || shape?.type === 'quad';
+
 /** The area a panel covers, for telling a panel from four taps in one spot. */
 export function area(points) {
   let sum = 0;
@@ -88,7 +107,7 @@ export function area(points) {
 
 /** A shape too small to have been meant. */
 export function isTiny(shape) {
-  if (shape.type === 'quad') return area(shape.points) < 16;
+  if (isPolygon(shape)) return (shape.points?.length || 0) < 3 || area(shape.points) < 16;
   if (shape.type === 'brush') return !shape.points?.length;
   return shape.w < 3 || shape.h < 3;
 }
@@ -100,10 +119,15 @@ export function isTiny(shape) {
  * happen to be square, so one saved then opens as a panel that can be
  * reshaped like any other. */
 export function normalise(shapes) {
-  return (shapes || []).map((shape) => (shape.type === 'box'
-    ? quad([[shape.x, shape.y], [shape.x + shape.w, shape.y],
-      [shape.x + shape.w, shape.y + shape.h], [shape.x, shape.y + shape.h]], shape.colour)
-    : shape));
+  return (shapes || []).map((shape) => {
+    if (shape.type === 'box') {
+      return poly([[shape.x, shape.y], [shape.x + shape.w, shape.y],
+        [shape.x + shape.w, shape.y + shape.h], [shape.x, shape.y + shape.h]], shape.colour);
+    }
+    // A four-cornered panel from the version before is a shape of four points.
+    if (shape.type === 'quad') return { ...shape, type: 'poly' };
+    return shape;
+  });
 }
 
 /** A point on the picture, from a point on the screen. */
@@ -129,7 +153,7 @@ export function edgeMiddles(points) {
  * is the finer adjustment.
  */
 export function handleAt(shape, { x, y }, reach) {
-  if (shape?.type !== 'quad') return null;
+  if (!isPolygon(shape)) return null;
   const nearest = (kind, points) => {
     let best = null;
     points.forEach(([hx, hy], at) => {
@@ -187,7 +211,7 @@ export function paintShapes(ctx, shapes) {
     ctx.fillStyle = colour;
     ctx.strokeStyle = colour;
 
-    if (shape.type === 'quad' && shape.points?.length >= 3) {
+    if (shape.type === 'poly' && shape.points?.length >= 3) {
       ctx.beginPath();
       const [[x0, y0], ...rest] = shape.points;
       ctx.moveTo(x0, y0);
@@ -226,7 +250,7 @@ export function paintShapes(ctx, shapes) {
 /** The same shapes as SVG, for drawing them over the picture while editing. */
 export function svgFor(shape) {
   const fill = COLOURS[shape.colour] || COLOURS.black;
-  if (shape.type === 'quad') {
+  if (isPolygon(shape)) {
     return `<polygon points="${shape.points.map(([x, y]) => `${x},${y}`).join(' ')}" fill="${fill}"/>`;
   }
   if (shape.type === 'box') return svgFor(normalise([shape])[0]);
@@ -261,7 +285,7 @@ export function shapeAt(shapes, point, slack = 0) {
 }
 
 function covers(shape, { x, y }, slack) {
-  if (shape.type === 'quad') {
+  if (isPolygon(shape)) {
     if (inside(shape.points, x, y)) return true;
     const { points } = shape;
     return points.some((p, i) => toSegment(x, y, p, points[(i + 1) % points.length]) <= slack);

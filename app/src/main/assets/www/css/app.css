@@ -1887,7 +1887,7 @@ body[data-view="reader"] .stepper {
   position: fixed; inset: 0; z-index: 46;
   background: #000; color: #eee;
   display: grid;
-  grid-template-rows: auto 1fr auto auto auto;
+  grid-template-rows: auto 1fr auto auto auto auto;
   padding-top: var(--safe-top, 0px);
   /* The loupe is placed against this. */
   isolation: isolate;
@@ -1945,11 +1945,18 @@ body[data-view="reader"] .stepper {
   vector-effect: non-scaling-stroke;
 }
 #redact-svg .pending { stroke-dasharray: 6 4; }
+/* What the shape will cover once it is filled in: the area, faintly, and the
+   edge that will close it back to the first point. */
+#redact-svg .preview { fill: var(--accent); fill-opacity: .25; stroke: none; }
+#redact-svg .closing { fill: none; stroke: var(--accent); stroke-width: 1.5px; stroke-dasharray: 2 5; vector-effect: non-scaling-stroke; opacity: .8; }
+/* The first point, where a tap closes the shape. */
+#redact-svg .first { fill: #fff; stroke: var(--accent); stroke-width: 3px; vector-effect: non-scaling-stroke; }
 #redact-svg .corner { fill: #fff; stroke: var(--accent); stroke-width: 2px; vector-effect: non-scaling-stroke; }
 #redact-svg .edge { fill: var(--accent); stroke: #fff; stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
 #redact-svg .placed { fill: var(--accent); stroke: #fff; stroke-width: 2px; vector-effect: non-scaling-stroke; }
-/* A panel not being worked on, while one is: so the one that is stands out. */
-#redact-svg.editing polygon.panel:not(.chosen) { opacity: .75; }
+/* Every shape at full strength, the one being adjusted included: a black
+   shape shown dimmed read as one that would not come out black. The
+   outline and handles are what pick out the one being worked on. */
 
 .redact-loupe {
   position: absolute; z-index: 1;
@@ -1970,8 +1977,26 @@ body[data-view="reader"] .stepper {
 .redact-hint {
   margin: 0; padding: 4px 16px 0;
   font-size: 11px; line-height: 1.45; color: #aaa; text-align: center;
-  min-height: 1.45em;
+  /* The same height whatever it says: a hint that wraps to one more line
+     on one step than the last shrinks the picture above it, and moves it
+     under the finger in the middle of drawing a shape. Room for three. */
+  box-sizing: border-box;
+  height: calc(4px + 3 * 1.45em);
+  overflow: hidden;
 }
+
+.redact-shape {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px 0;
+  font-size: 12px; color: #ccc;
+}
+/* Held in place when there is no shape being drawn, not taken away: the
+   picture is fitted to the room left over, and a row appearing under it
+   after the first tap shrank it -- so every later point landed somewhere
+   other than where the finger had been aiming. A class, not [hidden]: the
+   app's [hidden] rule takes anything carrying it out of the layout. */
+.redact-shape.idle { visibility: hidden; }
+.redact-shape span { flex: 1; min-width: 0; }
 
 .redact-leave {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -2023,12 +2048,19 @@ body[data-view="reader"] .stepper {
 
 .redact-chip {
   position: fixed; z-index: 35;
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 10px 14px; min-height: 44px;
+  display: inline-flex; align-items: stretch;
   border-radius: var(--radius-pill);
   background: var(--accent); color: var(--on-accent);
-  font-family: var(--font-heading); font-weight: 600; font-size: 13px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+  overflow: hidden;
 }
 .redact-chip[hidden] { display: none; }
+.redact-chip button {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 10px 14px; min-height: 44px;
+  font-family: var(--font-heading); font-weight: 600; font-size: 13px;
+  color: inherit; white-space: nowrap;
+}
+.redact-chip button + button { border-left: 1px solid rgba(0, 0, 0, .18); }
+.redact-chip button:active { background: rgba(0, 0, 0, .12); }
 .redact-chip svg { width: 18px; height: 18px; }

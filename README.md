@@ -162,6 +162,11 @@ eighty pixels a scanlator's credit page and the first page of a chapter are
 the same shape, and so are two halves of one spread. A chapter is worse — an
 afterword and a chapter are the same row until you read a paragraph of either.
 
+While reading, **Take out** in the toolbar opens this screen at the page on
+screen, already picked, and holding a picture offers **Take page out** for
+that page alone. Either way the book comes back at the same place once the
+page is gone, not the shelf.
+
 So nothing is taken out unseen:
 
 - **The glass on every page opens it full size**, and from there you can step
@@ -185,18 +190,20 @@ speech bubble. **Black out panels** is in a book's menu, among the shelf's
 selection actions and at the top of the image reel, each opening the book's
 pictures to pick from. While reading, the toolbar's black-out button takes
 the picture on screen, and holding a finger on a picture offers it. Any of
-them opens the picture to mark panels on. **Press the four corners of a panel** — in any order; a panel is
-never joined up as a bow tie — and it is covered. Each corner can then be
-dragged to fit, or the dot in the middle of an edge to move that whole edge
-at its angle; a loupe shows what is under the finger while a corner is
-placed, because the finger is what hides it. Press inside a panel to choose
-it again, drag to move it, or delete it; black or white, undo, and zoom.
+them opens the picture to draw on. **Tap points round what you want
+covered** — three for a triangle, six for a six-sided shape, as many as it
+needs, joined in the order they were tapped — then **Black out shape**, or
+tap the first point again, to fill it in. Each point can then be dragged to
+fit, or the dot in the middle of an edge to move that whole edge; a loupe
+shows what is under the finger while a point is placed. Press inside a shape
+to choose it again, drag to move it, or delete it; black or white, undo, and
+zoom.
 
-Saving **paints the panels into the picture itself**. The book's own copy is
+Saving **paints the shapes into the picture itself**. The book's own copy is
 replaced, so the reader, the reel, an exported EPUB, a smaller copy and a book
 built onto this one all carry the edit; a mask laid over the page at reading
 time would vanish the moment the book left the app. The original is kept
-inside the app alongside the panels, so an edit can be changed later — the
+inside the app alongside the shapes, so an edit can be changed later — the
 editor always starts again from the original — or put back with **Restore
 original**. A comic whose cover is the edited page gets the edited cover too,
 unless the cover was picked by hand.

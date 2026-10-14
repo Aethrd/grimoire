@@ -157,6 +157,8 @@ function back() {
   // stats screen re-reads on every open, so a late arrival still shows up.
   el('tabbar').hidden = target === 'reader';
   enter(target);
+  // Back into a book that was changed while it was away.
+  if (target === 'reader') reloadReader();
   return true;
 }
 
@@ -183,7 +185,7 @@ function back() {
  * yet kept -- was deleted the moment its index or picture reel was opened,
  * and both came up empty because the book had just been thrown away.
  */
-const BESIDE_THE_BOOK = new Set(['toc', 'reel', 'find', 'layout', 'settings', 'marks']);
+const BESIDE_THE_BOOK = new Set(['toc', 'reel', 'find', 'layout', 'settings', 'marks', 'remove']);
 
 async function forgetTransientBook() {
   const book = reader.state.book;
@@ -257,6 +259,8 @@ function settleGreyMix(book) {
 }
 
 async function openBook(book, opts) {
+  // Opened afresh, so nothing is waiting to be reopened.
+  readerStale = null;
   await show('reader');
   try {
     // Opened, not read. Continue follows this; the status does not, because
@@ -1885,6 +1889,39 @@ async function goToMatch(hit) {
   await reader.goTo({ chapter: hit.chapter, anchor: hit.anchor, flash: true });
 }
 
+/* ── coming back to a book that changed ─────────────────────────────────
+ *
+ * Taking pages out of the book being read changes it under the reader. It
+ * is reopened when it is next shown -- at the saved place, which the removal
+ * has already moved with the pages -- and where a picture was on screen, at
+ * that picture, or the one after it if that was the page taken out.
+ */
+let readerStale = null;     // { bookId, land: href | null }
+let readerLanding = null;   // the picture on screen when the book was left
+
+async function reloadReader() {
+  const stale = readerStale;
+  const book = reader.state.book;
+  if (!stale || !book || stale.bookId !== book.id) return;
+  readerStale = null;
+  readerLanding = null;
+  try {
+    await reader.open(book.id);
+    paintReader();
+    if (!stale.land) return;
+    const was = await store.get('images', [book.id, stale.land]);
+    if (!was) return;
+    const live = (await library.livePictures(book.id)).sort((a, b) => (a.order || 0) - (b.order || 0));
+    const target = !was.removed ? was
+      : live.find((image) => (image.order || 0) > (was.order || 0)) || live[live.length - 1];
+    if (!target) return;
+    if (target.chapterIndex !== reader.state.chapterIndex) await reader.goTo({ chapter: target.chapterIndex });
+    reader.flashImage(target.href);
+  } catch (error) {
+    toast(error.message || 'That book could not be reopened');
+  }
+}
+
 async function jumpToImage(image) {
   back();
   if (current !== 'reader') await show('reader');
@@ -2807,7 +2844,8 @@ function wireDivide() {
       divideCuts = new Set();
       dividePages.release();
       await refreshShelf();
-      await show('library');
+      // Back to where it was asked for, not out to the shelf.
+      back();
       toast(`Divided into ${made.length} parts — the original is still here`, 7000, { kind: 'done' });
     } catch (error) {
       finish.fail();
@@ -2841,7 +2879,16 @@ let removeMode = 'pages';
 /* Thumbnails live only as long as the screen does. */
 const removeThumbs = blobs.urlCache();
 
-async function openRemove(book, mode) {
+/* Where Take out was opened from: 'reader' when it was the book being read,
+ * so finishing goes back to reading it rather than leaving it. */
+let removeOrigin = null;
+
+/**
+ * @param options.from   'reader' when opened from the book being read
+ * @param options.focus  the row to open at, as an index into what is shown
+ * @param options.pick   rows to start with picked
+ */
+async function openRemove(book, mode, { from = null, focus = null, pick = null } = {}) {
   let look;
   try {
     look = await trim.inspect(book.id);
@@ -2858,10 +2905,17 @@ async function openRemove(book, mode) {
   if (removeMode === 'chapters' && !look.canChapters) removeMode = 'pages';
 
   removing = look;
-  removePicked = new Set();
+  removeOrigin = from;
+  removePicked = new Set(pick || []);
   removeThumbs.release();
   renderRemove();
   await show('remove');
+  // Opened at the part of the book that was on screen, not at page one of six
+  // hundred.
+  if (focus != null) {
+    const row = el('remove-body').querySelector(`[data-at="${focus}"]`);
+    if (row) el('remove-body').scrollTop = Math.max(0, row.offsetTop - el('remove-body').clientHeight / 3);
+  }
 }
 
 /** Which of the two things can be taken out, offered only where both can. */
@@ -2991,6 +3045,7 @@ function renderRemove() {
 function removeCell(page, at) {
   const cell = document.createElement('button');
   cell.className = 'remove-cell';
+  cell.dataset.at = String(at);
   cell.setAttribute('aria-pressed', String(removePicked.has(at)));
   cell.onclick = () => { toggleRemove(at); };
 
@@ -3048,6 +3103,7 @@ function removeCell(page, at) {
 function removeLine(row, at, pages) {
   const line = document.createElement('button');
   line.className = 'remove-row';
+  line.dataset.at = String(at);
   line.setAttribute('aria-pressed', String(removePicked.has(at)));
   line.onclick = () => { toggleRemove(at); };
 
@@ -3186,19 +3242,21 @@ function stepRemoveLook(by) {
 
 /* ── blacking out part of a picture ──────────────────────────────────────
  *
- * Each panel is marked by pressing its four corners, and painted into the
- * picture on Save -- the book's copy is replaced, so the edit goes wherever
- * the book goes. redact.js does the geometry, the painting and the
- * bookkeeping; this is the editor around it.
+ * Each shape is drawn by tapping points round what is to be covered -- three
+ * for a triangle, six for a six-sided shape, as many as it takes -- and
+ * filled in with "Black out shape" (or a tap back on the first point). The
+ * shapes are painted into the picture on Save -- the book's copy is
+ * replaced, so the edit goes wherever the book goes. redact.js does the
+ * geometry, the painting and the bookkeeping; this is the editor around it.
  *
- * Pressing a corner and holding lets it be slid into place before letting
- * go, with the loupe showing what is under the finger. Once all four are down
- * the panel is chosen, and each corner -- or the middle of an edge, which
- * moves the whole edge -- can be dragged to fit. Pressing inside a panel
- * chooses it again later; dragging from inside moves it.
+ * Pressing a point and holding lets it be slid into place before letting go,
+ * with the loupe showing what is under the finger. Once filled, a shape is
+ * chosen, and each point -- or the middle of an edge, which moves the whole
+ * edge -- can be dragged to fit. Pressing inside a shape chooses it again
+ * later; dragging from inside moves it.
  *
- * The editor always shows the original with every panel drawn over it, never
- * the last saved edit: clearing every panel and saving is the picture as it
+ * The editor always shows the original with every shape drawn over it, never
+ * the last saved edit: clearing every shape and saving is the picture as it
  * came.
  */
 
@@ -3357,13 +3415,13 @@ function paintRedact() {
   const svg = el('redact-svg');
   const parts = r.shapes.map((shape, at) => {
     const drawn = redact.svgFor(shape);
-    return shape.type === 'quad'
+    return redact.isPolygon(shape)
       ? drawn.replace('<polygon ', `<polygon class="panel${at === r.chosen ? ' chosen' : ''}" `)
       : drawn;
   });
 
   const chosen = r.shapes[r.chosen];
-  if (chosen?.type === 'quad') {
+  if (redact.isPolygon(chosen)) {
     const pts = chosen.points.map(([x, y]) => `${x},${y}`).join(' ');
     parts.push(`<polygon class="outline" points="${pts}"/>`);
     for (const [x, y] of redact.edgeMiddles(chosen.points)) {
@@ -3378,37 +3436,52 @@ function paintRedact() {
     parts.push(redact.svgFor(chosen).replace(/fill="[^"]*"/, 'class="outline"'));
   }
 
-  if (r.pending.length) {
+  const n = r.pending.length;
+  if (n) {
     const pts = r.pending.map(([x, y]) => `${x},${y}`).join(' ');
-    if (r.pending.length > 1) parts.push(`<polyline class="pending" points="${pts}"/>`);
-    for (const [x, y] of r.pending) {
-      parts.push(`<circle class="placed" cx="${x}" cy="${y}" r="${8 * scale}"/>`);
+    if (n >= 3) parts.push(`<polygon class="preview" points="${pts}"/>`);
+    if (n > 1) parts.push(`<polyline class="pending" points="${pts}"/>`);
+    if (n >= 3) {
+      const [fx, fy] = r.pending[0];
+      const [lx, ly] = r.pending[n - 1];
+      parts.push(`<line class="closing" x1="${lx}" y1="${ly}" x2="${fx}" y2="${fy}"/>`);
     }
+    r.pending.forEach(([x, y], at) => {
+      parts.push(`<circle class="${at === 0 && n >= 3 ? 'placed first' : 'placed'}" cx="${x}" cy="${y}" r="${(at === 0 && n >= 3 ? 10 : 8) * scale}"/>`);
+    });
   }
 
   svg.innerHTML = parts.join('');
   svg.classList.toggle('editing', r.chosen >= 0);
 
-  el('redact-undo').disabled = !r.past.length && !r.pending.length;
-  el('redact-redo').disabled = !r.future.length || r.pending.length > 0;
-  el('redact-clear').disabled = !r.shapes.length && !r.pending.length;
+  el('redact-undo').disabled = !r.past.length && !n;
+  el('redact-redo').disabled = !r.future.length || n > 0;
+  el('redact-clear').disabled = !r.shapes.length && !n;
   el('redact-delete').disabled = r.chosen < 0;
+
+  // Kept in the layout when idle, never taken out of it: see the CSS.
+  el('redact-shape').classList.toggle('idle', !n);
+  el('redact-shape').setAttribute('aria-hidden', String(!n));
+  el('redact-shape-cancel').disabled = !n;
+  el('redact-shape-count').textContent = `${n} point${n === 1 ? '' : 's'}`;
+  el('redact-confirm').disabled = n < 3;
 
   const count = r.shapes.length;
   el('redact-caption').textContent = count
-    ? `Black out · ${count} panel${count === 1 ? '' : 's'}`
+    ? `Black out · ${count} shape${count === 1 ? '' : 's'}`
     : 'Black out';
 
   let note;
   if (r.warn) note = r.warn;
   else if (r.tool === 'move') note = 'Drag to look around the picture.';
-  else if (r.pending.length) {
-    const left = 4 - r.pending.length;
-    note = `Now the next corner — ${left} to go. Hold and slide to place it exactly.`;
+  else if (n && n < 3) {
+    note = 'Keep tapping round what you want covered. Hold and slide to place a point exactly.';
+  } else if (n) {
+    note = 'Add more points, or tap Black out shape — or the first point — to fill it in.';
   } else if (r.chosen >= 0) {
-    note = 'Drag a corner, or the dot in the middle of an edge, to fit the panel. Drag inside it to move it.';
+    note = 'Drag a point, or the dot in the middle of an edge, to adjust. Drag inside to move it.';
   } else {
-    note = 'Press the four corners of a panel to cover it.';
+    note = 'Tap points round what you want covered — as many as the shape needs.';
   }
   const notes = [note];
   if (r.zoom > 1 && r.tool !== 'move') notes.push('Use Move to look around.');
@@ -3418,9 +3491,30 @@ function paintRedact() {
   el('redact-hint').textContent = notes.join(' ');
 }
 
-/** A change that Undo can take back. */
-function changeRedact(next, chosen = -1) {
+/**
+ * Fill in the shape being drawn.
+ *
+ * @returns whether there was one to fill.
+ */
+function confirmShape() {
   const r = redacting;
+  if (!r || r.pending.length < 3) return false;
+  const shape = redact.poly(r.pending, r.colour);
+  r.pending = [];
+  if (redact.isTiny(shape)) {
+    r.warn = 'Those points are almost on top of each other — tap round the outline of what to cover.';
+    paintRedact();
+    return false;
+  }
+  r.warn = '';
+  changeRedact([...r.shapes, shape], r.shapes.length);
+  return true;
+}
+
+/** A change that Undo can take back. */
+function changeRedact(next, chosen = -1, picked = false) {
+  const r = redacting;
+  r.picked = picked;
   r.past.push(r.shapes);
   if (r.past.length > 200) r.past.shift();
   r.future = [];
@@ -3450,9 +3544,12 @@ function setRedactColour(colour) {
   for (const button of el('redact-colour').querySelectorAll('[data-colour]')) {
     button.setAttribute('aria-pressed', String(button.dataset.colour === colour));
   }
-  const chosen = r.shapes[r.chosen];
+  // Recoloured only when it was picked out on purpose: the shape just
+  // finished is chosen too, so its points can be adjusted, and choosing white
+  // for the next one turned that one white as well.
+  const chosen = r.picked ? r.shapes[r.chosen] : null;
   if (chosen && chosen.colour !== colour) {
-    changeRedact(r.shapes.map((shape, at) => (at === r.chosen ? { ...shape, colour } : shape)), r.chosen);
+    changeRedact(r.shapes.map((shape, at) => (at === r.chosen ? { ...shape, colour } : shape)), r.chosen, true);
   }
 }
 
@@ -3512,11 +3609,12 @@ function redactDown(event) {
     paintRedact();
   };
 
-  // Partway through a panel: each press is the next corner, unless it is on
-  // one already pressed, which is then slid instead.
+  // Partway through a shape: each press is the next point, unless it is on
+  // one already pressed, which is then slid instead -- and the first one,
+  // tapped without sliding, closes the shape.
   if (r.pending.length) {
     const near = r.pending.findIndex(([x, y]) => Math.hypot(point.x - x, point.y - y) <= reach);
-    if (near >= 0) return begin({ kind: 'pending', at: near });
+    if (near >= 0) return begin({ kind: 'pending', at: near, start: [...r.pending[near]] });
     r.pending.push(here);
     return begin({ kind: 'pending', at: r.pending.length - 1, placing: true });
   }
@@ -3530,6 +3628,7 @@ function redactDown(event) {
     const corner = redact.handleAt(r.shapes[at], point, reach);
     if (corner?.kind === 'corner') {
       r.chosen = at;
+      r.picked = true;
       return begin(corner);
     }
   }
@@ -3538,13 +3637,15 @@ function redactDown(event) {
   const inside = redact.shapeAt(r.shapes, point);
   if (inside >= 0) {
     r.chosen = inside;
-    if (r.shapes[inside].type === 'quad') return begin({ kind: 'whole' });
+    r.picked = true;
+    if (redact.isPolygon(r.shapes[inside])) return begin({ kind: 'whole' });
     paintRedact();
     return undefined;
   }
 
-  // Anywhere else is the first corner of a new panel.
+  // Anywhere else is the first point of a new shape.
   r.chosen = -1;
+  r.picked = false;
   r.pending = [here];
   return begin({ kind: 'pending', at: 0, placing: true });
 }
@@ -3574,15 +3675,12 @@ function redactUp(event) {
 
   if (drag.kind === 'pending') {
     if (cancelled && drag.placing) r.pending.splice(drag.at, 1);
-    if (r.pending.length === 4) {
-      const panel = redact.quad(r.pending, r.colour);
-      r.pending = [];
-      if (redact.isTiny(panel)) {
-        r.warn = 'Those corners are almost on top of each other — press the panel’s four corners.';
-        paintRedact();
-        return;
-      }
-      changeRedact([...r.shapes, panel], r.shapes.length);
+    // The first point tapped again, not slid: the shape is finished.
+    const [sx, sy] = drag.start || [];
+    const still = drag.start && Math.hypot(r.pending[0][0] - sx, r.pending[0][1] - sy) < REDACT_REACH * redactScale() / 3;
+    if (!cancelled && drag.at === 0 && still && r.pending.length >= 3) {
+      r.pending[0] = drag.start;
+      confirmShape();
       return;
     }
     paintRedact();
@@ -3705,8 +3803,70 @@ function hideRedactChip() {
   el('redact-chip').hidden = true;
 }
 
+/**
+ * Take the held page out, from the page itself.
+ *
+ * The same confirmation as the Take out screen -- the page, shown, and what
+ * goes with it -- over the book rather than instead of it, and back to
+ * reading at the page after it once it is gone.
+ */
+async function removePageHere(href) {
+  const book = reader.state.book;
+  if (!book) return;
+  let look;
+  try {
+    look = await trim.inspect(book.id);
+  } catch (error) {
+    return toast(error.message || 'That book could not be opened');
+  }
+  const page = look.pages.find((p) => p.picture === href);
+  if (!page) {
+    return toast('That picture is not a page on its own — use Take out to choose what goes', 5000);
+  }
+  removing = look;
+  removeMode = 'pages';
+  removePicked = new Set([page.at]);
+  removeOrigin = 'reader';
+  readerLanding = href;
+  await askAboutRemoval();
+}
+
+/**
+ * The toolbar's Take out: the whole screen of pages, opened where the book
+ * is, with the page on screen already picked -- and back into the book when
+ * it is done.
+ */
+async function removeHere() {
+  const book = reader.state.book;
+  if (!book) return;
+  const here = reader.picturesInView();
+  readerLanding = here[0] || null;
+  let look;
+  try {
+    look = await trim.inspect(book.id);
+  } catch (error) {
+    return toast(error.message || 'That book could not be opened');
+  }
+  if (look.canPages && here.length) {
+    const pages = look.pages.filter((p) => here.includes(p.picture));
+    const ats = pages.map((p) => p.at);
+    return openRemove(book, 'pages', {
+      from: 'reader',
+      focus: ats.length ? Math.min(...ats) : null,
+      pick: here.length === 1 ? ats : null,
+    });
+  }
+  // Prose: the chapters, opened at this one.
+  const mode = look.canChapters ? 'chapters' : 'pages';
+  const focus = mode === 'chapters'
+    ? look.rows.findIndex((row) => row.index === reader.state.chapterIndex)
+    : look.pages.findIndex((p) => p.chapterIndex === reader.state.chapterIndex);
+  return openRemove(book, mode, { from: 'reader', focus: focus >= 0 ? focus : null });
+}
+
 function wireRedactWhileReading() {
   el('redact-here').onclick = () => redactHere();
+  el('remove-here').onclick = () => removeHere();
 
   const host = el('page-host');
   const chip = el('redact-chip');
@@ -3724,9 +3884,10 @@ function wireRedactWhileReading() {
     const bookId = reader.state.book.id;
     chipTimer = setTimeout(() => {
       chipTimer = null;
-      chip.onclick = () => { hideRedactChip(); openRedact(bookId, href); };
+      el('chip-redact').onclick = () => { hideRedactChip(); openRedact(bookId, href); };
+      el('chip-remove').onclick = () => { hideRedactChip(); removePageHere(href); };
       // Above the finger, so the finger is not on top of it; kept on screen.
-      const width = 200;
+      const width = 300;
       chip.style.left = `${Math.max(12, Math.min(window.innerWidth - width - 12, pressX - width / 2))}px`;
       chip.style.top = `${Math.max(12, pressY - 76)}px`;
       chip.hidden = false;
@@ -3778,9 +3939,11 @@ async function showRedacted(bookId, href, blob) {
 async function saveRedact() {
   const r = redacting;
   if (!r || r.busy) return;
+  // A shape with enough points to be one is what was meant; fewer is not
+  // a shape yet, and saying so beats guessing at it.
+  if (r.pending.length >= 3) confirmShape();
   if (r.pending.length) {
-    const left = 4 - r.pending.length;
-    r.warn = `That panel has ${r.pending.length} of its 4 corners — press the last ${left === 1 ? 'one' : left}, or Undo them, then save.`;
+    r.warn = `That shape has only ${r.pending.length} point${r.pending.length === 1 ? '' : 's'} — add more, or Cancel shape, then save.`;
     paintRedact();
     return;
   }
@@ -3881,6 +4044,13 @@ function wireRedact() {
     r.warn = '';
     if (r.shapes.length) changeRedact([]);
     else paintRedact();
+  };
+  el('redact-confirm').onclick = () => confirmShape();
+  el('redact-shape-cancel').onclick = () => {
+    if (!redacting) return;
+    redacting.pending = [];
+    redacting.warn = '';
+    paintRedact();
   };
   el('redact-restore').onclick = () => restoreRedact();
   el('redact-cancel').onclick = () => leaveRedact();
@@ -4010,7 +4180,10 @@ async function askAboutRemoval() {
     `<b>${look.pagesLeft} page${look.pagesLeft === 1 ? '' : 's'} and ${
       look.chaptersLeft} chapter${look.chaptersLeft === 1 ? '' : 's'} left.</b>`
     + (parts.length ? ` ${escapeText(parts.join(' · '))}.` : '')
-    + ' Everything here can be put back from this screen until you discard it.';
+    + (removeOrigin === 'reader' && current !== 'remove'
+      // Asked from the page itself, where there is no "this screen".
+      ? ' It can be put back from Take out in the reader’s toolbar until you discard it.'
+      : ' Everything here can be put back from this screen until you discard it.');
 
   el('remove-confirm').hidden = false;
 }
@@ -4081,6 +4254,7 @@ async function runPutBack() {
   const done = progress.start('Putting it back');
   try {
     const out = await trim.putBack(id, { onProgress: done.step });
+    if (reader.state.book?.id === id) readerStale = { bookId: id, land: readerLanding };
     toast(`${out.what} back in the book`, 5000, { kind: 'done' });
     await refreshShelf();
     await reopenRemove(id);
@@ -4171,10 +4345,28 @@ function wireRemove() {
     const id = removing.book.id;
     const done = progress.start('Taking it out');
     try {
+      // Where the reader is, written down first: the removal moves the saved
+      // place along with the pages, and it can only move what was saved.
+      if (current === 'reader' && reader.state.book?.id === id) {
+        reader.holdPosition();
+        await store.flushPosition();
+      }
       const take = removeMode === 'pages' ? trim.removePages : trim.removeChapters;
       const out = await take(id, pickedKeys(), { onProgress: done.step });
 
       await refreshShelf();
+      if (reader.state.book?.id === id) readerStale = { bookId: id, land: readerLanding };
+
+      if (removeOrigin === 'reader') {
+        /* Back to reading, at the same place -- not to the list of pages,
+         * and certainly not to the shelf. */
+        const marks = out.marks ? `, ${out.marks} mark${out.marks === 1 ? '' : 's'} with it` : '';
+        removeOrigin = null;
+        if (current === 'remove') back();
+        else await reloadReader();
+        toast(`${out.what} taken out${marks} — put it back from Take out in the toolbar`, 7000, { kind: 'done' });
+        return;
+      }
       await reopenRemove(id);
 
       /* Said in full, because it is the one operation here that changes a
@@ -4358,7 +4550,10 @@ function wireWorkshop() {
       toast(failed.length
         ? `Built “${book.title}” — ${book.chapters} chapters · ${failed.length} part${failed.length === 1 ? '' : 's'} skipped: ${failed[0].reason}`
         : `Built “${book.title}” — ${book.chapters} chapters`, 8000, { kind: 'done' });
-      await show('library');
+      /* Straight into the book that was just made, not out to the shelf to
+       * go looking for it. */
+      const made = await store.get('books', book.id);
+      if (made) await openBook(made);
     } catch (error) {
       finish.fail();
       toast(error.message || 'That could not be built', 6000, { kind: 'failed' });
