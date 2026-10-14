@@ -26,6 +26,28 @@ const MEDIA = {
 
 const mediaFor = (name) => MEDIA[String(name).split('.').pop().toLowerCase()] || 'image/jpeg';
 
+/**
+ * A chapter's markup as XHTML, which is what an EPUB's chapters are.
+ *
+ * The book keeps its chapters as HTML, where a line break is "<br>" and
+ * nothing closes it. Written as they were into an .xhtml file, that is not
+ * XML at all: an EPUB of four hundred chapters went out with four hundred
+ * and forty unclosed line breaks, and a strict reader -- or this app's own
+ * importer, on a slow day -- has to fall back or give up on every one.
+ * Parsed as HTML and written out again as XML, a break comes out as
+ * "<br/>", an ampersand as "&amp;", and nothing is left unclosed.
+ */
+const XHTML_NS = / xmlns="http:\/\/www\.w3\.org\/1999\/xhtml"/g;
+export function toXhtml(html) {
+  if (typeof DOMParser !== 'function' || typeof XMLSerializer !== 'function') return html;
+  const doc = new DOMParser().parseFromString(`<!doctype html><html><body>${html}</body></html>`, 'text/html');
+  const out = new XMLSerializer();
+  let xml = '';
+  for (const node of doc.body.childNodes) xml += out.serializeToString(node);
+  // Declared once, on <html>, by the file around it -- not on every paragraph.
+  return xml.replace(XHTML_NS, '');
+}
+
 /* The extension a picture is written under.
  *
  * Read off what the picture now is, where that is known, and only then off
@@ -169,6 +191,8 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
       if (!target) return '';
       return `<img src="../${target}" alt=""/>`;
     });
+
+    body = toXhtml(body);
 
     /* The namespace declared once on <html> rather than on every section,
        and no newlines between the parts: with a chapter per scraped page this

@@ -135,7 +135,10 @@ async function locateDirectory(blob, tail, tailStart, eocd) {
  * volumes, an unsupported compression method, encryption. The caller falls
  * back rather than this guessing.
  */
-export async function openZip(blob) {
+/**
+ * @param options.inMemory  the size up to which the archive is read whole
+ */
+export async function openZip(blob, { inMemory = IN_MEMORY } = {}) {
   if (!canStream()) return null;
 
   const tailStart = Math.max(0, blob.size - TAIL_BYTES);
@@ -214,10 +217,59 @@ export async function openZip(blob) {
     at += 46 + nameLength + extraLength + commentLength;
   }
 
-  return { entries, blob, ...readers(blob, entries) };
+  /* Held whole, where it is small enough to be.
+   *
+   * Every entry read from a Blob is several round trips -- the local header,
+   * then the data, then the inflated result turned back into text -- and on
+   * a phone each one goes out of the page to the browser process and back.
+   * An EPUB of four hundred chapters was some two thousand of them in a row:
+   * three seconds on a desktop, most of it waiting, and long enough on a
+   * phone that a mass import sat on that one book and looked stuck. A book
+   * of a few megabytes costs nothing to hold, and then every entry is read
+   * from memory instead. The large archives this reader exists for are still
+   * read a piece at a time. */
+  const whole = blob.size <= inMemory
+    ? new Uint8Array(await bytesOf(blob))
+    : null;
+
+  return { entries, blob, ...readers(blob, entries, whole) };
 }
 
-function readers(blob, entries) {
+/** Archives up to this size are read once, into memory, and served from there. */
+export const IN_MEMORY = 48 * 1024 * 1024;
+
+function bytesOf(blob) {
+  if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error);
+    fr.readAsArrayBuffer(blob);
+  });
+}
+
+/** Inflate bytes already in memory, without a Blob -- so without leaving the page. */
+async function inflate(data) {
+  const source = new ReadableStream({
+    start(controller) {
+      controller.enqueue(data);
+      controller.close();
+    },
+  });
+  return new Uint8Array(await new Response(source.pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+}
+
+const UTF8_LOOSE = new TextDecoder('utf-8');
+
+function readers(blob, entries, whole = null) {
+  /** An entry's bytes, from memory: the archive is already here. */
+  function fromMemory(entry) {
+    const header = new DataView(whole.buffer, whole.byteOffset + entry.localAt, 30);
+    const start = entry.localAt + 30 + header.getUint16(26, true) + header.getUint16(28, true);
+    const data = whole.subarray(start, start + entry.compressedSize);
+    return entry.method === 0 ? Promise.resolve(data) : inflate(data);
+  }
+
   /**
    * The local header repeats the name and extra field, and its lengths do not
    * have to match the central directory's, so the data offset can only be
@@ -262,12 +314,20 @@ function readers(blob, entries) {
 
     /** The entry as a Blob of the given type, or null if it is not there. */
     async blob(name, type) {
+      if (whole) {
+        const entry = entries.get(name);
+        return entry ? new Blob([await fromMemory(entry)], { type }) : null;
+      }
       const data = await raw(name);
       return data ? new Blob([data], { type }) : null;
     },
 
     /** The entry decoded as UTF-8 text. */
     async text(name) {
+      if (whole) {
+        const entry = entries.get(name);
+        return entry ? UTF8_LOOSE.decode(await fromMemory(entry)) : null;
+      }
       const data = await raw(name);
       if (!data) return null;
       if (typeof data.text === 'function') return data.text();

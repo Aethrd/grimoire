@@ -13,7 +13,8 @@ export async function boot() {
 
   for (const key of ['window','document','Node','NodeFilter','DOMParser','Image','CSS',
                      'HTMLElement','customElements','getComputedStyle','requestAnimationFrame',
-                     'matchMedia','Blob','File','FileReader','URL','navigator','localStorage']) {
+                     'matchMedia','Blob','File','FileReader','URL','navigator','localStorage',
+                     'XMLSerializer']) {
     if (window[key] === undefined) continue;
     try { globalThis[key] = window[key]; }
     catch { Object.defineProperty(globalThis, key, { value: window[key], configurable: true }); }

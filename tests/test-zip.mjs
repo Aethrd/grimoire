@@ -228,4 +228,88 @@ await t('folder names from a Korean Windows zip come out in Korean, not question
   assert.deepEqual(plain.names(), ['Books/a.txt']);
 });
 
+/* ── a book of many chapters ─────────────────────────────────────────── */
+
+console.log('\na book of many chapters');
+
+/** A Blob that counts how often it is read, as every read on a phone leaves the page. */
+function counted(file) {
+  const reads = { count: 0 };
+  const wrap = (blob) => new Proxy(blob, {
+    get(target, key) {
+      if (key === '__target') return target;
+      if (key === 'slice') return (...args) => wrap(target.slice(...args));
+      if ((key === 'arrayBuffer' || key === 'stream' || key === 'text') && typeof target[key] === 'function') {
+        return (...args) => { reads.count += 1; return target[key](...args); };
+      }
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return { blob: wrap(file), reads };
+}
+
+// Where the Blob has no arrayBuffer() -- as here, and on an old WebView --
+// reads go through FileReader, so those are counted too.
+let fileReads = null;
+{
+  const original = window.FileReader.prototype.readAsArrayBuffer;
+  window.FileReader.prototype.readAsArrayBuffer = function readAsArrayBuffer(blob) {
+    if (fileReads) fileReads.count += 1;
+    return original.call(this, blob && blob.__target ? blob.__target : blob);
+  };
+}
+
+async function manyChapters(count) {
+  const zip = new JSZip();
+  zip.file('mimetype', 'application/epub+zip');
+  zip.file('META-INF/container.xml', '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
+  const items = [];
+  const refs = [];
+  for (let i = 1; i <= count; i++) {
+    zip.file(`OEBPS/text/ch${i}.xhtml`, `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter ${i}</title></head><body><p>Chapter ${i} <br>Words go here, and here.</p></body></html>`);
+    items.push(`<item id="c${i}" href="text/ch${i}.xhtml" media-type="application/xhtml+xml"/>`);
+    refs.push(`<itemref idref="c${i}"/>`);
+  }
+  zip.file('OEBPS/content.opf', `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Many</dc:title></metadata><manifest>${items.join('')}</manifest><spine>${refs.join('')}</spine></package>`);
+  return new File([await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })], 'many.epub');
+}
+
+await t('a book of hundreds of chapters is read from the file once, not once a chapter', async () => {
+  /* Not A Regressor: 448 chapters, and a mass import sat on it long enough
+   * to look stuck. Every chapter was several reads of the file, each one a
+   * round trip out of the page on a phone. Now a book this size is read
+   * whole, once, and its chapters come from memory. */
+  const file = await manyChapters(300);
+  const { blob, reads } = counted(file);
+  fileReads = reads;
+  const zip = await zipreader.openZip(blob);
+  for (let i = 1; i <= 300; i++) assert.match(await zip.text(`OEBPS/text/ch${i}.xhtml`), new RegExp(`Chapter ${i} `));
+  fileReads = null;
+  assert.ok(reads.count <= 3, `${reads.count} reads of the file for 300 chapters`);
+});
+
+await t('an archive too big to hold is still read a piece at a time, and reads the same', async () => {
+  const file = await manyChapters(20);
+  const { blob, reads } = counted(file);
+  fileReads = reads;
+  const zip = await zipreader.openZip(blob, { inMemory: 0 });
+  const held = await zipreader.openZip(file);
+  for (let i = 1; i <= 20; i++) {
+    const name = `OEBPS/text/ch${i}.xhtml`;
+    assert.equal(await zip.text(name), await held.text(name));
+  }
+  fileReads = null;
+  assert.ok(reads.count > 20, 'a large archive was read whole');
+  const stored = await build({ 'a.txt': 'plain' }, { store: true });
+  assert.equal(await (await zipreader.openZip(stored, { inMemory: 0 })).text('a.txt'), 'plain');
+  assert.equal(await (await zipreader.openZip(stored)).text('a.txt'), 'plain');
+});
+
+await t('the whole book imports, chapter titles and all', async () => {
+  const parsed = await parse.parse(await manyChapters(120));
+  assert.equal(parsed.chapters.length, 120);
+  assert.equal(parsed.chapters[119].title, 'Chapter 120');
+});
+
 console.log(`\n${pass} assertions passed`);
