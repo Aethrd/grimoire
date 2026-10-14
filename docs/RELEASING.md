@@ -3,7 +3,27 @@
 There is no app store here. A release is a signed APK attached to a GitHub
 release, which you or anyone else installs directly.
 
-## Once: make a signing key
+## Updating without uninstalling
+
+Every build -- the debug APK from **Actions → CI** as much as a release -- is
+signed with `app/signing/grimoire.keystore`, which lives in the repository.
+Android installs an update only over an app signed with the same key, so any
+APK built from this repository installs straight over the last one, library
+and all. Before it was there, each CI run signed with a key made fresh for
+that run, and every update meant uninstalling first, which deletes every book.
+
+The key is not secret and does not need to be: it only shows that an update
+came from the same place as the app it replaces. Do not delete or regenerate
+it -- a different key is a different app as far as Android is concerned.
+
+The debug build's version number is the CI run number, so each one is newer
+than the last.
+
+## Optional: a signing key of your own
+
+The shared key is enough for installing your own builds. A private key, kept
+out of the repository, is only worth having if others install the APK and you
+want only your builds to be able to update it.
 
 ```bash
 keytool -genkeypair -v \
@@ -27,8 +47,9 @@ Add four repository secrets (**Settings → Secrets and variables → Actions**)
 | `KEY_ALIAS` | `grimoire` |
 | `KEY_PASSWORD` | key password |
 
-Without them the build still runs, signs with the debug key, and warns. Fine
-for a one-off test, not for anything you intend to update.
+Without them the build still runs, signs with the shared key, and says so.
+Switching an installed app from the shared key to a private one needs one
+last uninstall -- back up first (Settings → Data & vault → Save a backup).
 
 For local builds, `keystore.properties` in the project root does the same job
 and is git-ignored:

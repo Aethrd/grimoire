@@ -99,6 +99,29 @@ android {
     }
 
     signingConfigs {
+        /* One signing key for every build, kept in the repository.
+         *
+         * Android will only install an update over an app signed with the
+         * same key. A debug build is signed with whatever debug key the
+         * machine building it has -- and a CI runner makes a fresh one every
+         * run -- so each APK from Actions was a stranger to the last: "App
+         * not installed", uninstall, and the library went with it.
+         *
+         * This key is not a secret and is not meant to be. It proves only
+         * that an update came from the same place as the install it replaces,
+         * which is all a sideloaded app needs. A release signed with a key of
+         * your own (docs/RELEASING.md) still takes precedence for release
+         * builds. */
+        val shared = file("signing/grimoire.keystore")
+        if (shared.exists()) {
+            getByName("debug") {
+                storeFile = shared
+                storePassword = "grimoire-sideload"
+                keyAlias = "grimoire"
+                keyPassword = "grimoire-sideload"
+            }
+        }
+
         if (hasReleaseSigning) {
             create("release") {
                 storeFile = file(storeFilePath!!)
