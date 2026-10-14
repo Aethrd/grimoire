@@ -1151,6 +1151,73 @@ await t('every picture gets a box of the frame\'s size, where the frame was draw
   assert.match(css, /body\[data-frame\]\[data-images="fill"\] \.page-flow \.pic:not\(\.small\) img \{ object-fit: cover; \}/);
 });
 
+await t('a picture in a figure, a quote or a list still lands on the frame, with no empty page before it', async () => {
+  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
+  const flow = el('page-flow');
+  const viewport = el('page-viewport');
+  viewport.getBoundingClientRect = () => ({ left: 0, top: 50, right: 400, bottom: 750, width: 400, height: 700 });
+  const keep = [...flow.childNodes];
+  flow.innerHTML = '<section class="chapter"><p>Words.</p>'
+    + '<figure style="margin: 16px 40px"><span class="pic" id="in-figure"><img alt=""></span><figcaption>Caption</figcaption></figure>'
+    + '<blockquote style="margin: 0; padding-left: 12px; border-left: 2px solid"><p>Quoted.</p><span class="pic" id="in-quote"><img alt=""></span></blockquote>'
+    + '<p>Before <span class="pic small in-text" id="emoji"><img alt=""></span> after.</p></section>';
+  try {
+    reader.setPictureFrame({ l: 0.1, t: 0.1, r: 0.9, b: 0.9 });
+    const figure = flow.querySelector('figure');
+    // The figure's indent is taken back off, so the box sits where the frame is.
+    assert.equal(document.getElementById('in-figure').style.getPropertyValue('--pic-in'), '40px');
+    assert.equal(document.getElementById('in-quote').style.getPropertyValue('--pic-in'), '14px');
+    // The figure opens with its picture, so it gives up its top spacing; the
+    // quote and the chapter do not, since words come first in both.
+    assert.ok(figure.classList.contains('pic-lead'), 'the figure keeps a margin that pushes its picture a page on');
+    assert.ok(!flow.querySelector('blockquote').classList.contains('pic-lead'));
+    assert.ok(!flow.querySelector('section').classList.contains('pic-lead'));
+    // A picture small enough to sit in a sentence is not framed, so leads nothing.
+    assert.ok(!flow.querySelectorAll('p')[2].classList.contains('pic-lead'));
+    // No frame: nothing is marked.
+    reader.setPictureFrame(null);
+    reader.setPictureFrame({ l: 0.1, t: 0.1, r: 0.9, b: 0.9 });
+    document.getElementById('in-figure').classList.add('small');
+    reader.setPictureFrame({ l: 0.1, t: 0.1, r: 0.9, b: 0.8 });
+    assert.ok(!figure.classList.contains('pic-lead'), 'an ornament took the figure\'s spacing away');
+  } finally {
+    reader.setPictureFrame(null);
+    flow.replaceChildren(...keep);
+    delete viewport.getBoundingClientRect;
+  }
+  // Moved into place, not pushed there by margins -- a margin before a page
+  // break is what left a blank page in front of every framed picture.
+  assert.match(css, /body\[data-frame\] \.page-flow \.pic:not\(\.small\) \{[^}]*margin: 0;[^}]*position: relative;[^}]*left: calc\(var\(--pic-x, 0px\) - var\(--pic-in, 0px\)\);[^}]*top: var\(--pic-y, 0px\)/);
+  assert.match(css, /body\[data-frame\]\[data-mode="paged"\] \.page-flow \.pic-lead \{[^}]*margin-top: 0/);
+  assert.match(css, /\.page-flow \.pic\.small\.in-text \{[^}]*display: inline-block/);
+  const readerSource = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
+  assert.match(readerSource, /Math\.min\(w, h\) < 100/, 'a thin divider would be given a page of its own');
+});
+
+await t('a picture drawn through SVG comes in as a picture', async () => {
+  const JSZip = (await import('jszip')).default;
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const zip = new JSZip();
+  zip.file('META-INF/container.xml', '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
+  zip.file('OEBPS/c.opf', '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Plates</dc:title></metadata><manifest>'
+    + '<item id="a" href="text/a.xhtml" media-type="application/xhtml+xml"/><item id="b" href="text/b.xhtml" media-type="application/xhtml+xml"/>'
+    + '<item id="p" href="img/plate.png" media-type="image/png"/><item id="q" href="img/plain.png" media-type="image/png"/></manifest><spine><itemref idref="a"/><itemref idref="b"/></spine></package>');
+  // A page that is only an SVG-wrapped picture, and one with words and both kinds.
+  zip.file('OEBPS/text/a.xhtml', '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:xlink="http://www.w3.org/1999/xlink"><body><div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><image width="10" height="10" xlink:href="../img/plate.png"/></svg></div></body></html>');
+  zip.file('OEBPS/text/b.xhtml', '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><p>Words.</p><img src="../img/plain.png" alt=""/><svg xmlns="http://www.w3.org/2000/svg"><image href="../img/plate.png"/></svg></body></html>');
+  zip.file('OEBPS/img/plate.png', PNG);
+  zip.file('OEBPS/img/plain.png', PNG);
+  const book = await parse.parse(new File([await zip.generateAsync({ type: 'nodebuffer' })], 'plates.epub'));
+  assert.equal(book.chapters.length, 2, 'the page that is only a picture was dropped');
+  assert.deepEqual(book.images.map((i) => i.href).sort(), ['OEBPS/img/plain.png', 'OEBPS/img/plate.png']);
+  assert.match(parse.chapterHtml(book.chapters[0]), /^<div><img data-img="OEBPS\/img\/plate\.png"><\/div>$/);
+  const second = parse.chapterHtml(book.chapters[1]);
+  assert.match(second, /data-img="OEBPS\/img\/plain\.png"/);
+  assert.match(second, /data-img="OEBPS\/img\/plate\.png"/);
+  assert.ok(!/<svg|<image/i.test(second), 'SVG got through the sanitiser');
+});
+
 await t('Settings offers the frame, and Fill, beside the other fittings', async () => {
   const pane = await behaviourPane();
   assert.match(pane.textContent, /Picture frame/);

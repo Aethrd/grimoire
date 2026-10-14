@@ -482,6 +482,11 @@ section.block > h2 { margin-top: 18px; }
 .page-flow img.small { width: auto !important; height: auto !important;
                        max-width: 100% !important; max-height: none !important; }
 
+/* A small picture among words -- an emoji, a glyph, a little animated icon
+   -- sits in the line like a letter rather than splitting the sentence. */
+.page-flow .pic.small.in-text { display: inline-block; margin: 0 .1em; vertical-align: middle; }
+.page-flow .pic.small.in-text img { display: inline-block; margin: 0; }
+
 /* Fit screen: the whole picture, as large as the page allows. Nothing cropped
    and nothing distorted, which is why it is the default. */
 [data-images="screen"] .page-flow img {
@@ -561,9 +566,18 @@ body[data-mode="paged"][data-images="smart"] .pic {
    at that place on its page, and the fitting decides what happens inside the
    box: shown whole, filled and cropped, stretched, or panned. A picture
    starts a page of its own, so the box is where the frame was drawn. */
+/* Moved into place rather than pushed there with margins. A top margin on a
+   box that starts a page made the browser decide it no longer fitted, so it
+   went over to the page after and left an empty page behind it; shifting it
+   after layout leaves the page breaks alone. --pic-in takes off however far
+   the picture's container is indented, so a picture in a figure or a quote
+   still lands on the frame. */
 body[data-frame] .page-flow .pic:not(.small) {
   width: var(--pic-w); height: var(--pic-h);
-  margin: var(--pic-y) 0 0 var(--pic-x);
+  margin: 0;
+  position: relative;
+  left: calc(var(--pic-x, 0px) - var(--pic-in, 0px));
+  top: var(--pic-y, 0px);
   max-width: none; max-height: none;
   overflow: hidden;
 }
@@ -571,8 +585,13 @@ body[data-frame][data-mode="paged"] .page-flow .pic:not(.small) {
   break-before: column; -webkit-column-break-before: always;
   break-after: column; -webkit-column-break-after: always;
 }
+/* What a framed picture is the first thing in gives up its top spacing, so
+   the picture's page starts with the picture (see markLead in reader.js). */
+body[data-frame][data-mode="paged"] .page-flow .pic-lead {
+  margin-top: 0; padding-top: 0; border-top-width: 0;
+}
 body[data-frame][data-mode="scroll"] .page-flow .pic:not(.small) {
-  margin-top: .5em; margin-bottom: .5em;
+  top: 0; margin: .5em 0;
 }
 /* Inside the box. */
 body[data-frame] .page-flow .pic:not(.small) img {

@@ -1340,7 +1340,7 @@ const firstPicture = (chapter) => picturesOf(chapter)[0] || null;
 const lastPicture = (chapter) => picturesOf(chapter).slice(-1)[0] || null;
 
 const countPictures = (chapter) =>
-  ((chapter?.html || chapter?.source || '').match(/<img\b/gi) || []).length;
+  ((chapter?.html || chapter?.source || '').match(/<img\b|<image\b/gi) || []).length;
 
 function plainTextOf(chapter) {
   const markup = chapter.html ?? chapter.source ?? '';

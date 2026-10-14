@@ -212,6 +212,18 @@ function readChapter(root, resolveImage) {
 
       const tag = child.tagName.toUpperCase();
       if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK' || tag === 'IFRAME') continue;
+      /* A picture drawn through SVG -- <svg><image xlink:href=...></svg> --
+         is how a great many illustrated and fixed-layout books place a page
+         that should fill the screen. SVG itself is not let through, so the
+         picture inside it is taken out and treated as the picture it is;
+         otherwise it went the way of the SVG and the page came out blank. */
+      if (tag === 'IMAGE') {
+        const src = svgImageSource(child);
+        const href = src && resolveImage(src);
+        if (href) html.push(`<img data-img="${escapeAttr(href)}">`);
+        continue;
+      }
+
       // Not allowed, but its contents might be: unwrap rather than drop.
       if (!ALLOWED.has(tag)) { walk(child); continue; }
 
@@ -242,12 +254,21 @@ function readChapter(root, resolveImage) {
   };
 }
 
-/** Image sources named in markup, without parsing it. */
+const XLINK = 'http://www.w3.org/1999/xlink';
+
+/** Where an SVG <image> takes its picture from: xlink:href, or plain href. */
+function svgImageSource(node) {
+  return node.getAttribute('xlink:href') || node.getAttributeNS?.(XLINK, 'href')
+    || node.getAttribute('href') || null;
+}
+
+/** Image sources named in markup, without parsing it -- <img src>, and the
+ *  <image href> an SVG-wrapped page uses -- in the order they appear. */
 function imageRefs(markup) {
   const out = [];
-  const pattern = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
+  const pattern = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']|<image\b[^>]*?\b(?:xlink:)?href\s*=\s*["']([^"']+)["']/gi;
   let match;
-  while ((match = pattern.exec(markup)) !== null) out.push(match[1]);
+  while ((match = pattern.exec(markup)) !== null) out.push(match[1] || match[2]);
   return out;
 }
 
@@ -448,7 +469,7 @@ async function parseEpub(file, onProgress, { onImage } = {}) {
       else images.push(record);
     }
 
-    if (!text && !/<img\b/i.test(raw)) continue;
+    if (!text && !/<img\b|<image\b/i.test(raw)) continue;
 
     chapters.push({
       index: chapters.length,

@@ -191,6 +191,65 @@ function placeFrame(cs) {
   flow.style.setProperty('--pic-y', `${Math.round(top - room.top)}px`);
   flow.style.setProperty('--pic-w', `${Math.floor(right - left)}px`);
   flow.style.setProperty('--pic-h', `${Math.floor(bottom - top)}px`);
+  indentPictures();
+}
+
+/* How far in from the page's edge each picture's container starts.
+ *
+ * The frame is measured from the edge of the page, but a picture is laid out
+ * inside whatever holds it: a figure (every comic page is one) is indented by
+ * the browser, a quotation by its rule, a list by its bullets. Without taking
+ * that back off, a framed picture sat that far to the right of where the
+ * frame was drawn and ran off the side of its page onto the next.
+ *
+ * Read from the containers' styles rather than measured from the layout,
+ * because in paged mode the layout is in columns and a position on screen
+ * says as much about which page a picture is on as where on it. */
+function indentPictures(root = flow) {
+  if (!pictureFrame || !root) return;
+  for (const pic of root.querySelectorAll('.pic')) {
+    let indent = 0;
+    for (let node = pic.parentElement; node && node !== flow; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      indent += (parseFloat(style.marginLeft) || 0) + (parseFloat(style.borderLeftWidth) || 0)
+        + (parseFloat(style.paddingLeft) || 0);
+    }
+    if (indent) pic.style.setProperty('--pic-in', `${Math.round(indent)}px`);
+    else pic.style.removeProperty('--pic-in');
+    markLead(pic);
+  }
+}
+
+/* The containers a framed picture opens.
+ *
+ * A picture starts a page of its own, and whatever it is the first thing in
+ * -- the figure round every comic page, a paragraph, the chapter -- starts
+ * with it. Their top spacing then lands either at the top of the picture's
+ * page, pushing it below the frame and off the bottom, or just before the
+ * page break, where the browser took it as reason enough to leave a whole
+ * page empty. So those containers are marked, and lose their top spacing
+ * while a frame is in use. */
+function markLead(pic) {
+  const lead = !!pictureFrame && !pic.classList.contains('small');
+  let child = pic;
+  for (let node = pic.parentElement; node && node !== flow; node = node.parentElement) {
+    if (!lead || !opens(node, child)) {
+      if (!node.classList.contains('pic-lead')) break;
+      node.classList.remove('pic-lead');
+    } else {
+      node.classList.add('pic-lead');
+    }
+    child = node;
+  }
+}
+
+/** Whether nothing comes before `child` inside `node` -- no words, no element. */
+function opens(node, child) {
+  for (let before = child.previousSibling; before; before = before.previousSibling) {
+    if (before.nodeType === Node.ELEMENT_NODE) return false;
+    if (before.nodeType === Node.TEXT_NODE && before.nodeValue.trim()) return false;
+  }
+  return true;
 }
 
 function relayout() {
@@ -475,10 +534,19 @@ function hydrateImages(section, index) {
         // runs out of room first.
         img.style.setProperty('--ar', (w / h).toFixed(4));
         // A divider or an ornament keeps its own size -- and, in a picture
-        // frame, is not given a page of its own.
-        const small = w < 200 && h < 200;
+        // frame, is not given a page of its own. Small both ways, or a thin
+        // line of any length: a rule drawn as a picture is 600 by 30.
+        const small = (w < 200 && h < 200) || Math.min(w, h) < 100;
         img.classList.toggle('small', small);
         img.parentElement?.classList.toggle('small', small);
+        // One among words -- an emoji, a glyph, a little moving icon --
+        // stays in its sentence instead of breaking the line round it.
+        const holder = img.parentElement?.parentElement;
+        // Only something the size of a letter or two: a bigger one forced
+        // into a line opens a hole in the paragraph and reads worse.
+        const icon = Math.max(w, h) <= 96;
+        img.parentElement?.classList.toggle('in-text', icon && !!holder && /\S/.test(holder.textContent || ''));
+        if (img.parentElement?.classList.contains('pic')) markLead(img.parentElement);
       };
       if (img.complete && img.naturalWidth) shape();
       else img.addEventListener('load', shape, { once: true });
@@ -938,7 +1006,7 @@ function chapterHasText() {
 /** How many pictures a chapter holds, for books that are made of them. */
 function picturesIn(chapter) {
   const html = chapter.html || chapter.source || '';
-  return (html.match(/<img\b/gi) || []).length;
+  return (html.match(/<img\b|<image\b/gi) || []).length;
 }
 
 function estimateTotals() {
