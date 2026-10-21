@@ -97,6 +97,77 @@ await t('escapes markup found in plain text', async () => {
   assert.ok(!/<img/.test(parse.chapterHtml(evil.chapters[0])), 'raw HTML leaked out of a .txt file');
 });
 
+console.log('plain text in any encoding');
+
+/* A Chinese web novel as it is usually downloaded: GBK, a paragraph a line,
+ * no blank lines, and chapters headed 第一章. Every one of those used to go
+ * wrong -- read as UTF-8 into question marks, joined into one paragraph, and
+ * left as one chapter -- and a phone froze laying the result out. */
+const bytesOf = (b64) => Uint8Array.from(Buffer.from(b64, 'base64'));
+const samples = {
+  gbk: 'tdrSu9XCILP1yOu9rbr+CqGhoaHL+9W+1NrJvcPFx7CjrM3718XUtrSmtcTUxrqjo6zQxMDvz+vXxdXi0KnE6sC0t6LJ+rXEysLH6aGjCqGhoaGhsMTj1ea1xNKq19/C8KO/obHQocqmw8POyrXAoaMKtdq2/tXCILfnxvDUxtO/CqGhoaHI/czs1q6686Osy/vAtLW9wcu+qbPHo6yzx8DvyMvAtMjLzfmhowo=',
+  big5: 'ssSkQLO5IKrspEqmv7TyCqFAoUClTK+4pmKkc6r5q2WhQbHmtdu7t7NCqrq2s678oUGk37jMt1G127NvqMemfqjTtW+lzaq6qMaxoaFDCqFAoUChdadBr3Wquq1uqKu23KFIoXakcK52qWaw3blEoUMKssSkR7O5IK23sF+2s7TpCqFAoUCkVKTRpKer4aFBpUyo06jspEaoyquwoUGrsLjMpEio06RIqbmhQwo=',
+  sjis: 'keaI6phiIILNgraC3ILoCoFAlN6CzYl3gsyDeoFbg4CCyZengsGCxIFBiZOCrYLMjlKC8IypgsSCooK9gUKCoILMk/qCzIKxgsaC8IFBgtyCvoLNgsGCq4LogsaKb4KmgsSCooLpgUIKgXWWe5OWgsmNc4KtgsyBSIF2gsaU3o+Xgs2Vt4Kigr2BQgqR5pPxmGIgk4yLngqBQI5Pk/qM44FBlN6CzZOMi56CyZKFgqKCvYFCCg==',
+  euckr: 'waYxwOUgvcPA2wqx17TCIL+qIL7Vv6EgvK28rSC41SC76sC7ILnZtvO6uLDtIMDWvvq02S4gsdezr8DHIMDPwLsgvsbB97W1ILbItsjI9yCx4r7vx8+w7SDA1rTZLgoiwaS4uyCwobTCILDFvt8/IiCx17PgsKEgubC++rTZLgrBpjLA5SC8rb/vCrvnyOogyMQsILHXtMIgvK2/77+hILW1wvjH37TZLgo=',
+  utf16: 'LHsATuB6IAAdUmVRX2xWbgoAADAAMNZO2XooV3Fc6JVNUgz/G2dAd9yPBFmEdpFOd20M/8NfzJHzYEB32Y+bTnReZWfRUx91hHaLTsVgAjAKAAAwADAcIGBPH3eEdoGJcI0XVB//HSAPXAheuVnulVOQAjAKACx7jE7geiAAzph3jZFOjG0KAAAwADAJTilZS04OVAz/1k5lZzBShk6sTs5XDP/OV8yRuk5lZ7pOgF8CMAoA',
+};
+const expected = {
+  gbk: ['第一章 初入江湖', '第二章 风起云涌', '他站在山门前'],
+  big5: ['第一章 初入江湖', '第二章 風起雲湧', '他站在山門前'],
+  sjis: ['第一話 はじまり', '第二話 東京', '彼は駅のホームに立って'],
+  euckr: ['제1장 시작', '제2장 서울', '그는 역 앞에 서서'],
+  utf16: ['第一章 初入江湖', '第二章 风起云涌', '他站在山门前'],
+};
+for (const [name, b64] of Object.entries(samples)) {
+  await t(`reads a ${name} text file as what it says`, async () => {
+    const book = await parse.parse(new File([bytesOf(b64)], `${name}.txt`));
+    const [first, second, opening] = expected[name];
+    assert.deepEqual(book.chapters.map((c) => c.title), [first, second], `${name} was read as ${book.chapters[0].title}`);
+    const html = parse.chapterHtml(book.chapters[0]);
+    assert.ok(html.includes(opening), `${name} came out as ${html.slice(0, 60)}`);
+    assert.ok(!html.includes('�'), `${name} has unreadable characters in it`);
+    assert.equal(book.damaged, false);
+  });
+}
+await t('a line is a paragraph where the lines end sentences, and wrapping where they do not', async () => {
+  const lines = await parse.parse(new File(['一行。\n二行。\n三行。\n四行。'], 'lines.txt'));
+  assert.equal((parse.chapterHtml(lines.chapters[0]).match(/<p>/g) || []).length, 4);
+  const wrapped = await parse.parse(new File([
+    'The road bent north and the\ncarts followed it into the\nhills.\n\nThen it stopped, and\nso did they.'], 'wrapped.txt'));
+  const html = parse.chapterHtml(wrapped.chapters[0]);
+  assert.equal((html.match(/<p>/g) || []).length, 2, 'hard-wrapped lines were taken for paragraphs');
+  assert.match(html, /followed it into the hills\./);
+});
+await t('a Chinese line is not a heading for having no capitals', async () => {
+  const book = await parse.parse(new File(['第一章 开始\n他走了。\n她笑了\n我们回家吧\n第二章 回来\n又是一天。'], 'caps.txt'));
+  assert.deepEqual(book.chapters.map((c) => c.title), ['第一章 开始', '第二章 回来']);
+});
+await t('nothing comes in as one enormous paragraph or chapter', async () => {
+  // A million characters with no line breaks and no headings at all.
+  const sentence = '他看着远方的山，心里想着很多事情。';
+  const huge = await parse.parse(new File([sentence.repeat(20000)], 'wall.txt'));
+  assert.ok(huge.chapters.length > 4, `still ${huge.chapters.length} chapter(s)`);
+  for (const chapter of huge.chapters) {
+    const html = parse.chapterHtml(chapter);
+    assert.ok(html.length <= 66 * 1024, `a chapter of ${Math.round(html.length / 1024)}KB`);
+    for (const p of html.match(/<p>[^<]*<\/p>/g)) assert.ok(p.length <= 4100, `a paragraph of ${p.length} characters`);
+  }
+  assert.equal(huge.chapters[0].title, 'Part 1');
+  const text = huge.chapters.map((c) => parse.chapterHtml(c).replace(/<[^>]+>/g, '')).join('');
+  assert.equal(text, sentence.repeat(20000), 'text was lost or changed in the cutting');
+});
+await t('a file ruined before it arrived is read, and said to be ruined', async () => {
+  // What GBK read as UTF-8 and saved again looks like: replacement marks.
+  const ruined = ('����С˵����。\n').repeat(400);
+  const book = await parse.parse(new File([ruined], 'ruined.txt'));
+  assert.equal(book.damaged, true);
+  assert.ok(book.chapters.length >= 1);
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /if \(parsed\.damaged\)/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /was already damaged before it reached the app/);
+});
+
 console.log('Markdown');
 const md = await parse.parse(new File(['# Opening\n\nSome **bold** text.\n\n## Next\n\nMore.'], 'notes.md'));
 await t('reads Markdown headings and inline emphasis', () => {

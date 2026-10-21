@@ -604,6 +604,28 @@ await t('search does not find deleted books', async () => {
   assert.equal((screensSource.match(/!b\.binnedAt/g) || []).length, 3);
 });
 
+await t('a text file imported as one frozen block is read again when picked again', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const text = '第一章 开始\n他走了。\n第二章 回来\n她笑了。\n';
+  const file = new File([text], 'frozen-novel.txt');
+  // What the old reading of text left behind: the whole book in one paragraph.
+  const old = await store.add('books', {
+    title: 'frozen-novel', format: 'TXT', fingerprint: `frozen-novel.txt:${file.size}`, addedAt: 1, chapterCount: 1,
+  });
+  await store.put('chapters', { bookId: old, index: 0, title: 'Beginning', words: 1, html: `<p>${'字'.repeat(90 * 1024)}</p>` });
+  const out = await library.importFiles([file], {});
+  assert.equal(out.reread, 1, 'the frozen copy was kept instead of read again');
+  assert.equal(out.added, 1);
+  assert.equal(await store.get('books', old), undefined, 'the frozen copy is still there');
+  const fresh = (await store.byIndex('books', 'fingerprint', `frozen-novel.txt:${file.size}`))[0];
+  const chapters = await store.byIndex('chapters', 'bookId', fresh.id);
+  assert.deepEqual(chapters.sort((a, b) => a.index - b.index).map((c) => c.title), ['第一章 开始', '第二章 回来']);
+  // Picked a third time, the good copy is kept.
+  const again = await library.importFiles([file], {});
+  assert.equal(again.added, 0);
+  assert.equal(again.already, 1);
+});
+
 /* ── a file the page is not allowed to read ──────────────────────────────
  *
  * "The requested file could not be read, typically due to permission problems

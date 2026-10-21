@@ -470,7 +470,15 @@ export async function importFiles(files, { onProgress, onDone, transient = false
        * is on the shelf, or in the Vault, is skipped, and the result says so
        * rather than counting it as nothing. */
       const copies = await store.byIndex('books', 'fingerprint', fingerprint);
-      const kept = copies.find((book) => !book.binnedAt && !book.transient && !book.importing);
+      let kept = copies.find((book) => !book.binnedAt && !book.transient && !book.importing);
+      /* A text file imported before text was read properly is replaced, not
+       * kept: it came in as one enormous paragraph that froze the phone, and
+       * picking the file again is the only way to get it read right. */
+      if (kept && await outgrownText(kept)) {
+        await destroyBooks([kept.id]);
+        results.reread = (results.reread || 0) + 1;
+        kept = null;
+      }
       if (kept) {
         if (kept.inVault) results.inVault = (results.inVault || 0) + 1;
         else results.already = (results.already || 0) + 1;
@@ -606,6 +614,11 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       // together are otherwise two identical "1 book added" lines.
       if (!results.titles) results.titles = [];
       results.titles.push(parsed.title || name);
+      // Read, but already ruined before it got here; see looksDamaged.
+      if (parsed.damaged) {
+        if (!results.damaged) results.damaged = [];
+        results.damaged.push(parsed.title || name);
+      }
     } catch (error) {
       results.failed.push({ name, reason: error.message || 'Could not be parsed' });
     }
@@ -1036,6 +1049,20 @@ export const naturalOrder = (a, b) => String(a || '').localeCompare(String(b || 
  */
 
 export const isBinned = (book) => !!book?.binnedAt;
+
+/**
+ * Whether a book from a text file was imported by the old reading of text:
+ * a chapter or a paragraph far bigger than one is now allowed to be (see
+ * boundedChapters and splitLongParagraph in parse.js).
+ */
+async function outgrownText(book) {
+  if (book.format !== 'TXT' && book.format !== 'MD') return false;
+  const chapters = await store.byIndex('chapters', 'bookId', book.id);
+  return chapters.some((chapter) => {
+    const html = chapter.html || '';
+    return html.length > 80 * 1024 || /<p>[^<]{6000}/.test(html);
+  });
+}
 
 /** Out of the way, with the time it happened kept so the bin can be ordered. */
 export async function binBooks(ids) {

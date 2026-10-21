@@ -637,8 +637,121 @@ function readText(file) {
   });
 }
 
+/* ── which encoding a text file is in ──────────────────────────────────
+ *
+ * Every text file used to be read as UTF-8, which is right for most and
+ * ruinous for the rest: a Chinese novel saved as GBK, a Japanese one as
+ * Shift-JIS, came out as a page of question-mark diamonds. So the bytes are
+ * read first and the encoding chosen from them -- a byte-order mark if there
+ * is one, UTF-8 if the file is valid UTF-8, and otherwise whichever of the
+ * East Asian encodings makes the most sense of it, judged by how much of
+ * what it produces is ordinary text in that language.
+ */
+
+/** The commonest Chinese characters, shared by simplified and traditional. */
+/* The three hundred commonest Chinese characters -- about two thirds of any
+ * Chinese text -- with the traditional forms of the ones that differ. Kept
+ * short on purpose: a long list matches the characters a wrong encoding
+ * produces as readily as the right ones. */
+const COMMON_HAN = new Set([...'的一是不了在人有我他这个们中来上大为和国地到以说时要就出会可也你对生能而子那得于着下自之年过发后作里用道行所然家种事成方多经么去法学如都同现当没动面起看定天分还进好小部其些主样理心她本前开但因只从想实日者意无力它与长把机十民第公此已工使情明性知全三又关点正业外将两高间由问很最重并物手应战向头文体相见被利什二等产或新己制身果加西月话合回特代内信表化老给世位次度门任常先海通教儿原东声提立及比员解水名真论处走义各入几口认条平系气题活更别打女变四神总何电数安少报才结反受目太量再感建做接必场件计管期直命山金指许保至形便空决展马五基眼书非则听白却界光放强即像难且思王象完设色路记南住告类求程北边死张该交万取們這個來時會說對過發後裡經麼現當動還進樣開從實與長機無點業將兩間問應戰頭體見產']);
+
+/** The commonest Korean syllables, for the same purpose. */
+const COMMON_HANGUL = new Set([...'이다는의에하고를가지은서기사리도대한로아자수나해그어시일으인라게것을만들보요니정면장상우주있없했었습니고와부전과위내적말여때소생제동무원회성또많년할하여거간신모경저오두중데되치']);
+
+/** How much like ordinary text a decoding is, per character that is not ASCII. */
+function scoreDecoding(text) {
+  let score = 0;
+  let wide = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) continue;
+    wide += 1;
+    if (code === 0xFFFD) score -= 20;                                  // could not be read at all
+    else if (COMMON_HAN.has(text[i])) score += 3;                      // an everyday Chinese character
+    else if (code >= 0x3040 && code <= 0x30FF) score += 2.5;           // kana: Japanese
+    else if (COMMON_HANGUL.has(text[i])) score += 3;                   // an everyday Korean syllable
+    else if (code >= 0xAC00 && code <= 0xD7A3) score += 0.3;           // a rarer one
+    else if (code >= 0x3000 && code <= 0x303F) score += 1;             // CJK punctuation
+    else if (code >= 0xFF01 && code <= 0xFF5E) score += 1;             // full-width punctuation
+    else if (code >= 0x4E00 && code <= 0x9FFF) score += 0.3;           // a rarer character
+    else if (code >= 0xFF61 && code <= 0xFF9F) score -= 3;             // half-width katakana: almost always a misreading
+    else if (code < 0xA0 || (code >= 0xE000 && code <= 0xF8FF)) score -= 5;  // control or private-use
+    else if (code >= 0xD800 && code <= 0xDFFF) score -= 2;             // a character outside the common plane
+  }
+  return wide ? score / wide : 0;
+}
+
+/** The likeliest encoding for bytes that are not UTF-8. */
+export function guessEncoding(bytes) {
+  const sample = bytes.subarray(0, 256 * 1024);
+  let best = 'windows-1252';
+  let bestScore = 0.5;           // below this, none of them read as language
+  // UTF-16 competes too: a file of Chinese in UTF-16 with no mark has no
+  // zero bytes to give it away, and reads as nonsense in anything else.
+  for (const name of ['gb18030', 'big5', 'shift_jis', 'euc-kr', 'utf-16le', 'utf-16be']) {
+    let text;
+    try { text = new TextDecoder(name).decode(sample); } catch { continue; }
+    const score = scoreDecoding(text);
+    if (score > bestScore) { best = name; bestScore = score; }
+  }
+  return best;
+}
+
+function readBytes(file) {
+  if (typeof file.arrayBuffer === 'function') return file.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error);
+    fr.readAsArrayBuffer(file);
+  });
+}
+
+/** A text file's words, in whatever encoding it was saved in. */
+export async function decodeText(file) {
+  if (typeof TextDecoder !== 'function') return readText(file);
+  const bytes = new Uint8Array(await readBytes(file));
+  const [a, b, c] = bytes;
+  if (a === 0xEF && b === 0xBB && c === 0xBF) return new TextDecoder('utf-8').decode(bytes.subarray(3));
+  if (a === 0xFF && b === 0xFE) return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+  if (a === 0xFE && b === 0xFF) return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+
+  // UTF-16 without a mark: every other byte is zero in anything mostly ASCII.
+  const head = bytes.subarray(0, 4096);
+  let evenZero = 0; let oddZero = 0;
+  for (let i = 0; i < head.length; i++) if (!head[i]) { if (i % 2) oddZero += 1; else evenZero += 1; }
+  if (oddZero > head.length / 4 && evenZero < head.length / 50) return new TextDecoder('utf-16le').decode(bytes);
+  if (evenZero > head.length / 4 && oddZero < head.length / 50) return new TextDecoder('utf-16be').decode(bytes);
+
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder(guessEncoding(bytes)).decode(bytes);
+  }
+}
+
+/**
+ * Whether text arrived already ruined: a file that was once in another
+ * encoding, read as UTF-8 by something along the way and saved like that,
+ * so that most of its characters are the replacement mark. Nothing can bring
+ * those characters back -- they are not in the file any more -- so the most
+ * that can be done is to say so, rather than let it look like this reader's
+ * mistake.
+ */
+export function looksDamaged(text) {
+  const sample = text.slice(0, 200000);
+  let lost = 0; let wide = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const code = sample.charCodeAt(i);
+    if (code < 0x80) continue;
+    wide += 1;
+    if (code === 0xFFFD) lost += 1;
+  }
+  return wide > 200 && lost / wide > 0.2;
+}
+
 export async function parseText(file) {
-  const raw = await readText(file);
+  const raw = await decodeText(file);
   const format = formatOf(file.name);
   let blocks;
 
@@ -653,9 +766,11 @@ export async function parseText(file) {
   }
 
   const lang = null;
+  blocks = boundedChapters(blocks);
   return {
     title: file.name.replace(/\.[^.]+$/, ''),
     author: null, series: null, seriesIndex: null, lang, coverBlob: null,
+    damaged: looksDamaged(raw),
     chapters: blocks.map((b, i) => ({
       index: i, title: b.title, fromToc: false, html: b.html,
       words: countWords(plainTextOf(b.html), lang),
@@ -663,12 +778,91 @@ export async function parseText(file) {
     images: [],
     tocSource: format === 'HTML' || format === 'MD'
       ? 'heading levels in the file'
-      : 'blank-line breaks, because plain text carries no structure',
+      : 'the chapter headings in the text, or parts of an even length where it has none',
   };
 }
 
+/* Where a paragraph ends, in plain text.
+ *
+ * Two conventions, and a book uses one or the other. English text from
+ * Project Gutenberg and the like is wrapped at seventy characters with a blank
+ * line between paragraphs; a Chinese or Japanese web novel, and plenty of
+ * others, puts each paragraph on a line of its own and never leaves a line
+ * blank. Read the second way as the first, a whole novel became one paragraph
+ * -- a million characters in a single block, which a phone spends the better
+ * part of a minute laying out, if it does not give up first.
+ *
+ * So: where the lines between blank lines mostly end a sentence, each line is
+ * a paragraph; where they mostly stop mid-sentence, they are wrapping and the
+ * blank lines are the breaks. */
+const SENTENCE_END = /[.!?。！？…”"」』）)\]～~—:：]$/;
+
+export function paragraphsOf(raw) {
+  const text = raw.replace(/\r\n?/g, '\n');
+  const blocks = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+  let byLine = false;
+  if (lines.length > blocks.length) {
+    const ended = lines.filter((l) => SENTENCE_END.test(l)).length / lines.length;
+    const perBlock = lines.length / Math.max(1, blocks.length);
+    // A block of many lines that end sentences is many paragraphs; one block
+    // holding the whole book is never meant as one paragraph.
+    byLine = blocks.length === 1 || (perBlock > 1.5 && ended > 0.5);
+  }
+  const paragraphs = byLine ? lines : blocks.map((b) => b.replace(/\s*\n\s*/g, ' '));
+  return paragraphs.flatMap(splitLongParagraph);
+}
+
+/* No paragraph longer than a few screens.
+ *
+ * Even with the breaks found, a file can hold a block with no breaks in it at
+ * all, and one enormous paragraph is the thing a page layout handles worst.
+ * Cut at a sentence end near the limit, or at a space, or -- in a language
+ * without spaces -- wherever the limit falls. */
+const LONG_PARAGRAPH = 4000;
+
+function splitLongParagraph(text) {
+  if (text.length <= LONG_PARAGRAPH) return [text];
+  const out = [];
+  let rest = text;
+  while (rest.length > LONG_PARAGRAPH) {
+    const window = rest.slice(0, LONG_PARAGRAPH);
+    let cut = -1;
+    for (const mark of ['。', '！', '？', '. ', '! ', '? ', '…', '\u3000', ' ']) {
+      const at = window.lastIndexOf(mark);
+      if (at > LONG_PARAGRAPH / 2) { cut = at + mark.length; break; }
+    }
+    if (cut <= 0) cut = LONG_PARAGRAPH;
+    out.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut);
+  }
+  if (rest.trim()) out.push(rest.trim());
+  return out.filter(Boolean);
+}
+
+/* A heading, in a book with no markup to say so.
+ *
+ * "Chapter 12", "PART TWO", and their equivalents elsewhere: 第十二章, 第3回,
+ * 序章, 番外, プロローグ, 제12장. The all-capitals rule only applies where letters have
+ * capitals -- Chinese has none, so every short line used to pass it, and a
+ * novel read a line at a time became thousands of one-line chapters. */
+const CJK_HEADING = /^(第\s*[0-9０-９零〇一二三四五六七八九十百千万两]+\s*[章节回卷部集篇话話幕]|序章|序言|楔子|引子|尾声|尾聲|后记|後記|番外|终章|終章|プロローグ|エピローグ|あとがき|제\s*[0-9]+\s*[장화부권]|프롤로그|에필로그)/;
+
+function looksLikeHeadingLine(p) {
+  if (p.length > 60) return false;
+  if (CJK_HEADING.test(p)) return true;
+  if (/[.!?。！？]$/.test(p)) return false;
+  if (/^(chapter|part|book|prologue|epilogue|interlude)\b/i.test(p)) return true;
+  // All capitals, in a line that is mostly letters that have capitals.
+  const cased = (p.match(/[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]/g) || []).length;
+  return cased >= 3 && cased / p.replace(/\s/g, '').length > 0.6 && p === p.toUpperCase();
+}
+
 function splitPlainText(raw, markdown) {
-  const paragraphs = raw.replace(/\r\n?/g, '\n').split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  const paragraphs = markdown
+    ? raw.replace(/\r\n?/g, '\n').split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+    : paragraphsOf(raw);
   const chapters = [];
   let current = null;
 
@@ -676,10 +870,9 @@ function splitPlainText(raw, markdown) {
 
   for (const p of paragraphs) {
     const md = markdown && /^(#{1,3})\s+(.*)$/.exec(p);
-    // Even without Markdown, a short all-caps line on its own is a heading in
-    // practice — it is how nearly every plain-text book marks a chapter.
-    const looksLikeHeading = !markdown && p.length < 60 && !/[.!?]$/.test(p)
-      && (/^(chapter|part|book)\b/i.test(p) || p === p.toUpperCase());
+    // Even without Markdown, a short line that names itself a chapter is a
+    // heading in practice; see looksLikeHeadingLine.
+    const looksLikeHeading = !markdown && looksLikeHeadingLine(p);
 
     if (md) { push(md[2].trim()); continue; }
     if (looksLikeHeading) { push(p); continue; }
@@ -698,6 +891,37 @@ function splitPlainText(raw, markdown) {
 
   if (!chapters.length) chapters.push({ title: 'Text', html: `<p>${escapeHtml(raw)}</p>` });
   return chapters;
+}
+
+/* No chapter longer than a reader can lay out quickly.
+ *
+ * A text with no headings it can find is one chapter, and one chapter is laid
+ * out in one go -- for a whole novel, tens of seconds on a phone, and the page
+ * holds every word of the book in memory while it is open. So a chapter over
+ * the limit is cut into parts at paragraph boundaries, each named for the one
+ * it came from. */
+const LONG_CHAPTER = 64 * 1024;
+
+export function boundedChapters(chapters) {
+  const out = [];
+  for (const chapter of chapters) {
+    if (chapter.html.length <= LONG_CHAPTER) { out.push(chapter); continue; }
+    const paragraphs = chapter.html.split(/(?<=<\/p>)/);
+    const parts = [];
+    let html = '';
+    for (const p of paragraphs) {
+      if (html && html.length + p.length > LONG_CHAPTER) { parts.push(html); html = ''; }
+      html += p;
+    }
+    if (html) parts.push(html);
+    const base = chapter.title === 'Beginning' || chapter.title === 'Text' ? 'Part' : chapter.title;
+    parts.forEach((part, n) => out.push({
+      ...chapter,
+      title: parts.length === 1 ? chapter.title : `${base} ${n + 1}`,
+      html: part,
+    }));
+  }
+  return out;
 }
 
 function splitOnHeadings(html) {

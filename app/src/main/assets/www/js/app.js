@@ -1777,6 +1777,7 @@ async function importNow(files, { transient = false } = {}, done) {
     results.already ? `${results.already} already on your shelf` : null,
     results.inVault ? `${results.inVault} already in the Vault` : null,
     results.replaced ? `${results.replaced} replaced ${results.replaced === 1 ? 'its copy' : 'their copies'} in the Bin` : null,
+    results.reread ? `${results.reread} read again and split properly, replacing the copy that froze` : null,
     results.restored ? `${results.restored} given back what your backup held for ${results.restored === 1 ? 'it' : 'them'}` : null,
   ].filter(Boolean).join(' · ');
   const note = besides ? ` · ${besides}` : '';
@@ -1813,6 +1814,17 @@ async function importNow(files, { transient = false } = {}, done) {
       : folders
         ? `${results.added} book${results.added === 1 ? '' : 's'} added across ${folders} folder${folders === 1 ? '' : 's'}${took}`
         : `${results.added} book${results.added === 1 ? '' : 's'} added${took}`) + note, 6000, { kind: 'done' });
+  }
+
+  /* A file that was ruined before it arrived, said plainly and on its own.
+   *
+   * Its characters were lost when something saved it in the wrong encoding,
+   * so it imports as a page of question marks -- which looks exactly like a
+   * reader that cannot read Chinese, unless it is told otherwise. */
+  const [damaged] = results.damaged || [];
+  if (damaged) {
+    toast(`“${damaged}” was already damaged before it reached the app — most of its characters `
+      + 'were lost when it was saved in the wrong encoding. A fresh copy of the file should read properly.', 12000);
   }
 
   /* A web novel saved a page per chapter is imported as it came -- a book per
