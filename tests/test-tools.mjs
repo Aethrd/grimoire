@@ -538,7 +538,45 @@ await t('the pad is drawn on the reader, where it was put, and turns pages on in
   } finally {
     host.getBoundingClientRect = realRect;
   }
-  assert.match(app, /const onControl = \(e\) => !!e\.target\?\.closest\?\.\('#chapter-pad, #scrub-rail, #edge-hint'\)/);
+  assert.match(app, /const onControl = \(e\) => !!e\.target\?\.closest\?\.\('#chapter-pad, #edge-hint'\)/);
+
+  /* Held on the rail -- a long press on a word at the end of a line, to
+   * highlight it -- is not a scrub. The rail used to jump on contact, so
+   * highlighting near the margin threw the reader pages away. Only a drag
+   * along it moves the book. */
+  const rail = el('scrub-rail');
+  const realRail = rail.getBoundingClientRect;
+  rail.getBoundingClientRect = () => ({ left: 360, right: 386, top: 100, bottom: 700, width: 26, height: 600 });
+  const railTouch = (type, x, y) => {
+    const event = new window.Event(type, { bubbles: true, cancelable: true });
+    const at = { clientX: x, clientY: y, identifier: 2, target: rail };
+    Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : [at] });
+    Object.defineProperty(event, 'changedTouches', { value: [at] });
+    rail.dispatchEvent(event);
+  };
+  try {
+    reader.state.pageCount = 5;
+    reader.goToPage(1);
+    await settle(100);
+    railTouch('touchstart', 373, 650);
+    await settle(700);                       // held, as a long press is
+    railTouch('touchmove', 375, 652);        // the slight drift of a held finger
+    railTouch('touchend', 375, 652);
+    await settle(100);
+    assert.equal(reader.state.page, 1, 'a press held on the rail moved the book');
+    assert.equal(el('scrub-bubble').hidden, true);
+
+    // A drag along it still scrubs.
+    railTouch('touchstart', 373, 120);
+    for (const y of [140, 300, 500, 690]) railTouch('touchmove', 373, y);
+    assert.equal(el('scrub-bubble').hidden, false, 'dragging the rail shows nothing');
+    railTouch('touchend', 373, 690);
+    await settle(100);
+    assert.equal(reader.state.page, 4, 'a drag down the rail did not move through the chapter');
+    assert.equal(el('scrub-bubble').hidden, true);
+  } finally {
+    rail.getBoundingClientRect = realRail;
+  }
 
   /* Dragging cannot be driven here: jsdom has no layout, so a synthetic touch
    * carries no coordinates to drag by. The grip being the only handle, and

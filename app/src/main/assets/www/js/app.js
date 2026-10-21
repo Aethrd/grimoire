@@ -4787,7 +4787,9 @@ function wireReader() {
    * forward tap zone. Next turned two pages, Previous turned one back and one
    * forward and so did nothing, and in scroll mode each press showed or hid
    * the bars instead of moving the text. */
-  const onControl = (e) => !!e.target?.closest?.('#chapter-pad, #scrub-rail, #edge-hint');
+  // Not the scrub rail: it only takes a drag, and a drag is never a tap. A
+  // tap on it is a tap on the page's right edge, which is what it looks like.
+  const onControl = (e) => !!e.target?.closest?.('#chapter-pad, #edge-hint');
 
   host.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1 || onControl(e)) { moved = true; return; }
@@ -4941,13 +4943,44 @@ function wireReader() {
     reader.setScrubbing(true);
     reader.scrubTo(fraction);
   };
-  rail.addEventListener('touchmove', (e) => { scrub(e.touches[0].clientY); e.preventDefault(); });
-  rail.addEventListener('touchstart', (e) => scrub(e.touches[0].clientY), { passive: true });
-  rail.addEventListener('touchend', () => {
+  /* Only a drag along it moves the book.
+   *
+   * The rail sits on the right edge, over the end of every line, and it used
+   * to jump the moment a finger touched it: a long press on a word near the
+   * margin -- the way a passage is highlighted -- landed on the rail and threw
+   * the reader several pages on, and a tap on the far edge jumped instead of
+   * turning one page. Now a touch that stays where it landed is left alone,
+   * to be the tap or the long press it was, and the rail takes over only once
+   * the finger slides along it. */
+  const DRAG = 10;
+  let railFrom = null;
+  let railOn = false;
+  rail.addEventListener('touchstart', (e) => {
+    railFrom = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    railOn = false;
+  }, { passive: true });
+  rail.addEventListener('touchmove', (e) => {
+    const touch = e.touches[0];
+    if (!railOn) {
+      if (!railFrom) return;
+      const dy = Math.abs(touch.clientY - railFrom.y);
+      const dx = Math.abs(touch.clientX - railFrom.x);
+      if (dy < DRAG || dy < dx) return;     // not a drag along the rail, yet
+      railOn = true;
+    }
+    scrub(touch.clientY);
+    e.preventDefault();
+  });
+  const railDone = () => {
+    railFrom = null;
+    if (!railOn) return;
+    railOn = false;
     bubble.hidden = true;
     rail.classList.remove('dragging');
     reader.setScrubbing(false);
-  });
+  };
+  rail.addEventListener('touchend', railDone);
+  rail.addEventListener('touchcancel', railDone);
 
   // The progress bar is draggable too, and releases to a page boundary.
   const track = el('progress-track');
