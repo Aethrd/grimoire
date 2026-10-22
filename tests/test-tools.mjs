@@ -598,7 +598,7 @@ await t('search does not find deleted books', async () => {
   assert.ok(!found.includes(gone), 'a deleted book was found');
   // Nor counted in its folder, nor caught by Select all, nor grouped.
   const panelsSource = read('app/src/main/assets/www/js/panels.js');
-  assert.match(panelsSource, /const visible = books\.filter\(\(b\) => !b\.binnedAt/);
+  assert.match(panelsSource, /const visible = books\.filter\(\(b\) => onShelf\(b\)/);
   assert.match(app, /!book\.importing && !book\.transient && !book\.binnedAt/);
   const screensSource = read('app/src/main/assets/www/js/screens.js');
   assert.equal((screensSource.match(/!b\.binnedAt/g) || []).length, 3);
@@ -872,6 +872,44 @@ await t('an archive saved over an older file gives back its own books, not the o
   assert.match(java, /if \(written >= 0 && written != expected\)/);
   const saved = java.slice(java.indexOf('copyInto(target, source);'), java.indexOf('} catch (Throwable e) {', java.indexOf('copyInto(target, source);')));
   assert.match(saved, /exportSaved/, '"Saved" is said before the file is checked');
+});
+
+await t('a bundle of editions is one book in every count', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  // Start from an empty library, so the counts are only these.
+  for (const b of await store.all('books')) await store.deleteBook(b.id);
+  for (const e of await store.all('events')) await store.del('events', e.id);
+
+  // One novel kept in Korean and in English, bundled; one book on its own;
+  // one in the bin; one only opened from a file manager.
+  const raw = await store.add('books', { title: 'Raw', lang: 'ko', folder: 'Novels', addedAt: 1 });
+  const english = await store.add('books', { title: 'English', lang: 'en', folder: 'Novels', addedAt: 2, finishedAt: 5 });
+  for (const id of [raw, english]) { const b = await store.get('books', id); b.bundleId = raw; await store.put('books', b); }
+  const alone = await store.add('books', { title: 'Alone', lang: 'en', folder: 'Novels', addedAt: 3 });
+  await store.add('books', { title: 'Binned', addedAt: 4, binnedAt: 9, finishedAt: 6, folder: 'Novels' });
+  await store.add('books', { title: 'Passing', addedAt: 5, transient: true, folder: 'Novels' });
+  // Read a little of both editions, and of the other book.
+  for (const bookId of [raw, english, alone]) {
+    await store.add('events', { bookId, day: store.dayKey(Date.now()), at: Date.now(), pages: 3, words: 900, activeMs: 60000, chapters: 1 });
+  }
+
+  assert.equal(library.countWorks(await store.all('books')), 4, 'the helper does not see the bundle');
+
+  await panels.openStats();
+  const stats = document.getElementById('stats-body').textContent;
+  assert.match(stats, /2Books — in the library/, `the library is not two books: ${/\d+Books/.exec(stats)?.[0]}`);
+  assert.match(stats, /1Finished/, 'finishing one edition is not finishing one book');
+  assert.match(stats, /Books touched2of 2 on the shelf/, 'reading both editions counted as two books');
+  assert.match(stats, /First book finished.*Earned/s);
+
+  await panels.openFolders(() => {});
+  assert.match(document.getElementById('folders-count').textContent, /1 folder · 2 books/);
+  const novels = [...document.querySelectorAll('#folders-list .list-row')].find((r) => /Novels/.test(r.textContent));
+  assert.equal(novels.querySelector('.trail').textContent, '2');
+
+  // The Groups preview draws the shelf's way too.
+  assert.match(read('app/src/main/assets/www/js/screens.js'), /groupBooks\(sortBooks\(collapseBundles\(all, draft\.group\), draft\.keys\), draft\.group\)/);
 });
 
 /* ── a file the page is not allowed to read ──────────────────────────────

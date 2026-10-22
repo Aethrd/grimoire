@@ -134,6 +134,35 @@ export const STATUS_LABELS = Object.fromEntries(STATUSES);
 export const isBundled = (book) => !!book.bundleId;
 export const leadsBundle = (book) => book.bundleId === book.id;
 
+/* ── one book, however many editions ──────────────────────────────────────
+ *
+ * A bundle is a translation and its raw, or two scans of one volume: one
+ * book, kept as several files. Counted as several, a library of forty novels
+ * each kept in Korean and English said eighty, and finishing one counted
+ * twice. These say which book an edition is, by the same rule the shelf uses
+ * to draw one tile for the lot -- so every count agrees with what is shown. */
+
+/** Which book this is an edition of: its bundle, where the bundle holds, or itself. */
+export function workOf(book, byId) {
+  const leader = book?.bundleId != null ? byId.get(book.bundleId) : null;
+  return leader && leader.bundleId === book.bundleId ? `bundle:${book.bundleId}` : `book:${book?.id}`;
+}
+
+/**
+ * How many books these are, a bundle counting once.
+ *
+ * @param among  the books a bundle is looked up in -- the whole shelf, when
+ *               counting a part of it such as the finished ones, since a
+ *               bundle's leader need not be among those.
+ */
+export function countWorks(books, among = books) {
+  const byId = new Map(among.map((b) => [b.id, b]));
+  return new Set(books.map((book) => workOf(book, byId))).size;
+}
+
+/** Whether a book is on the shelf: not in the bin, not half-imported, not only passing through. */
+export const onShelf = (book) => !book.binnedAt && !book.importing && !book.transient;
+
 /**
  * Reduce a list to one entry per bundle.
  *

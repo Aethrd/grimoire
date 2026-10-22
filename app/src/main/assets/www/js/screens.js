@@ -4,7 +4,7 @@ import * as store from './store.js';
 import { chapterPlainText } from './parse.js';
 import * as reader from './reader.js';
 import * as library from './library.js';
-import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, vaultUnlocked } from './library.js';
+import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, collapseBundles, vaultUnlocked } from './library.js';
 import { pool, measure } from './blobs.js';
 
 const el = (id) => document.getElementById(id);
@@ -96,7 +96,9 @@ function renderSort() {
 async function previewTree() {
   const all = (await store.all('books'))
     .filter((b) => !b.binnedAt && !b.importing && (!b.inVault || vaultUnlocked));
-  const tree = groupBooks(sortBooks(all, draft.keys), draft.group);
+  // As the shelf will draw it: a bundle is one book unless the grouping
+  // splits its editions apart.
+  const tree = groupBooks(sortBooks(collapseBundles(all, draft.group), draft.keys), draft.group);
   const host = el('group-preview');
   host.innerHTML = '';
   const walk = (nodes, depth) => {

@@ -7,7 +7,7 @@
 import * as store from './store.js';
 import * as theme from './theme.js';
 import * as reader from './reader.js';
-import { setVaultUnlocked, vaultUnlocked } from './library.js';
+import { setVaultUnlocked, vaultUnlocked, countWorks, workOf, onShelf } from './library.js';
 import { toast } from './screens.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
@@ -666,12 +666,18 @@ export async function openStats() {
    * Time and pages only see what happened in the app. Words and chapters see
    * what was read wherever it was read, so those are the ones worth showing
    * an average of. */
-  const shelf = await store.all('books');
+  /* Books, as the shelf has them: what is on it, outside a locked vault,
+   * with a bundle of editions counted once. The bin is not the library. */
+  const shelf = books.filter((b) => onShelf(b) && !hidden.has(b.id));
+  const shelfCount = countWorks(shelf);
   const totalWords = log.reduce((n, e) => n + (e.words || 0), 0);
   const totalChapters = log.reduce((n, e) => n + (e.chapters || 0), 0);
   const elsewhereWords = log.filter((e) => e.elsewhere).reduce((n, e) => n + (e.words || 0), 0);
   const activeDays = [...byDay.values()].filter((d) => d.words > 0).length;
-  const booksTouched = new Set(log.map((e) => e.bookId).filter(Boolean)).size;
+  // Reading the raw and then the translation is reading one book.
+  const everyBook = new Map(books.map((b) => [b.id, b]));
+  const booksTouched = new Set(log.map((e) => e.bookId).filter(Boolean)
+    .map((id) => (everyBook.has(id) ? workOf(everyBook.get(id), everyBook) : `book:${id}`))).size;
 
   const averages = document.createElement('section');
   averages.className = 'block';
@@ -697,7 +703,7 @@ export async function openStats() {
   fact('Read elsewhere', totalWords
     ? `${Math.round((elsewhereWords / totalWords) * 100)}%`
     : '—', 'copied out of the app');
-  fact('Books touched', String(booksTouched), `of ${shelf.length} on the shelf`);
+  fact('Books touched', String(booksTouched), `of ${shelfCount} on the shelf`);
 
   averages.appendChild(table);
   body.appendChild(averages);
@@ -749,7 +755,9 @@ export async function openStats() {
   spark.appendChild(bars);
   body.appendChild(spark);
 
-  const visible = books.filter((b) => !hidden.has(b.id));
+  const visible = shelf;
+  // Finished once, whichever edition it was finished in.
+  const finishedCount = countWorks(visible.filter((b) => b.finishedAt), visible);
   const totals = document.createElement('section');
   totals.className = 'block';
   totals.innerHTML = '<h2>Totals</h2>';
@@ -759,8 +767,8 @@ export async function openStats() {
   const words = log.reduce((n, e) => n + e.words, 0);
   const languages = new Set(visible.map((b) => b.lang).filter(Boolean)).size;
   for (const [value, label, sub] of [
-    [visible.length, 'Books', 'in the library'],
-    [visible.filter((b) => b.finishedAt).length, 'Finished', 'read to the end'],
+    [shelfCount, 'Books', 'in the library, editions counted once'],
+    [finishedCount, 'Finished', 'read to the end'],
     [log.reduce((n, e) => n + e.pages, 0), 'Pages', 'at your current type size'],
     [words.toLocaleString(), 'Words', 'CJK normalised by script'],
     [hours.toFixed(1), 'Hours', 'foreground only, idle stripped'],
@@ -777,7 +785,7 @@ export async function openStats() {
   const milestones = document.createElement('section');
   milestones.className = 'block';
   milestones.innerHTML = '<h2>Milestones</h2>';
-  const finished = visible.filter((b) => b.finishedAt).length;
+  const finished = finishedCount;
   for (const [label, have, need] of [
     ['First book finished', finished, 1],
     ['Ten books finished', finished, 10],
@@ -1584,18 +1592,22 @@ export function onFolderMenu(fn) { onFolderActions = fn; }
 export async function openFolders(onOpenFolder) {
   const books = await store.all('books');
   // Deleted books are in the bin, not in their folders.
-  const visible = books.filter((b) => !b.binnedAt && !b.importing && (!b.inVault || vaultUnlocked));
+  const visible = books.filter((b) => onShelf(b) && (!b.inVault || vaultUnlocked));
 
-  const counts = new Map();
+  // Books per folder, a bundle of editions counted once (see countWorks).
+  const inFolder = new Map();
   for (const book of visible) {
     const folder = book.folder || '';
-    counts.set(folder, (counts.get(folder) || 0) + 1);
+    if (!inFolder.has(folder)) inFolder.set(folder, []);
+    inFolder.get(folder).push(book);
   }
+  const counts = new Map([...inFolder].map(([folder, list]) => [folder, countWorks(list, visible)]));
+  const total = countWorks(visible);
 
   const list = el('folders-list');
   list.innerHTML = '';
   el('folders-count').textContent =
-    `${counts.size} folder${counts.size === 1 ? '' : 's'} · ${visible.length} books`;
+    `${counts.size} folder${counts.size === 1 ? '' : 's'} · ${total} book${total === 1 ? '' : 's'}`;
 
   const entry = (label, count, folder, note) => {
     const row = document.createElement('div');
@@ -1629,7 +1641,7 @@ export async function openFolders(onOpenFolder) {
     list.appendChild(row);
   };
 
-  entry('All books', visible.length, null, 'Everything, unfiltered');
+  entry('All books', total, null, 'Everything, unfiltered');
 
   // Nested paths sort together, so "Fantasy" sits above "Fantasy/Sub".
   for (const [folder, count] of [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
