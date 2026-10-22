@@ -146,20 +146,26 @@ export async function openZip(blob, { chunk = CHUNK, keep = KEEP } = {}) {
   const tailStart = Math.max(0, blob.size - TAIL_BYTES);
   const tail = await bytes(blob, tailStart, blob.size);
   const eocd = findEocd(tail);
-  if (eocd === -1) return null;
+  // No end at all: cut off partway, as a download or a save can be. What is
+  // whole of it can still be read from the front.
+  if (eocd === -1) return recover(blob, { chunk, keep });
 
   const located = await locateDirectory(blob, tail, tailStart, eocd);
   if (!located) return null;
   const { count, size: directorySize, at: directoryAt } = located;
-  if (directoryAt + directorySize > blob.size) return null;
+  if (directoryAt + directorySize > blob.size) return recover(blob, { chunk, keep });
 
   const directory = await bytes(blob, directoryAt, directoryAt + directorySize);
   const entries = new Map();
 
   let at = 0;
   for (let i = 0; i < count; i++) {
-    if (at + 46 > directory.byteLength) return null;
-    if (directory.getUint32(at, true) !== CENTRAL_SIGNATURE) return null;
+    /* Not a directory where the end says one is: the end belongs to
+     * something else -- a book stored inside this archive, whose own end is
+     * all that is left of a file cut short. Handed on, JSZip would "correct"
+     * for the mismatch and read that one book as the whole archive. */
+    if (at + 46 > directory.byteLength) return recover(blob, { chunk, keep });
+    if (directory.getUint32(at, true) !== CENTRAL_SIGNATURE) return recover(blob, { chunk, keep });
 
     const flags = directory.getUint16(at + 8, true);
     const method = directory.getUint16(at + 10, true);
@@ -169,7 +175,7 @@ export async function openZip(blob, { chunk = CHUNK, keep = KEEP } = {}) {
     const extraLength = directory.getUint16(at + 30, true);
     const commentLength = directory.getUint16(at + 32, true);
     let localAt = directory.getUint32(at + 42, true);
-    if (at + 46 + nameLength + extraLength > directory.byteLength) return null;
+    if (at + 46 + nameLength + extraLength > directory.byteLength) return recover(blob, { chunk, keep });
 
     const extra = extras(directory, at + 46 + nameLength, extraLength);
 
@@ -233,11 +239,79 @@ export async function openZip(blob, { chunk = CHUNK, keep = KEEP } = {}) {
   const reading = readers(blob, entries, { chunk, keep });
   const listed = [...entries.values()].sort((a, b) => a.localAt - b.localAt);
   for (const entry of new Set([listed[0], listed[listed.length - 1]].filter(Boolean))) {
-    if (!await reading.isWhereListed(entry)) throw damagedArchive();
+    if (!await reading.isWhereListed(entry)) {
+      // The index is not this file's -- but the files in it may well be
+      // whole. Read them the way a file manager's extractor does.
+      const rescued = await recover(blob, { chunk, keep });
+      if (rescued) return rescued;
+      throw damagedArchive();
+    }
   }
 
-  const { isWhereListed, ...use } = reading;
+  const { isWhereListed, bytesAt, ...use } = reading;
   return { entries, blob, ...use };
+}
+
+/**
+ * Read a zip from the front, one entry after another, ignoring its index.
+ *
+ * The index at the end of a zip is what everything normally goes by, and it
+ * is the part that goes wrong: a file saved over a larger one ends with the
+ * old file's index, and a file cut off has none at all. Every entry also
+ * carries its own header, though, saying its name and how long it is -- which
+ * is how a phone's file manager extracts such a file without complaint while
+ * this reader refused it. So when the index cannot be trusted, the entries
+ * are walked from the start, taking each one that is whole, and stopping at
+ * the first thing that is not an entry: the index, the damage, or the end.
+ *
+ * @returns the archive, marked `recovered`, or null if nothing was whole.
+ */
+async function recover(blob, { chunk = CHUNK, keep = KEEP } = {}) {
+  const entries = new Map();
+  const { isWhereListed, bytesAt, ...use } = readers(blob, entries, { chunk, keep });
+  let pos = 0;
+  for (let n = 0; n < 200000 && pos + 30 <= blob.size; n++) {
+    const head = await bytesAt(pos, pos + 30);
+    const view = new DataView(head.buffer, head.byteOffset, 30);
+    if (view.getUint32(0, true) !== LOCAL_SIGNATURE) break;
+    const flags = view.getUint16(6, true);
+    const method = view.getUint16(8, true);
+    let compressedSize = view.getUint32(18, true);
+    let size = view.getUint32(22, true);
+    const nameLength = view.getUint16(26, true);
+    const extraLength = view.getUint16(28, true);
+    const dataStart = pos + 30 + nameLength + extraLength;
+    if (dataStart > blob.size) break;
+    const meta = (await bytesAt(pos + 30, dataStart)).slice();
+    const metaView = new DataView(meta.buffer);
+    if (compressedSize === MAX32 || size === MAX32) {
+      const field = extras(metaView, nameLength, extraLength).get(ZIP64_EXTRA);
+      if (!field || field.size < 8) break;
+      let read = field.at;
+      if (size === MAX32) { size = uint64(metaView, read); read += 8; }
+      if (compressedSize === MAX32 && read + 8 <= field.at + field.size) compressedSize = uint64(metaView, read);
+    }
+    // Encrypted, or with its length written only after its data: neither can
+    // be stepped over without reading it, so this is as far as it goes.
+    if (flags & 0x1) break;
+    if ((flags & 0x8) && !compressedSize) break;
+    if (dataStart + compressedSize > blob.size) break;     // cut off partway through this one
+
+    const rawName = meta.subarray(0, nameLength);
+    const name = flags & 0x800 ? new TextDecoder('utf-8').decode(rawName) : decodeName(rawName, null);
+    if ((method === 0 || method === 8) && !name.endsWith('/')) {
+      entries.set(name, { name, method, compressedSize, size, localAt: pos, rawName });
+    }
+    pos = dataStart + compressedSize;
+    if (flags & 0x8) {
+      // The trailing record of sizes, with or without its own signature.
+      const sig = pos + 4 <= blob.size ? (await bytesAt(pos, pos + 4)) : null;
+      const signed = sig && new DataView(sig.buffer, sig.byteOffset, 4).getUint32(0, true) === 0x08074b50;
+      pos += signed ? 16 : 12;
+    }
+  }
+  if (!entries.size) return null;
+  return { entries, blob, recovered: true, ...use };
 }
 
 const LOCAL_SIGNATURE = 0x04034b50;
@@ -399,6 +473,7 @@ function readers(blob, entries, { chunk = CHUNK, keep = KEEP } = {}) {
 
   return {
     isWhereListed,
+    bytesAt: range,
     has: (name) => entries.has(name),
     sizeOf: (name) => entries.get(name)?.size ?? 0,
     names: () => [...entries.keys()],

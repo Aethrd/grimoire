@@ -409,6 +409,10 @@ export async function importFiles(files, { onProgress, onDone, transient = false
         continue;
       }
 
+      if (archive.recovered) {
+        if (!results.recovered) results.recovered = [];
+        results.recovered.push({ name: file.name, books: archive.books.length });
+      }
       for (const book of archive.books) {
         queue.push({
           // read() rather than a File: the entry is extracted when its turn

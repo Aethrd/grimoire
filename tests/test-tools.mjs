@@ -818,10 +818,11 @@ await t('a book called ".zip" is one book, on import and in Build -- not its pag
   build.clear();
 });
 
-await t('an archive saved over an older file is refused, not read as the older one', async () => {
+await t('an archive saved over an older file gives back its own books, not the older one', async () => {
   const { zipWriter } = await import(new URL('../app/src/main/assets/www/js/zipwriter.js', import.meta.url).href);
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
   const JSZip = (await import('jszip')).default;
+  const fixture = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
   // An older, larger file: a book of many chapters.
   const old = new JSZip();
   old.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
@@ -830,16 +831,40 @@ await t('an archive saved over an older file is refused, not read as the older o
   // A newer, smaller export written over the start of it, the rest left behind.
   const parts = [];
   const zip = zipWriter((bytes) => { parts.push(Buffer.from(bytes)); });
-  await zip.add('Small.epub', new Blob([Buffer.from('not much')]));
+  await zip.add('Overwritten Almanac.epub', new Blob([fixture]));
   await zip.finish();
   const fresh = Buffer.concat(parts);
   assert.ok(fresh.length < oldBytes.length);
   const damaged = Buffer.from(oldBytes);
   fresh.copy(damaged, 0);
 
-  const out = await library.importFiles([new File([damaged], 'Books.zip')], {});
-  assert.equal(out.added, 0, `the leftovers came in as ${out.added} books`);
-  assert.match(out.failed[0]?.reason || '', /damaged: its contents do not match its own index/);
+  // Read from the front, as a file manager would: the new book, and none of
+  // the old one's pages.
+  const before = (await store.all('books')).filter((b) => /^ch\d{4}/.test(b.title)).length;
+  const out = await library.importFiles([new File([damaged], 'Overwritten.zip')], {});
+  assert.equal(out.recovered?.[0]?.books, 1, 'it was not read from the front');
+  assert.equal(out.failed.length, 0, out.failed[0]?.reason);
+  assert.equal((await store.all('books')).filter((b) => /^ch\d{4}/.test(b.title)).length, before,
+    'the older file\'s pages came in as books');
+  assert.match(app, /was damaged at the end, so its/);
+
+  // Cut off partway, it gives back what is whole.
+  const twoParts = [];
+  const two = zipWriter((bytes) => { twoParts.push(Buffer.from(bytes)); });
+  await two.add('First.epub', new Blob([fixture]));
+  await two.add('Second.epub', new Blob([fixture]));
+  await two.finish();
+  const whole = Buffer.concat(twoParts);
+  const zipreader = await import(new URL('../app/src/main/assets/www/js/zipreader.js', import.meta.url).href);
+  const cut = await zipreader.openZip(new File([whole.subarray(0, whole.length - 500)], 'cut.zip'));
+  assert.deepEqual(cut.names(), ['First.epub'], 'a book cut off partway was taken, or a whole one was lost');
+  assert.equal(cut.recovered, true);
+
+  // Nothing whole at all: refused, with the reason, rather than read as anything.
+  const ruined = Buffer.from(oldBytes);
+  ruined.fill(0, 0, 200);
+  await assert.rejects(zipreader.openZip(new File([ruined], 'ruined.zip')), /damaged: its contents do not match its own index/);
+
   // And it is not made that way: the file is written over entirely, and checked.
   const java = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
   assert.match(java, /openOutputStream\(target, "wt"\)/);

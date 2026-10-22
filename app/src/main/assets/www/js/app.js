@@ -1904,6 +1904,14 @@ async function importNow(files, { transient = false } = {}, done) {
         : `${results.added} book${results.added === 1 ? '' : 's'} added${took}`) + note, 6000, { kind: 'done' });
   }
 
+  /* A zip whose index was damaged, read from the front instead. What came
+   * of it is in the count above; this says why it might not be everything. */
+  const [rescued] = results.recovered || [];
+  if (rescued) {
+    toast(`“${rescued.name}” was damaged at the end, so its ${rescued.books} complete book${
+      rescued.books === 1 ? ' was' : 's were'} read from the front of it. Anything that was cut off is not included.`, 10000);
+  }
+
   /* A file that was ruined before it arrived, said plainly and on its own.
    *
    * Its characters were lost when something saved it in the wrong encoding,

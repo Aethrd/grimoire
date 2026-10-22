@@ -1150,7 +1150,9 @@ export async function expandArchive(file, onProgress) {
 
   const count = out.length;
   onProgress?.(1, `${count} book${count === 1 ? '' : 's'} found`);
-  return { comic: false, books: out };
+  // Read from the front because its index was damaged; see recover() in
+  // zipreader.js. Said, so a damaged file is not mistaken for a whole one.
+  return { comic: false, books: out, recovered: !!zip.recovered };
 }
 
 /* ── entry point ──────────────────────────────────────────────────────── */
