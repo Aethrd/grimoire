@@ -468,23 +468,65 @@ public class MainActivity extends AppCompatActivity {
         }
 
         staging.execute(() -> {
-            try (InputStream in = new java.io.FileInputStream(source);
-                 java.io.OutputStream out = getContentResolver().openOutputStream(target)) {
-                if (out == null) throw new java.io.IOException("nowhere to write");
-                byte[] buffer = new byte[64 * 1024];
-                int n;
-                while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
+            final long expected = source.length();
+            try {
+                copyInto(target, source);
+                /* Checked, not assumed. A file saved over an older, larger one
+                 * kept the end of the old one where the provider would not
+                 * truncate: a zip with a stranger's tail, which no file app
+                 * would open and which the importer read as the pages of
+                 * whatever book used to be there. */
+                long written = writtenSize(target);
+                if (written >= 0 && written != expected) {
+                    throw new java.io.IOException("wrote " + written + " bytes of " + expected);
+                }
+                // Said once the file is whole and closed, not before.
                 tellReader("window.Grimoire.exportSaved("
                         + JSONObject.quote(source.getName()) + ")");
             } catch (Throwable e) {
                 Log.w(TAG, "Could not write " + source.getName(), e);
-                tellReader("window.Grimoire.exportFailed("
-                        + JSONObject.quote("That file could not be saved") + ")");
+                tellReader("window.Grimoire.exportFailed(" + JSONObject.quote(
+                        "That file could not be saved properly. Save it under a new name rather "
+                                + "than over an existing file.") + ")");
             } finally {
                 //noinspection ResultOfMethodCallIgnored
                 source.delete();
             }
         });
+    }
+
+    /* Written over whatever was there, entirely.
+     *
+     * "w" is documented to truncate and, on a good many providers, does not:
+     * writing a smaller file over a larger one leaves the larger one's end in
+     * place. "wt" says truncate in so many words. A provider that refuses
+     * "wt" gets "w", and the size check after catches it if it misbehaves. */
+    private void copyInto(Uri target, File source) throws java.io.IOException {
+        java.io.OutputStream out = null;
+        try {
+            out = getContentResolver().openOutputStream(target, "wt");
+        } catch (IllegalArgumentException | java.io.FileNotFoundException | SecurityException e) {
+            Log.w(TAG, "No \"wt\" for " + target + "; writing with \"w\"", e);
+        }
+        if (out == null) out = getContentResolver().openOutputStream(target, "w");
+        if (out == null) throw new java.io.IOException("nowhere to write");
+        try (InputStream in = new java.io.FileInputStream(source); java.io.OutputStream o = out) {
+            byte[] buffer = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buffer)) != -1) o.write(buffer, 0, n);
+            o.flush();
+        }
+    }
+
+    /** How big a document actually is on disk now -- asked of the file
+     *  itself, not of the listing, which can lag behind a write -- or -1
+     *  when the provider will not say. */
+    private long writtenSize(Uri uri) {
+        try (android.os.ParcelFileDescriptor fd = getContentResolver().openFileDescriptor(uri, "r")) {
+            return fd == null ? -1 : fd.getStatSize();
+        } catch (Exception e) {
+            return -1;
+        }
     }
 
     /* Everything the picker has handed over, by URI -- not only the latest.
