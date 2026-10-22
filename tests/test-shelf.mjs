@@ -140,7 +140,7 @@ console.log('details');
 t('a single selection can have its metadata corrected by hand', () => {
   // Scraped EPUB metadata is frequently wrong, and fixing it should not mean
   // re-making the file.
-  assert.match(app, /async function openDetails\(book\)/);
+  assert.match(app, /async function openDetails\(tapped\)/);
   for (const field of ['title', 'author', 'series', 'seriesIndex', 'folder', 'lang']) {
     assert.ok(app.includes(`['${field}',`), `no ${field} field in the details sheet`);
   }
@@ -210,8 +210,9 @@ t('the continue card follows the last book opened', () => {
   assert.ok(!/percent/.test(filter),
     'a book you opened but did not page through is still excluded');
   assert.match(library, /openedAt\(b\) && !\['finished', 'dropped', 'onHold'\]\.includes\(statusOf\(b\)\)/);
-  // And opening a book records that it was opened.
-  assert.match(app, /book\.lastOpenedAt = Date\.now\(\)/);
+  // And opening a book records that it was opened -- on the book as stored,
+  // not on the copy the shelf handed over, which may be older.
+  assert.match(app, /current\.lastOpenedAt = Date\.now\(\)/);
 });
 
 t('translated titles reach the tile and the continue card', () => {
@@ -739,7 +740,7 @@ t('several books write out as one archive', () => {
   assert.ok(!/act === 'export'/.test(app.slice(app.indexOf('const single ='), app.indexOf('const single =') + 120)),
     'export is still restricted to a single book');
   // Two books of the same name would otherwise replace each other.
-  assert.match(app, /while \(bundle\.file\(entry\)\)/);
+  assert.match(app, /while \(used\.has\(entry\)\)/);
   // And one that will not write costs that book, not the batch.
   assert.match(app, /failed\.push\(\{ title: library\.displayTitle\(book\)/);
 });

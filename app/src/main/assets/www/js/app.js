@@ -10,6 +10,8 @@ import { nameWithFormat, chapterHtml } from './parse.js';
 import * as build from './build.js';
 import * as epub from './epub.js';
 import * as trim from './trim.js';
+import * as covers from './coverpage.js';
+import { zipWriter } from './zipwriter.js';
 import * as shrink from './shrink.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
@@ -266,8 +268,14 @@ async function openBook(book, opts) {
   try {
     // Opened, not read. Continue follows this; the status does not, because
     // glancing at a book is not reading it.
-    book.lastOpenedAt = Date.now();
-    await store.put('books', book);
+    /* Stamped on the book as it is stored now, not on the copy that was
+     * tapped. The shelf hands over the record it drew the tile from, which
+     * can be older than the book: writing that back undid whatever had been
+     * saved since -- a cover just replaced came back as the old one, and the
+     * new one's place in the book was forgotten, so it could not be removed. */
+    const current = (await store.get('books', book.id)) || book;
+    current.lastOpenedAt = Date.now();
+    await store.put('books', current);
     await reader.open(book.id, opts);
     paintReader();
     if ((await store.settings()).keepScreenOn) window.GrimoireNative?.keepScreenOn?.(true);
@@ -560,7 +568,10 @@ function wireSelection() {
   el('folder-create').onclick = () => moveTo(el('folder-new').value.trim());
 }
 
-async function openDetails(book) {
+async function openDetails(tapped) {
+  // The book as it is stored, not the copy the menu was opened from -- which
+  // can be older, and saving it would undo whatever changed since.
+  const book = (await store.get('books', tapped.id)) || tapped;
   const body = el('details-body');
   const urls = blobs.pool();
   const coverUrl = urls.url(book.coverBlob);
@@ -717,6 +728,18 @@ async function openDetails(book) {
     }
 
     await store.put('books', book);
+    /* Into the book itself, not only onto the shelf: the cover page shows the
+     * new picture, an export carries it, and removing it puts the book back
+     * as it came. See coverpage.js. */
+    if (newCover !== undefined && (newCover || book.coverPage)) {
+      try {
+        await covers.placeCover(book.id, newCover);
+        // An open copy of this book is reread when it is next shown.
+        if (reader.state.book?.id === book.id) readerStale = { bookId: book.id, land: null };
+      } catch (error) {
+        toast(`The cover is set, but could not be put into the book: ${error.message}`, 6000);
+      }
+    }
     // Titles were translated from the old text, so that cache is now wrong.
     await translate.clearCache(book.id).catch(() => {});
     close();
@@ -1064,51 +1087,116 @@ async function splitSelected(book) {
  */
 async function exportMany(books) {
   const finish = progress.start(`Writing ${books.length} books`);
-
-  const bundle = new JSZip();
   const failed = [];
+  const name = `${epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books')}.zip`;
+
+  /* One book at a time, straight into the archive.
+   *
+   * Every book used to be built and kept, then packed into a zip built whole
+   * in memory, then sent: the entire batch held two or three times over at
+   * the peak. With enough books Android shut the app down while its save
+   * screen was open, and the export never arrived. Now each book is built,
+   * written into the archive on disk, and let go before the next. */
+  const sink = exportSink(name);
+  const zip = zipWriter(sink.write);
+  const used = new Set();
 
   try {
     for (const [at, book] of books.entries()) {
       finish.say(`Writing ${library.displayTitle(book)}`, null, `${at + 1} of ${books.length}`);
       try {
-        const { blob, name } = await epub.buildEpub(book.id, {
+        let { blob, name: entry } = await epub.buildEpub(book.id, {
           onProgress: (fraction) => {
-            finish.say(null, ((at + fraction) / books.length) * 0.9);
+            finish.say(null, ((at + fraction * 0.8) / books.length));
           },
         });
         // Two books of the same name would otherwise replace each other.
-        let entry = name;
+        const base = entry;
         let n = 2;
-        while (bundle.file(entry)) entry = name.replace(/\.epub$/i, ` (${n++}).epub`);
-        bundle.file(entry, blob);
+        while (used.has(entry)) entry = base.replace(/\.epub$/i, ` (${n++}).epub`);
+        used.add(entry);
+        await zip.add(entry, blob, (fraction) => {
+          finish.say(null, ((at + 0.8 + fraction * 0.2) / books.length));
+        });
+        blob = null;
       } catch (error) {
+        if (error.writeFailed) throw error;
         // One book that will not write costs that book, not the batch.
         failed.push({ title: library.displayTitle(book), reason: error.message });
       }
     }
 
-    if (!bundle.file(/.*/).length) {
+    if (!used.size) {
       throw new Error(failed[0] ? `${failed[0].title}: ${failed[0].reason}` : 'Nothing could be written');
     }
 
-    const archive = await bundle.generateAsync({ type: 'blob', mimeType: 'application/zip' });
-    await writeOut(archive, `${epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books')}.zip`,
-      'application/zip', {
-        onProgress: (fraction) => finish.say(null, 0.9 + fraction * 0.1),
-      });
+    await zip.finish();
+    await sink.done('application/zip');
 
     clearSelection();
     await refreshShelf();
     toast(failed.length
       ? `${books.length - failed.length} written · ${failed.length} skipped — ${failed[0].title}: ${failed[0].reason}`
-      : `${books.length} books written out`, 7000, { kind: 'done' });
+      : `${books.length} books written out — choose where to save them`, 7000, { kind: 'done' });
   } catch (error) {
     finish.fail();
     toast(error.message || 'Those books could not be written out', 6000, { kind: 'failed' });
   } finally {
     finish();
   }
+}
+
+/**
+ * Where an archive being written goes: a file on the native side, in pieces
+ * of a few megabytes, or -- in an ordinary browser with no native side -- a
+ * download made of the same pieces.
+ */
+function exportSink(name) {
+  const bridge = window.GrimoireNative;
+  const native = !!bridge?.beginExport;
+  const handle = native ? bridge.beginExport(name) : null;
+  if (native && !handle) throw new Error('There was nowhere to write the file');
+
+  const held = [];
+  let heldBytes = 0;
+  const kept = [];             // the browser's download, which has to be whole
+
+  const flush = () => {
+    if (!heldBytes) return;
+    const piece = new Uint8Array(heldBytes);
+    let at = 0;
+    for (const part of held) { piece.set(part, at); at += part.length; }
+    held.length = 0;
+    heldBytes = 0;
+    if (!native) { kept.push(piece); return; }
+    if (!bridge.appendExport(handle, base64Of(piece))) {
+      const error = new Error('The file could not be written — the phone may be out of space');
+      error.writeFailed = true;
+      throw error;
+    }
+  };
+
+  return {
+    async write(bytes) {
+      held.push(bytes);
+      heldBytes += bytes.length;
+      if (heldBytes >= EXPORT_CHUNK) {
+        flush();
+        // A breath, so the progress bar paints and the app answers taps.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    },
+    async done(mimeType, share = false) {
+      flush();
+      if (native) { bridge.finishExport(handle, mimeType, share); return; }
+      const url = URL.createObjectURL(new Blob(kept, { type: mimeType }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = name;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    },
+  };
 }
 
 /* Remembered between exports, not between sessions.
@@ -1899,7 +1987,9 @@ function refreshKeepButton() {
   keep.hidden = !book?.transient;
   keep.onclick = async () => {
     delete book.transient;
-    await store.put('books', book);
+    const stored = await store.get('books', book.id);
+    if (stored) delete stored.transient;
+    await store.put('books', stored || book);
     keep.hidden = true;
     await refreshShelf();
     toast('Kept in your library');
@@ -5153,6 +5243,16 @@ function wireChrome() {
 
 const EXPORT_CHUNK = 3 * 1024 * 1024;
 
+/** Bytes to base64, in pieces: String.fromCharCode on a whole chunk at once
+ *  overflows the argument list. */
+function base64Of(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  }
+  return btoa(binary);
+}
+
 async function writeOut(blob, name, mimeType, { share = false, onProgress } = {}) {
   const bridge = window.GrimoireNative;
   if (!bridge?.beginExport) {
@@ -5173,14 +5273,7 @@ async function writeOut(blob, name, mimeType, { share = false, onProgress } = {}
   for (let at = 0; at < blob.size; at += EXPORT_CHUNK) {
     const piece = blob.slice(at, Math.min(at + EXPORT_CHUNK, blob.size));
     const bytes = new Uint8Array(await piece.arrayBuffer());
-
-    // Built in pieces too: String.fromCharCode on a whole chunk at once
-    // overflows the argument list.
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += 8192) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-    }
-    if (!bridge.appendExport(handle, btoa(binary))) {
+    if (!bridge.appendExport(handle, base64Of(bytes))) {
       throw new Error('The file could not be written');
     }
     onProgress?.(Math.min(1, (at + EXPORT_CHUNK) / blob.size));

@@ -626,6 +626,138 @@ await t('a text file imported as one frozen block is read again when picked agai
   assert.equal(again.already, 1);
 });
 
+await t('a chosen cover goes into the book: over its cover page, or in front as one', async () => {
+  const covers = await import(new URL('../app/src/main/assets/www/js/coverpage.js', import.meta.url).href);
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  const picture = (n) => new Blob([`cover ${n}`], { type: 'image/webp' });
+  const words = (html) => html.replace(/<[^>]+>/g, '');
+  const firstHtml = async (id) => parse.chapterHtml((await store.byIndex('chapters', 'bookId', id)).find((c) => c.index === 0));
+
+  // A book that opens on its cover: the picture on that page is swapped.
+  const comic = await aBook({ title: 'Opens on a cover', imageCount: 2 });
+  await store.put('chapters', { bookId: comic, index: 0, title: 'One', words: 3, html: '<figure><img data-img="old.jpg"></figure><p>Once upon a time.</p>' });
+  await store.put('images', { bookId: comic, href: 'old.jpg', order: 0, chapterIndex: 0, blob: new Blob(['old']) });
+  assert.equal(await covers.placeCover(comic, picture(1)), 'swapped');
+  let html = await firstHtml(comic);
+  const first = (await store.get('books', comic)).coverPage.href;
+  assert.match(html, new RegExp(`^<figure><img data-img="${first}"></figure><p>Once upon a time\\.</p>$`));
+  assert.ok(first.startsWith('grimoire-cover/') && first.endsWith('.webp'));
+  const kept = await store.get('images', [comic, first]);
+  assert.ok(kept && kept.cover === true && kept.chapterIndex === 0, 'the picture is not among the book\'s own');
+  assert.equal((await store.get('books', comic)).imageCount, 3);
+
+  // Chosen again: it replaces the last choice instead of stacking up.
+  await covers.placeCover(comic, picture(2));
+  html = await firstHtml(comic);
+  const second = (await store.get('books', comic)).coverPage.href;
+  assert.equal((html.match(/<img/g) || []).length, 1);
+  assert.ok(html.includes(second) && !html.includes(first));
+  assert.equal(await store.get('images', [comic, first]), undefined, 'the replaced choice was left behind');
+  assert.equal((await store.get('books', comic)).coverPage.swapped, 'old.jpg', 'the original was forgotten');
+
+  // Removed: the book is as it came.
+  assert.equal(await covers.placeCover(comic, null), 'removed');
+  assert.equal(await firstHtml(comic), '<figure><img data-img="old.jpg"></figure><p>Once upon a time.</p>');
+  assert.equal((await store.get('books', comic)).coverPage, undefined);
+  assert.equal((await store.get('books', comic)).imageCount, 2);
+
+  // A book that opens on words: a cover page goes in front, and moves no text,
+  // so every mark and reading position counted in characters stays put.
+  const novel = await aBook({ title: 'Opens on words' });
+  const prose = '<h1>Chapter One</h1><p>It was a dark night.</p>';
+  await store.put('chapters', { bookId: novel, index: 0, title: 'One', words: 6, html: prose });
+  assert.equal(await covers.placeCover(novel, picture(3)), 'added');
+  html = await firstHtml(novel);
+  assert.match(html, /^<figure class="grimoire-cover"><img data-img="grimoire-cover\/[^"]+" alt="Cover"><\/figure><h1>/);
+  assert.equal(words(html), words(prose), 'the cover page moved the text');
+  await covers.placeCover(novel, null);
+  assert.equal(await firstHtml(novel), prose);
+
+  // It has a page of its own when reading, and in the exported book.
+  assert.match(css, /body\[data-mode="paged"\] \.page-flow figure\.grimoire-cover \{\s*break-after: column/);
+  assert.match(read('app/src/main/assets/www/js/epub.js'), /figure\.grimoire-cover \{[^}]*page-break-after: always/);
+});
+
+await t('Save in the details puts the cover into the book, and opening a book does not undo it', async () => {
+  // Wired where the cover is chosen...
+  assert.match(app, /await covers\.placeCover\(book\.id, newCover\)/);
+  // ...and the book is never overwritten by an older copy of itself: the
+  // shelf's tile record, written back on opening, brought the old cover back.
+  const open = app.slice(app.indexOf('async function openBook'), app.indexOf('/* ── selection'));
+  assert.match(open, /const current = \(await store\.get\('books', book\.id\)\) \|\| book;/);
+  assert.ok(!/await store\.put\('books', book\);/.test(open), 'opening writes the tapped copy back');
+  assert.match(app, /async function openDetails\(tapped\) \{[\s\S]{0,300}await store\.get\('books', tapped\.id\)/);
+});
+
+await t('a backup puts a chosen cover back into the book, not only onto the shelf', async () => {
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  const id = await aBook({ title: 'Restored cover', fingerprint: 'restored-cover.epub:10' });
+  await store.put('chapters', { bookId: id, index: 0, title: 'One', words: 2, html: '<p>Two words.</p>' });
+  const report = await store.importBackup({
+    format: 'grimoire-backup',
+    version: 1,
+    books: [{ fingerprint: 'restored-cover.epub:10', title: 'Restored cover', coverCustom: true }],
+    covers: [{ fingerprint: 'restored-cover.epub:10', dataUrl: 'data:image/webp;base64,UklGRgAAAABXRUJQ' }],
+    positions: [], marks: [],
+  });
+  assert.equal(report.covers, 1);
+  const book = await store.get('books', id);
+  assert.ok(book.coverPage?.href, 'the cover came back to the shelf only');
+  const html = parse.chapterHtml((await store.byIndex('chapters', 'bookId', id))[0]);
+  assert.ok(html.includes(book.coverPage.href));
+});
+
+await t('an exported book names its cover for what the picture is', async () => {
+  const epub = await import(new URL('../app/src/main/assets/www/js/epub.js', import.meta.url).href);
+  const source = read('app/src/main/assets/www/js/epub.js');
+  assert.match(source, /const coverName = `cover\.\$\{extensionFor\(book\.coverBlob, 'cover\.jpg'\)\}`/);
+  assert.match(source, /media-type="\$\{mediaFor\(coverName\)\}"/);
+  assert.equal(epub.extensionFor(new Blob(['x'], { type: 'image/webp' }), 'cover.jpg'), 'webp');
+});
+
+await t('many books are written into one zip a book at a time, and it opens anywhere', async () => {
+  const { zipWriter } = await import(new URL('../app/src/main/assets/www/js/zipwriter.js', import.meta.url).href);
+  const JSZip = (await import('jszip')).default;
+  const book = new Uint8Array(5 * 1024 * 1024).map((_, i) => (i * 7 + (i >> 11)) & 255);
+  for (const zip64At of [undefined, 1000]) {          // and with the forms used past 4GB
+    const parts = [];
+    const zip = zipWriter((bytes) => { parts.push(Buffer.from(bytes)); }, zip64At ? { zip64At } : {});
+    await zip.add('Volume 1.epub', new Blob([book]));
+    await zip.add('Том 2 — 第二.epub', new Blob(['small']));
+    await zip.finish();
+    const read = await JSZip.loadAsync(Buffer.concat(parts), { checkCRC32: true });
+    assert.deepEqual(Object.keys(read.files), ['Volume 1.epub', 'Том 2 — 第二.epub']);
+    const back = await read.file('Volume 1.epub').async('uint8array');
+    assert.equal(back.length, book.length);
+    assert.ok(back.every((v, i) => v === book[i]), 'the book came out changed');
+    assert.equal(await read.file('Том 2 — 第二.epub').async('string'), 'small');
+  }
+  // And the export builds each book, writes it, and lets it go -- not every
+  // book held, then the whole archive again.
+  const many = app.slice(app.indexOf('async function exportMany'), app.indexOf('function exportSink'));
+  assert.ok(!/new JSZip|generateAsync/.test(many), 'the batch is still built whole in memory');
+  assert.match(many, /await zip\.add\(entry, blob/);
+  assert.match(many, /await zip\.finish\(\);\s*await sink\.done\('application\/zip'\)/);
+});
+
+await t('an export survives Android closing the app while the save screen is open', () => {
+  const java = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  // Where the file is, kept across the restart...
+  assert.match(java, /outState\.putString\(STAGED_PATH, staged\.getAbsolutePath\(\)\)/);
+  assert.match(java, /restoreStagedExport\(savedInstanceState\);/);
+  assert.match(java, /getSharedPreferences\("exports", MODE_PRIVATE\)/);
+  // ...and never dropped without a word.
+  const result = java.slice(java.indexOf('protected void onActivityResult'), java.indexOf('staging.execute(() -> {', java.indexOf('protected void onActivityResult')));
+  assert.ok(!/if \(target == null \|\| source == null\) return;/.test(result), 'a lost export is still silent');
+  assert.match(result, /The export was lost while the save screen was open/);
+  assert.match(result, /Not saved — no place was chosen/);
+  // What it says is held until the page that will show it is ready.
+  assert.match(java, /if \(!readerReady \|\| webView == null\) \{\s*heldCalls\.add\(call\);/);
+  assert.match(java, /readerReady = true;\s*flushHeldCalls\(\);/);
+  const rebuild = java.slice(java.indexOf('private void rebuildWebView'), java.indexOf('webView.loadUrl(START_URL);', java.indexOf('private void rebuildWebView')));
+  assert.match(rebuild, /readerReady = false;/);
+});
+
 /* ── a file the page is not allowed to read ──────────────────────────────
  *
  * "The requested file could not be read, typically due to permission problems

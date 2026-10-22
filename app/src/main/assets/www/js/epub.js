@@ -217,7 +217,9 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
   zip.file('OEBPS/style.css',
     'body { margin: 0 5%; line-height: 1.5; }\n'
     + 'h1, h2, h3 { line-height: 1.25; }\n'
-    + 'img { max-width: 100%; height: auto; }\n', TEXT);
+    + 'img { max-width: 100%; height: auto; }\n'
+    // A cover added in the app is a page of its own there, and here.
+    + 'figure.grimoire-cover { margin: 0; text-align: center; page-break-after: always; break-after: page; }\n', TEXT);
 
   for (const [href, name] of renamed) {
     const image = images.find((i) => i.href === href);
@@ -229,8 +231,12 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
 
   if (typeof book.coverBlob?.size === 'number' && book.coverBlob.size > 0) {
     try {
-      zip.file('OEBPS/cover.jpg', book.coverBlob, PICTURE);
-      manifest.push('<item id="cover" href="cover.jpg" media-type="image/jpeg" '
+      /* Named for what it is. A cover chosen in the app is stored as WebP,
+       * and it went out as "cover.jpg" declared JPEG -- which a strict reader
+       * refuses, and a lenient one shows as a blank. */
+      const coverName = `cover.${extensionFor(book.coverBlob, 'cover.jpg')}`;
+      zip.file(`OEBPS/${coverName}`, book.coverBlob, PICTURE);
+      manifest.push(`<item id="cover" href="${coverName}" media-type="${mediaFor(coverName)}" `
         + 'properties="cover-image"/>');
     } catch {
       // A cover that will not write is not worth losing the book over.

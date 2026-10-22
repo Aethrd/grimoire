@@ -576,18 +576,37 @@ async function restoreInto(book, record, report = null) {
     if (saved.coverBlur === undefined) delete book.coverBlur;
   }
 
+  let coverBack = false;
   if (record.cover) {
     try {
       const blob = dataUrlToBlob(record.cover);
       book.coverBlob = blob;
       book.coverBytes = blob.size;
       book.coverCustom = true;
+      coverBack = true;
       if (report) report.covers = (report.covers || 0) + 1;
     } catch {
       // A cover that will not decode is not worth failing a restore over.
     }
   }
   await put('books', book);
+
+  /* And into the book, as it was when the backup was made: a chosen cover is
+   * part of the book now, not only the picture on the shelf (see
+   * coverpage.js). Loaded when needed, which keeps the store free of a
+   * dependency on the reader's markup. */
+  if (coverBack) {
+    try {
+      const { placeCover } = await import('./coverpage.js');
+      await placeCover(book.id, book.coverBlob);
+      const fresh = await get('books', book.id);
+      // Carried onto the copy the caller holds, which it may write again.
+      book.coverPage = fresh.coverPage;
+      book.imageCount = fresh.imageCount;
+    } catch (error) {
+      console.warn('Could not put the chosen cover into the book', error);
+    }
+  }
 
   for (const position of record.positions) {
     const { fingerprint, ...row } = position;

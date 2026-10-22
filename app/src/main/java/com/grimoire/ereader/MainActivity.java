@@ -130,6 +130,8 @@ public class MainActivity extends AppCompatActivity {
         applyInsetsToCss();
         installBackHandler();
 
+        restoreStagedExport(savedInstanceState);
+
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState);
         } else {
@@ -157,6 +159,9 @@ public class MainActivity extends AppCompatActivity {
         setContentView(webView);
 
         contentReady = false;
+        // A new page, not ready until it says so: anything sent before then
+        // is held (see tellReader) rather than lost on a half-loaded page.
+        readerReady = false;
         configureWebView();
         applyInsetsToCss();
         webView.loadUrl(START_URL);
@@ -367,6 +372,41 @@ public class MainActivity extends AppCompatActivity {
     private File staged;
     private String stagedType;
 
+    /* Kept somewhere that outlives this activity.
+     *
+     * Picking where to save opens another app, and while it is open Android
+     * is free to shut Grimoire down -- which it does readily after a large
+     * export, the largest thing the app ever holds in memory. The choice then
+     * comes back to a fresh copy of the activity that had never heard of the
+     * file, and was dropped without a word: the person was left in the file
+     * picker, and nothing was saved. The file itself is on disk throughout,
+     * so remembering where it is, across that restart, is all it takes. */
+    private static final String STAGED_PATH = "grimoire.stagedExport";
+    private static final String STAGED_TYPE = "grimoire.stagedExportType";
+
+    private void rememberStaged(@Nullable File file, @Nullable String type) {
+        staged = file;
+        stagedType = type;
+        getSharedPreferences("exports", MODE_PRIVATE).edit()
+                .putString(STAGED_PATH, file == null ? null : file.getAbsolutePath())
+                .putString(STAGED_TYPE, type)
+                .apply();
+    }
+
+    private void restoreStagedExport(@Nullable Bundle state) {
+        String path = state != null ? state.getString(STAGED_PATH) : null;
+        String type = state != null ? state.getString(STAGED_TYPE) : null;
+        if (path == null) {
+            android.content.SharedPreferences prefs = getSharedPreferences("exports", MODE_PRIVATE);
+            path = prefs.getString(STAGED_PATH, null);
+            type = prefs.getString(STAGED_TYPE, null);
+        }
+        if (path != null && new File(path).exists()) {
+            staged = new File(path);
+            stagedType = type;
+        }
+    }
+
     void offerExport(File file, String mimeType, boolean share) {
         runOnUiThread(() -> {
             if (share) {
@@ -384,8 +424,7 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
-            staged = file;
-            stagedType = mimeType;
+            rememberStaged(file, mimeType);
             Intent create = new Intent(Intent.ACTION_CREATE_DOCUMENT);
             create.addCategory(Intent.CATEGORY_OPENABLE);
             create.setType(mimeType);
@@ -406,9 +445,27 @@ public class MainActivity extends AppCompatActivity {
         if (request != PICK_EXPORT_TARGET) return;
 
         final Uri target = result == RESULT_OK && data != null ? data.getData() : null;
+        if (staged == null) restoreStagedExport(null);
         final File source = staged;
-        staged = null;
-        if (target == null || source == null) return;
+        rememberStaged(null, null);
+
+        if (target == null) {
+            // Backed out of the picker: nothing to write, and nothing to keep.
+            if (source != null) {
+                //noinspection ResultOfMethodCallIgnored
+                source.delete();
+                tellReader("window.Grimoire.exportFailed("
+                        + JSONObject.quote("Not saved — no place was chosen") + ")");
+            }
+            return;
+        }
+        if (source == null || !source.exists()) {
+            // Never silent: this is exactly where an export used to vanish.
+            tellReader("window.Grimoire.exportFailed("
+                    + JSONObject.quote("The export was lost while the save screen was open. "
+                    + "Please export it again.") + ")");
+            return;
+        }
 
         staging.execute(() -> {
             try (InputStream in = new java.io.FileInputStream(source);
@@ -634,6 +691,7 @@ public class MainActivity extends AppCompatActivity {
     /** Called from JavaScript once the reader has booted. */
     void onReaderReady() {
         readerReady = true;
+        flushHeldCalls();
         deliverPendingUri();
     }
 
@@ -671,9 +729,30 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    /* Said once there is a page to say it to.
+     *
+     * The result of an export arrives when the person comes back from the
+     * file picker -- which is often to an app Android restarted meanwhile,
+     * whose page has not loaded yet. Sent then, "Saved" landed on nothing and
+     * the export looked as if it had never happened. Held until the reader
+     * says it is ready, then delivered in order. */
+    private final java.util.List<String> heldCalls = new java.util.ArrayList<>();
+
     private void tellReader(String call) {
         runOnUiThread(() -> {
-            if (webView != null) webView.evaluateJavascript("window.Grimoire && " + call, null);
+            if (!readerReady || webView == null) {
+                heldCalls.add(call);
+                return;
+            }
+            webView.evaluateJavascript("window.Grimoire && " + call, null);
+        });
+    }
+
+    private void flushHeldCalls() {
+        runOnUiThread(() -> {
+            if (!readerReady || webView == null) return;
+            for (String call : heldCalls) webView.evaluateJavascript("window.Grimoire && " + call, null);
+            heldCalls.clear();
         });
     }
 
@@ -681,6 +760,10 @@ public class MainActivity extends AppCompatActivity {
     protected void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
         webView.saveState(outState);
+        if (staged != null) {
+            outState.putString(STAGED_PATH, staged.getAbsolutePath());
+            outState.putString(STAGED_TYPE, stagedType);
+        }
     }
 
     @Override

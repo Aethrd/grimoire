@@ -1154,7 +1154,8 @@ await t('pictures are stored rather than deflated again', () => {
   // `written` rather than `image.blob`: a smaller copy substitutes a
   // downscaled blob here, and either way it is stored, never deflated.
   assert.match(source, /zip\.file\(`OEBPS\/\$\{name\}`, written, PICTURE\)/);
-  assert.match(source, /zip\.file\('OEBPS\/cover\.jpg', book\.coverBlob, PICTURE\)/);
+  // The cover too, under a name that says what kind of picture it is.
+  assert.match(source, /zip\.file\(`OEBPS\/\$\{coverName\}`, book\.coverBlob, PICTURE\)/);
   // While the markup says DEFLATE rather than relying on the default alone.
   assert.match(source, /const TEXT = \{ compression: 'DEFLATE'/);
 });
@@ -1173,7 +1174,8 @@ await t('files leave in pieces, not in one', () => {
   // is what killed the app when files came the other way.
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /const EXPORT_CHUNK/);
-  assert.match(app, /bridge\.appendExport\(handle, btoa\(binary\)\)/);
+  assert.match(app, /bridge\.appendExport\(handle, base64Of\(bytes\)\)/);
+  assert.match(app, /bridge\.appendExport\(handle, base64Of\(piece\)\)/);
   const bridge = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
   assert.match(bridge, /public boolean appendExport/);
   // Saving somewhere chosen, not only handing it to whatever app will take

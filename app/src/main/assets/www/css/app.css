@@ -613,6 +613,14 @@ body[data-frame][data-images="height"] .page-flow .pic:not(.small) img,
 body[data-frame][data-images="smart"] .page-flow .pic:not(.small) img.landscape { height: 100%; width: auto; }
 body[data-frame][data-images="original"] .page-flow .pic:not(.small) img { width: auto; height: auto; }
 
+/* A cover chosen in the app and added in front of the first chapter (see
+   coverpage.js) is a page of its own, as a cover is: the chapter starts on
+   the page after it. */
+.page-flow figure.grimoire-cover { margin: 0; }
+body[data-mode="paged"] .page-flow figure.grimoire-cover {
+  break-after: column; -webkit-column-break-after: always;
+}
+
 .page-flow blockquote { margin: 1em 0; padding-left: 1em;
                         border-left: 2px solid var(--accent-400); }
 .page-flow hr { border: 0; border-top: 1px solid var(--divider); margin: 1.5em 0; }
