@@ -18,7 +18,7 @@
 
 import * as store from './store.js';
 import {
-  parse, parseChapters, formatOf, expandArchive, nameWithFormat, chapterHtml, UNSUPPORTED_REASON,
+  parse, parseChapters, formatOf, expandArchive, asEpubName, nameWithFormat, chapterHtml, UNSUPPORTED_REASON,
 } from './parse.js';
 import { planBooks } from './group.js';
 
@@ -103,6 +103,12 @@ export async function add(files, onProgress) {
       try {
         const archive = await expandArchive(file, (fraction, name) =>
           onProgress?.(`Opening ${name}`, fraction));
+        // An EPUB named ".zip" is one part -- the book -- not its pages.
+        if (archive.epub) {
+          const asEpub = asEpubName(named);
+          found.push({ file: new File([file], asEpub), name: asEpub });
+          continue;
+        }
         if (archive.comic) {
           /* A zip of pictures is a comic, and has to say so.
            *

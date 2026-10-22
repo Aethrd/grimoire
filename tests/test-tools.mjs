@@ -802,6 +802,53 @@ await t('a book written out and given back is the same book, not a second copy',
   assert.equal(theOriginal.already, 1);
 });
 
+await t('a book called ".zip" is one book, on import and in Build -- not its pages', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const fixture = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+  const before = (await store.all('books')).length;
+  const out = await library.importFiles([new File([fixture], 'Renamed Almanac.zip')], {});
+  assert.equal(out.added, 1, `a renamed EPUB came in as ${out.added} things`);
+  const added = (await store.all('books')).filter((b) => b.title === 'The Salt Almanac').pop();
+  assert.equal(added.format, 'EPUB');
+  assert.equal((await store.all('books')).length, before + 1);
+  build.clear();
+  const parts = await build.add([new File([fixture], 'Renamed Almanac.epub.zip')]);
+  assert.deepEqual(parts.map((p) => p.name), ['Renamed Almanac.epub']);
+  build.clear();
+});
+
+await t('an archive saved over an older file is refused, not read as the older one', async () => {
+  const { zipWriter } = await import(new URL('../app/src/main/assets/www/js/zipwriter.js', import.meta.url).href);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const JSZip = (await import('jszip')).default;
+  // An older, larger file: a book of many chapters.
+  const old = new JSZip();
+  old.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
+  for (let i = 1; i <= 40; i++) old.file(`OEBPS/text/ch${String(i).padStart(4, '0')}.xhtml`, `<p>${'Old words. '.repeat(400)}</p>`);
+  const oldBytes = await old.generateAsync({ type: 'nodebuffer', compression: 'STORE' });
+  // A newer, smaller export written over the start of it, the rest left behind.
+  const parts = [];
+  const zip = zipWriter((bytes) => { parts.push(Buffer.from(bytes)); });
+  await zip.add('Small.epub', new Blob([Buffer.from('not much')]));
+  await zip.finish();
+  const fresh = Buffer.concat(parts);
+  assert.ok(fresh.length < oldBytes.length);
+  const damaged = Buffer.from(oldBytes);
+  fresh.copy(damaged, 0);
+
+  const out = await library.importFiles([new File([damaged], 'Books.zip')], {});
+  assert.equal(out.added, 0, `the leftovers came in as ${out.added} books`);
+  assert.match(out.failed[0]?.reason || '', /damaged: its contents do not match its own index/);
+  // And it is not made that way: the file is written over entirely, and checked.
+  const java = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(java, /openOutputStream\(target, "wt"\)/);
+  assert.ok(!/openOutputStream\(target\)\)/.test(java), 'still written with a mode that may not truncate');
+  assert.match(java, /if \(written >= 0 && written != expected\)/);
+  const saved = java.slice(java.indexOf('copyInto(target, source);'), java.indexOf('} catch (Throwable e) {', java.indexOf('copyInto(target, source);')));
+  assert.match(saved, /exportSaved/, '"Saved" is said before the file is checked');
+});
+
 /* ── a file the page is not allowed to read ──────────────────────────────
  *
  * "The requested file could not be read, typically due to permission problems

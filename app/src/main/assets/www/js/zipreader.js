@@ -214,12 +214,41 @@ export async function openZip(blob, { chunk = CHUNK, keep = KEEP } = {}) {
       : decodeName(rawName, unicodePath);
 
     if (!name.endsWith('/')) {
-      entries.set(name, { name, method, compressedSize, size, localAt });
+      entries.set(name, { name, method, compressedSize, size, localAt, rawName: rawName.slice() });
     }
     at += 46 + nameLength + extraLength + commentLength;
   }
 
-  return { entries, blob, ...readers(blob, entries, { chunk, keep }) };
+  /* The directory has to describe this file.
+   *
+   * A zip saved over a larger one, by a provider that would not truncate,
+   * ends with the old file's directory -- which describes the old file, so
+   * every entry it lists points at bytes that now belong to something else.
+   * Trusted, it imported the pages of whatever book used to be there. The
+   * first and last entries are looked at where the directory says they are;
+   * if what is there is not them, the file is not what its directory says. */
+  /* Read through the same pieces as everything else, so looking costs no
+   * extra trip out of the page: the first entry is in the first piece and the
+   * last is beside the directory, and both are read before long anyway. */
+  const reading = readers(blob, entries, { chunk, keep });
+  const listed = [...entries.values()].sort((a, b) => a.localAt - b.localAt);
+  for (const entry of new Set([listed[0], listed[listed.length - 1]].filter(Boolean))) {
+    if (!await reading.isWhereListed(entry)) throw damagedArchive();
+  }
+
+  const { isWhereListed, ...use } = reading;
+  return { entries, blob, ...use };
+}
+
+const LOCAL_SIGNATURE = 0x04034b50;
+
+/** An archive whose own index does not match its contents. */
+export function damagedArchive() {
+  const error = new Error('That file is damaged: its contents do not match its own index. '
+    + 'This usually happens when a file is saved over an older one. Save or download it again, '
+    + 'under a new name.');
+  error.damaged = true;
+  return error;
 }
 
 /* ── reading entries ─────────────────────────────────────────────────────
@@ -322,8 +351,22 @@ function readers(blob, entries, { chunk = CHUNK, keep = KEEP } = {}) {
   async function dataRange(entry) {
     const header = await range(entry.localAt, Math.min(blob.size, entry.localAt + 30));
     const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+    // Not an entry where the directory says one is: a damaged file, whose
+    // bytes here belong to something else. See openZip.
+    if (header.byteLength < 30 || view.getUint32(0, true) !== LOCAL_SIGNATURE) throw damagedArchive();
     const start = entry.localAt + 30 + view.getUint16(26, true) + view.getUint16(28, true);
     return [start, start + entry.compressedSize];
+  }
+
+  /** Whether the entry the directory lists is really there: its header, its name. */
+  async function isWhereListed(entry) {
+    const end = Math.min(blob.size, entry.localAt + 30 + entry.rawName.length);
+    if (end - entry.localAt < 30 + entry.rawName.length) return false;
+    const header = await range(entry.localAt, end);
+    const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+    return view.getUint32(0, true) === LOCAL_SIGNATURE
+      && view.getUint16(26, true) === entry.rawName.length
+      && entry.rawName.every((b, i) => header[30 + i] === b);
   }
 
   /** An entry's bytes, inflated, in memory. Only for entries small enough to hold. */
@@ -355,6 +398,7 @@ function readers(blob, entries, { chunk = CHUNK, keep = KEEP } = {}) {
   const small = (entry) => entry.compressedSize <= chunk;
 
   return {
+    isWhereListed,
     has: (name) => entries.has(name),
     sizeOf: (name) => entries.get(name)?.size ?? 0,
     names: () => [...entries.keys()],

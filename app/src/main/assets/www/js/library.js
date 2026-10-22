@@ -3,7 +3,7 @@
 import * as store from './store.js';
 import { urlCache } from './blobs.js';
 import {
-  parse, parsePictures, formatOf, expandArchive, chapterHtml, countWords,
+  parse, parsePictures, formatOf, expandArchive, asEpubName, chapterHtml, countWords,
   withRescue, nameWithFormat, bytesOf, SUPPORTED, UNSUPPORTED_REASON,
 } from './parse.js';
 import { planBooks } from './group.js';
@@ -374,6 +374,12 @@ export async function importFiles(files, { onProgress, onDone, transient = false
         file = readable;
         return opened;
       }, rescue);
+
+      // An EPUB that arrived named ".zip": one book, read as the EPUB it is.
+      if (archive.epub) {
+        queue.push({ file, name: file.name, folder: '', as: asEpubName(file.name) });
+        continue;
+      }
 
       if (archive.comic) {
         /* A zip of images is a comic, not a container.

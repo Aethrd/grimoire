@@ -40,7 +40,9 @@ async function openArchive(file) {
    * the fallback turned the one error worth recognising into "corrupted zip".
    * That one is passed on as it is, so it can be rescued. */
   const streamed = await openZip(file).catch((error) => {
-    if (isUnreadable(error)) throw error;
+    // A damaged file is not handed on: JSZip forgives exactly the damage
+    // that makes an archive read as the wrong thing.
+    if (isUnreadable(error) || error.damaged) throw error;
     return null;
   });
   if (streamed) return streamed;
@@ -658,6 +660,12 @@ function readText(file) {
  * what it produces is ordinary text in that language.
  */
 
+/** The name a book called ".zip" should be read under: ".epub". */
+export const asEpubName = (name) => {
+  const base = String(name || 'book').replace(/\.zip$/i, '');
+  return /\.epub$/i.test(base) ? base : `${base}.epub`;
+};
+
 /** The commonest Chinese characters, shared by simplified and traditional. */
 /* The three hundred commonest Chinese characters -- about two thirds of any
  * Chinese text -- with the traditional forms of the ones that differ. Kept
@@ -1063,6 +1071,15 @@ export function stripCommonRoot(paths) {
  */
 export async function expandArchive(file, onProgress) {
   const zip = await openArchive(file);
+
+  /* A book called a zip is a book.
+   *
+   * An EPUB is a zip, and a file manager, a cloud drive or a download can
+   * hand one over named ".zip". Unpacked as an archive, every page inside it
+   * -- ch0001.xhtml, ch0002.xhtml, the contents page -- came out as a book of
+   * its own. Its container file says what it is; that is believed over the
+   * name. */
+  if (zip.has('META-INF/container.xml')) return { epub: true, comic: false, books: [] };
 
   const entries = zip.names().map((name) => ({ name })).filter((f) =>
     // Skip macOS resource forks and Windows thumbnail junk, which otherwise
