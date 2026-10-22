@@ -758,6 +758,50 @@ await t('an export survives Android closing the app while the save screen is ope
   assert.match(rebuild, /readerReady = false;/);
 });
 
+await t('a book written out and given back is the same book, not a second copy', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const epub = await import(new URL('../app/src/main/assets/www/js/epub.js', import.meta.url).href);
+  const JSZip = (await import('jszip')).default;
+  const fixture = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+  const bytesOf = (blob) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(Buffer.from(reader.result));
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(blob);
+  });
+  const original = new File([fixture], 'round-trip-almanac.epub');
+  const first = await library.importFiles([original], {});
+  assert.equal(first.added, 1);
+  const book = (await store.byIndex('books', 'fingerprint', `round-trip-almanac.epub:${original.size}`))[0];
+
+  // Written out, it says which book it is -- the same thing every time.
+  const { blob } = await epub.buildEpub(book.id, {});
+  const opf = await (await JSZip.loadAsync(await bytesOf(blob))).file('OEBPS/content.opf').async('string');
+  assert.match(opf, new RegExp(`<dc:identifier id="pub-id">urn:grimoire:${encodeURIComponent(book.fingerprint).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}</dc:identifier>`));
+  const again = await epub.buildEpub(book.id, {});
+  const opf2 = await (await JSZip.loadAsync(await bytesOf(again.blob))).file('OEBPS/content.opf').async('string');
+  assert.equal(/<dc:identifier[^>]*>([^<]*)</.exec(opf)[1], /<dc:identifier[^>]*>([^<]*)</.exec(opf2)[1]);
+
+  // Given back while the book is on the shelf: recognised, not added.
+  const exported = new File([await bytesOf(blob)], 'The Salt Almanac.epub');
+  const back = await library.importFiles([exported], {});
+  assert.equal(back.added, 0, 'the export came in as a second copy');
+  assert.equal(back.already, 1);
+  assert.deepEqual(back.existing, [book.id]);
+
+  // With the book in the Bin, the export takes its place -- and remembers
+  // which book it is, so the original file is then the same book too.
+  await library.binBooks([book.id]);
+  const replaced = await library.importFiles([exported], {});
+  assert.equal(replaced.added, 1);
+  assert.equal(replaced.replaced, 1);
+  const now = (await store.all('books')).filter((b) => b.sourceId === book.fingerprint);
+  assert.equal(now.length, 1);
+  const theOriginal = await library.importFiles([original], {});
+  assert.equal(theOriginal.added, 0, 'the original file came in beside its own export');
+  assert.equal(theOriginal.already, 1);
+});
+
 /* ── a file the page is not allowed to read ──────────────────────────────
  *
  * "The requested file could not be read, typically due to permission problems

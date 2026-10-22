@@ -256,7 +256,14 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
     '<?xml version="1.0" encoding="UTF-8"?>\n'
     + '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">\n'
     + '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n'
-    + `<dc:identifier id="pub-id">grimoire-${bookId}-${Date.now()}</dc:identifier>\n`
+    /* Which book this is, the same every time it is written out.
+     *
+     * It was a new number on every export, so a book exported and imported
+     * again -- moving it to another phone, keeping a copy, reading it in the
+     * same app -- could not be told from a different book, and arrived as a
+     * second copy beside the first. Named for the file the book came from,
+     * which is how the shelf already knows a book it has. */
+    + `<dc:identifier id="pub-id">${escapeXml(exportId(book, bookId))}</dc:identifier>\n`
     + `<dc:title>${escapeXml(book.title)}</dc:title>\n`
     + `<dc:language>${escapeXml(book.lang || 'en')}</dc:language>\n`
     + (book.author ? `<dc:creator>${escapeXml(book.author)}</dc:creator>\n` : '')
@@ -280,6 +287,16 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
   // The saving is reported rather than assumed: it is the whole reason a
   // smaller copy was asked for, and on line art it can come out near zero.
   return { blob, name: `${safeName(book.title)}.epub`, saved };
+}
+
+/** What marks a book as this app's, and which of its books it is. */
+export const GRIMOIRE_ID = 'urn:grimoire:';
+
+/** A book's lasting identity: the file it came from, carried through any
+ *  number of exports and imports. */
+export function exportId(book, bookId) {
+  const source = book.sourceId || book.fingerprint || `book:${bookId}`;
+  return `${GRIMOIRE_ID}${encodeURIComponent(source)}`;
 }
 
 /** A filename a file system will accept, from a title that may be anything. */

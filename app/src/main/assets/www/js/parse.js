@@ -383,6 +383,16 @@ async function parseEpub(file, onProgress, { onImage } = {}) {
   };
   const title = meta('title') || file.name.replace(/\.[^.]+$/, '');
   const author = meta('creator') || null;
+  // A book this app wrote out names the book it came from; see exportId in
+  // epub.js. Any of the identifiers may be it.
+  let sourceId = null;
+  for (const child of metadata ? metadata.children : []) {
+    const text = child.localName === 'identifier' ? child.textContent.trim() : '';
+    if (text.startsWith('urn:grimoire:')) {
+      try { sourceId = decodeURIComponent(text.slice('urn:grimoire:'.length)) || null; } catch { sourceId = null; }
+      break;
+    }
+  }
   const lang = meta('language') || null;
 
   // Calibre writes series into a meta tag; it is the only reliable source.
@@ -493,7 +503,7 @@ async function parseEpub(file, onProgress, { onImage } = {}) {
 
   return {
     title, author, series, seriesIndex, lang, coverBlob, chapters, images,
-    imageCount,
+    imageCount, sourceId,
     tocSource: tocMap.size ? 'the file\u2019s own table of contents'
                            : 'headings, because the file carries no table of contents',
   };

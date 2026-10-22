@@ -276,6 +276,21 @@ export async function importFiles(files, { onProgress, onDone, transient = false
    */
   const started = Date.now();
   const spent = { read: 0, parse: 0, write: 0 };
+
+  /* Books here that came from this app's own exports, by the file each one
+   * first came from. Read once per import and refreshed as books arrive. */
+  let fromExports = null;
+  const exportedFrom = async () => {
+    if (!fromExports) {
+      fromExports = new Map();
+      for (const book of await store.all('books')) {
+        if (!book.sourceId) continue;
+        if (!fromExports.has(book.sourceId)) fromExports.set(book.sourceId, []);
+        fromExports.get(book.sourceId).push(book);
+      }
+    }
+    return fromExports;
+  };
   /* One line per book.
    *
    * Averages hide the thing worth knowing. A shelf that imports in four
@@ -469,7 +484,14 @@ export async function importFiles(files, { onProgress, onDone, transient = false
        * opened from a file manager, is not on the shelf either. A copy that
        * is on the shelf, or in the Vault, is skipped, and the result says so
        * rather than counting it as nothing. */
-      const copies = await store.byIndex('books', 'fingerprint', fingerprint);
+      /* The same book can arrive as a different file: one this app wrote out
+       * and is now being given back. Those carry the identity of the file the
+       * book first came from (see exportId in epub.js), so a copy is found by
+       * that as well as by its own name and size -- either way round. */
+      const copies = [
+        ...await store.byIndex('books', 'fingerprint', fingerprint),
+        ...(await exportedFrom()).get(fingerprint) || [],
+      ];
       let kept = copies.find((book) => !book.binnedAt && !book.transient && !book.importing);
       /* A text file imported before text was read properly is replaced, not
        * kept: it came in as one enormous paragraph that froze the phone, and
@@ -546,8 +568,33 @@ export async function importFiles(files, { onProgress, onDone, transient = false
         throw error;
       }
 
+      /* Written out by this app from a book that is already here: the same
+       * book, not another one. Only knowable once the file has been read,
+       * since it is the file's own identifier that says so. */
+      if (parsed.sourceId) {
+        const same = [
+          ...(await store.byIndex('books', 'fingerprint', parsed.sourceId)),
+          ...(await exportedFrom()).get(parsed.sourceId) || [],
+        ].filter((book) => book.id !== bookId);
+        const here = same.find((book) => !book.binnedAt && !book.transient && !book.importing);
+        if (here) {
+          await store.deleteBook(bookId);
+          if (here.inVault) results.inVault = (results.inVault || 0) + 1;
+          else results.already = (results.already || 0) + 1;
+          if (!results.existing) results.existing = [];
+          results.existing.push(here.id);
+          continue;
+        }
+        const binned = same.filter((book) => book.binnedAt);
+        if (binned.length) {
+          await destroyBooks(binned.map((book) => book.id));
+          results.replaced = (results.replaced || 0) + binned.length;
+        }
+      }
+
       await store.put('books', {
         id: bookId,
+        sourceId: parsed.sourceId || null,
         title: parsed.title,
         author: parsed.author,
         series: parsed.series,
@@ -573,6 +620,7 @@ export async function importFiles(files, { onProgress, onDone, transient = false
         inVault: false,
         tags: [],
       });
+      if (parsed.sourceId) fromExports = null;   // one more to know about
 
       // One transaction rather than one per chapter: a long book has hundreds
       // of them, and a transaction apiece is what made importing a shelf take
