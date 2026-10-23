@@ -66,14 +66,29 @@ t('long press selects rather than opening a typed menu', () => {
   assert.match(app, /const selection = new Set\(\)/);
 });
 
+t('lifting the finger after a long press is not also a tap', () => {
+  // The press selected the book (or opened a menu); the tap the browser makes
+  // of the lift used to deselect it again, or shut the menu under the finger.
+  const tile = library.slice(library.indexOf('let heldAt'), library.indexOf('function cleanAuthor'));
+  assert.match(tile, /heldAt = Date\.now\(\)/, 'the press is not remembered');
+  assert.match(tile, /touchend[\s\S]*?justHeld\(\)[\s\S]*?preventDefault\(\)/, 'the lift still makes a tap');
+  assert.match(tile, /click[\s\S]*?if \(justHeld\(\)\)[\s\S]*?return;/, 'a tap that gets through still counts');
+  // Kept outside the tile: selecting redraws the shelf, so the lift lands on
+  // a new tile in the old one's place.
+  assert.ok(library.indexOf('let heldAt') < library.indexOf('function tile('));
+});
+
 t('actions are labelled, not a row of bare glyphs', () => {
   // One of them is a bin. Making someone tap to find out what a glyph does is
   // not acceptable when that is a possible outcome.
   const grid = html.slice(html.indexOf('id="select-actions"'), html.indexOf('id="confirm-bar"'));
   const acts = [...grid.matchAll(/data-act="(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(acts,
-    ['open', 'folder', 'status', 'bundle', 'merge', 'blur', 'trim', 'redact', 'export',
+    ['open', 'bundle', 'merge', 'blur', 'trim', 'redact', 'export',
       'details', 'vault', 'delete']);
+  // Folder and status are in Details, for one book or several -- not two
+  // more buttons beside it doing part of the same job.
+  assert.match(app, /if \(books\.length === 1\) return openDetails\(books\[0\]\);\s*if \(books\.length > 1\) return openGroupDetails\(books\);/);
   // Every one carries a text label beside its icon.
   assert.equal((grid.match(/<span>/g) || []).length, acts.length);
   assert.ok(html.includes('id="select-all"') && html.includes('id="select-cancel"'));
@@ -106,7 +121,10 @@ t('moving to an existing folder needs no typing', () => {
   // one, which is the only case where typing is unavoidable.
   assert.match(app, /library\.folderCounts\(\)/);
   assert.match(library, /export async function folderCounts/);
-  assert.match(app, /button\.onclick = \(\) => moveTo\(folder\)/);
+  // The folders there are, each a tap; a new one is the only thing typed.
+  const picker = app.slice(app.indexOf('async function folderPicker'), app.indexOf('async function openGroupDetails'));
+  assert.match(picker, /for \(const folder of folders\) offer\(folder, folder\)/);
+  assert.match(picker, /offer\('＋ New folder…', null\)/);
 });
 
 t('deleting several books is confirmed in the app, not by a system dialog', () => {
@@ -141,20 +159,24 @@ t('a single selection can have its metadata corrected by hand', () => {
   // Scraped EPUB metadata is frequently wrong, and fixing it should not mean
   // re-making the file.
   assert.match(app, /async function openDetails\(tapped\)/);
-  for (const field of ['title', 'author', 'series', 'seriesIndex', 'folder', 'lang']) {
+  for (const field of ['title', 'author', 'series', 'seriesIndex', 'lang']) {
     assert.ok(app.includes(`['${field}',`), `no ${field} field in the details sheet`);
   }
+  // The folder is picked from the ones there are, or named new -- not typed.
+  assert.match(app, /inputs\.folder = await folderPicker\(body, book\.folder \|\| ''\)/);
   assert.match(app, /details-cover-pick/);
   assert.match(app, /newCover = null/, 'a cover cannot be removed, only replaced');
 });
 
-t('the status action opens a picker, not a toggle', () => {
+t('status is picked from all its states, for one book or several', () => {
   // Read-or-unread is two of five states, and a two-way toggle cannot reach
   // the other three.
-  assert.match(app, /status: \(\) => openStatusSheet\(\)/);
-  assert.match(app, /async function openStatusSheet/);
-  // A shared state is ticked, so a batch shows what it already is.
-  assert.match(app, /current\.size === 1 && current\.has\(value\)/);
+  const one = app.slice(app.indexOf('async function openDetails'), app.indexOf('async function folderPicker'));
+  assert.match(one, /\[\.\.\.library\.STATUSES, \[null, 'Automatic'\]\]/);
+  const many = app.slice(app.indexOf('async function openGroupDetails'), app.indexOf('const escapeText'));
+  // Several at once change nothing that is not picked.
+  assert.match(many, /\[\[undefined, 'Leave as they are'\], \.\.\.library\.STATUSES, \[null, 'Automatic'\]\]/);
+  assert.match(many, /if \(pickedStatus !== undefined\) await applyStatus\(books, pickedStatus/);
 });
 
 t('renaming a book drops its stale translated title', () => {
@@ -494,9 +516,7 @@ t('status is more than read or unread, and can be reverted', () => {
   // Automatic is the revert: it clears what was set rather than picking one.
   assert.match(app, /if \(status === null\) delete book\.status/);
   assert.match(app, /back to automatic/);
-  // Offered only when there is something to revert.
-  assert.match(app, /if \(pinned\) \{/);
-  assert.ok(html.includes('id="status-sheet"'));
+  assert.ok(!html.includes('id="status-sheet"'), 'the separate status sheet is back');
 });
 
 t('a book put aside is not offered as the one to continue', () => {
@@ -721,9 +741,12 @@ t('a found book can be acted on where it was found', () => {
   assert.match(app, /screens\.onLongPressBook\(openBookMenu\)/);
   const menu = app.slice(app.indexOf('async function openBookMenu'),
     app.indexOf('function resetConfirm'));
-  for (const action of ['Open', 'Details', 'Take pages out', 'Write out',
-    'Move to folder', 'Reading status', 'Delete']) {
+  for (const action of ['Open', 'Details', 'Take pages out', 'Write out', 'Delete']) {
     assert.ok(menu.includes(`'${action}'`), `the menu has no ${action}`);
+  }
+  // Folder and status are details of the book, and live in Details.
+  for (const gone of ['Move to folder', 'Reading status']) {
+    assert.ok(!menu.includes(`'${gone}'`), `the menu still has ${gone} beside Details`);
   }
   // The sheet carries the book's own name, or it is a menu for nothing in
   // particular.

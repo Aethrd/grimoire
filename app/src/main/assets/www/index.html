@@ -392,7 +392,6 @@
   <section class="screen" data-screen="bin">
     <header class="app-head">
       <div class="app-head-title"><h1>Bin</h1><p class="eyebrow" id="bin-eyebrow">Nothing in here</p></div>
-      <button class="btn ghost" id="bin-empty">Empty</button>
     </header>
     <div class="scroll pad" id="bin-body"></div>
     <footer class="stepper" id="bin-foot" hidden>
@@ -442,14 +441,6 @@
     <svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
     <span>Open</span>
   </button>
-  <button data-act="folder">
-    <svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z"/><path d="M3 7V5h6"/></svg>
-    <span>Folder</span>
-  </button>
-  <button data-act="status">
-    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>
-    <span>Status</span>
-  </button>
   <button data-act="bundle">
     <svg viewBox="0 0 24 24"><path d="M4 8h13v12H4z"/><path d="M7 5h13v12"/></svg>
     <span>Bundle</span>
@@ -493,20 +484,6 @@
   <span class="select-count" id="confirm-text"></span>
   <button class="btn ghost" id="confirm-no">Cancel</button>
   <button class="btn danger" id="confirm-yes">Delete</button>
-</div>
-
-<div class="sheet-scrim" id="folder-sheet" hidden>
-  <div class="sheet">
-    <p class="eyebrow">Move to</p>
-    <div class="sheet-list" id="folder-list"></div>
-    <div class="field" style="margin:12px 0 0">
-      <input type="text" id="folder-new" placeholder="New folder — use / to nest" autocapitalize="words">
-    </div>
-    <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
-      <button class="btn ghost" id="folder-cancel">Cancel</button>
-      <button class="btn primary" id="folder-create">Create &amp; move</button>
-    </div>
-  </div>
 </div>
 
 <div class="sheet-scrim" id="folder-actions" hidden>
@@ -571,16 +548,6 @@
     <div class="sheet-list" id="bundle-list"></div>
     <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
       <button class="btn ghost" id="bundle-cancel">Cancel</button>
-    </div>
-  </div>
-</div>
-
-<div class="sheet-scrim" id="status-sheet" hidden>
-  <div class="sheet">
-    <p class="eyebrow">Reading status</p>
-    <div class="sheet-list" id="status-list"></div>
-    <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
-      <button class="btn ghost" id="status-cancel">Cancel</button>
     </div>
   </div>
 </div>

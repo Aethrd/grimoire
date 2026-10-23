@@ -335,7 +335,8 @@ function paintSelection() {
   // Actions that only make sense for one book, or for any book at all.
   for (const button of el('select-actions').children) {
     const act = button.dataset.act;
-    const single = act === 'open' || act === 'details';
+    // Details works for several books too: their folder and status.
+    const single = act === 'open';
     button.disabled = single ? count !== 1 : count === 0;
   }
 }
@@ -386,8 +387,6 @@ function wireSelection() {
       openBook(book);
     },
 
-    folder: () => openFolderSheet(),
-
     /* Writing a book out is a thing you do to a book, so it belongs with the
        other things you do to a book. It was only inside the details sheet,
        which is a long press and a scroll away -- far enough that it may as
@@ -417,12 +416,16 @@ function wireSelection() {
       return exportMany(books);
     },
 
+    /* Folder and status live here, for one book or many.
+     *
+     * They were two more buttons beside this one, doing part of what it does;
+     * one book gets its whole details sheet, several get the part of it that
+     * applies to all of them at once. */
     details: async () => {
-      const [book] = await selectedBooks();
-      if (book) openDetails(book);
+      const books = await selectedBooks();
+      if (books.length === 1) return openDetails(books[0]);
+      if (books.length > 1) return openGroupDetails(books);
     },
-
-    status: () => openStatusSheet(),
 
     /* Only the undo lives here now.
      *
@@ -555,17 +558,6 @@ function wireSelection() {
     if (e.target === el('bundle-sheet')) el('bundle-sheet').hidden = true;
   };
 
-  el('status-cancel').onclick = () => { el('status-sheet').hidden = true; };
-  el('status-sheet').onclick = (e) => {
-    if (e.target === el('status-sheet')) el('status-sheet').hidden = true;
-  };
-
-  el('folder-cancel').onclick = () => { el('folder-sheet').hidden = true; };
-  el('folder-sheet').onclick = (e) => {
-    // Dismiss on the scrim, not on the sheet itself.
-    if (e.target === el('folder-sheet')) el('folder-sheet').hidden = true;
-  };
-  el('folder-create').onclick = () => moveTo(el('folder-new').value.trim());
 }
 
 async function openDetails(tapped) {
@@ -635,7 +627,6 @@ async function openDetails(tapped) {
     ['author', 'Author', book.author || ''],
     ['series', 'Series', book.series || ''],
     ['seriesIndex', 'Series number', book.seriesIndex ?? ''],
-    ['folder', 'Folder', book.folder || ''],
     ['lang', 'Language', book.lang || ''],
   ];
   const inputs = {};
@@ -651,6 +642,13 @@ async function openDetails(tapped) {
     field.appendChild(input);
     body.appendChild(field);
   }
+
+  /* The folder, picked rather than typed.
+   *
+   * Typing it meant spelling an existing folder exactly as it was spelled
+   * before, or quietly making a second one beside it. The folders there are
+   * are offered as they are; a new one is still a tap and a name away. */
+  inputs.folder = await folderPicker(body, book.folder || '');
 
   // Read-only, because these describe the file rather than the record.
   const facts = document.createElement('div');
@@ -750,6 +748,127 @@ async function openDetails(tapped) {
   el('details-sheet').hidden = false;
 }
 
+/**
+ * A folder chooser: the folders that exist, "Not filed", and a new one.
+ *
+ * @returns something with a `value` -- the folder chosen, "" for none -- so
+ *   it reads like the text field it replaces.
+ */
+async function folderPicker(body, current, { keep = false } = {}) {
+  const field = document.createElement('div');
+  field.className = 'field';
+  field.innerHTML = '<label><span>Folder</span></label>';
+  const row = document.createElement('div');
+  row.className = 'chip-row wrap details-folders';
+  field.appendChild(row);
+  const typed = document.createElement('input');
+  typed.type = 'text';
+  typed.className = 'details-folder-new';
+  typed.placeholder = 'Name the new folder — a / puts it inside another';
+  typed.hidden = true;
+  field.appendChild(typed);
+  body.appendChild(field);
+
+  let chosen = current;
+  const chips = [];
+  const press = (chip) => { for (const other of chips) other.setAttribute('aria-pressed', String(other === chip)); };
+  const offer = (label, folder) => {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.style.textTransform = 'none';
+    chip.textContent = label;
+    chip.dataset.folder = folder ?? '';
+    chip.setAttribute('aria-pressed', String(!keep && folder === current));
+    chip.onclick = () => {
+      if (folder === null) {
+        // A new one: the name box, ready to type in.
+        typed.hidden = false;
+        chosen = typed.value.trim();
+        typed.focus();
+      } else {
+        typed.hidden = true;
+        chosen = folder;
+      }
+      press(chip);
+    };
+    chips.push(chip);
+    row.appendChild(chip);
+  };
+
+  // For several books at once: change nothing unless a folder is picked.
+  if (keep) { chosen = undefined; offer('Leave as they are', undefined); chips[0].setAttribute('aria-pressed', 'true'); }
+  offer('Not filed', '');
+  const folders = (await library.folderCounts()).map(([folder]) => folder).filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  for (const folder of folders) offer(folder, folder);
+  offer('＋ New folder…', null);
+  typed.oninput = () => { chosen = typed.value.trim(); };
+
+  return { get value() { return chosen; } };
+}
+
+/**
+ * Details for several books at once: what can sensibly be the same for all of
+ * them -- where they are filed and how far through they are. Nothing changes
+ * that is not picked.
+ */
+async function openGroupDetails(books) {
+  const body = el('details-body');
+  body.innerHTML = `<p class="eyebrow">${books.length} books</p>`;
+
+  const statusField = document.createElement('div');
+  statusField.className = 'field';
+  statusField.innerHTML = '<label><span>Status</span></label>';
+  const statusChips = document.createElement('div');
+  statusChips.className = 'chip-row wrap';
+  let pickedStatus;   // undefined = leave them as they are
+  for (const [value, label] of [[undefined, 'Leave as they are'], ...library.STATUSES, [null, 'Automatic']]) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.style.textTransform = 'none';
+    chip.textContent = label;
+    chip.setAttribute('aria-pressed', String(value === undefined));
+    chip.onclick = () => {
+      pickedStatus = value;
+      for (const other of statusChips.children) other.setAttribute('aria-pressed', String(other === chip));
+    };
+    statusChips.appendChild(chip);
+  }
+  statusField.appendChild(statusChips);
+  body.appendChild(statusField);
+
+  const folder = await folderPicker(body, null, { keep: true });
+
+  const actions = document.createElement('div');
+  actions.className = 'sheet-actions';
+  actions.style.cssText = 'border:0;background:none;padding:10px 0 0';
+  actions.innerHTML = `
+    <button class="btn ghost" id="details-cancel">Cancel</button>
+    <button class="btn primary" id="details-save">Save</button>`;
+  body.appendChild(actions);
+
+  const close = () => { el('details-sheet').hidden = true; };
+  actions.querySelector('#details-cancel').onclick = close;
+  actions.querySelector('#details-save').onclick = async () => {
+    if (pickedStatus !== undefined) await applyStatus(books, pickedStatus, { quiet: true });
+    const chosen = folder.value;
+    if (chosen !== undefined) {
+      const clean = String(chosen).trim().replace(/^\/+|\/+$/g, '');
+      for (const book of books) {
+        const stored = (await store.get('books', book.id)) || book;
+        stored.folder = clean;
+        await store.put('books', stored);
+      }
+    }
+    close();
+    clearSelection();
+    await refreshShelf();
+    toast(`${books.length} books updated`);
+  };
+
+  el('details-sheet').hidden = false;
+}
+
 const escapeText = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -816,18 +935,11 @@ async function openBookMenu(book) {
     list.appendChild(button);
   };
 
-  /* Actions that work on a selection are given one of exactly this book,
-   * rather than each being rewritten to take a book: one path through moving
-   * and status, used from both places. */
-  const only = () => {
-    selectMode = true;
-    selection.clear();
-    selection.add(book.id);
-    paintSelection();
-  };
-
   choice('Open', 'Start reading', () => openBook(book));
-  choice('Details', 'Title, author, series, cover', () => openDetails(book));
+  /* Its folder and its reading status are details of the book, and live
+   * with the rest of them -- not as two more rows in a menu that was already
+   * the longest thing on the screen. */
+  choice('Details', 'Title, author, status, folder, cover', () => openDetails(book));
   choice('Take pages out', 'Credit pages, ads, afterwords', () => openRemove(book));
   // Offered unless the book is known to have no pictures at all.
   if (book.imageCount !== 0) {
@@ -842,8 +954,6 @@ async function openBookMenu(book) {
 
   choice('Build onto this book', 'Add more files to the end of it', () => buildOnto(book));
   choice('Write out', 'As an EPUB, whole or smaller', () => askAboutExport(book));
-  choice('Move to folder', book.folder ? `In ${book.folder}` : 'Not filed', () => { only(); openFolderSheet(); });
-  choice('Reading status', library.STATUS_LABELS[book.status] || 'Not set', () => { only(); openStatusSheet(); });
   choice(book.coverBlur ? 'Show the cover' : 'Blur the cover', 'For a shelf read in public', async () => {
     await library.blurCovers([book.id], !book.coverBlur);
     await refreshShelf();
@@ -891,7 +1001,6 @@ async function renderBin() {
   el('bin-eyebrow').textContent = books.length
     ? `${books.length} book${books.length === 1 ? '' : 's'} · still taking up room`
     : 'Nothing in here';
-  el('bin-empty').hidden = !books.length;
   el('bin-foot').hidden = !books.length;
 
   if (!books.length) {
@@ -933,7 +1042,12 @@ async function renderBin() {
   el('bin-count').textContent = binSelection.size
     ? `${binSelection.size} picked`
     : `${books.length} in the bin`;
+  /* One bar, saying what it will do to: the picked books, or all of them.
+   * There used to be an Empty at the top as well, doing what Delete for good
+   * already did with nothing picked -- two buttons for one thing, at opposite
+   * ends of the screen. */
   el('bin-restore-all').textContent = binSelection.size ? 'Put back' : 'Put all back';
+  el('bin-destroy').textContent = binSelection.size ? 'Delete for good' : 'Empty bin';
   el('bin-destroy').disabled = false;
 }
 
@@ -964,7 +1078,6 @@ function wireBin() {
   };
 
   el('bin-destroy').onclick = () => confirmDestroy(false);
-  el('bin-empty').onclick = () => confirmDestroy(true);
 }
 
 /**
@@ -1441,36 +1554,7 @@ async function openFolderActions(folder, label, count) {
   sheet.hidden = false;
 }
 
-async function openStatusSheet() {
-  const books = await selectedBooks();
-  if (!books.length) return;
-
-  const list = el('status-list');
-  list.innerHTML = '';
-
-  const current = new Set(books.map((b) => library.statusOf(b)));
-  const pinned = books.filter((b) => library.statusIsPinned(b)).length;
-
-  for (const [value, label] of library.STATUSES) {
-    const button = document.createElement('button');
-    const shared = current.size === 1 && current.has(value);
-    button.innerHTML = `<span>${label}</span><span>${shared ? '✓' : ''}</span>`;
-    button.onclick = () => applyStatus(books, value);
-    list.appendChild(button);
-  }
-
-  // Only offered when there is something to revert.
-  if (pinned) {
-    const revert = document.createElement('button');
-    revert.innerHTML = `<span>Automatic</span><span>${pinned} set by hand</span>`;
-    revert.onclick = () => applyStatus(books, null);
-    list.appendChild(revert);
-  }
-
-  el('status-sheet').hidden = false;
-}
-
-async function applyStatus(books, status) {
+async function applyStatus(books, status, { quiet = false } = {}) {
   for (const book of books) {
     if (status === null) delete book.status;
     else book.status = status;
@@ -1483,49 +1567,11 @@ async function applyStatus(books, status) {
 
     await store.put('books', book);
   }
-  el('status-sheet').hidden = true;
+  if (quiet) return;
   clearSelection();
   toast(status === null
     ? `${books.length} book${books.length === 1 ? '' : 's'} back to automatic`
     : `${books.length} marked ${library.STATUS_LABELS[status].toLowerCase()}`);
-}
-
-async function openFolderSheet() {
-  const list = el('folder-list');
-  list.innerHTML = '';
-  el('folder-new').value = '';
-
-  // Existing folders first, so the common case is one tap and no typing.
-  const folders = await library.folderCounts();
-  for (const [folder, count] of folders) {
-    const button = document.createElement('button');
-    button.innerHTML = `<span>${folder || 'Unfiled'}</span><span>${count}</span>`;
-    button.onclick = () => moveTo(folder);
-    list.appendChild(button);
-  }
-  if (!folders.some(([f]) => f === '')) {
-    const button = document.createElement('button');
-    button.innerHTML = '<span>Unfiled</span><span>—</span>';
-    button.onclick = () => moveTo('');
-    list.appendChild(button);
-  }
-
-  el('folder-sheet').hidden = false;
-}
-
-async function moveTo(folder) {
-  const clean = String(folder || '').trim().replace(/^\/+|\/+$/g, '');
-  const books = await selectedBooks();
-  for (const book of books) {
-    book.folder = clean;
-    await store.put('books', book);
-  }
-  el('folder-sheet').hidden = true;
-  const count = books.length;
-  clearSelection();
-  toast(clean
-    ? `${count} book${count === 1 ? '' : 's'} moved to ${clean}`
-    : `${count} book${count === 1 ? '' : 's'} unfiled`);
 }
 
 /* ── import ───────────────────────────────────────────────────────────── */
@@ -5150,6 +5196,23 @@ function wireSwipeBetweenTabs() {
   }, { passive: true });
 }
 
+/* Shelf, tapped twice: back to the top of it.
+ *
+ * A long shelf is a long way down, and the tab that leads to it is the
+ * obvious thing to press to get back -- as it is in most apps. A second tap
+ * soon after the first goes to the shelf and up to its first row. */
+let shelfTapAt = 0;
+function shelfTapped() {
+  const now = Date.now();
+  if (now - shelfTapAt > 400) { shelfTapAt = now; return; }
+  shelfTapAt = 0;
+  const scroller = el('shelf-scroll');
+  if (!scroller) return;
+  const reduce = matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+  if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' });
+  else scroller.scrollTop = 0;
+}
+
 function wireChrome() {
   document.addEventListener('click', (event) => {
     /* A named screen, and only a named screen.
@@ -5164,6 +5227,7 @@ function wireChrome() {
       const name = go.dataset.go;
       if (name && screenNode(name)) {
         show(name, { replace: TABS.includes(name) });
+        if (name === 'library' && go.closest('#tabbar')) shelfTapped();
       }
       return;
     }
@@ -5326,8 +5390,6 @@ window.Grimoire = {
     if (!el('export-sheet').hidden) { el('export-sheet').hidden = true; return true; }
     if (!el('merge-sheet').hidden) { el('merge-sheet').hidden = true; return true; }
     if (!el('bundle-sheet').hidden) { el('bundle-sheet').hidden = true; return true; }
-    if (!el('status-sheet').hidden) { el('status-sheet').hidden = true; return true; }
-    if (!el('folder-sheet').hidden) { el('folder-sheet').hidden = true; return true; }
     if (!el('confirm-bar').hidden) { el('confirm-bar').hidden = true; resetConfirm(); return true; }
     // Selection is a mode, and back should leave a mode before leaving a
     // screen -- otherwise deselecting means backing out of the library.

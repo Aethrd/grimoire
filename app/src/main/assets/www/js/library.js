@@ -766,6 +766,12 @@ export function bookTile(book, onOpen, onLongPress = null) {
   return tile(book, onOpen, onLongPress, null, false);
 }
 
+/* Shared by every tile, not kept on one: selecting redraws the shelf, so the
+ * tap that ends a long press lands on the new tile drawn in the old one's
+ * place, which would otherwise know nothing of the press. */
+let heldAt = 0;
+const justHeld = () => Date.now() - heldAt < 800;
+
 function tile(book, onOpen, onLongPress, selection, selecting) {
   const coverUrl = coverUrlFor(book);
   const node = document.createElement('button');
@@ -790,22 +796,39 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
     <span class="tile-name${isTranslatedTitle(book) ? ' translated-text' : ''}">${escape(displayTitle(book))}</span>
     <span class="tile-meta">${escape(cleanAuthor(book.author))}</span>`;
 
-  node.addEventListener('click', () => onOpen(book));
+  /* The tap that ends a long press is part of the long press.
+   *
+   * Android decides for itself what counts as a long press, and its delay
+   * can be set longer than this one's half second -- in which case lifting
+   * the finger after the book was selected also arrives as a tap, and the tap
+   * deselected it again: selection mode on, nothing selected, and every
+   * action greyed out. So the one tap that follows a long press is let go. */
+  node.addEventListener('click', () => {
+    if (justHeld()) { heldAt = 0; return; }
+    onOpen(book);
+  });
 
   if (!onLongPress) return node;
 
-  // Long press starts selection. The click listener above still fires on
-  // touchend, so it checks whether selection mode is on and toggles instead
-  // of opening -- which is also what makes a second tap deselect.
+  // Long press starts selection. Later taps, while selecting, toggle rather
+  // than open -- which is also what makes a second tap deselect.
   let timer = null;
   node.addEventListener('touchstart', () => {
+    heldAt = 0;
     timer = setTimeout(() => {
       timer = null;
+      heldAt = Date.now();
       onLongPress(book, node);
     }, 500);
   }, { passive: true });
   const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
-  node.addEventListener('touchend', cancel);
+  /* Lifting the finger after a long press is not a tap. The press may have
+   * opened a menu under the finger, and the tap the browser would make of it
+   * lands on that menu's backdrop and shuts it again before it is seen. */
+  node.addEventListener('touchend', (e) => {
+    cancel();
+    if (justHeld() && e.cancelable) e.preventDefault();
+  });
   node.addEventListener('touchmove', cancel, { passive: true });
 
   return node;
@@ -907,8 +930,10 @@ export async function renderShelf(handlers) {
 
   const shelves = new Set(sorted.map((b) => b.series).filter(Boolean)).size;
   const reading = sorted.filter((b) => statusOf(b) === 'reading').length;
-  el('library-counts').textContent = visible.length
-    ? `${visible.length} titles · ${shelves} series · ${reading} reading`
+  // A bundle of editions is one title, as on the tiles above (see countWorks).
+  const titles = countWorks(visible);
+  el('library-counts').textContent = titles
+    ? `${titles} title${titles === 1 ? '' : 's'} · ${shelves} series · ${reading} reading`
     : 'No books yet';
 
   el('sort-summary').textContent = sortSummary(settings.sort.keys);
