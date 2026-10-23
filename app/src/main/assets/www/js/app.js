@@ -365,10 +365,9 @@ function wireSelection() {
      * trap: what it selects is not what is in front of you, and the next
      * thing pressed -- move, delete -- happens to books you cannot see.
      */
-    const books = (await store.all('books')).filter((book) =>
-      (!book.inVault || library.vaultUnlocked)
-      && !book.importing && !book.transient && !book.binnedAt
-      && (!activeFolder || book.folder === activeFolder));
+    // What the shelf drew, so nothing in a hidden folder is caught up in it
+    // -- nor anything outside the folder the shelf is filtered to.
+    const books = (await store.all('books')).filter((book) => library.shownOnShelf.has(book.id));
 
     // A second press clears, so the same button undoes itself.
     const all = books.every((book) => selection.has(book.id));
@@ -742,7 +741,7 @@ async function openDetails(tapped) {
     await translate.clearCache(book.id).catch(() => {});
     close();
     clearSelection();
-    toast('Details saved');
+    toast(await hiddenNote([book], 'Details saved'), 5000);
   };
 
   el('details-sheet').hidden = false;
@@ -863,7 +862,7 @@ async function openGroupDetails(books) {
     close();
     clearSelection();
     await refreshShelf();
-    toast(`${books.length} books updated`);
+    toast(await hiddenNote(books, `${books.length} books updated`), 5000);
   };
 
   el('details-sheet').hidden = false;
@@ -1503,11 +1502,34 @@ async function openFolderActions(folder, label, count) {
       delete book.folder;
       await store.put('books', book);
     }
+    // The folder is gone; a later one of the same name starts on the shelf.
+    if (by === folder) await library.setFolderHidden(folder, false);
     if (activeFolder === folder) await openFolder(null);
     await refreshShelf();
     await panels.openFolders(openFolder);
     toast(`${books.length} book${books.length === 1 ? '' : 's'} taken out of “${label}”`);
   });
+
+  /* Off the shelf, or back on it. A folder inside a hidden one is hidden by
+   * that one, so the choice offered is the one that would change anything. */
+  const hidden = library.hiddenFolderList(await store.settings());
+  const by = library.hiddenBy(folder, hidden);
+  if (folder) {
+    const target = by || folder;
+    const showing = !by;
+    choice(
+      showing ? 'Hide from the shelf' : by === folder ? 'Show on the shelf' : `Show “${by}” on the shelf`,
+      showing ? 'Its books are only found here, under Folders'
+        : by === folder ? 'Its books go back on the shelf'
+        : `Hidden because it is inside “${by}”`,
+      async () => {
+        sheet.hidden = true;
+        await library.setFolderHidden(target, showing);
+        await refreshShelf();
+        await panels.openFolders(openFolder);
+        toast(showing ? `“${label}” is off the shelf. Open it from Folders.` : `“${target}” is back on the shelf`);
+      });
+  }
 
   choice('Blur every cover', 'Hide what is on them, on this shelf only', async () => {
     sheet.hidden = true;
@@ -1543,6 +1565,7 @@ async function openFolderActions(folder, label, count) {
         finish();
       }
 
+      if (by === folder) await library.setFolderHidden(folder, false);
       if (activeFolder === folder) await openFolder(null);
       await refreshShelf();
       await panels.openFolders(openFolder);
@@ -1552,6 +1575,17 @@ async function openFolderActions(folder, label, count) {
   remove.classList.add('danger');
 
   sheet.hidden = false;
+}
+
+/** A book filed into a hidden folder disappears from the shelf; say where. */
+async function hiddenNote(books, said) {
+  if (activeFolder != null) return said;
+  const hidden = library.hiddenFolderList(await store.settings());
+  const fresh = await Promise.all(books.map((b) => store.get('books', b.id)));
+  const off = fresh.filter((b) => b && library.offShelf(b, hidden));
+  if (!off.length) return said;
+  const where = library.hiddenBy(off[0].folder, hidden);
+  return `${said}. ${off.length === 1 ? 'It is' : `${off.length} are`} in “${where}”, hidden from the shelf`;
 }
 
 async function applyStatus(books, status, { quiet = false } = {}) {
@@ -5472,6 +5506,12 @@ async function boot() {
   theme.apply(settings);
   reader.setPictureFrame(settings.pictureFrame || null);
   activeFolder = settings.shelfFolder ?? null;
+  /* A hidden folder left open is not what the app opens on next time:
+   * hiding it would mean little if the shelf came back up showing it. */
+  if (activeFolder && library.hiddenBy(activeFolder, library.hiddenFolderList(settings))) {
+    activeFolder = null;
+    await store.saveSettings({ shelfFolder: null });
+  }
   // Anything a crash left half-written is cleared before the shelf is drawn.
   await library.sweepUnfinishedImports();
   // Locked only if a passphrase exists to unlock it with.

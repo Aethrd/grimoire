@@ -1478,6 +1478,10 @@ body[data-view="reader"] .stepper {
 /* A folder and what can be done with it, on one line. */
 .folder-row { display: flex; align-items: stretch; }
 .folder-row .list-row { flex: 1; min-width: 0; }
+/* A folder kept off the main shelf, marked as such where it can still be opened. */
+.folder-row.off-shelf small { display: inline-flex; align-items: center; gap: 5px; }
+.off-shelf-icon { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .folder-row .folder-more { flex: none; width: 44px; align-self: center;
                            color: var(--muted); }
 /* The one choice in that sheet that cannot be undone. */

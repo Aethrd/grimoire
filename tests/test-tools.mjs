@@ -599,11 +599,84 @@ await t('search does not find deleted books', async () => {
   // Nor counted in its folder, nor caught by Select all, nor grouped.
   const panelsSource = read('app/src/main/assets/www/js/panels.js');
   assert.match(panelsSource, /const visible = books\.filter\(\(b\) => onShelf\(b\)/);
-  assert.match(app, /!book\.importing && !book\.transient && !book\.binnedAt/);
+  assert.match(app, /library\.shownOnShelf\.has\(book\.id\)/);
   const screensSource = read('app/src/main/assets/www/js/screens.js');
   assert.equal((screensSource.match(/!b\.binnedAt/g) || []).length, 3);
 });
 
+
+await t('a folder hidden from the shelf is only found under Folders', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  const panelsMod = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  const out = await aBook({ title: 'Brambleway Out', folder: 'Shelved' });
+  const kept = await aBook({ title: 'Brambleway Kept', folder: 'Private' });
+  const nested = await aBook({ title: 'Brambleway Nested', folder: 'Private/Old' });
+  const lookalike = await aBook({ title: 'Brambleway Lookalike', folder: 'Private stuff' });
+
+  // Nested folders go with the one they are in; a name that merely starts
+  // the same does not.
+  assert.equal(library.hiddenBy('Private/Old', ['Private']), 'Private');
+  assert.equal(library.hiddenBy('Private stuff', ['Private']), null);
+  assert.equal(library.hiddenBy('', ['Private']), null);
+
+  await library.setFolderHidden('Private', true);
+  const tiles = () => [...el('shelf').querySelectorAll('[data-book]')].map((n) => Number(n.dataset.book));
+  const handlers = { onOpen() {}, onLongPress() {}, selection: new Set(), selecting: false };
+
+  await library.renderShelf({ ...handlers, folder: null });
+  let shown = tiles();
+  assert.ok(shown.includes(out) && shown.includes(lookalike), 'the rest of the shelf went with it');
+  assert.ok(!shown.includes(kept), 'a hidden folder is still on the shelf');
+  assert.ok(!shown.includes(nested), 'a folder inside a hidden one is still on the shelf');
+  assert.ok(!library.shownOnShelf.has(kept), '"select all" would reach a hidden book');
+
+  // Opened from Folders, it shows what is in it.
+  await library.renderShelf({ ...handlers, folder: 'Private' });
+  shown = tiles();
+  assert.ok(shown.includes(kept) && shown.includes(nested), 'opening the folder does not show its books');
+  assert.ok(!shown.includes(out));
+
+  // The shelf's search leaves it out too.
+  screensMod.initFind(() => {}, false);
+  el('find-input').value = 'Brambleway';
+  el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle(450);
+  const found = [...el('find-results').querySelectorAll('[data-book]')].map((n) => Number(n.dataset.book));
+  assert.ok(found.includes(out));
+  assert.ok(!found.includes(kept) && !found.includes(nested), 'search finds a hidden folder');
+
+  // Still listed under Folders, and marked.
+  await panelsMod.openFolders(() => {});
+  const rows = [...el('folders-list').querySelectorAll('.folder-row')];
+  const row = (name) => rows.find((r) => r.querySelector('b')?.textContent === name);
+  assert.ok(row('Private')?.classList.contains('off-shelf'), 'the hidden folder is not listed, or not marked');
+  assert.match(row('Private').textContent, /Hidden from the shelf/);
+  assert.match(row('Private/Old').textContent, /Hidden with “Private”/);
+  assert.ok(!row('Private stuff').classList.contains('off-shelf'));
+
+  // And back again.
+  await library.setFolderHidden('Private', false);
+  await library.renderShelf({ ...handlers, folder: null });
+  assert.ok(tiles().includes(kept), 'showing it again did not put it back');
+  await library.binBooks([out, kept, nested, lookalike]);
+});
+
+await t('a shelf of only hidden folders does not say there are no books', async () => {
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/library.js', import.meta.url), 'utf8');
+  assert.match(app, /kept \? 'Nothing on the shelf' : 'No books yet'/);
+  assert.match(app, /in folders hidden from the shelf\. They are under Folders/);
+});
+
+await t('a hidden folder is not what the app opens on', async () => {
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  const boot = app.slice(app.indexOf('async function boot()'));
+  assert.match(boot, /library\.hiddenBy\(activeFolder, library\.hiddenFolderList\(settings\)\)[\s\S]{0,80}activeFolder = null/);
+  // The choice is in the folder's own menu, both ways.
+  assert.match(app, /'Hide from the shelf'/);
+  assert.match(app, /'Show on the shelf'/);
+  assert.match(app, /await library\.setFolderHidden\(target, showing\)/);
+});
 await t('a text file imported as one frozen block is read again when picked again', async () => {
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
   const text = '第一章 开始\n他走了。\n第二章 回来\n她笑了。\n';

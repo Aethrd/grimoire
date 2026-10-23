@@ -7,7 +7,7 @@
 import * as store from './store.js';
 import * as theme from './theme.js';
 import * as reader from './reader.js';
-import { setVaultUnlocked, vaultUnlocked, countWorks, workOf, onShelf } from './library.js';
+import { setVaultUnlocked, vaultUnlocked, countWorks, workOf, onShelf, hiddenBy, hiddenFolderList } from './library.js';
 import { toast } from './screens.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
@@ -1589,6 +1589,10 @@ let onFolderActions = null;
 /** What the shell offers for a whole folder; it owns deleting. */
 export function onFolderMenu(fn) { onFolderActions = fn; }
 
+const OFF_SHELF_ICON = '<svg class="off-shelf-icon" viewBox="0 0 24 24" aria-hidden="true">'
+  + '<path d="M3 3l18 18M10.6 6.2A9.8 9.8 0 0 1 12 6c5 0 8.5 4.2 9.5 6-.4.8-1.3 2-2.5 3.2M6.3 7.8C4.6 9 3.3 10.7 2.5 12c1 1.8 4.5 6 9.5 6 1.4 0 2.7-.3 3.8-.8"/>'
+  + '<path d="M9.9 10a3 3 0 0 0 4.1 4.1"/></svg>';
+
 export async function openFolders(onOpenFolder) {
   const books = await store.all('books');
   // Deleted books are in the bin, not in their folders.
@@ -1603,6 +1607,11 @@ export async function openFolders(onOpenFolder) {
   }
   const counts = new Map([...inFolder].map(([folder, list]) => [folder, countWorks(list, visible)]));
   const total = countWorks(visible);
+  // "All books" opens the main shelf, which leaves hidden folders out; its
+  // count is what you will find there.
+  const hidden = hiddenFolderList(await store.settings());
+  const onMainShelf = visible.filter((b) => !hiddenBy(b.folder || '', hidden));
+  const shelfTotal = countWorks(onMainShelf, visible);
 
   const list = el('folders-list');
   list.innerHTML = '';
@@ -1615,8 +1624,13 @@ export async function openFolders(onOpenFolder) {
 
     const button = document.createElement('button');
     button.className = 'list-row';
+    const by = folder ? hiddenBy(folder, hidden) : null;
+    if (by) {
+      row.classList.add('off-shelf');
+      note = by === folder ? 'Hidden from the shelf' : `Hidden with “${by}”`;
+    }
     button.innerHTML = `<span class="body"><b>${escape(label)}</b>${
-      note ? `<small>${escape(note)}</small>` : ''}</span><span class="trail">${count}</span>`;
+      note ? `<small>${by ? OFF_SHELF_ICON : ''}${escape(note)}</small>` : ''}</span><span class="trail">${count}</span>`;
     button.onclick = () => onOpenFolder(folder);
     row.appendChild(button);
 
@@ -1641,7 +1655,8 @@ export async function openFolders(onOpenFolder) {
     list.appendChild(row);
   };
 
-  entry('All books', total, null, 'Everything, unfiltered');
+  entry('All books', shelfTotal, null,
+    shelfTotal === total ? 'Everything, unfiltered' : 'The shelf: everything but hidden folders');
 
   // Nested paths sort together, so "Fantasy" sits above "Fantasy/Sub".
   for (const [folder, count] of [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {

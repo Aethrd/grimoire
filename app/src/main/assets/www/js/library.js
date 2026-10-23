@@ -872,6 +872,12 @@ export const displayTitle = (book) => titles.get(book.id) || book.title;
  *  book's own. Used to mark it, so the two are never mistaken. */
 export const isTranslatedTitle = (book) => titles.has(book.id);
 
+const EMPTY_NOTE = 'EPUB, PDF, CBZ, TXT, HTML, Markdown and FB2. Drop in a .zip and it is unpacked, with the folders inside kept as folders here.';
+
+/** The books the shelf drew last, bundles opened out: what "select all"
+ *  selects, so it never reaches a book that is not on screen. */
+export let shownOnShelf = new Set();
+
 export async function renderShelf(handlers) {
   lastHandlers = handlers;
   const { onOpen, onLongPress, selection, selecting, folder } = handlers;
@@ -884,6 +890,12 @@ export async function renderShelf(handlers) {
   // not a book yet, so it does not belong on the shelf.
   let visible = all.filter((b) =>
     !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
+
+  // The main shelf leaves out hidden folders. Opened from Folders, a folder
+  // shows what is in it, hidden or not -- that is the way in.
+  const hidden = hiddenFolderList(settings);
+  const kept = folder == null ? visible.filter((b) => offShelf(b, hidden)).length : 0;
+  if (kept) visible = visible.filter((b) => !offShelf(b, hidden));
 
   // Filtered to one folder, and to anything nested under it.
   if (folder != null) {
@@ -905,6 +917,13 @@ export async function renderShelf(handlers) {
   shelf.className = `shelf cols-${settings.columns}`;
 
   empty.hidden = visible.length > 0;
+  // Not "no books yet" when there are books, only none on the shelf.
+  el('library-empty-title').textContent = kept ? 'Nothing on the shelf' : 'No books yet';
+  el('library-empty-note').textContent = kept
+    ? `${kept} book${kept === 1 ? ' is' : 's are'} in folders hidden from the shelf. They are under Folders.`
+    : EMPTY_NOTE;
+  el('library-empty').querySelector('[data-import]').hidden = !!kept;
+  shownOnShelf = new Set(visible.map((b) => b.id));
 
   const flat = [];
   const collect = (nodes, depth) => {
@@ -1085,6 +1104,39 @@ async function applyTitleTranslations(books, settings) {
   // One re-render at the end rather than forty DOM pokes, and it puts the
   // translated title in the continue card too.
   if (changed) await renderShelf(lastHandlers);
+}
+
+/* Folders kept off the main shelf.
+ *
+ * Blurring covers hides what is on them, but a shelf with a row of blurred
+ * covers on it says plainly that something is being hidden. A hidden folder's
+ * books are simply not on the shelf -- nor in the shelf's search, its "carry
+ * on reading" card or its counts -- and are opened from Folders instead.
+ *
+ * Hiding a folder hides what is nested in it, as filing goes: "Private" takes
+ * "Private/Old" with it.
+ */
+export const hiddenFolderList = (settings) =>
+  Array.isArray(settings?.hiddenFolders) ? settings.hiddenFolders : [];
+
+/** The hidden folder this folder is kept off the shelf by -- itself or one it
+ *  sits in -- or null when it is on the shelf. */
+export function hiddenBy(folder, hidden) {
+  if (!folder) return null;
+  for (const top of hidden) {
+    if (folder === top || folder.startsWith(`${top}/`)) return top;
+  }
+  return null;
+}
+
+/** Whether this book stays off the main shelf. */
+export const offShelf = (book, hidden) => hiddenBy(book.folder || '', hidden) !== null;
+
+export async function setFolderHidden(folder, hide) {
+  const hidden = hiddenFolderList(await store.settings()).filter((f) => f !== folder);
+  if (hide) hidden.push(folder);
+  await store.saveSettings({ hiddenFolders: hidden });
+  return hidden;
 }
 
 /** Every folder currently in use, with how many books are in each. */

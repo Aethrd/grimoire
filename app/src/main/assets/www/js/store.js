@@ -188,6 +188,9 @@ export const DEFAULT_SETTINGS = {
   // unfiled. Kept with the rest of the shelf's arrangement rather than in a
   // module variable, which forgot it on every launch.
   shelfFolder: null,
+  // Folders kept off the main shelf. Their books are still in them, and the
+  // folder is still listed under Folders; opening it there shows them.
+  hiddenFolders: [],
   sort: { keys: [['lastRead', 'desc'], ['author', 'asc']], group: [] },
   turnBySwipe: true,
   turnBySideTap: true,

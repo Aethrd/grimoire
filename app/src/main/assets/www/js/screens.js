@@ -4,7 +4,7 @@ import * as store from './store.js';
 import { chapterPlainText } from './parse.js';
 import * as reader from './reader.js';
 import * as library from './library.js';
-import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, collapseBundles, vaultUnlocked } from './library.js';
+import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, collapseBundles, vaultUnlocked, offShelf, hiddenFolderList } from './library.js';
 import { pool, measure } from './blobs.js';
 
 const el = (id) => document.getElementById(id);
@@ -94,8 +94,9 @@ function renderSort() {
 }
 
 async function previewTree() {
+  const hidden = hiddenFolderList(await store.settings());
   const all = (await store.all('books'))
-    .filter((b) => !b.binnedAt && !b.importing && (!b.inVault || vaultUnlocked));
+    .filter((b) => !b.binnedAt && !b.importing && (!b.inVault || vaultUnlocked) && !offShelf(b, hidden));
   // As the shelf will draw it: a bundle is one book unless the grouping
   // splits its editions apart.
   const tree = groupBooks(sortBooks(collapseBundles(all, draft.group), draft.keys), draft.group);
@@ -701,8 +702,12 @@ async function runFind(query, onGoToMatch) {
     // The same books the shelf shows: nothing from the vault while it is
     // locked, nothing still being imported, and nothing deleted -- a book in
     // the bin is found in the bin, not offered back as if it were on the shelf.
+    // Nor anything in a folder hidden from the shelf: that is found by
+    // opening the folder, not by a search anyone could type.
+    const hidden = hiddenFolderList(await store.settings());
     const books = (await store.all('books'))
-      .filter((b) => !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
+      .filter((b) => !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked)
+        && !offShelf(b, hidden));
 
     const only = shelfScope === 'title' ? ['title', 'shown']
       : shelfScope === 'author' ? ['author']
@@ -765,8 +770,12 @@ async function runFind(query, onGoToMatch) {
     // The same books the shelf shows: nothing from the vault while it is
     // locked, nothing still being imported, and nothing deleted -- a book in
     // the bin is found in the bin, not offered back as if it were on the shelf.
+    // Nor anything in a folder hidden from the shelf: that is found by
+    // opening the folder, not by a search anyone could type.
+    const hidden = hiddenFolderList(await store.settings());
     const books = (await store.all('books'))
-      .filter((b) => !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
+      .filter((b) => !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked)
+        && !offShelf(b, hidden));
 
     const only = shelfScope === 'title' ? ['title', 'shown']
       : shelfScope === 'author' ? ['author']

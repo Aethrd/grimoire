@@ -841,8 +841,10 @@ t('a folder can be emptied or deleted as a folder', () => {
 t('select all means all of what is shown', () => {
   // Filtered to a folder, a "select all" that reaches past the filter is a
   // trap: the next thing pressed happens to books you cannot see.
-  assert.match(app, /!activeFolder \|\| book\.folder === activeFolder/);
-  assert.match(app, /!book\.importing && !book\.transient/);
+  // What the shelf drew: the folder it is filtered to, and nothing in a
+  // folder hidden from it.
+  assert.match(app, /filter\(\(book\) => library\.shownOnShelf\.has\(book\.id\)\)/);
+  assert.match(library, /shownOnShelf = new Set\(visible\.map/);
 });
 
 t('the tap zone is read whichever way it was stored', () => {
