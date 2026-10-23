@@ -1,6 +1,11 @@
 package com.grimoire.ereader;
 
 import android.app.Activity;
+import android.content.ContentResolver;
+import android.content.ContentValues;
+import android.os.Build;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.content.Intent;
 import android.net.Uri;
 import android.database.Cursor;
@@ -248,6 +253,79 @@ public class GrimoireBridge {
         if (activity instanceof MainActivity) {
             ((MainActivity) activity).offerExport(file, mimeType, share);
         }
+    }
+
+    /**
+     * Finish a picture, straight into the phone's Pictures folder.
+     *
+     * Saving a picture is not like saving a book: it belongs where the gallery
+     * will show it, and asking where to put each one is a chore. It goes into
+     * Pictures/Grimoire through the media store, which needs no permission
+     * from Android 10 on. Before that it would, and the app asks for none, so
+     * there -- and for anything the media store will not take as a picture --
+     * it is saved the ordinary way, by choosing where.
+     */
+    @JavascriptInterface
+    public void saveToPictures(String handle, String mimeType) {
+        final File file = new File(new File(activity.getCacheDir(), "exports"),
+                new File(handle).getName());
+        if (!file.exists()) {
+            Log.w(TAG, "Nothing staged for " + handle);
+            return;
+        }
+        if (!(activity instanceof MainActivity)) return;
+        final MainActivity main = (MainActivity) activity;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            main.offerExport(file, mimeType, false);
+            return;
+        }
+        io.execute(() -> intoPictures(main, file, mimeType));
+    }
+
+    /** Only reached on Android 10 and later; see saveToPictures. */
+    @android.annotation.TargetApi(Build.VERSION_CODES.Q)
+    private void intoPictures(MainActivity main, File file, String mimeType) {
+        {
+            ContentResolver resolver = activity.getContentResolver();
+            Uri uri = null;
+            try {
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, file.getName());
+                values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                        Environment.DIRECTORY_PICTURES + File.separator + "Grimoire");
+                values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+                uri = resolver.insert(
+                        MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values);
+                if (uri == null) throw new java.io.IOException("The media store gave nowhere to write");
+                try (InputStream in = new java.io.FileInputStream(file);
+                     OutputStream out = resolver.openOutputStream(uri)) {
+                    if (out == null) throw new java.io.IOException("Could not open the picture to write");
+                    byte[] buffer = new byte[64 * 1024];
+                    int read;
+                    while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
+                }
+                values.clear();
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                resolver.update(uri, values, null, null);
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+                callReader("window.Grimoire.pictureSaved(" + JSONObject.quote(file.getName()) + ")");
+            } catch (Throwable e) {
+                Log.w(TAG, "Could not save " + file.getName() + " to Pictures", e);
+                if (uri != null) {
+                    try { resolver.delete(uri, null, null); } catch (Throwable ignored) { }
+                }
+                main.offerExport(file, mimeType, false);
+            }
+        }
+    }
+
+    private void callReader(String call) {
+        final String js = "window.Grimoire && " + call;
+        activity.runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
     }
 
     /**

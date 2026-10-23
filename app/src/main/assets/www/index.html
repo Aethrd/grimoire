@@ -486,6 +486,18 @@
   <button class="btn danger" id="confirm-yes">Delete</button>
 </div>
 
+<!-- What to do with a picture held down in a book or its reel. -->
+<div class="sheet-scrim" id="picture-sheet" hidden>
+  <div class="sheet">
+    <div class="picture-preview" id="picture-preview"></div>
+    <p class="eyebrow" id="picture-name"></p>
+    <div class="sheet-list" id="picture-list"></div>
+    <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
+      <button class="btn ghost" id="picture-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-scrim" id="folder-actions" hidden>
   <div class="sheet">
     <p class="eyebrow" id="folder-actions-name"></p>
@@ -598,13 +610,17 @@
 <!-- Offered where a picture is held down while reading. Offered, not
      done: a thumb resting on a comic page is a long press too. -->
 <div class="redact-chip" id="redact-chip" hidden>
+  <button id="chip-save">
+    <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 19h14"/></svg>
+    <span>Save</span>
+  </button>
   <button id="chip-redact">
     <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M6 8l6-1 1 6-6 1z" fill="currentColor"/></svg>
     <span>Black out</span>
   </button>
   <button id="chip-remove">
     <svg viewBox="0 0 24 24"><path d="M6 5l12 14M18 5L6 19"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/></svg>
-    <span>Take page out</span>
+    <span>Take out</span>
   </button>
 </div>
 

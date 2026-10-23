@@ -12,6 +12,7 @@ import * as epub from './epub.js';
 import * as trim from './trim.js';
 import * as covers from './coverpage.js';
 import { zipWriter } from './zipwriter.js';
+import { pictureType, pictureName } from './picturesave.js';
 import * as shrink from './shrink.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
@@ -4362,13 +4363,18 @@ function wireRedactWhileReading() {
     const bookId = reader.state.book.id;
     chipTimer = setTimeout(() => {
       chipTimer = null;
+      // Saving it -- a GIF as the GIF it is -- beside the two ways of changing it.
+      el('chip-save').onclick = () => {
+        hideRedactChip();
+        offerPicture(reader.state.images?.get(href), { title: reader.state.book?.title, href });
+      };
       el('chip-redact').onclick = () => { hideRedactChip(); openRedact(bookId, href); };
       el('chip-remove').onclick = () => { hideRedactChip(); removePageHere(href); };
       // Above the finger, so the finger is not on top of it; kept on screen.
-      const width = 300;
+      chip.hidden = false;
+      const width = chip.offsetWidth || 300;
       chip.style.left = `${Math.max(12, Math.min(window.innerWidth - width - 12, pressX - width / 2))}px`;
       chip.style.top = `${Math.max(12, pressY - 76)}px`;
-      chip.hidden = false;
       chipHide = setTimeout(hideRedactChip, 4000);
     }, 550);
   }, { passive: true });
@@ -4546,6 +4552,11 @@ function wireRedact() {
   }
 
   screens.onRedact((bookId, href) => openRedact(bookId, href));
+  screens.onPicture((blob, about) => offerPicture(blob, about));
+  el('picture-cancel').onclick = () => { el('picture-sheet').hidden = true; };
+  el('picture-sheet').onclick = (e) => {
+    if (e.target === el('picture-sheet')) el('picture-sheet').hidden = true;
+  };
   el('redact-pick-close').onclick = () => closeRedactPick();
   wireRedactWhileReading();
   el('reel-redact').onclick = () => {
@@ -5447,7 +5458,7 @@ function base64Of(bytes) {
   return btoa(binary);
 }
 
-async function writeOut(blob, name, mimeType, { share = false, onProgress } = {}) {
+async function writeOut(blob, name, mimeType, { share = false, toPictures = false, onProgress } = {}) {
   const bridge = window.GrimoireNative;
   if (!bridge?.beginExport) {
     // In an ordinary browser there is no native side; fall back to the
@@ -5466,7 +5477,8 @@ async function writeOut(blob, name, mimeType, { share = false, onProgress } = {}
 
   for (let at = 0; at < blob.size; at += EXPORT_CHUNK) {
     const piece = blob.slice(at, Math.min(at + EXPORT_CHUNK, blob.size));
-    const bytes = new Uint8Array(await piece.arrayBuffer());
+    // Not piece.arrayBuffer(): older WebViews do not have it.
+    const bytes = new Uint8Array(await blobs.readArrayBuffer(piece));
     if (!bridge.appendExport(handle, base64Of(bytes))) {
       throw new Error('The file could not be written');
     }
@@ -5475,13 +5487,69 @@ async function writeOut(blob, name, mimeType, { share = false, onProgress } = {}
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
-  bridge.finishExport(handle, mimeType, share);
+  // Straight into the phone's pictures, where the gallery shows it. A shell
+  // from before this existed asks where to put it instead.
+  if (toPictures && bridge.saveToPictures) bridge.saveToPictures(handle, mimeType);
+  else bridge.finishExport(handle, mimeType, share);
   return true;
+}
+
+/**
+ * What to do with a picture that was held down.
+ *
+ * Saving into Pictures is the one most people want, so it comes first and
+ * needs no more choosing; "Save as" is for putting it somewhere particular,
+ * and Share hands the picture itself to another app.
+ */
+async function offerPicture(blob, { title = '', href = '' } = {}) {
+  if (!blob) return toast('That picture has not loaded yet');
+  const type = await pictureType(blob, href);
+  const name = pictureName(title, href, type);
+  const typed = blob.type === type ? blob : blob.slice(0, blob.size, type);
+
+  const sheet = el('picture-sheet');
+  const urls = blobs.pool();
+  const url = urls.url(typed);
+  el('picture-preview').innerHTML = url ? `<img src="${url}" alt="">` : '';
+  const size = blob.size >= 1048576
+    ? `${(blob.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(blob.size / 1024))} KB`;
+  el('picture-name').textContent = `${name} · ${size}`;
+
+  const list = el('picture-list');
+  list.innerHTML = '';
+  const native = !!window.GrimoireNative?.beginExport;
+  const close = () => { sheet.hidden = true; el('picture-preview').innerHTML = ''; urls.release(); };
+  const choice = (text, note, how) => {
+    const button = document.createElement('button');
+    button.innerHTML = `<span>${escapeText(text)}</span><span>${escapeText(note)}</span>`;
+    button.onclick = async () => {
+      close();
+      try {
+        await writeOut(typed, name, type, how);
+        if (!native) toast(`Downloaded ${name}`, 4000);
+      } catch (error) {
+        toast(error.message || 'That picture could not be saved', 6000, { kind: 'failed' });
+      }
+    };
+    list.appendChild(button);
+  };
+
+  if (native) {
+    choice('Save to Pictures', 'Into Pictures/Grimoire, where the gallery finds it', { toPictures: true });
+    choice('Save as…', 'Choose the folder and name', {});
+    choice('Share', 'Send the picture to another app', { share: true });
+  } else {
+    choice('Download', 'Save the picture', {});
+  }
+  el('picture-cancel').onclick = close;
+  sheet.hidden = false;
 }
 
 window.Grimoire = {
   /** Called from Java once a file has been written where it was asked for. */
   exportSaved(name) { toast(`Saved ${name}`, 5000); },
+  /** Called from Java once a picture is in the phone's Pictures folder. */
+  pictureSaved(name) { toast(`Saved to Pictures/Grimoire — ${name}`, 5000, { kind: 'done' }); },
 
   /* Something the shell needs to say, said once the page can say it.
    *
@@ -5508,6 +5576,7 @@ window.Grimoire = {
     if (!el('redact-pick').hidden) { closeRedactPick(); return true; }
     if (!el('remove-look').hidden) { closeRemoveLook(); return true; }
     if (!el('remove-confirm').hidden) { el('remove-confirm').hidden = true; return true; }
+    if (!el('picture-sheet').hidden) { el('picture-sheet').hidden = true; return true; }
     if (!el('folder-actions').hidden) { el('folder-actions').hidden = true; return true; }
     if (!el('export-sheet').hidden) { el('export-sheet').hidden = true; return true; }
     if (!el('merge-sheet').hidden) { el('merge-sheet').hidden = true; return true; }

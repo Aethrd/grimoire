@@ -6,6 +6,7 @@ import * as reader from './reader.js';
 import * as library from './library.js';
 import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, collapseBundles, vaultUnlocked, offShelf, hiddenFolderList } from './library.js';
 import { pool, measure } from './blobs.js';
+import { holdPicture } from './picturesave.js';
 
 const el = (id) => document.getElementById(id);
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -346,6 +347,10 @@ let reelBook = null;
    released and re-minted with it. */
 const reelUrls = pool();
 
+/* What the reel is showing, for a press on one of its pictures. */
+let reelVisible = [];
+let reelTitle = '';
+
 export async function openReel(bookId, onJump) {
   /* A different book starts afresh.
    *
@@ -446,6 +451,15 @@ export async function openReel(bookId, onJump) {
 
   const grid = el('reel-grid');
   reelUrls.release();
+  reelTitle = (await store.get('books', bookId))?.title || '';
+  if (!grid.dataset.holds) {
+    grid.dataset.holds = '1';
+    // Once for the grid: it is redrawn, its listener need not be.
+    holdPicture(grid, 'img[data-reel]', (img) => {
+      const image = reelVisible[Number(img.dataset.reel)];
+      if (image) onPictureHeld?.(image.blob, { title: reelTitle, href: image.href });
+    });
+  }
   grid.innerHTML = '<div class="reel-grid"></div>';
   const inner = grid.firstElementChild;
 
@@ -456,7 +470,7 @@ export async function openReel(bookId, onJump) {
      zero, which is below every threshold, and it was being dropped from the
      reel entirely. A real picture shown at an unknown size is a far better
      outcome than "No images in this book". */
-  const visible = images.filter((image) => {
+  const visible = reelVisible = images.filter((image) => {
     const known = Math.max(image.width || 0, image.height || 0);
     if (known > 0 && known < settings.imageThreshold) return false;
     if (reelVolume && image.volume !== reelVolume) return false;
@@ -508,6 +522,7 @@ export async function openReel(bookId, onJump) {
       <img src="${url}" alt="" loading="lazy">
       <figcaption>${escape(where)} · ${image.width}×${image.height}</figcaption>`;
     figure.querySelector('img').onclick = () => viewer(url, image, () => onJump(image));
+    figure.querySelector('img').dataset.reel = String(visible.indexOf(image));
     if (!first) first = figure;
     if (!atReading && image.chapterIndex >= readingAt) atReading = figure;
     strip.appendChild(figure);
@@ -534,7 +549,7 @@ function viewer(url, image, onGo) {
     <img src="${url}" alt="">
     <div class="viewer-bar">
       <button class="btn ghost" data-close>Close</button>
-      <button class="btn ghost" data-share>Share</button>
+      <button class="btn ghost" data-save>Save…</button>
       ${onRedactPicture && image?.bookId && image?.href ? '<button class="btn ghost" data-redact>Black out…</button>' : ''}
       <button class="btn primary" data-goto-page>Go to page</button>
     </div>`;
@@ -555,10 +570,11 @@ function viewer(url, image, onGo) {
    * jumping to a page. The jump is not a navigation; it should never have been
    * wearing the router's attribute. */
   overlay.querySelector('[data-goto-page]').onclick = () => { overlay.remove(); onGo(); };
-  overlay.querySelector('[data-share]').onclick = () => {
-    // The shell exposes a share intent; there is no web share in a WebView.
-    window.GrimoireNative?.shareText?.(`Image from ${reader.state.book?.title || 'a book'}`);
-  };
+  /* Save, Save as, or Share -- the picture itself. Share used to send only
+   * the words "Image from" and the book's title, with no picture at all. */
+  const save = () => onPictureHeld?.(image?.blob, { title: reelTitle, href: image?.href });
+  overlay.querySelector('[data-save]').onclick = save;
+  holdPicture(overlay, 'img', save);
   document.body.appendChild(overlay);
 }
 
@@ -592,6 +608,11 @@ export function onLongPressBook(fn) { onBookMenu = fn; }
 let onRedactPicture = null;
 
 export function onRedact(fn) { onRedactPicture = fn; }
+
+/** Who offers to save a picture held down in the reel or its viewer. */
+let onPictureHeld = null;
+
+export function onPicture(fn) { onPictureHeld = fn; }
 
 export function initFind(onGoToMatch, fromReader = false) {
   const input = el('find-input');

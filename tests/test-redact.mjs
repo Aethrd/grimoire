@@ -944,5 +944,89 @@ await t('a finished build opens the book it made, not the shelf', () => {
   assert.ok(!/show\('library'\)/.test(divide), 'dividing still ends on the shelf');
 });
 
+console.log('saving a picture');
+
+await t('holding a picture while reading also offers to save it', async () => {
+  const reader = await import(www('reader.js'));
+  const img = el('page-flow').querySelector('img[data-img]');
+  assert.ok(img);
+  const href = img.getAttribute('data-img');
+  touch(img, 'touchstart', 100, 300);
+  await settle(650);
+  assert.equal(el('redact-chip').hidden, false);
+  touch(img, 'touchend', 100, 300);
+
+  // Saved through the same native calls as a book, but into Pictures.
+  const calls = [];
+  const sent = [];
+  window.GrimoireNative = {
+    ...(window.GrimoireNative || {}),
+    beginExport: (name) => { calls.push(['begin', name]); return name; },
+    appendExport: (handle, b64) => { sent.push(b64); return true; },
+    finishExport: (...args) => calls.push(['finish', ...args]),
+    saveToPictures: (...args) => calls.push(['pictures', ...args]),
+  };
+  try {
+    tap(el('chip-save'));
+    await settle(200);
+    assert.equal(el('picture-sheet').hidden, false, 'Save offered nothing');
+    const choices = [...el('picture-list').querySelectorAll('button')].map((b) => b.firstElementChild.textContent);
+    assert.deepEqual(choices, ['Save to Pictures', 'Save as…', 'Share']);
+    assert.match(el('picture-name').textContent, new RegExp(`${reader.state.book.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+
+    tap(el('picture-list').querySelector('button'));
+    await settle(300);
+    assert.equal(el('picture-sheet').hidden, true);
+    const begin = calls.find((c) => c[0] === 'begin');
+    const done = calls.find((c) => c[0] === 'pictures');
+    assert.ok(begin && done, `not saved to Pictures: ${JSON.stringify(calls)}`);
+    assert.match(done[2], /^image\//);
+    // Every byte of the picture the book holds.
+    const bytes = Buffer.concat(sent.map((b) => Buffer.from(b, 'base64')));
+    const { readArrayBuffer } = await import(www('blobs.js'));
+    const held = Buffer.from(await readArrayBuffer(reader.state.images.get(href)));
+    assert.ok(bytes.equals(held), 'what was saved is not the picture');
+
+    // Share hands over the picture itself.
+    calls.length = 0;
+    touch(img, 'touchstart', 100, 300);
+    await settle(650);
+    touch(img, 'touchend', 100, 300);
+    tap(el('chip-save'));
+    await settle(200);
+    tap([...el('picture-list').querySelectorAll('button')].find((b) => /Share/.test(b.textContent)));
+    await settle(300);
+    const shared = calls.find((c) => c[0] === 'finish');
+    assert.ok(shared && shared[3] === true, `Share did not share: ${JSON.stringify(calls)}`);
+  } finally {
+    delete window.GrimoireNative.saveToPictures;
+  }
+});
+
+await t('a picture is named and typed by what it is, not what it is called', async () => {
+  const { pictureType, pictureName } = await import(www('picturesave.js'));
+  const blob = (bytes, type = '') => new window.Blob([new Uint8Array(bytes)], { type });
+  assert.equal(await pictureType(blob([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]), 'x.jpg'), 'image/gif');
+  assert.equal(await pictureType(blob([0x89, 0x50, 0x4E, 0x47, 13, 10, 26, 10])), 'image/png');
+  assert.equal(await pictureType(blob([0xFF, 0xD8, 0xFF, 0xE0])), 'image/jpeg');
+  assert.equal(await pictureType(blob([...Buffer.from('RIFF\0\0\0\0WEBPVP8 ')])), 'image/webp');
+  assert.equal(await pictureType(blob([1, 2, 3]), 'images/pic.png'), 'image/png');
+  assert.equal(pictureName('My: Book?', 'OEBPS/images/p%2003.gif', 'image/gif'), 'My Book - p 03.gif');
+  assert.equal(pictureName('Book', 'grimoire-cover/1712.jpg', 'image/jpeg'), 'Book - cover.jpg');
+  assert.equal(pictureName('', 'a/b.png', 'image/png'), 'b.png');
+});
+
+await t('the reel holds to save, and the viewer saves the picture rather than its name', async () => {
+  const screens = fs.readFileSync(new URL(www('screens.js')), 'utf8');
+  assert.match(screens, /holdPicture\(grid, 'img\[data-reel\]'/);
+  assert.match(screens, /data-save>Save…/);
+  assert.ok(!/shareText\?\.\(`Image from/.test(screens), 'the viewer still shares only words');
+  const java = fs.readFileSync(new URL('../app/src/main/java/com/grimoire/ereader/GrimoireBridge.java', import.meta.url), 'utf8');
+  assert.match(java, /public void saveToPictures\(String handle, String mimeType\)/);
+  assert.match(java, /Environment\.DIRECTORY_PICTURES \+ File\.separator \+ "Grimoire"/);
+  // No storage permission is asked for: before Android 10 it asks where.
+  assert.match(java, /SDK_INT < Build\.VERSION_CODES\.Q\) \{\s*main\.offerExport\(file, mimeType, false\)/);
+});
+
 console.log(`\n${pass} assertions passed`);
 process.exit(0);
