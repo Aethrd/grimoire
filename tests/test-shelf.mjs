@@ -78,6 +78,32 @@ t('lifting the finger after a long press is not also a tap', () => {
   assert.ok(library.indexOf('let heldAt') < library.indexOf('function tile('));
 });
 
+t('whatever is done to a bundle is done to every edition in it', () => {
+  // Its tile carries the leader's id; selecting it used to select the leader
+  // alone, so filing, deleting or locking away a bundle left the rest behind.
+  assert.match(app, /if \(book\.bundle\?\.length > 1\) selectedBundles\.set\(book\.id, book\.bundle\.map\(\(b\) => b\.id\)\)/);
+  const picked = app.slice(app.indexOf('async function selectedBooks'), app.indexOf('async function oneSelected'));
+  assert.match(picked, /const ids = selectedIds\(\)/);
+  assert.match(app, /const ids = \[\.\.\.selectedIds\(\)\];\s*el\('confirm-bar'\)\.hidden = true;\s*const moved = await library\.binBooks\(ids\)/);
+  // Blur, export, vault and the several-book details all go through it.
+  const from = app.indexOf('const actions = {');
+  const acts = app.slice(from, app.indexOf("for (const button of el('select-actions').children)", from));
+  for (const name of ['blur', 'export', 'vault']) {
+    const body = acts.slice(acts.indexOf(`${name}: async`), acts.indexOf('},', acts.indexOf(`${name}: async`)));
+    assert.match(body, /await selectedBooks\(\)/, `${name} does not reach every edition`);
+  }
+  // One bundle's details are its leader's, with folder and status for all.
+  assert.match(acts, /openDetails\(\{ id: leader \}, \{ editions: bundle\.filter\(\(id\) => id !== leader\) \}\)/);
+  assert.match(app, /for \(const id of editions\) \{[\s\S]{0,120}edition\.folder = book\.folder/);
+  // What is done to one book asks which edition.
+  for (const name of ['open', 'merge', 'trim', 'redact']) {
+    assert.match(acts, new RegExp(`${name}: \\(\\) => oneSelected\\(`), `${name} picks an edition for you`);
+  }
+  // Adding books to a bundle keeps its leader.
+  assert.match(acts, /const leader = books\.find\(\(b\) => b\.bundleId === b\.id\) \|\| books\[0\]/);
+  assert.match(app, /\$\{count\} selected · \$\{books\} books/);
+});
+
 t('actions are labelled, not a row of bare glyphs', () => {
   // One of them is a bin. Making someone tap to find out what a glyph does is
   // not acceptable when that is a possible outcome.
@@ -130,7 +156,7 @@ t('moving to an existing folder needs no typing', () => {
 t('deleting several books is confirmed in the app, not by a system dialog', () => {
   assert.ok(!/confirm\(/.test(app), 'app.js uses a native confirm dialog');
   assert.ok(html.includes('id="confirm-bar"'));
-  assert.match(app, /Delete \$\{selection\.size\}/);
+  assert.match(app, /Delete \$\{n\} book\$\{n === 1 \? '' : 's'\}\? They go to the bin/);
 });
 
 t('selection is a mode that back leaves before the screen', () => {
@@ -158,7 +184,7 @@ console.log('details');
 t('a single selection can have its metadata corrected by hand', () => {
   // Scraped EPUB metadata is frequently wrong, and fixing it should not mean
   // re-making the file.
-  assert.match(app, /async function openDetails\(tapped\)/);
+  assert.match(app, /async function openDetails\(tapped, \{ editions = \[\] \} = \{\}\)/);
   for (const field of ['title', 'author', 'series', 'seriesIndex', 'lang']) {
     assert.ok(app.includes(`['${field}',`), `no ${field} field in the details sheet`);
   }

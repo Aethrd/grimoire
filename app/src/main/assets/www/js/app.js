@@ -303,8 +303,8 @@ function onTileTap(book) {
     if (book.bundle) return openBundleSheet(book.bundle);
     return openBook(book);
   }
-  if (selection.has(book.id)) selection.delete(book.id);
-  else selection.add(book.id);
+  if (selection.has(book.id)) unselectTile(book);
+  else selectTile(book);
   // Deliberately stays in the mode at zero: dropping out because you
   // deselected the last one loses your place in a long shelf.
   paintSelection();
@@ -313,9 +313,47 @@ function onTileTap(book) {
 
 function onTileHold(book) {
   selectMode = true;
-  selection.add(book.id);
+  selectTile(book);
   paintSelection();
   refreshShelf();
+}
+
+/* A bundle is one tile and several books.
+ *
+ * Its tile carries the leader's id, so selecting it selected the leader and
+ * nothing else: filing, deleting, locking away or writing out a bundle did it
+ * to one edition and left the rest where they were. Which editions a tile
+ * stood for is kept with the selection, so everything done to the tile is
+ * done to every book in it. Kept from the tile itself rather than looked up
+ * by bundle: when the shelf is grouped so that a bundle's editions are shown
+ * apart, each is its own tile and is selected on its own. */
+const selectedBundles = new Map();   // leader id -> the ids of every edition
+
+function selectTile(book) {
+  selection.add(book.id);
+  if (book.bundle?.length > 1) selectedBundles.set(book.id, book.bundle.map((b) => b.id));
+}
+
+function unselectTile(book) {
+  selection.delete(book.id);
+  selectedBundles.delete(book.id);
+}
+
+/** Every book the selection stands for: bundles opened out into editions. */
+function selectedIds() {
+  const ids = new Set(selection);
+  for (const [leader, editions] of selectedBundles) {
+    if (selection.has(leader)) for (const id of editions) ids.add(id);
+  }
+  return ids;
+}
+
+/** The one bundle selected, when a single tile that is a bundle is all
+ *  that is selected. */
+function soleBundle() {
+  if (selection.size !== 1) return null;
+  const [id] = selection;
+  return selectedBundles.get(id) || null;
 }
 
 function paintSelection() {
@@ -328,9 +366,11 @@ function paintSelection() {
   el('tabbar').hidden = on || current === 'reader';
   if (!on) el('confirm-bar').hidden = true;
 
+  // A bundle counts as the one tile it is, with what it holds said beside.
+  const books = selectedIds().size;
   el('select-count').textContent = count === 0
     ? 'Select books'
-    : `${count} selected`;
+    : books > count ? `${count} selected · ${books} books` : `${count} selected`;
 
   // Actions that only make sense for one book, or for any book at all.
   for (const button of el('select-actions').children) {
@@ -345,14 +385,37 @@ function clearSelection() {
   if (!selectMode) return false;
   selectMode = false;
   selection.clear();
+  selectedBundles.clear();
   paintSelection();
   refreshShelf();
   return true;
 }
 
+/** The books selected, every edition of a selected bundle among them. */
 async function selectedBooks() {
+  const ids = selectedIds();
   const books = await store.all('books');
-  return books.filter((b) => selection.has(b.id));
+  return books.filter((b) => ids.has(b.id));
+}
+
+/**
+ * For what is done to one book: which one, when the tile is a bundle.
+ *
+ * Taking pages out of a bundle, or dividing one, means one of its editions;
+ * the bundle's sheet of editions is shown so the choice is yours rather than
+ * whichever happens to lead.
+ */
+async function oneSelected(refusal, run) {
+  const bundle = soleBundle();
+  if (bundle) {
+    const books = await store.all('books');
+    const editions = bundle.map((id) => books.find((b) => b.id === id)).filter(Boolean);
+    clearSelection();
+    return openBundleSheet(editions, { verb: refusal.verb, run });
+  }
+  const books = await selectedBooks();
+  if (books.length !== 1) return toast(refusal.text);
+  return run(books[0]);
 }
 
 function wireSelection() {
@@ -379,12 +442,11 @@ function wireSelection() {
   };
 
   const actions = {
-    open: async () => {
-      const [book] = await selectedBooks();
-      if (!book) return;
+    // A bundle asks which edition, as tapping it does.
+    open: () => oneSelected({ text: 'Choose one book to open', verb: 'Open which edition?' }, (book) => {
       clearSelection();
       openBook(book);
-    },
+    }),
 
     /* Writing a book out is a thing you do to a book, so it belongs with the
        other things you do to a book. It was only inside the details sheet,
@@ -421,6 +483,13 @@ function wireSelection() {
      * one book gets its whole details sheet, several get the part of it that
      * applies to all of them at once. */
     details: async () => {
+      // One bundle: its leader's details, with folder and status for every
+      // edition -- the title and cover are the leader's own.
+      const bundle = soleBundle();
+      if (bundle) {
+        const [leader] = selection;
+        return openDetails({ id: leader }, { editions: bundle.filter((id) => id !== leader) });
+      }
       const books = await selectedBooks();
       if (books.length === 1) return openDetails(books[0]);
       if (books.length > 1) return openGroupDetails(books);
@@ -439,17 +508,14 @@ function wireSelection() {
      * A book that was joined comes apart into what it was made from. Any
      * other book can be divided at chapters you choose -- which is the same
      * idea applied to a file that arrived as one piece. */
-    merge: async () => {
-      const books = await selectedBooks();
-      if (books.length !== 1) return toast('Choose one book to take apart');
-      const [book] = books;
+    merge: () => oneSelected({ text: 'Choose one book to take apart', verb: 'Take apart which edition?' }, (book) => {
 
       /* A book that was built can be taken apart two different ways, and
        * choosing for the reader was wrong: it went straight to undoing the
        * join, so a built comic could never be divided at all. */
       if (library.wasJoined(book) || book.builtFrom) return offerTakeApart(book);
       return openDivide(book);
-    },
+    }),
 
     /* Bundling is one action that reads both ways: several books become a
        bundle, and a bundle already selected comes apart. Two buttons for
@@ -473,9 +539,10 @@ function wireSelection() {
 
       if (books.length < 2) return toast('Select two or more books to bundle them');
 
-      // The first by the shelf's own order leads, so the bundle keeps the
-      // cover and title you were already looking at.
-      const leader = books[0];
+      /* A bundle already among them keeps leading, so books added to it join
+       * it -- rather than its leader being made a member of something else,
+       * which left its old editions pointing at a bundle that had moved. */
+      const leader = books.find((b) => b.bundleId === b.id) || books[0];
       for (const book of books) { book.bundleId = leader.id; await store.put('books', book); }
       clearSelection();
       toast(`${books.length} editions bundled under “${leader.title}”`);
@@ -505,24 +572,22 @@ function wireSelection() {
      * A mistap on a grid of covers is not a decision, and deleting outright
      * treated it as one: the file had to be found again, which for something
      * downloaded a year ago often means not at all. */
-    trim: async () => {
-      const books = await selectedBooks();
-      if (books.length !== 1) return toast('Choose one book to take pages out of');
+    trim: () => oneSelected({ text: 'Choose one book to take pages out of', verb: 'Take pages out of which edition?' }, (book) => {
       clearSelection();
-      return openRemove(books[0]);
-    },
+      return openRemove(book);
+    }),
 
-    redact: async () => {
-      const books = await selectedBooks();
-      if (books.length !== 1) return toast('Choose one book to black out panels in');
+    redact: () => oneSelected({ text: 'Choose one book to black out panels in', verb: 'Black out panels in which edition?' }, (book) => {
       clearSelection();
-      return openRedactPick(books[0]);
-    },
+      return openRedactPick(book);
+    }),
 
     delete: () => {
       resetConfirm();
-      el('confirm-text').textContent =
-        `Delete ${selection.size} book${selection.size === 1 ? '' : 's'}? They go to the bin.`;
+      const n = selectedIds().size;
+      el('confirm-text').textContent = selectedBundles.size && n > selection.size
+        ? `Delete ${n} books, every edition in the bundle${soleBundle() ? '' : 's'}? They go to the bin.`
+        : `Delete ${n} book${n === 1 ? '' : 's'}? They go to the bin.`;
       el('confirm-bar').hidden = false;
     },
   };
@@ -559,7 +624,7 @@ function wireSelection() {
 
 }
 
-async function openDetails(tapped) {
+async function openDetails(tapped, { editions = [] } = {}) {
   // The book as it is stored, not the copy the menu was opened from -- which
   // can be older, and saving it would undo whatever changed since.
   const book = (await store.get('books', tapped.id)) || tapped;
@@ -568,7 +633,9 @@ async function openDetails(tapped) {
   const coverUrl = urls.url(book.coverBlob);
 
   body.innerHTML = `
-    <p class="eyebrow">Book details</p>
+    <p class="eyebrow">${editions.length
+      ? `Bundle details · folder and status go to all ${editions.length + 1} editions`
+      : 'Book details'}</p>
     <div class="details-head">
       <span class="details-cover" id="details-cover">
         ${coverUrl ? `<img src="${coverUrl}" alt="">` : ''}
@@ -737,11 +804,26 @@ async function openDetails(tapped) {
         toast(`The cover is set, but could not be put into the book: ${error.message}`, 6000);
       }
     }
+    // A bundle is filed and marked as one: its other editions follow.
+    const others = [];
+    for (const id of editions) {
+      const edition = await store.get('books', id);
+      if (!edition) continue;
+      edition.folder = book.folder;
+      if (!edition.folder) delete edition.folder;
+      if (pickedStatus !== undefined) {
+        if (pickedStatus === null) delete edition.status;
+        else edition.status = pickedStatus;
+      }
+      await store.put('books', edition);
+      others.push(edition);
+    }
     // Titles were translated from the old text, so that cache is now wrong.
     await translate.clearCache(book.id).catch(() => {});
     close();
     clearSelection();
-    toast(await hiddenNote([book], 'Details saved'), 5000);
+    toast(await hiddenNote([book, ...others], others.length
+      ? `Details saved, for all ${others.length + 1} editions` : 'Details saved'), 5000);
   };
 
   el('details-sheet').hidden = false;
@@ -880,9 +962,15 @@ const escapeText = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
  * someone says otherwise.
  */
 /** Which edition of a bundled book to open. */
-function openBundleSheet(members) {
+function openBundleSheet(members, { verb = null, run = null } = {}) {
   const list = el('bundle-list');
   list.innerHTML = '';
+  // Asking which edition something is to be done to, or which to read.
+  const heading = el('bundle-sheet').querySelector('.eyebrow');
+  if (heading) {
+    if (heading.dataset.plain == null) heading.dataset.plain = heading.textContent;
+    heading.textContent = verb || heading.dataset.plain;
+  }
 
   for (const book of members) {
     const row = document.createElement('button');
@@ -891,7 +979,7 @@ function openBundleSheet(members) {
       .filter(Boolean).join(' · ');
     row.innerHTML = `<span>${escapeText(library.displayTitle(book))}</span>`
       + `<span>${escapeText(marks)}</span>`;
-    row.onclick = () => { el('bundle-sheet').hidden = true; openBook(book); };
+    row.onclick = () => { el('bundle-sheet').hidden = true; (run || openBook)(book); };
     list.appendChild(row);
   }
 
@@ -972,7 +1060,7 @@ function resetConfirm() {
   el('confirm-yes').textContent = 'Delete';
   el('confirm-no').onclick = () => { el('confirm-bar').hidden = true; resetConfirm(); };
   el('confirm-yes').onclick = async () => {
-    const ids = [...selection];
+    const ids = [...selectedIds()];
     el('confirm-bar').hidden = true;
     const moved = await library.binBooks(ids);
     clearSelection();

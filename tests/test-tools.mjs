@@ -759,7 +759,7 @@ await t('Save in the details puts the cover into the book, and opening a book do
   const open = app.slice(app.indexOf('async function openBook'), app.indexOf('/* ── selection'));
   assert.match(open, /const current = \(await store\.get\('books', book\.id\)\) \|\| book;/);
   assert.ok(!/await store\.put\('books', book\);/.test(open), 'opening writes the tapped copy back');
-  assert.match(app, /async function openDetails\(tapped\) \{[\s\S]{0,300}await store\.get\('books', tapped\.id\)/);
+  assert.match(app, /async function openDetails\(tapped, \{ editions = \[\] \} = \{\}\) \{[\s\S]{0,300}await store\.get\('books', tapped\.id\)/);
 });
 
 await t('a backup puts a chosen cover back into the book, not only onto the shelf', async () => {
