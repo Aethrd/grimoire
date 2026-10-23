@@ -107,8 +107,8 @@ function groupLabel(book, level) {
  *
  * `null` is not a state: it means no one has said, and the state is worked out
  * from whether the book has been opened and whether it was finished. Setting
- * one of these pins it; reverting to Automatic lets it follow the reading
- * again.
+ * one of these holds until the book is next read, and then the reading says
+ * again; choosing Automatic hands it back at once.
  */
 export const STATUSES = [
   ['reading', 'Reading'],
@@ -219,7 +219,8 @@ export function statusOf(book) {
   return 'unread';
 }
 
-/** Whether the state was set by hand rather than inferred. */
+/** Whether the state was set by hand rather than inferred -- which it stays
+ *  only until the book is next read (see store.markRead). */
 export const statusIsPinned = (book) => !!(book.status && STATUS_LABELS[book.status]);
 
 const GROUP_ORDER = {

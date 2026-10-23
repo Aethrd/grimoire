@@ -605,6 +605,47 @@ await t('search does not find deleted books', async () => {
 });
 
 
+await t('a status set by hand holds until the book is next read, then reading takes over', async () => {
+  const lib = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const id = await aBook({ title: 'Statusful', lastReadAt: 5, status: 'onHold' });
+  let book = await store.get('books', id);
+  assert.equal(lib.statusOf(book), 'onHold', 'what was set does not show');
+  assert.equal(lib.statusIsPinned(book), true);
+
+  // Opening it is not reading it: still on hold.
+  await store.queuePosition({ bookId: id, chapterIndex: 0, offset: 0, percent: 0.2 });
+  await store.flushPosition();
+  book = await store.get('books', id);
+  assert.equal(lib.statusOf(book), 'onHold', 'merely opening the book undid the status');
+
+  // Reading it is.
+  await store.markRead(id);
+  book = await store.get('books', id);
+  assert.equal(book.status, undefined, 'the status stayed set after reading');
+  assert.equal(lib.statusOf(book), 'reading');
+  assert.equal(lib.statusIsPinned(book), false);
+
+  // Marked finished, it stays finished when read again: the mark is kept in
+  // the dates, not only in the status that reading lets go of.
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  const set = app.slice(app.indexOf('function setStatusOn'), app.indexOf('async function applyStatus'));
+  assert.match(set, /status === 'finished'\) \{ book\.finishedAt = book\.finishedAt \|\| Date\.now\(\); book\.percent = 1; \}/);
+  assert.match(set, /reader\.noteStatusSet\(book\.id\)/);
+  book.status = 'finished'; book.finishedAt = 7; book.percent = 1;
+  await store.put('books', book);
+  await store.markRead(id);
+  assert.equal(lib.statusOf(await store.get('books', id)), 'finished');
+
+  // Every way of setting one goes through it -- one book, a bundle, several.
+  assert.match(app, /if \(pickedStatus !== undefined\) setStatusOn\(book, pickedStatus\)/);
+  assert.match(app, /if \(pickedStatus !== undefined\) setStatusOn\(edition, pickedStatus\)/);
+  assert.match(app, /for \(const book of books\) \{\s*setStatusOn\(book, status\)/);
+  // Details is left on Automatic, and says what the status is now.
+  assert.match(app, /chip\.setAttribute\('aria-pressed', String\(value === null\)\)/);
+  assert.match(app, /as you set it, until you next read it/);
+  await library.binBooks([id]);
+});
+
 await t('a folder hidden from the shelf is only found under Folders', async () => {
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
   const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);

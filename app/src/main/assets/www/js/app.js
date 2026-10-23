@@ -665,8 +665,13 @@ async function openDetails(tapped, { editions = [] } = {}) {
 
   const statusField = document.createElement('div');
   statusField.className = 'field';
-  statusField.innerHTML = `<label><span>Status</span><span class="muted">${
-    library.statusIsPinned(book) ? 'set by hand' : 'from your reading'}</span></label>`;
+  // Automatic is always what it is left on: a status chosen here is set once,
+  // and holds only until the book is next read.
+  const nowLabel = library.STATUS_LABELS[library.statusOf(book)];
+  statusField.innerHTML = `<label><span>Status</span><span class="muted">${escapeText(
+    library.statusIsPinned(book)
+      ? `${nowLabel}, as you set it, until you next read it`
+      : `${nowLabel}, from your reading`)}</span></label>`;
   const statusChips = document.createElement('div');
   statusChips.className = 'chip-row wrap';
   let pickedStatus;   // undefined = leave as it is
@@ -675,10 +680,7 @@ async function openDetails(tapped, { editions = [] } = {}) {
     chip.className = 'chip';
     chip.style.textTransform = 'none';
     chip.textContent = label;
-    const active = value === null
-      ? !library.statusIsPinned(book)
-      : library.statusOf(book) === value && library.statusIsPinned(book);
-    chip.setAttribute('aria-pressed', String(active));
+    chip.setAttribute('aria-pressed', String(value === null));
     chip.onclick = () => {
       pickedStatus = value;
       for (const other of statusChips.children) other.setAttribute('aria-pressed', 'false');
@@ -787,10 +789,7 @@ async function openDetails(tapped, { editions = [] } = {}) {
       // picked by hand does not, so the backup has to carry it.
       book.coverCustom = !!newCover;
     }
-    if (pickedStatus !== undefined) {
-      if (pickedStatus === null) delete book.status;
-      else book.status = pickedStatus;
-    }
+    if (pickedStatus !== undefined) setStatusOn(book, pickedStatus);
 
     await store.put('books', book);
     /* Into the book itself, not only onto the shelf: the cover page shows the
@@ -812,10 +811,7 @@ async function openDetails(tapped, { editions = [] } = {}) {
       if (!edition) continue;
       edition.folder = book.folder;
       if (!edition.folder) delete edition.folder;
-      if (pickedStatus !== undefined) {
-        if (pickedStatus === null) delete edition.status;
-        else edition.status = pickedStatus;
-      }
+      if (pickedStatus !== undefined) setStatusOn(edition, pickedStatus);
       await store.put('books', edition);
       others.push(edition);
     }
@@ -1677,17 +1673,28 @@ async function hiddenNote(books, said) {
   return `${said}. ${off.length === 1 ? 'It is' : `${off.length} are`} in “${where}”, hidden from the shelf`;
 }
 
+/**
+ * Set a status by hand, once.
+ *
+ * It holds until the book is next read, and then the reading takes over
+ * (store.markRead). So the dates are made to agree with it: what the reading
+ * says afterwards carries on from what was set -- a book marked finished
+ * stays finished when it is next opened, instead of the mark simply being
+ * forgotten.
+ */
+function setStatusOn(book, status) {
+  if (status === null) delete book.status;
+  else book.status = status;
+  if (status === 'finished') { book.finishedAt = book.finishedAt || Date.now(); book.percent = 1; }
+  if (status === 'reading' || status === 'unread') book.finishedAt = null;
+  if (status === 'unread') book.percent = 0;
+  // Read on from here, even in the book already open, and the reading says.
+  reader.noteStatusSet(book.id);
+}
+
 async function applyStatus(books, status, { quiet = false } = {}) {
   for (const book of books) {
-    if (status === null) delete book.status;
-    else book.status = status;
-
-    // The dates stay coherent with the state, so a book marked finished by
-    // hand behaves like one that was read to the end.
-    if (status === 'finished') { book.finishedAt = book.finishedAt || Date.now(); book.percent = 1; }
-    if (status === 'reading' || status === 'unread') book.finishedAt = null;
-    if (status === 'unread') book.percent = 0;
-
+    setStatusOn(book, status);
     await store.put('books', book);
   }
   if (quiet) return;

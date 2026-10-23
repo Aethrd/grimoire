@@ -1578,6 +1578,12 @@ function startSession() {
  * even though it credits no pages -- jumping to chapter five does not mean
  * chapters one to four were read.
  */
+/** A status was just set by hand: the next page read is reading again, even
+ *  in a session that has already been noted as reading. */
+export function noteStatusSet(bookId) {
+  if (session && state.book?.id === bookId) session.marked = false;
+}
+
 function noteReading() {
   if (!session || session.marked || !state.book) return;
   session.marked = true;

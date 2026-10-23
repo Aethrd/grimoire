@@ -388,6 +388,14 @@ export async function markRead(bookId) {
   if (!book) return;
   book.lastReadAt = Date.now();
   book.lastOpenedAt = book.lastReadAt;
+  /* A status set by hand is set once, not pinned for good.
+   *
+   * Marking a book "On hold" says where it stands now. Picking it up again
+   * says otherwise, and having to go back and set it to Automatic before the
+   * shelf would believe it was being read was a chore nobody remembered. So
+   * the status stands until the book is next read, and the reading takes
+   * over from there. */
+  delete book.status;
   await put('books', book);
 }
 
