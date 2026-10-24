@@ -295,7 +295,19 @@ async function looksLikeText(file) {
   }
 }
 
-export async function importFiles(files, { onProgress, onDone, transient = false, rescue = null } = {}) {
+/**
+ * Where a book is filed when it arrives while the shelf is open at a folder:
+ * in that folder, with any folder it had inside an archive kept beneath it --
+ * a zip's "Volume 2" opened in "Manhwa" lands in "Manhwa/Volume 2".
+ */
+export function filedUnder(into, folder) {
+  const outer = String(into || '').replace(/^\/+|\/+$/g, '');
+  const inner = String(folder || '').replace(/^\/+|\/+$/g, '');
+  if (!outer) return inner;
+  return inner ? `${outer}/${inner}` : outer;
+}
+
+export async function importFiles(files, { onProgress, onDone, transient = false, rescue = null, into = '' } = {}) {
   /* Timed, in phases.
    *
    * Judging an import from a benchmark on a desktop was a mistake: jsdom
@@ -498,7 +510,9 @@ export async function importFiles(files, { onProgress, onDone, transient = false
 
   for (let i = 0; i < queue.length; i++) {
     const entry = queue[i];
-    const folder = entry.folder;
+    // Filed in the folder the shelf was open at, if it was open at one. Only
+    // what is new: a book already on the shelf stays where it is.
+    const folder = filedUnder(transient ? '' : into, entry.folder);
     const name = entry.name || entry.file?.name || 'book';
     onProgress?.(`Reading ${name}`, i / queue.length, i, queue.length);
 

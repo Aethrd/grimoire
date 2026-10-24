@@ -259,7 +259,7 @@ export function describe(part) {
  * two volumes of a serial name their pictures identically, and without a
  * prefix the later ones quietly replace the earlier.
  */
-export async function build({ title, author, onProgress } = {}) {
+export async function build({ title, author, folder = null, onProgress } = {}) {
   /* One part is a book too.
    *
    * A zip of a volume's saved pages, or a folder of a chapter's images, is a
@@ -270,8 +270,22 @@ export async function build({ title, author, onProgress } = {}) {
   if (!parts.length) throw new Error('Add something to build from.');
 
   const name = title || commonName(parts.map((p) => p.name)) || 'Built book';
+
+  /* Filed where it was asked for -- the folder the shelf is open at -- or,
+   * when it was not, where the book it was built onto is filed. A volume
+   * added to a book in "Manhwa" belongs in "Manhwa", not loose on the shelf. */
+  let filed = folder || '';
+  if (!filed) {
+    for (const part of parts) {
+      if (!part.bookId) continue;
+      filed = (await store.get('books', part.bookId))?.folder || '';
+      break;
+    }
+  }
+
   const bookId = await store.add('books', {
     title: name,
+    folder: filed,
     // Set here rather than left to be corrected later: a book named at the
     // moment it is made is named everywhere -- on the shelf, in its own
     // metadata, and in anything written out of it afterwards.

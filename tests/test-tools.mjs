@@ -978,6 +978,55 @@ await t('a book written out and given back is the same book, not a second copy',
   assert.equal(theOriginal.already, 1);
 });
 
+await t('opened at a folder, imports and builds are filed in it', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  const JSZip = (await import('jszip')).default;
+  // A folder inside an archive is kept, beneath the one the shelf is open at.
+  assert.equal(library.filedUnder('Manhwa', ''), 'Manhwa');
+  assert.equal(library.filedUnder('Manhwa', 'Volume 2'), 'Manhwa/Volume 2');
+  assert.equal(library.filedUnder('', 'Volume 2'), 'Volume 2');
+  assert.equal(library.filedUnder('/Manhwa/', '/Sub/'), 'Manhwa/Sub');
+
+  const fixture = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+  const out = await library.importFiles([new File([fixture], 'Filed Almanac.epub')], { into: 'Manhwa' });
+  assert.equal(out.added, 1);
+  const filed = (await store.all('books')).filter((b) => b.fingerprint?.startsWith('Filed Almanac.epub')).pop();
+  assert.equal(filed.folder, 'Manhwa', 'an import made in a folder is not in it');
+
+  const zip = new JSZip();
+  zip.file('Volume 2/Zipped Almanac.epub', fixture);
+  const archive = new File([await zip.generateAsync({ type: 'uint8array' })], 'series.zip');
+  await library.importFiles([archive], { into: 'Manhwa' });
+  const zipped = (await store.all('books')).filter((b) => b.fingerprint?.startsWith('Zipped Almanac.epub')).pop();
+  assert.equal(zipped?.folder, 'Manhwa/Volume 2', `a zip's folder was not kept beneath: ${zipped?.folder}`);
+
+  // Opened for reading only, it is not filed.
+  const passing = await library.importFiles([new File([fixture], 'Passing Almanac.epub')], { into: 'Manhwa', transient: true });
+  assert.equal(passing.added, 1);
+  const glance = (await store.all('books')).filter((b) => b.fingerprint?.startsWith('Passing Almanac.epub')).pop();
+  assert.ok(!glance.folder, 'a book only opened to read was filed');
+
+  // A build, into the folder it was asked for...
+  build.clear();
+  await build.add([new File([fixture], 'Built Almanac.epub')]);
+  const { book } = await build.build({ title: 'Built in a folder', folder: 'Manhwa' });
+  assert.equal((await store.get('books', book.id)).folder, 'Manhwa');
+  // ...or, not asked, where the book it was built onto is.
+  build.clear();
+  build.addBook(filed);
+  const { book: onto } = await build.build({ title: 'Built onto a filed book' });
+  assert.equal((await store.get('books', onto.id)).folder, 'Manhwa', 'built onto a filed book, the result was not filed with it');
+  build.clear();
+
+  // The app passes the folder the shelf is open at, captured when it is asked.
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /const into = options\.transient \? '' : \(activeFolder \|\| ''\);/);
+  assert.match(app, /folder: activeFolder \|\| null,/);
+  assert.match(app, /const where = into \? ` to “\$\{into\}”` : '';/);
+  for (const b of [filed, zipped, glance, book, onto]) await store.deleteBook(b.id);
+});
+
 await t('a book called ".zip" is one book, on import and in Build -- not its pages', async () => {
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
   const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);

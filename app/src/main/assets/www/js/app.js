@@ -2110,13 +2110,17 @@ function handleFiles(files, options = {}) {
     job.say(null, 0, `${files.length} file${files.length === 1 ? '' : 's'} queued`);
   }
   importsWaiting += 1;
-  const run = importQueue.then(() => importNow(files, options, job));
+  /* Into the folder the shelf is open at, as it is when the import is asked
+   * for: a folder left while the import waits its turn does not change where
+   * these books were meant to go. */
+  const into = options.transient ? '' : (activeFolder || '');
+  const run = importQueue.then(() => importNow(files, { ...options, into }, job));
   // The next one waits for this to finish, however it finishes.
   importQueue = run.catch(() => {}).then(() => { importsWaiting -= 1; });
   return run;
 }
 
-async function importNow(files, { transient = false } = {}, done) {
+async function importNow(files, { transient = false, into = '' } = {}, done) {
   done.say('Opening…', 0, '');
 
   /* The shelf is refreshed as books land rather than only at the end, so an
@@ -2134,6 +2138,7 @@ async function importNow(files, { transient = false } = {}, done) {
   try {
     results = await library.importFiles(files, {
       transient,
+      into,
       // Anything the page is not allowed to read is read by the shell
       // instead -- but only when a read is actually refused.
       rescue: (file) => rescueFile(file, done),
@@ -2195,11 +2200,13 @@ async function importNow(files, { transient = false } = {}, done) {
     // time actually went on a real phone.
     const took = seconds > 2 ? ` · ${seconds.toFixed(0)}s, ${each.toFixed(1)}s a book` : '';
     const one = results.added === 1 && results.titles?.[0];
+    // Where they went, when that was the folder the shelf is open at.
+    const where = into ? ` to “${into}”` : '';
     toast((one
-      ? `Added “${one}”${took}`
+      ? `Added “${one}”${where}${took}`
       : folders
-        ? `${results.added} book${results.added === 1 ? '' : 's'} added across ${folders} folder${folders === 1 ? '' : 's'}${took}`
-        : `${results.added} book${results.added === 1 ? '' : 's'} added${took}`) + note, 6000, { kind: 'done' });
+        ? `${results.added} book${results.added === 1 ? '' : 's'} added${where} across ${folders} folder${folders === 1 ? '' : 's'}${took}`
+        : `${results.added} book${results.added === 1 ? '' : 's'} added${where}${took}`) + note, 6000, { kind: 'done' });
   }
 
   /* A zip whose index was damaged, read from the front instead. What came
@@ -5064,8 +5071,10 @@ function renderWorkshop() {
   el('build-empty').hidden = parts.length > 0;
   el('build-naming').hidden = parts.length === 0;
   el('build-foot').hidden = parts.length === 0;
+  // Where it will be filed, said before it is built: the folder the shelf is
+  // open at is two tabs away from here.
   el('build-count').textContent = parts.length
-    ? `${parts.length} part${parts.length === 1 ? '' : 's'}` : '';
+    ? `${parts.length} part${parts.length === 1 ? '' : 's'}${activeFolder ? ` · into “${activeFolder}”` : ''}` : '';
 
   /* The suggested name follows what has been added, until it is typed over.
    *
@@ -5164,6 +5173,8 @@ function wireWorkshop() {
       const { book, failed } = await build.build({
         title: el('build-title').value.trim() || undefined,
         author: el('build-author').value.trim() || undefined,
+        // Into the folder the shelf is open at, as an import would be.
+        folder: activeFolder || null,
         onProgress: (message, fraction, at, total) => {
           finish.say(message, fraction, total > 1 ? `${at + 1} of ${total}` : '');
         },
@@ -5176,9 +5187,10 @@ function wireWorkshop() {
       await refreshShelf();
       // Said with the parts that failed, not instead of them: a book short
       // three volumes should not look like a complete one.
+      const filed = book.folder ? ` · in “${book.folder}”` : '';
       toast(failed.length
-        ? `Built “${book.title}” — ${book.chapters} chapters · ${failed.length} part${failed.length === 1 ? '' : 's'} skipped: ${failed[0].reason}`
-        : `Built “${book.title}” — ${book.chapters} chapters`, 8000, { kind: 'done' });
+        ? `Built “${book.title}” — ${book.chapters} chapters${filed} · ${failed.length} part${failed.length === 1 ? '' : 's'} skipped: ${failed[0].reason}`
+        : `Built “${book.title}” — ${book.chapters} chapters${filed}`, 8000, { kind: 'done' });
       /* Straight into the book that was just made, not out to the shelf to
        * go looking for it. */
       const made = await store.get('books', book.id);
