@@ -113,3 +113,57 @@ pdf = Buffer.concat([pdf, Buffer.from(table),
 fs.writeFileSync('tests/fixtures/sample.pdf', pdf);
 
 console.log('fixtures written');
+
+
+/* RAR fixtures, stored rather than compressed.
+ *
+ * Nothing on npm writes RAR, and RAR's compression is not something to
+ * re-create, so these are written with every file stored as it is: the
+ * marker, the archive header, a header in front of each file, and the end of
+ * the archive. That is enough for UnRAR to read, and it is UnRAR -- the same
+ * decoder the app uses -- that the tests read them with. The compressed RAR 5
+ * sample the tests use as well is real, and embedded in the test itself. */
+function crc32(bytes) {
+  let c, crc = 0xFFFFFFFF;
+  for (const b of bytes) {
+    c = (crc ^ b) & 0xFF;
+    for (let k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xEDB88320 : c >>> 1;
+    crc = (crc >>> 8) ^ c;
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+function rarBlock(type, flags, body) {
+  const rest = Buffer.alloc(5 + body.length);
+  rest.writeUInt8(type, 0);
+  rest.writeUInt16LE(flags, 1);
+  rest.writeUInt16LE(7 + body.length, 3);
+  body.copy(rest, 5);
+  const head = Buffer.alloc(2);
+  head.writeUInt16LE(crc32(rest) & 0xFFFF, 0);
+  return Buffer.concat([head, rest]);
+}
+function storedRar(entries) {
+  const parts = [Buffer.from('Rar!\x1a\x07\x00', 'latin1'), rarBlock(0x73, 0, Buffer.alloc(6))];
+  for (const [name, data] of entries) {
+    const raw = Buffer.from(name.replace(/\//g, '\\'), 'latin1');
+    const body = Buffer.alloc(25);
+    body.writeUInt32LE(data.length, 0);          // packed size
+    body.writeUInt32LE(data.length, 4);          // unpacked size
+    body.writeUInt8(2, 8);                       // made on Windows
+    body.writeUInt32LE(crc32(data), 9);
+    body.writeUInt32LE(0x5A210000, 13);          // a date in 2025
+    body.writeUInt8(29, 17);                     // version needed
+    body.writeUInt8(0x30, 18);                   // method: stored
+    body.writeUInt16LE(raw.length, 19);
+    body.writeUInt32LE(0x20, 21);                // attributes: a file
+    parts.push(rarBlock(0x74, 0x8000, Buffer.concat([body, raw])), data);
+  }
+  parts.push(Buffer.from([0xC4, 0x3D, 0x7B, 0x00, 0x40, 0x07, 0x00]));
+  return Buffer.concat(parts);
+}
+const cbr = storedRar([['page1.png', png], ['page2.png', png], ['page10.png', png]]);
+fs.writeFileSync('tests/fixtures/comic.cbr', cbr);
+fs.writeFileSync('tests/fixtures/books.rar', storedRar([
+  ['Volume 1/Salt Almanac.epub', fs.readFileSync('tests/fixtures/salt-almanac.epub')],
+  ['Comics/Nested Comic.cbr', cbr],
+]));

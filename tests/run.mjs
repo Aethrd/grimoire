@@ -13,7 +13,7 @@ const root = path.join(here, '..');
  * one otherwise surfaces as a bare MODULE_NOT_FOUND from Node with no
  * indication of what to do about it. */
 const builder = path.join(here, 'fixtures/build.mjs');
-const fixtures = ['salt-almanac.epub', 'comic.cbz', 'sample.pdf'];
+const fixtures = ['salt-almanac.epub', 'comic.cbz', 'sample.pdf', 'comic.cbr', 'books.rar'];
 const missing = fixtures.filter((f) => !existsSync(path.join(here, 'fixtures', f)));
 
 if (missing.length) {

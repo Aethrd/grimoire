@@ -63,6 +63,12 @@
                 <data android:mimeType="application/vnd.comicbook+zip" />
                 <data android:mimeType="application/x-cbz" />
                 <data android:mimeType="application/zip" />
+                <!-- RAR, and comics in it, unpacked in the page (js/rar.js). -->
+                <data android:mimeType="application/vnd.comicbook-rar" />
+                <data android:mimeType="application/x-cbr" />
+                <data android:mimeType="application/vnd.rar" />
+                <data android:mimeType="application/x-rar-compressed" />
+                <data android:mimeType="application/x-rar" />
                 <data android:mimeType="application/x-fictionbook+xml" />
                 <data android:mimeType="text/plain" />
                 <data android:mimeType="text/markdown" />
@@ -74,6 +80,9 @@
                 <data android:mimeType="application/epub+zip" />
                 <data android:mimeType="application/pdf" />
                 <data android:mimeType="application/vnd.comicbook+zip" />
+                <data android:mimeType="application/vnd.comicbook-rar" />
+                <data android:mimeType="application/vnd.rar" />
+                <data android:mimeType="application/x-rar-compressed" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>

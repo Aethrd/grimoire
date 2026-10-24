@@ -978,6 +978,141 @@ await t('a book written out and given back is the same book, not a second copy',
   assert.equal(theOriginal.already, 1);
 });
 
+/* ── RAR ─────────────────────────────────────────────────────────────── */
+
+console.log('rar');
+
+/* Two real archives, small enough to carry here rather than as files.
+ *
+ * RAR5_SOLID is RAR 5, compressed and solid -- libarchive's
+ * test_read_format_rar5_solid.rar (BSD 2-clause). It proves the decoder
+ * itself, which the stored archives the fixture builder makes cannot.
+ * LOCKED has encrypted headers, password 1234 -- node-unrar-js's
+ * HeaderEnc1234.rar (MIT). */
+const RAR5_SOLID = 'UmFyIRoHAQAJ78hvCwEFBwQGAQGAgIAA5TdjDCYCAwunAwSwCaSDAs1wynyAHQEIdGVzdC5iaW4KAxOLV6xb+BitHs01owEodlVWQfRgWNsMfHGMGDHxxiyyxjGWTGDBZZZZDHxsssmMYskJ8ZCSST4yEhJJJISfOSSSEISSQhCSSQkkhCEvfnvmvfNaSlc5nqnT7me2XOjL3N9v7m97810a5zfXrl+/zvlq1rVa6df3Oct+a8/ebrdvo3u5W9/4ZoAEABANSlwHzz9fn7/b6fP4/D3+72+z1en0efzeXyeLw9/vdzt9rs9jr9XqdLo8/nc3mcvlcnkcbicLg8Dfb3ebvdbncbfbbTZ7LYa/XazVanUafTaXSaLQ6DPZzN5nMV2Xy2VylVU1GTyOPx2MpqWko8XicRhsLhJ+enZybmpnAX+/Xy9Xm73a6XO5XG3222SCoUa+yogW3hbbde0swbc8IjZlzQJhCQzSUcGW0JJtLIxSrP0XCT1Vq/flrHkjIlJW4pW4FLyRYKTKilCp7qVbKlo7wWxli397LoX0vHLl9ZgpSZKgmiq5stXOFxZ0vBPE9nywNAVZQltcOXWoi/GKLB0ZZ2kLh0peumKYxpZqnLj5AvlkioagtbUl3aoparLP1hdOtKTriMzcbuknAgMLgQEEgCCkgwLGshN+wB0BCXRlc3QxLmJpbgoDE2dfrFsaWp4QRmJ+aABABADVGzBJC0+9ne/6RJBbxBbbr2oJg254RGzLmgTAEhmko4MtoSTaWRjG/BHxpLn6A2kojZlzQJfCQzSUcGW0JJtLIxjegj40lz1AbSURsy5oEvBIZpKODLaEk2lkYpTvhdljrlxu+Wuxb3V2EX64vXy4r3i4o3X/rjPwrqeSBCcCAwuYAASAIKSDAsuvZvHAHQEJdGVzdDIuYmluCgMTel+sWy1UcxdGCRVoAEAEANbPj+/xgYzU/lO+I/x/M/Bo7yzjJwIDC6kABIAgpIMC2SOxn8AdAQl0ZXN0My5iaW4KAxN+X6xb0D0AA0Y6JmgAQAQA4TPj+sIf382Nq2gcSCNYAcSCNYAcSCNYAb5TviP8fzPwGKwj+ScCAwuYAASAIKSDAtQ+xBDAHQEJdGVzdDQuYmluCgMTgV+sW6EmHRJFChVoAEAEAOCz4/ojAxmx/Kd8R/j+Z+Dn4U6XJwIDC64ABIAgpIMC8lXRucAdAQl0ZXN0NS5iaW4KAxNcZ6xbG9RFEEQ1K2gAQAQA4DPj+saf395GaEuH2oQzQIMPtQhmfP4fahDM8ew/4U74j/H8z8BtS83NJwIDC5gABIAgpIMC/0ikNsAdAQl0ZXN0Ni5iaW4KAxNfZ6xbO4/UF0UKFWgAQAQA37Pj+iMDGbH8p3xH+P5n4B13VlEDBQQA';
+const LOCKED = 'UmFyIRoHAM6Zc4AADQAAAAAAAAAAAAAAAAAAAJPPq+tC7kb+20uYk0gq0MEW0RnMY87mJjVfk2pZ2l1hswZtLi3a3Tttx7+sAOo3yWhEDDlEV4/ZPa5HRtzk4ixxzAUX3NLdvGFtZzwNvrKER1U11CO58cEJYwMAb00mSQAAAAAAAAAAZe5YSqjdugsoKY2ljG5uBLezMVJhXr3/OEQAsi/rqqu2TzNN2+YlsYs7VgvvGm43ULoFeXNCHpwVtn+Ce+97gvXUeBs7k5xe4jIY084mD1tZyoG78cgcVKKhGnVpbN0DAAAAAAAAAACmAnZVHOHZezeKX5/8e6oS0CvlpebpmGzHcMoWvlyhcaDIZ38lgTkb5o2AbvKIpRYV1gIDXx+H2bbpACoTobXN7ge5vwHtUrbs64LyxHHoyjr/KtejMtZ69osAIX1DDpUAAAAAAAAAACQnI+yOgBdTJlP42jhLQRE=';
+
+const rar = await import(new URL('../app/src/main/assets/www/js/rar.js', import.meta.url).href);
+{
+  // The page fetches the decoder; a test has no page to fetch from.
+  const unrar = await import(new URL('../app/src/main/assets/www/vendor/unrar/index.js', import.meta.url).href);
+  const wasm = fs.readFileSync(new URL('../app/src/main/assets/www/vendor/unrar/unrar.wasm', import.meta.url));
+  rar.useDecoder(unrar, Uint8Array.from(wasm).buffer);
+}
+const fixtureFile = (name, as = name) => new File([Uint8Array.from(fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url)))], as);
+const zipNames = async (file) => {
+  const JSZip = (await import('jszip')).default;
+  const { readArrayBuffer } = await import(new URL('../app/src/main/assets/www/js/blobs.js', import.meta.url).href);
+  const zip = await JSZip.loadAsync(await readArrayBuffer(file));
+  return Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
+};
+
+await t('a RAR is unpacked into the ZIP it could have been', async () => {
+  const comic = await rar.rarToZip(fixtureFile('comic.cbr'));
+  assert.equal(comic.name, 'comic.cbz', 'a .cbr did not stay a comic');
+  assert.deepEqual(await zipNames(comic), ['page1.png', 'page10.png', 'page2.png']);
+  const books = await rar.rarToZip(fixtureFile('books.rar'));
+  assert.equal(books.name, 'books.zip');
+  assert.deepEqual(await zipNames(books), ['Comics/Nested Comic.cbr', 'Volume 1/Salt Almanac.epub']);
+});
+
+await t('RAR 5, compressed and solid, comes out whole', async () => {
+  const solid = new File([Buffer.from(RAR5_SOLID, 'base64')], 'solid.rar');
+  assert.ok(await rar.isRar(solid));
+  const out = await rar.rarToZip(solid);
+  const JSZip = (await import('jszip')).default;
+  const { readArrayBuffer } = await import(new URL('../app/src/main/assets/www/js/blobs.js', import.meta.url).href);
+  const zip = await JSZip.loadAsync(await readArrayBuffer(out));
+  const sizes = {};
+  for (const name of Object.keys(zip.files)) sizes[name] = (await zip.files[name].async('uint8array')).length;
+  assert.deepEqual(sizes, {
+    'test.bin': 1200, 'test1.bin': 4096, 'test2.bin': 4096, 'test3.bin': 4096,
+    'test4.bin': 4096, 'test5.bin': 4096, 'test6.bin': 4096,
+  });
+});
+
+await t('a locked, damaged or empty RAR says which', async () => {
+  await assert.rejects(rar.rarToZip(new File([Buffer.from(LOCKED, 'base64')], 'Locked.rar')),
+    /“Locked\.rar” is locked with a password/);
+  const whole = fs.readFileSync(new URL('./fixtures/comic.cbr', import.meta.url));
+  await assert.rejects(rar.rarToZip(new File([whole.subarray(0, 40)], 'Cut.cbr')), /“Cut\.cbr” is damaged or did not finish downloading|“Cut\.cbr” could not be unpacked/);
+});
+
+await t('importing a .cbr makes a comic; a .rar of books makes its books, folders kept', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const before = new Set((await store.all('books')).map((b) => b.id));
+  const fresh = async () => (await store.all('books')).filter((b) => !before.has(b.id));
+
+  const one = await library.importFiles([fixtureFile('comic.cbr', 'Rar Comic.cbr')], {});
+  assert.equal(one.added, 1, `a .cbr came in as ${one.added}: ${JSON.stringify(one.failed)}`);
+  const [comic] = await fresh();
+  assert.equal(comic.format, 'CBZ');
+  assert.equal(comic.imageCount, 3);
+  assert.equal(comic.title, 'Rar Comic');
+
+  // The same file again is the same book.
+  const again = await library.importFiles([fixtureFile('comic.cbr', 'Rar Comic.cbr')], {});
+  assert.equal(again.added, 0);
+  assert.equal(again.already, 1, 'the same .cbr imported twice made two books');
+
+  before.add(comic.id);
+  const many = await library.importFiles([fixtureFile('books.rar', 'Rar Books.rar')], {});
+  assert.equal(many.added, 2, `a .rar of books came in as ${many.added}: ${JSON.stringify(many.failed)}`);
+  const made = await fresh();
+  const almanac = made.find((b) => b.title === 'The Salt Almanac');
+  const nested = made.find((b) => b.format === 'CBZ');
+  assert.equal(almanac?.folder, 'Volume 1', 'the folder inside the RAR was not kept');
+  // A .cbr inside it is unpacked in its turn, and is a comic too.
+  assert.equal(nested?.folder, 'Comics');
+  assert.equal(nested?.imageCount, 3);
+  for (const b of [comic, ...made]) await store.deleteBook(b.id);
+});
+
+await t('named wrong either way: a ZIP called .cbr, a RAR called .cbz, a RAR with no name', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const before = new Set((await store.all('books')).map((b) => b.id));
+  const out = await library.importFiles([
+    fixtureFile('comic.cbz', 'Zip Called Cbr.cbr'),
+    fixtureFile('comic.cbr', 'Rar Called Cbz.cbz'),
+  ], {});
+  assert.equal(out.added, 2, JSON.stringify(out.failed));
+  const made = (await store.all('books')).filter((b) => !before.has(b.id));
+  assert.ok(made.every((b) => b.format === 'CBZ' && b.imageCount === 3));
+  for (const b of made) await store.deleteBook(b.id);
+  // Named by its first bytes when it has no extension.
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  assert.equal(await parse.nameWithFormat('download', fixtureFile('comic.cbr')), 'download.rar');
+  // A locked one fails on its own, with the reason.
+  const locked = await library.importFiles([new File([Buffer.from(LOCKED, 'base64')], 'Locked.cbr')], {});
+  assert.equal(locked.added, 0);
+  assert.match(locked.failed[0].reason, /locked with a password/);
+});
+
+await t('Build takes a RAR as a part, as it takes a ZIP', async () => {
+  build.clear();
+  const parts = await build.add([fixtureFile('comic.cbr', 'Chapter 1.cbr')]);
+  assert.equal(parts.length, 1);
+  assert.match(parts[0].name, /^Chapter 1/);
+  const { book } = await build.build({ title: 'Built from a RAR' });
+  assert.equal(book.chapters >= 1, true);
+  const images = await store.byIndex('images', 'bookId', book.id);
+  assert.equal(images.length, 3, 'the pages of the RAR did not make it into the book');
+  build.clear();
+  await store.deleteBook(book.id);
+});
+
+await t('the decoder is the app\'s own, loaded only when a RAR arrives', async () => {
+  const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/rar.js', import.meta.url), 'utf8');
+  assert.match(src, /import\('\.\.\/vendor\/unrar\/index\.js'\)/);
+  assert.match(src, /fetch\(new URL\('\.\.\/vendor\/unrar\/unrar\.wasm', import\.meta\.url\)\)/);
+  // Nothing at the top of the module pulls it in.
+  assert.ok(!/^import .*unrar/m.test(src));
+  const manifest = fs.readFileSync(new URL('../app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+  for (const type of ['application/vnd.comicbook-rar', 'application/vnd.rar', 'application/x-rar-compressed']) {
+    assert.ok(manifest.includes(`android:mimeType="${type}"`), `${type} is not offered to the app`);
+  }
+});
+
 await t('opened at a folder, imports and builds are filed in it', async () => {
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
   const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);

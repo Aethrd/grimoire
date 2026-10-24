@@ -7,6 +7,7 @@ import {
   withRescue, nameWithFormat, bytesOf, SUPPORTED, UNSUPPORTED_REASON,
 } from './parse.js';
 import { planBooks } from './group.js';
+import { isRar, rarToZip, zipNameFor } from './rar.js';
 import * as translate from './translate.js';
 import * as mix from './mix.js';
 
@@ -401,6 +402,29 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       }
       continue;
     }
+    /* RAR, unpacked into the ZIP it could have been (see rar.js), and from
+     * there it is a .cbz or a .zip like any other. Read by its first bytes as
+     * well as its name: a .cbr is as often a ZIP renamed, and a .cbz now and
+     * then a RAR renamed, and either way the name is wrong about what to do. */
+    const kind = formatOf(original.name);
+    if (kind === 'RAR' || kind === 'CBR' || kind === 'CBZ' || kind === 'ZIP') {
+      let rar;
+      try { rar = await isRar(original); } catch { rar = kind === 'RAR' || kind === 'CBR'; }
+      if (rar) {
+        try {
+          const source = original;
+          onProgress?.(`Unpacking ${source.name}`, 0);
+          original = await withRescue(source, (readable) => rarToZip(readable,
+            (fraction, inner) => onProgress?.(`Unpacking ${inner || source.name}`, fraction)), rescue);
+        } catch (error) {
+          results.failed.push({ name: original.name, reason: error.message || 'Could not be unpacked' });
+          continue;
+        }
+      } else if (kind === 'RAR' || kind === 'CBR') {
+        original = new File([original], zipNameFor(original.name), { type: original.type });
+      }
+    }
+
     if (formatOf(original.name) !== 'ZIP') {
       loose.push(original);
       continue;
@@ -517,6 +541,21 @@ export async function importFiles(files, { onProgress, onDone, transient = false
     onProgress?.(`Reading ${name}`, i / queue.length, i, queue.length);
 
     const format = entry.pictures ? 'PICTURES' : formatOf(name);
+    /* A .cbr comic packed inside an archive: unpacked when its turn comes,
+     * like the rest of what is in there, and read as the comic it is. */
+    if (format === 'CBR' && !entry.unpacked) {
+      try {
+        const source = entry.file || new File([await entry.read()], name);
+        entry.file = await isRar(source).catch(() => true)
+          ? await rarToZip(source, (fraction) => onProgress?.(`Unpacking ${name}`, (i + fraction) / queue.length, i, queue.length))
+          : new File([source], zipNameFor(name));
+        entry.as = entry.file.name;
+        entry.unpacked = true;
+      } catch (error) {
+        results.failed.push({ name, reason: error.message || 'Could not be unpacked' });
+        continue;
+      }
+    }
     if (UNSUPPORTED_REASON[format]) {
       results.failed.push({ name, reason: UNSUPPORTED_REASON[format] });
       continue;
@@ -887,7 +926,7 @@ export const displayTitle = (book) => titles.get(book.id) || book.title;
  *  book's own. Used to mark it, so the two are never mistaken. */
 export const isTranslatedTitle = (book) => titles.has(book.id);
 
-const EMPTY_NOTE = 'EPUB, PDF, CBZ, TXT, HTML, Markdown and FB2. Drop in a .zip and it is unpacked, with the folders inside kept as folders here.';
+const EMPTY_NOTE = 'EPUB, PDF, CBZ, CBR, TXT, HTML, Markdown and FB2. Drop in a .zip or .rar and it is unpacked, with the folders inside kept as folders here.';
 
 /** The books the shelf drew last, bundles opened out: what "select all"
  *  selects, so it never reaches a book that is not on screen. */

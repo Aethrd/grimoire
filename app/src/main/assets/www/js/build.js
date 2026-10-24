@@ -16,6 +16,7 @@
  * serial, so it is shown, numbered, and movable before anything is built.
  */
 
+import { isRar, rarToZip, zipNameFor } from './rar.js';
 import * as store from './store.js';
 import {
   parse, parseChapters, formatOf, expandArchive, asEpubName, nameWithFormat, chapterHtml, UNSUPPORTED_REASON,
@@ -51,7 +52,18 @@ export async function add(files, onProgress) {
    * answer is what the rest of this works from.
    */
   const identified = [];
-  for (const file of files) {
+  for (const picked of files) {
+    let file = picked;
+    /* A RAR is unpacked into the ZIP it could have been, and is a part like
+     * any .cbz or .zip from then on (see rar.js). By its first bytes, not
+     * only its name: a .cbr is as often a ZIP that was renamed. */
+    if (/\.(rar|cbr|cbz|zip)$/i.test(file.name || '') || !/\.[a-z0-9]{1,10}$/i.test(file.name || '')) {
+      if (await isRar(file).catch(() => false)) {
+        file = await rarToZip(file, (fraction, inner) => onProgress?.(`Unpacking ${inner || file.name}`, fraction));
+      } else if (/\.(rar|cbr)$/i.test(file.name || '')) {
+        file = new File([file], zipNameFor(file.name), { type: file.type });
+      }
+    }
     identified.push({ file, named: await nameWithFormat(file.name || 'file', file) });
   }
 

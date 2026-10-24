@@ -76,7 +76,7 @@ export const FORMATS = {
   epub: 'EPUB', cbz: 'CBZ', cbr: 'CBR', txt: 'TXT', md: 'MD',
   html: 'HTML', htm: 'HTML', xhtml: 'HTML', fb2: 'FB2', zip: 'ZIP',
   pdf: 'PDF', docx: 'DOCX', mobi: 'MOBI', azw3: 'AZW3', rtf: 'RTF',
-  mht: 'MHT', mhtml: 'MHT',
+  mht: 'MHT', mhtml: 'MHT', rar: 'RAR',
 };
 
 /** Formats with a working parser today. The rest are refused with a reason. */
@@ -85,14 +85,16 @@ export const SUPPORTED = new Set(['EPUB', 'PDF', 'CBZ', 'TXT', 'MD', 'HTML', 'FB
 /** Book formats that can live inside an archive. ZIP is not one of them:
  *  nested archives are refused rather than recursed into. */
 export const ARCHIVE_CONTENTS =
-  new Set(['EPUB', 'PDF', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2', 'MHT']);
+  new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT', 'MD', 'HTML', 'FB2', 'MHT']);
 
 export const UNSUPPORTED_REASON = {
   DOCX: 'DOCX is OOXML in a zip. Readable with JSZip, but the styling model is a project of its own.',
   MOBI: 'MOBI is a PalmDOC container. No parser yet.',
   AZW3: 'AZW3 shares the MOBI container. No parser yet.',
   RTF: 'RTF needs a control-word stripper. No parser yet.',
-  CBR: 'CBR is RAR, which JSZip cannot open. Repack as CBZ, or vendor a RAR reader.',
+  // A RAR is unpacked before it gets here (see rar.js). One that reaches the
+  // parser is a RAR of books packed inside another archive.
+  RAR: 'A RAR inside another archive. Unpack the outer one and import the RAR on its own.',
 };
 
 export function formatOf(name) {
@@ -1444,6 +1446,7 @@ export async function nameWithFormat(name, blob) {
   const magic = String.fromCharCode(...head);
 
   if (magic.startsWith('%PDF')) return `${name}.pdf`;
+  if (magic === 'Rar!') return `${name}.rar`;
 
   /* Pictures, by their first bytes.
    *
