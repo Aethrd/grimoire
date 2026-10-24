@@ -322,6 +322,34 @@ export async function build({ title, author, folder = null, cover: chosenCover =
     const part = parts[at];
     onProgress?.(`Reading ${part.name}`, at / parts.length, at, parts.length);
 
+    const prefix = `p${at}/`;
+    // Where this part's chapters begin in the finished book. Its pictures
+    // number their chapters from zero, as every part does, and left that way
+    // they all claim to belong to the opening chapters of the book.
+    const base = index;
+    const volume = stripExtension(part.name);
+
+    /* Pictures written as the part is read, a dozen at a time, as an import
+     * writes them -- not gathered up and written at the end. A volume of an
+     * illustrated omnibus is fifty megabytes of pictures; held all at once,
+     * on top of reading the rest, that is what stalled a build on a phone
+     * that imported the same file without trouble. */
+    const pending = [];
+    const flush = async () => {
+      if (pending.length) await store.putAll('images', pending.splice(0));
+    };
+    const onImage = async (image) => {
+      pending.push({
+        ...image,
+        bookId,
+        order: picture++,
+        href: prefix + image.href,
+        chapterIndex: base + (image.chapterIndex || 0),
+        volume,
+      });
+      if (pending.length >= 12) await flush();
+    };
+
     let parsed;
     try {
       parsed = part.bookId
@@ -331,24 +359,23 @@ export async function build({ title, author, folder = null, cover: chosenCover =
         : part.pages
         ? await parseChapters(part.pages, (fraction) =>
           onProgress?.(`Reading ${part.name}`, (at + fraction) / parts.length, at, parts.length),
-          { title: part.name })
+          { title: part.name, onImage })
         : await parse(
           part.file || new File([await part.read()], part.name),
           (fraction) =>
             onProgress?.(`Reading ${part.name}`, (at + fraction) / parts.length, at, parts.length),
-          { prefix: part.prefix ?? null });
+          { prefix: part.prefix ?? null, onImage });
+      await flush();
     } catch (error) {
-      // One part that will not open should cost that part, not the build.
+      // One part that will not open should cost that part, not the build --
+      // nor leave its pictures behind without it.
+      pending.length = 0;
+      for (const image of await store.byIndex('images', 'bookId', bookId)) {
+        if (image.href.startsWith(prefix)) await store.del('images', [bookId, image.href]);
+      }
       failed.push({ name: part.name, reason: error.message });
       continue;
     }
-
-    const prefix = `p${at}/`;
-    // Where this part's chapters begin in the finished book. Its pictures
-    // number their chapters from zero, as every part does, and left that way
-    // they all claim to belong to the opening chapters of the book.
-    const base = index;
-    const volume = stripExtension(part.name);
     if (!cover && parsed.coverBlob) cover = parsed.coverBlob;
 
     await store.putAll('chapters', parsed.chapters.map((chapter, n) => ({

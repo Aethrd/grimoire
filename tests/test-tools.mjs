@@ -1075,6 +1075,33 @@ await t('Build takes a MOBI as a part', async () => {
   await store.deleteBook(book.id);
 });
 
+await t('a big MOBI builds without holding its pictures, and moves the bar while it opens', async () => {
+  // Pictures go to storage as each part is read, a dozen at a time, as an
+  // import's do -- an omnibus is fifty megabytes of them.
+  const buildSrc = fs.readFileSync(new URL('../app/src/main/assets/www/js/build.js', import.meta.url), 'utf8');
+  assert.match(buildSrc, /const onImage = async \(image\) => \{[\s\S]{0,400}if \(pending\.length >= 12\) await flush\(\);/);
+  assert.match(buildSrc, /\{ prefix: part\.prefix \?\? null, onImage \}/);
+  // Behaviour: the pictures land, keyed to the part and the right chapter.
+  build.clear();
+  const bytes = fs.readFileSync(new URL('./fixtures/lantern.mobi', import.meta.url));
+  await build.add([new File([bytes], 'One.mobi'), new File([bytes], 'Two.mobi')]);
+  const { book } = await build.build({ title: 'Two lanterns' });
+  const images = await store.byIndex('images', 'bookId', book.id);
+  assert.deepEqual(images.map((i) => i.href.split('/')[0]).sort(), ['p0', 'p1']);
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
+  const second = images.find((i) => i.href.startsWith('p1/'));
+  assert.ok(chapters[second.chapterIndex].html.includes(`data-img="${second.href}"`), 'a picture points at the wrong chapter');
+  build.clear();
+  await store.deleteBook(book.id);
+
+  const mobiSrc = fs.readFileSync(new URL('../app/src/main/assets/www/js/mobi.js', import.meta.url), 'utf8');
+  // Opening is counted, record by record, rather than sitting at nothing.
+  assert.match(mobiSrc, /const counted = source\(file, \(\) => \{/);
+  // Chapters from the book's index of every chapter, not its short contents page.
+  assert.match(mobiSrc, /ncx = await mobi\.getNCX\(\)/);
+  assert.match(mobiSrc, /if \(group\.label \|\| !open \|\| !named\) \{/);
+});
+
 await t('the Kindle reader runs on the oldest WebView the app supports', async () => {
   const vendor = fs.readFileSync(new URL('../app/src/main/assets/www/vendor/foliate/mobi.js', import.meta.url), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');   // the code, not what is said about it

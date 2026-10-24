@@ -24,7 +24,7 @@ const FLOW = /kindle:flow:(\w+)/i;
 
 /* A File, as the reader asks for one: slices that read as ArrayBuffers.
  * Read through FileReader where an old WebView has no Blob.arrayBuffer. */
-function source(file) {
+function source(file, onRead) {
   const read = (blob) => (typeof blob.arrayBuffer === 'function'
     ? blob.arrayBuffer()
     : new Promise((resolve, reject) => {
@@ -37,7 +37,13 @@ function source(file) {
     size: file.size,
     slice: (start, end) => {
       const piece = file.slice(start, end);
-      return { arrayBuffer: () => read(piece) };
+      return {
+        arrayBuffer: async () => {
+          const bytes = await read(piece);
+          onRead?.();
+          return bytes;
+        },
+      };
     },
   };
 }
@@ -139,9 +145,18 @@ export async function parseMobi(file, onProgress, { onImage } = {}) {
 
   const { MOBI } = await import('../vendor/foliate/mobi.js');
   const mobi = new MOBI({ unzlib: null });
+  /* Opening reads and unpacks all of the text before anything else can
+   * happen -- for an omnibus, a thousand records and several seconds on a
+   * phone. Counted as it goes, so the progress bar moves through it instead
+   * of sitting at nothing. */
+  let reads = 0;
+  const counted = source(file, () => {
+    reads += 1;
+    if (reads % 20 === 0) onProgress?.(Math.min(0.25, (0.25 * reads) / Math.max(1, info.textRecords)));
+  });
   let book;
   try {
-    book = await mobi.open(source(file));
+    book = await mobi.open(counted);
   } catch (error) {
     throw new Error(`This Kindle book could not be read: ${error.message || error}`);
   }
@@ -195,32 +210,86 @@ export async function parseMobi(file, onProgress, { onImage } = {}) {
     return null;
   };
 
-  /* Chapter names from the book's own contents, by the section each entry
-   * points into and the element it points at, so a section holding several
-   * chapters -- common in the older layout -- is cut where they begin. */
-  const flat = [];
-  const walkToc = (items) => {
-    for (const item of items || []) {
-      flat.push(item);
-      walkToc(item.subitems);
-    }
-  };
-  walkToc(book.toc);
-  const marksBySection = new Map();
-  for (const item of flat) {
+  /* Where chapters begin, and what they are called.
+   *
+   * The older layout carries an index of every chapter by its place in the
+   * text (the NCX); its contents page often links only a handful of them --
+   * seven, in an omnibus of a hundred and thirty chapters. The index is used
+   * where there is one, and the contents page where there is not. Each entry
+   * is placed in the section it falls in, and at the element it points to
+   * where that can be found, so a section holding several chapters is cut
+   * where each begins. */
+  const entries = [];
+  const place = async (label, href) => {
     try {
-      const where = await book.resolveHref(item.href);
-      if (!where || where.index == null || where.index < 0) continue;
-      if (!marksBySection.has(where.index)) marksBySection.set(where.index, []);
-      marksBySection.get(where.index).push({ label: (item.label || '').trim(), anchor: where.anchor });
+      const where = await book.resolveHref(href);
+      if (!where || where.index == null || where.index < 0) return;
+      entries.push({ label: String(label || '').replace(/\s+/g, ' ').trim(), index: where.index, anchor: where.anchor });
     } catch { /* an entry that points nowhere names nothing */ }
+  };
+  if (!kf8) {
+    let ncx = null;
+    try { ncx = await mobi.getNCX(); } catch { ncx = null; }
+    for (const entry of ncx || []) {
+      if (entry?.offset != null && entry.label) await place(entry.label, `filepos:${entry.offset}`);
+    }
   }
+  if (!entries.length) {
+    const walk = async (items) => {
+      for (const item of items || []) {
+        await place(item.label, item.href);
+        await walk(item.subitems);
+      }
+    };
+    await walk(book.toc);
+  }
+  const marksBySection = new Map();
+  for (const entry of entries) {
+    if (!marksBySection.has(entry.index)) marksBySection.set(entry.index, []);
+    marksBySection.get(entry.index).push(entry);
+  }
+  const named = entries.length > 0;
 
   const chapters = [];
   const images = [];
+  /* A chapter is gathered until the next one begins. A page break inside a
+   * chapter -- before an illustration, say -- does not start a new one when
+   * the book says where its chapters are; without that, every break does. */
+  let open = null;
+  const firstLine = (text) => text.split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).find((l) => l) || '';
+  const finish = async () => {
+    if (!open) return;
+    const chapter = open;
+    open = null;
+    // A chapter can still be a whole novel; long ones are cut as a text
+    // file's would be, so no chapter is too long to lay out.
+    for (const part of boundedChapters([{ title: chapter.title, html: chapter.html.join('') }])) {
+      const index = chapters.length;
+      chapters.push({
+        index,
+        title: part.title,
+        fromToc: chapter.fromToc,
+        html: part.html,
+        words: countWords(plainTextOf(part.html), lang),
+      });
+      for (const found of chapter.wanted.values()) {
+        if (found.handed || !part.html.includes(`data-img="${found.href}"`)) continue;
+        found.handed = true;
+        const record = {
+          href: found.href, blob: found.blob, order: order++, chapterIndex: index,
+          animated: found.animated, width: 0, height: 0,
+        };
+        if (onImage) await onImage(record);
+        else images.push(record);
+      }
+    }
+  };
+
   const sections = book.sections || [];
   for (let s = 0; s < sections.length; s++) {
-    onProgress?.(s / sections.length);
+    onProgress?.(0.25 + 0.7 * (s / sections.length));
+    // A breath now and then, so the progress bar is drawn as it moves.
+    if (s % 6 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
     const section = sections[s];
     if (!section?.createDocument) continue;
     let doc;
@@ -233,12 +302,19 @@ export async function parseMobi(file, onProgress, { onImage } = {}) {
       img.setAttribute('src', `recindex:${img.getAttribute('recindex')}`);
     }
 
-    // Cut at each contents entry that lands in this section.
-    const marks = (marksBySection.get(s) || [])
-      .map((mark) => ({ label: mark.label, el: (() => { try { return mark.anchor?.(doc) || null; } catch { return null; } })() }))
-      .filter((mark) => mark.el);
+    // Cut at each entry that lands in this section. One whose element cannot
+    // be found names the section from its start.
+    const here = marksBySection.get(s) || [];
+    const marks = [];
+    let atStart = null;
+    for (const entry of here) {
+      let el = null;
+      try { el = entry.anchor?.(doc) || null; } catch { el = null; }
+      if (el) marks.push({ label: entry.label, el });
+      else if (atStart == null) atStart = entry.label;
+    }
     const groups = [];
-    let current = { label: null, nodes: [] };
+    let current = { label: atStart, nodes: [] };
     for (const node of [...root.childNodes]) {
       const mark = marks.find((m) => m.el === node || (node.contains && node.contains(m.el)));
       if (mark) {
@@ -267,32 +343,23 @@ export async function parseMobi(file, onProgress, { onImage } = {}) {
       const { html, text } = readChapter(box, (src) => wanted.get(src)?.href || null);
       if (!text.trim() && !wanted.size) continue;
 
-      const heading = box.querySelector('h1, h2, h3')?.textContent?.replace(/\s+/g, ' ').trim();
-      const name = group.label || heading || `Section ${chapters.length + 1}`;
-      // A section with no breaks in it can be a whole novel; cut long ones
-      // as a text file's would be, so no chapter is too long to lay out.
-      for (const part of boundedChapters([{ title: name, html }])) {
-        const index = chapters.length;
-        chapters.push({
-          index,
-          title: part.title,
+      if (group.label || !open || !named) {
+        await finish();
+        const heading = box.querySelector('h1, h2, h3')?.textContent?.replace(/\s+/g, ' ').trim();
+        const line = firstLine(text);
+        open = {
+          title: group.label || heading || (line && line.length <= 70 ? line : '')
+            || (chapters.length ? `Section ${chapters.length + 1}` : title),
           fromToc: !!group.label,
-          html: part.html,
-          words: countWords(plainTextOf(part.html), lang),
-        });
-        for (const found of wanted.values()) {
-          if (found.handed || !part.html.includes(`data-img="${found.href}"`)) continue;
-          found.handed = true;
-          const record = {
-            href: found.href, blob: found.blob, order: order++, chapterIndex: index,
-            animated: found.animated, width: 0, height: 0,
-          };
-          if (onImage) await onImage(record);
-          else images.push(record);
-        }
+          html: [],
+          wanted: new Map(),
+        };
       }
+      open.html.push(html);
+      for (const [src, found] of wanted) open.wanted.set(src, found);
     }
   }
+  await finish();
   onProgress?.(1);
 
   let coverBlob = null;
@@ -318,6 +385,6 @@ export async function parseMobi(file, onProgress, { onImage } = {}) {
     images,
     imageCount: order,
     coverBlob,
-    tocSource: flat.length ? 'the book\'s own contents' : 'page breaks in the book',
+    tocSource: named ? 'the book\'s own contents' : 'page breaks in the book',
   };
 }
