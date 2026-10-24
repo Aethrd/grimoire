@@ -96,12 +96,21 @@ t('whatever is done to a bundle is done to every edition in it', () => {
   assert.match(acts, /openDetails\(\{ id: leader \}, \{ editions: bundle\.filter\(\(id\) => id !== leader\) \}\)/);
   assert.match(app, /for \(const id of editions\) \{[\s\S]{0,120}edition\.folder = book\.folder/);
   // What is done to one book asks which edition.
-  for (const name of ['open', 'merge', 'trim', 'redact']) {
+  for (const name of ['open', 'merge', 'build', 'trim', 'redact']) {
     assert.match(acts, new RegExp(`${name}: \\(\\) => oneSelected\\(`), `${name} picks an edition for you`);
   }
   // Adding books to a bundle keeps its leader.
   assert.match(acts, /const leader = books\.find\(\(b\) => b\.bundleId === b\.id\) \|\| books\[0\]/);
   assert.match(app, /\$\{count\} selected · \$\{books\} books/);
+});
+
+t('building onto a book is on the shelf too, not only in search', () => {
+  // It was a choice in a search result's menu and nowhere else.
+  assert.ok(html.includes('data-act="build"'));
+  assert.match(html, /data-act="build">[\s\S]{0,300}<span>Build onto<\/span>/);
+  const from = app.indexOf('const actions = {');
+  const acts = app.slice(from, app.indexOf("for (const button of el('select-actions').children)", from));
+  assert.match(acts, /build: \(\) => oneSelected\(\{ text: 'Choose one book to build onto'[\s\S]{0,160}return buildOnto\(book\);/);
 });
 
 t('actions are labelled, not a row of bare glyphs', () => {
@@ -110,7 +119,7 @@ t('actions are labelled, not a row of bare glyphs', () => {
   const grid = html.slice(html.indexOf('id="select-actions"'), html.indexOf('id="confirm-bar"'));
   const acts = [...grid.matchAll(/data-act="(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(acts,
-    ['open', 'bundle', 'merge', 'blur', 'trim', 'redact', 'export',
+    ['open', 'bundle', 'merge', 'build', 'blur', 'trim', 'redact', 'export',
       'details', 'vault', 'delete']);
   // Folder and status are in Details, for one book or several -- not two
   // more buttons beside it doing part of the same job.

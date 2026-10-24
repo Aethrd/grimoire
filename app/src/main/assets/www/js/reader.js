@@ -1465,7 +1465,12 @@ export function chapterText(index = state.chapterIndex) {
   if (!chapter) return '';
   const holder = document.createElement('div');
   holder.innerHTML = chapterHtml(chapter);
+  return plainText(holder);
+}
 
+/** The words in some markup, a paragraph to a paragraph, as copying wants
+ *  them: footnote marks kept as [1], pictures left out. */
+function plainText(holder) {
   for (const sup of holder.querySelectorAll('sup')) {
     sup.replaceWith(document.createTextNode(` [${sup.textContent.trim()}]`));
   }
@@ -1480,24 +1485,226 @@ export function chapterText(index = state.chapterIndex) {
 }
 
 export async function copyChapter() {
-  const text = chapterText();
-  if (!text) return { ok: false, words: 0 };
+  return copyText(chapterText(), { finishes: true });
+}
+
+/**
+ * The text on the page being read -- what is on screen, cut where the page
+ * cuts it, so a paragraph running on to the next page is copied up to the
+ * edge and the rest goes with the next page.
+ *
+ * Worked out from the page itself rather than from the chapter's source:
+ * where a page begins and ends is a matter of layout. Each character's box is
+ * asked which page it is on, and the first and last on this one are found by
+ * halving -- a few dozen measurements, not one per character.
+ */
+export function pageText() {
+  if (!measurable()) return '';
+  const index = isScroll() ? chapterAtViewport() : state.chapterIndex;
+  const section = sectionFor(index);
+  if (!section) return '';
+  const nodes = textNodes(section).filter((entry) => entry.length);
+  if (!nodes.length) return '';
+  const last = nodes[nodes.length - 1];
+  const total = last.start + last.length;
+
+  const entryAt = (offset) => {
+    let lo = 0;
+    let hi = nodes.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (nodes[mid].start <= offset) lo = mid; else hi = mid - 1;
+    }
+    return nodes[lo];
+  };
+  const box = viewport.getBoundingClientRect();
+  // Before this page (-1), on it (0), after it (1); null for a character
+  // with no box, such as a space the layout folded away.
+  const side = (offset) => {
+    const entry = entryAt(offset);
+    const range = rangeAt(entry, offset - entry.start);
+    if (isScroll()) {
+      const rect = range.getBoundingClientRect();
+      if (!rect.width && !rect.height) return null;
+      // A line cut off at either edge belongs to the screen it is whole on.
+      if (rect.top < box.top - 1) return -1;
+      if (rect.bottom > box.bottom + 1) return 1;
+      return 0;
+    }
+    const page = pageOfRange(range);
+    if (page === null) return null;
+    return page < state.page ? -1 : page > state.page ? 1 : 0;
+  };
+  const sideNear = (offset) => {
+    for (let at = offset; at < Math.min(total, offset + 64); at++) {
+      const found = side(at);
+      if (found !== null) return found;
+    }
+    return 1;
+  };
+  const firstWhere = (test) => {
+    let lo = 0;
+    let hi = total;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (test(sideNear(mid))) hi = mid; else lo = mid + 1;
+    }
+    return lo;
+  };
+  const start = firstWhere((where) => where >= 0);
+  const end = firstWhere((where) => where > 0);
+  if (end <= start) return '';
+
+  const range = document.createRange();
+  const from = entryAt(start);
+  range.setStart(from.node, start - from.start);
+  if (end >= total) range.setEnd(last.node, last.length);
+  else {
+    const to = entryAt(end);
+    range.setEnd(to.node, end - to.start);
+  }
+  const holder = document.createElement('div');
+  holder.appendChild(range.cloneContents());
+  const text = plainText(holder);
+  // Text not in a paragraph -- a line set straight in a div -- is still text.
+  return text || holder.textContent.replace(/\s+/g, ' ').trim();
+}
+
+/** Whether the page being read is the chapter's last. */
+function onLastPage() {
+  if (isScroll()) {
+    const section = sectionFor(chapterAtViewport());
+    if (!section) return false;
+    return viewport.scrollTop + viewport.clientHeight >= section.offsetTop + section.offsetHeight - 2;
+  }
+  return state.page >= state.pageCount - 1;
+}
+
+export async function copyPage() {
+  return copyText(pageText(), { finishes: onLastPage() });
+}
+
+/* Copying half a chapter: the half being read -- and pressed again without
+ * moving on, the next half, so a chapter can be copied out in two goes from
+ * wherever it was begun. */
+let lastHalf = null;
+
+/** The chapter in two, split between paragraphs as near the middle as it goes. */
+export function chapterHalves(index = state.chapterIndex) {
+  const text = chapterText(index);
+  if (!text) return ['', ''];
+  const blocks = text.split('\n\n');
+  if (blocks.length < 2) {
+    // One long paragraph: split at the sentence nearest the middle.
+    const middle = Math.floor(text.length / 2);
+    const after = text.slice(middle).search(/[.!?。！？]\s/);
+    const at = after === -1 ? middle : middle + after + 1;
+    return [text.slice(0, at).trim(), text.slice(at).trim()];
+  }
+  let running = 0;
+  let split = 1;
+  for (let i = 0; i < blocks.length; i++) {
+    running += blocks[i].length + 2;   // and the break after it
+    if (running >= text.length / 2) { split = Math.max(1, Math.min(blocks.length - 1, i + 1)); break; }
+  }
+  return [blocks.slice(0, split).join('\n\n'), blocks.slice(split).join('\n\n')];
+}
+
+export async function copyHalf() {
+  const halves = chapterHalves();
+  const anchor = state.anchor || 0;
+  const section = sectionFor(state.chapterIndex);
+  const length = section ? (section.textContent || '').length : 0;
+  let half = length && anchor / length >= 0.5 ? 1 : 0;
+  const book = state.book?.id;
+  if (lastHalf && lastHalf.book === book && lastHalf.chapter === state.chapterIndex
+    && lastHalf.anchor === anchor && lastHalf.half === 0) half = 1;
+  const result = await copyText(halves[half], { finishes: half === 1 });
+  if (result.ok) lastHalf = { book, chapter: state.chapterIndex, anchor, half };
+  return { ...result, half };
+}
+
+/** Onto the clipboard, and counted as read where it is read: elsewhere. */
+async function copyText(text, { finishes = false } = {}) {
+  if (!text) return { ok: false, words: 0, empty: true };
   try {
     // A secure origin, so the async clipboard is available. execCommand is the
     // fallback for older WebViews, which are common on Android 8 devices.
     if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
     else legacyCopy(text);
-    const words = countWords(text, state.book?.lang);
-    await recordCopiedChapter(words);
-    return { ok: true, words };
   } catch {
-    try {
-      legacyCopy(text);
-      const words = countWords(text, state.book?.lang);
-      await recordCopiedChapter(words);
-      return { ok: true, words };
-    } catch { return { ok: false, words: 0 }; }
+    try { legacyCopy(text); } catch { return { ok: false, words: 0 }; }
   }
+  const words = countWords(text, state.book?.lang);
+  await recordCopiedChapter(words, finishes ? 1 : 0);
+  return { ok: true, words };
+}
+
+/* ── the progress bar: anywhere in the book ───────────────────────────── */
+
+/**
+ * Where a point along the progress bar falls: which chapter, how far into it,
+ * and which page of the book.
+ *
+ * The bar shows the whole book, so dragging it moves through the whole book.
+ * Pages beyond the chapter open are estimates -- from the words in each
+ * chapter, at the density of the one being read -- so the page a drag lands
+ * on can be a page or two off what it said, and the bar settles on the real
+ * number once the chapter is open.
+ */
+export function bookPlace(fraction) {
+  if (!state.chapters.length) return null;
+  const total = Math.max(1, state.totalPages || 1);
+  const f = Math.max(0, Math.min(1, Number(fraction) || 0));
+
+  /* The chapter is found by words, not by page estimates.
+   *
+   * The estimates are rescaled to the density of whichever chapter is open,
+   * so a point chosen against one chapter's estimates was somewhere else by
+   * the estimates of the chapter it opened -- a tap at 15% landed at 10%.
+   * Words do not move, and they are what the percentage is made of once the
+   * chapter is open. A book of pictures is measured in pictures, as the
+   * estimates are. */
+  const byWords = state.chapters.some((c) => (c.words || 0) > 0);
+  const weights = state.chapters.map((c) => (byWords
+    ? Math.max(1, c.words || 0) : Math.max(1, picturesIn(c))));
+  const sum = weights.reduce((n, w) => n + w, 0);
+  const goal = f * sum;
+  let at = state.chapters.length - 1;
+  let before = 0;
+  for (let i = 0; i < weights.length; i++) {
+    if (before + weights[i] >= goal) { at = i; break; }
+    before += weights[i];
+  }
+  const chapter = state.chapters[at];
+  return {
+    position: at,
+    chapterIndex: chapter.index,
+    within: Math.max(0, Math.min(1, (goal - before) / weights[at])),
+    page: Math.max(1, Math.min(total, Math.round(f * total) || 1)),
+    total,
+    name: chapterName(chapter.index),
+  };
+}
+
+export async function goToBookFraction(fraction) {
+  const place = bookPlace(fraction);
+  if (!place) return null;
+  if (!sectionFor(place.chapterIndex)) await loadChapter(place.position, 0);
+  if (isScroll()) {
+    const section = sectionFor(place.chapterIndex);
+    if (section) {
+      const span = Math.max(0, section.offsetHeight - viewport.clientHeight);
+      viewport.scrollTop = section.offsetTop + place.within * span;
+      state.chapterIndex = place.chapterIndex;
+      state.anchor = currentAnchor();
+      save();
+      onChange(state);
+    }
+  } else {
+    show(Math.round(place.within * Math.max(0, state.pageCount - 1)), { animate: false });
+  }
+  return place;
 }
 
 /**
@@ -1510,7 +1717,7 @@ export async function copyChapter() {
  * recorded, marked as read away from the app, and counted separately where
  * the distinction matters.
  */
-async function recordCopiedChapter(words) {
+async function recordCopiedChapter(words, chapters = 1) {
   if (!state.book || !words) return;
   noteReading();
   await store.recordEvent({
@@ -1518,7 +1725,8 @@ async function recordCopiedChapter(words) {
     activeMs: 0,
     pages: 0,
     words,
-    chapters: 1,
+    // A chapter is counted when what was copied reaches its end.
+    chapters,
     elsewhere: true,
     lang: state.book.lang,
   });

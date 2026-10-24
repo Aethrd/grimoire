@@ -166,13 +166,30 @@
       <!-- The row that survives into COPY mode. -->
       <div class="copy-row">
         <button class="btn ghost" id="chapter-prev">‹ Ch</button>
-        <button class="btn primary" id="copy-chapter">Copy chapter</button>
+        <!-- One button in two: what it copies, and how much it copies. -->
+        <div class="copy-split">
+          <button class="btn primary" id="copy-chapter">Copy chapter</button>
+          <button class="btn primary copy-amount" id="copy-amount" title="How much to copy" aria-haspopup="menu" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/><circle class="knob" cx="0" cy="6" r="2.5" style="transform:translateX(15px)"/><circle class="knob" cx="0" cy="12" r="2.5" style="transform:translateX(8px)"/><circle class="knob" cx="0" cy="18" r="2.5" style="transform:translateX(16px)"/></svg>
+          </button>
+        </div>
         <button class="btn ghost" id="chapter-next">Ch ›</button>
+        <div class="copy-menu" id="copy-menu" role="menu" hidden>
+          <p class="eyebrow">Copy each time</p>
+          <button role="menuitemradio" data-amount="page"><span>Current page</span><small>What is on screen</small></button>
+          <button role="menuitemradio" data-amount="half"><span>Half a chapter</span><small>The half you are in — again for the next half</small></button>
+          <button role="menuitemradio" data-amount="chapter"><span>Current chapter</span><small>All of it</small></button>
+        </div>
       </div>
       <div class="full-only">
         <div class="progress">
           <span class="progress-page" id="progress-page"></span>
-          <span class="progress-track" id="progress-track"><span class="progress-fill" id="progress-fill"></span></span>
+          <!-- Taller than it looks: a 4px line is not something a thumb can find. -->
+          <span class="progress-hit" id="progress-hit">
+            <span class="progress-track" id="progress-track"><span class="progress-fill" id="progress-fill"></span></span>
+            <span class="progress-knob" id="progress-knob"></span>
+            <span class="progress-bubble" id="progress-bubble" hidden></span>
+          </span>
           <span class="progress-pct" id="progress-pct"></span>
         </div>
         <div class="tool-row">
@@ -448,6 +465,10 @@
   <button data-act="merge">
     <svg viewBox="0 0 24 24"><path d="M7 4v6a4 4 0 004 4h6"/><path d="M17 4v6a4 4 0 01-4 4H7"/><path d="M15 11l2 3 2-3"/></svg>
     <span>Split</span>
+  </button>
+  <button data-act="build">
+    <svg viewBox="0 0 24 24"><path d="M4 13h11v7H4z"/><path d="M8 13V8h11v7h-4"/><path d="M19 2v4M17 4h4"/></svg>
+    <span>Build onto</span>
   </button>
   <button data-act="blur">
     <svg viewBox="0 0 24 24"><path d="M12 3c-3 4-5 6.5-5 9a5 5 0 0010 0c0-2.5-2-5-5-9z"/><path d="M4 20h16"/></svg>

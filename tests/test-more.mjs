@@ -64,6 +64,70 @@ await t('normalises runs of whitespace', () => assert.match(text, /The harbour k
 await t('keeps the heading as its own block', () => assert.ok(text.startsWith('Salt and Tide')));
 
 
+await t('half a chapter: split between paragraphs, near the middle, nothing lost', () => {
+  const para = (n) => `<p>${`Word${n} `.repeat(40).trim()}.</p>`;
+  reader.state.chapters = [{ index: 0, title: 'H', html: Array.from({ length: 10 }, (_, i) => para(i)).join('') }];
+  const whole = reader.chapterText(0);
+  const [first, second] = reader.chapterHalves(0);
+  assert.equal(`${first}\n\n${second}`, whole);
+  assert.equal(first.split('\n\n').length, 5);
+  // One long paragraph is split at a sentence.
+  reader.state.chapters = [{ index: 0, title: 'L', html: `<p>${'One sentence here. '.repeat(30)}</p>` }];
+  const [a, b] = reader.chapterHalves(0);
+  assert.ok(a.endsWith('.') && b.startsWith('One'), `${a.slice(-20)} | ${b.slice(0, 20)}`);
+  assert.ok(Math.abs(a.length - b.length) < 40);
+});
+
+await t('the progress bar points at the whole book, by words', () => {
+  reader.state.chapters = [
+    { index: 0, title: 'A', words: 1000, html: '<p>a</p>' },
+    { index: 1, title: 'B', words: 3000, html: '<p>b</p>' },
+    { index: 2, title: 'C', words: 1000, html: '<p>c</p>' },
+  ];
+  reader.state.totalPages = 50;
+  reader.state.pagesBefore = [0, 10, 40];
+  assert.equal(reader.bookPlace(0).chapterIndex, 0);
+  assert.equal(reader.bookPlace(0).page, 1);
+  // 1000 + 1500 of 5000 words: halfway through the middle chapter.
+  const middle = reader.bookPlace(0.5);
+  assert.equal(middle.chapterIndex, 1);
+  assert.ok(Math.abs(middle.within - 0.5) < 1e-9, String(middle.within));
+  assert.equal(middle.page, 25);
+  const end = reader.bookPlace(1);
+  assert.equal(end.chapterIndex, 2);
+  assert.equal(end.within, 1);
+  assert.equal(end.page, 50);
+  // A comic, with no words, is measured in pictures.
+  reader.state.chapters = [
+    { index: 0, title: 'A', html: '<img data-img="1"><img data-img="2"><img data-img="3">' },
+    { index: 1, title: 'B', html: '<img data-img="4">' },
+  ];
+  assert.equal(reader.bookPlace(0.9).chapterIndex, 1);
+  assert.equal(reader.bookPlace(0.5).chapterIndex, 0);
+});
+
+await t('the copy button: split, with a choice of page, half or chapter', () => {
+  const fs2 = fs;
+  const www = (f) => fs2.readFileSync(new URL(`../app/src/main/assets/www/${f}`, import.meta.url), 'utf8');
+  const html = www('index.html');
+  const app = www('js/app.js');
+  assert.match(html, /<div class="copy-split">\s*<button class="btn primary" id="copy-chapter">Copy chapter<\/button>\s*<button class="btn primary copy-amount" id="copy-amount"/);
+  for (const amount of ['page', 'half', 'chapter']) assert.ok(html.includes(`data-amount="${amount}"`));
+  // The icon: three lines, a hollow circle on each.
+  const icon = html.slice(html.indexOf('id="copy-amount"'), html.indexOf('</button>', html.indexOf('id="copy-amount"')));
+  assert.match(icon, /<path d="M3 6h18M3 12h18M3 18h18"\/>/);
+  assert.equal((icon.match(/<circle class="knob"/g) || []).length, 3);
+  // ...whose circles move along their lines when the place in the book does.
+  assert.match(app, /if \(place !== copyIconAt\) \{\s*if \(copyIconAt\) moveCopyIconKnobs\(\);/);
+  // Remembered, and each choice copies what it says.
+  assert.match(app, /await store\.saveSettings\(\{ copyAmount \}\)/);
+  assert.match(app, /reader\.copyPage\(\)[\s\S]*reader\.copyHalf\(\)[\s\S]*reader\.copyChapter\(\)/);
+  // The bar is a tall target and goes anywhere in the book.
+  assert.match(app, /await reader\.goToBookFraction\(fraction\)/);
+  assert.match(www('css/app.css'), /\.progress-hit \{[^}]*height: 32px/);
+});
+
+
 
 console.log('finding a book');
 

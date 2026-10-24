@@ -670,13 +670,62 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
   padding-bottom: var(--safe-bottom);
 }
 .copy-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
+.copy-row { position: relative; }
 .copy-row .btn.primary { flex: 1; text-align: center; }
+/* Copy, and beside it -- part of the same button -- how much. */
+.copy-split { flex: 1; display: flex; min-width: 0; }
+.copy-split #copy-chapter { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.copy-split .copy-amount { flex: none; width: 46px; padding: 0; display: grid; place-items: center;
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(0, 0, 0, .2); }
+.copy-amount svg { width: 20px; height: 20px; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; overflow: visible; }
+/* Hollow circles that break their lines: filled with the button's own colour,
+   over lines drawn whole, so they can slide along them. */
+.copy-amount .knob { fill: var(--accent); transition: transform var(--motion) var(--ease); }
+.copy-amount:active .knob { fill: var(--accent-600); }
+@media (prefers-reduced-motion: reduce) { .copy-amount .knob { transition: none; } }
+.copy-menu { position: absolute; right: 12px; bottom: calc(100% + 6px); z-index: 30;
+  width: min(300px, calc(100vw - 24px)); padding: 8px; border-radius: var(--radius-md);
+  background: var(--surface); border: 1px solid var(--divider);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .35); }
+.copy-menu[hidden] { display: none; }
+.copy-menu .eyebrow { margin: 4px 8px 6px; }
+.copy-menu button { display: grid; width: 100%; text-align: left; gap: 2px;
+  padding: 10px 10px 10px 34px; border-radius: var(--radius-sm); position: relative; }
+.copy-menu button span { font-family: var(--font-heading); font-weight: 600; font-size: 14px; }
+.copy-menu button small { font-size: 12px; color: var(--muted); }
+/* Marked by an outline and the accent, which read in both themes; a pale
+   fill behind light text in the dark one did not. */
+.copy-menu button[aria-checked="true"] { box-shadow: inset 0 0 0 1px var(--accent); }
+.copy-menu button[aria-checked="true"] span { color: var(--accent); }
+.copy-menu button[aria-checked="true"]::before { content: '✓'; position: absolute; left: 12px; top: 10px;
+  color: var(--accent); font-weight: 700; }
 .tool-row { display: flex; justify-content: space-around; padding: 2px 12px 6px; }
 
 .progress { display: flex; align-items: center; gap: 10px; padding: 4px 14px 6px;
             font-size: 11px; color: var(--muted); }
+/* The bar is a drag target for the whole book. What is drawn is a 4px line;
+   what takes the touch is the height of a fingertip around it. */
+.progress-hit { flex: 1; position: relative; display: flex; align-items: center;
+                height: 32px; touch-action: none; cursor: pointer; }
 .progress-track { flex: 1; height: 4px; border-radius: var(--radius-pill);
-                  background: var(--neutral-600); overflow: hidden; }
+                  background: var(--neutral-600); overflow: hidden;
+                  transition: height var(--motion-fast) var(--ease); }
+.progress-hit.dragging .progress-track { height: 7px; }
+.progress-knob { position: absolute; top: 50%; left: 0; width: 14px; height: 14px;
+                 margin: -7px 0 0 -7px; border-radius: 50%; background: var(--accent);
+                 box-shadow: 0 1px 4px rgba(0, 0, 0, .35); pointer-events: none;
+                 transition: transform var(--motion-fast) var(--ease); }
+.progress-hit.dragging .progress-knob { transform: scale(1.3); }
+.progress-bubble { position: absolute; bottom: calc(100% + 4px); left: 0;
+                   transform: translateX(-50%); white-space: nowrap; max-width: 78vw;
+                   overflow: hidden; text-overflow: ellipsis;
+                   padding: 6px 10px; border-radius: var(--radius-sm);
+                   background: var(--accent); color: var(--on-accent);
+                   font-family: var(--font-heading); font-weight: 600; font-size: 12px;
+                   pointer-events: none; }
+.progress-bubble[hidden] { display: none; }
 .progress-fill { display: block; height: 100%; background: var(--accent); }
 
 /* The chrome cycle: FULL -> COPY -> NONE. Page turns stay live in all three. */
@@ -945,7 +994,8 @@ body[data-view="reader"] .stepper {
 .scrub-thumb { transition: top var(--motion) var(--ease); }
 /* Except while being dragged, where lag is the opposite of what you want. */
 .scrub-rail:active .scrub-thumb,
-.progress-track:active .progress-fill { transition: none; }
+.progress-track:active .progress-fill,
+.progress-hit.dragging .progress-fill { transition: none; }
 
 .switch, .switch::after { transition: background-color var(--motion-fast) var(--ease),
                                       transform var(--motion-fast) var(--ease); }

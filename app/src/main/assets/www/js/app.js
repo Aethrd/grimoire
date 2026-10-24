@@ -574,6 +574,13 @@ function wireSelection() {
      * A mistap on a grid of covers is not a decision, and deleting outright
      * treated it as one: the file had to be found again, which for something
      * downloaded a year ago often means not at all. */
+    /* Adding more files to the end of a book: the same as "Build onto this
+     * book" in a search result's menu, which was the only place it was. */
+    build: () => oneSelected({ text: 'Choose one book to build onto', verb: 'Build onto which edition?' }, (book) => {
+      clearSelection();
+      return buildOnto(book);
+    }),
+
     trim: () => oneSelected({ text: 'Choose one book to take pages out of', verb: 'Take pages out of which edition?' }, (book) => {
       clearSelection();
       return openRemove(book);
@@ -2248,9 +2255,19 @@ function paintReader() {
     + `${reader.pageInBook()} of ${state.totalPages} · ${Math.round(reader.percent() * 100)}%`;
 
   const pct = reader.percent();
-  el('progress-fill').style.width = `${pct * 100}%`;
+  // Not while the bar is being dragged: it shows where the finger is.
+  if (!barDragging) {
+    el('progress-fill').style.width = `${pct * 100}%`;
+    el('progress-knob').style.left = `${pct * 100}%`;
+    el('progress-pct').textContent = `${Math.round(pct * 100)}%`;
+  }
   el('progress-page').textContent = `p. ${reader.pageInBook()}`;
-  el('progress-pct').textContent = `${Math.round(pct * 100)}%`;
+  // A new place in the book moves the copy icon's circles.
+  const place = `${state.book.id}:${state.chapterIndex}:${reader.pageInBook()}`;
+  if (place !== copyIconAt) {
+    if (copyIconAt) moveCopyIconKnobs();
+    copyIconAt = place;
+  }
   const thumb = el('scrub-thumb');
   const fraction = reader.scrollFraction();
   const ratio = Math.max(0.06, Math.min(1, reader.viewportRatio()));
@@ -5289,12 +5306,7 @@ function wireReader() {
     paintReader();
   };
 
-  el('copy-chapter').onclick = async () => {
-    const result = await reader.copyChapter();
-    // The toast is the one piece of chrome allowed in NONE, and it confirms
-    // with a word count so the copy is verifiable at a glance.
-    toast(result.ok ? `Chapter copied · ${result.words.toLocaleString()} words` : 'Could not copy');
-  };
+  wireCopy();
 
   el('translate-chapter').onclick = async () => {
     const button = el('translate-chapter');
@@ -5393,14 +5405,178 @@ function wireReader() {
   rail.addEventListener('touchend', railDone);
   rail.addEventListener('touchcancel', railDone);
 
-  // The progress bar is draggable too, and releases to a page boundary.
+  wireProgressBar();
+}
+
+/* ── the progress bar ─────────────────────────────────────────────────────
+ *
+ * It shows how far through the book you are, so dragging it goes anywhere in
+ * the book. It used to move only within the chapter open -- the bar said 40%
+ * of the book, a drag to the middle said 50% of this chapter, and the line
+ * jumped back to somewhere else on release -- and it was a 4px line, which a
+ * thumb rarely found at all.
+ *
+ * While the finger is down nothing moves but the bar: a bubble says which
+ * chapter and page it is over, and the book goes there when the finger
+ * lifts. Loading chapter after chapter under a moving finger would be slow
+ * for nothing.
+ */
+let barDragging = false;
+
+function wireProgressBar() {
+  const hit = el('progress-hit');
   const track = el('progress-track');
-  const seek = (clientX) => {
+  const bubble = el('progress-bubble');
+  let at = null;
+
+  const fractionAt = (clientX) => {
     const box = track.getBoundingClientRect();
-    reader.scrubTo((clientX - box.left) / box.width);
+    return box.width ? Math.max(0, Math.min(1, (clientX - box.left) / box.width)) : 0;
   };
-  track.addEventListener('touchmove', (e) => { seek(e.touches[0].clientX); e.preventDefault(); });
-  track.addEventListener('click', (e) => seek(e.clientX));
+  const preview = (fraction) => {
+    barDragging = true;
+    hit.classList.add('dragging');
+    el('progress-fill').style.width = `${fraction * 100}%`;
+    el('progress-knob').style.left = `${fraction * 100}%`;
+    const place = reader.bookPlace(fraction);
+    bubble.textContent = place
+      ? `${place.name} · p. ${place.page} of ${place.total}`
+      : `${Math.round(fraction * 100)}%`;
+    el('progress-pct').textContent = `${Math.round(fraction * 100)}%`;
+    bubble.hidden = false;
+    // Kept on screen at either end of the bar.
+    const box = track.getBoundingClientRect();
+    const half = bubble.offsetWidth / 2;
+    const x = Math.max(half + 8, Math.min(window.innerWidth - half - 8, box.left + fraction * box.width));
+    bubble.style.left = `${x - box.left}px`;
+  };
+  const finish = async (go) => {
+    hit.classList.remove('dragging');
+    bubble.hidden = true;
+    const fraction = at;
+    at = null;
+    try {
+      if (go && fraction !== null) await reader.goToBookFraction(fraction);
+    } finally {
+      barDragging = false;
+      paintReader();
+    }
+  };
+
+  hit.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    // The bar's, not the page's: no scrolling, no tap on what is behind it.
+    e.preventDefault();
+    at = fractionAt(e.touches[0].clientX);
+    preview(at);
+  }, { passive: false });
+  hit.addEventListener('touchmove', (e) => {
+    if (at === null) return;
+    e.preventDefault();
+    at = fractionAt(e.touches[0].clientX);
+    preview(at);
+  }, { passive: false });
+  hit.addEventListener('touchend', () => { if (at !== null) finish(true); });
+  // Interrupted -- a call, the system taking the gesture -- is not a choice.
+  hit.addEventListener('touchcancel', () => { if (at !== null) finish(false); });
+  // A mouse, or a tap the browser delivered as a click.
+  hit.addEventListener('click', (e) => {
+    if (barDragging) return;
+    at = fractionAt(e.clientX);
+    preview(at);
+    finish(true);
+  });
+}
+
+/* ── the copy button ──────────────────────────────────────────────────────
+ *
+ * Split in two: the wide part copies, the narrow part beside it says how much
+ * -- the page on screen, half the chapter, or all of it. Remembered, so it is
+ * chosen once rather than on every press.
+ */
+const COPY_LABELS = { page: 'Copy page', half: 'Copy half', chapter: 'Copy chapter' };
+let copyAmount = 'chapter';
+
+function paintCopyAmount() {
+  el('copy-chapter').textContent = COPY_LABELS[copyAmount];
+  for (const option of el('copy-menu').querySelectorAll('[data-amount]')) {
+    option.setAttribute('aria-checked', String(option.dataset.amount === copyAmount));
+  }
+}
+
+/* The circles on the copy-amount icon move as you read.
+ *
+ * Every time your place changes -- a page turned, a chapter changed, a jump
+ * along the progress bar -- each slides to somewhere new along its line. Kept
+ * clear of the ends, and always a visible distance from where it was, so the
+ * change is a change and not a twitch. */
+let copyIconAt = '';
+
+function moveCopyIconKnobs() {
+  for (const knob of el('copy-amount').querySelectorAll('.knob')) {
+    const was = Number(knob.dataset.x) || 12;
+    let x = was;
+    for (let tries = 0; tries < 8 && Math.abs(x - was) < 3; tries++) x = 6 + Math.random() * 12;
+    knob.dataset.x = x.toFixed(1);
+    knob.style.transform = `translateX(${x.toFixed(1)}px)`;
+  }
+}
+
+function closeCopyMenu() {
+  if (el('copy-menu').hidden) return false;
+  el('copy-menu').hidden = true;
+  el('copy-amount').setAttribute('aria-expanded', 'false');
+  return true;
+}
+
+function wireCopy() {
+  store.settings().then((settings) => {
+    copyAmount = COPY_LABELS[settings.copyAmount] ? settings.copyAmount : 'chapter';
+    paintCopyAmount();
+  });
+
+  el('copy-chapter').onclick = async () => {
+    closeCopyMenu();
+    // The toast is the one piece of chrome allowed in NONE, and it confirms
+    // with a word count so the copy is verifiable at a glance.
+    const count = (result) => `${result.words.toLocaleString()} word${result.words === 1 ? '' : 's'}`;
+    if (copyAmount === 'page') {
+      const result = await reader.copyPage();
+      toast(result.ok ? `Page copied · ${count(result)}`
+        : result.empty ? 'Nothing to copy on this page' : 'Could not copy');
+    } else if (copyAmount === 'half') {
+      const result = await reader.copyHalf();
+      toast(result.ok ? `${result.half ? 'Second' : 'First'} half of the chapter copied · ${count(result)}`
+        : result.empty ? 'Nothing to copy in this chapter' : 'Could not copy');
+    } else {
+      const result = await reader.copyChapter();
+      toast(result.ok ? `Chapter copied · ${count(result)}`
+        : result.empty ? 'Nothing to copy in this chapter' : 'Could not copy');
+    }
+  };
+
+  el('copy-amount').onclick = (e) => {
+    e.stopPropagation();
+    if (closeCopyMenu()) return;
+    paintCopyAmount();
+    el('copy-menu').hidden = false;
+    el('copy-amount').setAttribute('aria-expanded', 'true');
+  };
+  for (const option of el('copy-menu').querySelectorAll('[data-amount]')) {
+    option.onclick = async (e) => {
+      e.stopPropagation();
+      copyAmount = option.dataset.amount;
+      paintCopyAmount();
+      closeCopyMenu();
+      await store.saveSettings({ copyAmount });
+    };
+  }
+  // A tap anywhere else puts the menu away.
+  document.addEventListener('pointerdown', (e) => {
+    if (el('copy-menu').hidden) return;
+    if (e.target.closest?.('#copy-menu, #copy-amount')) return;
+    closeCopyMenu();
+  }, true);
 }
 
 /* ── global wiring ────────────────────────────────────────────────────── */
@@ -5698,6 +5874,7 @@ window.Grimoire = {
     if (!el('redact-pick').hidden) { closeRedactPick(); return true; }
     if (!el('remove-look').hidden) { closeRemoveLook(); return true; }
     if (!el('remove-confirm').hidden) { el('remove-confirm').hidden = true; return true; }
+    if (closeCopyMenu()) return true;
     if (tags.closeTagPicker()) return true;
     if (!el('picture-sheet').hidden) { el('picture-sheet').hidden = true; return true; }
     if (!el('folder-actions').hidden) { el('folder-actions').hidden = true; return true; }
