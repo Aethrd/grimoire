@@ -1154,6 +1154,11 @@ body[data-view="reader"] .stepper {
 /* ── book details ────────────────────────────────────────────────────── */
 
 .details-head { display: flex; gap: 14px; margin-bottom: 16px; }
+.build-cover-field > span { display: block; margin-bottom: 8px; }
+#build-cover-note { font-size: 12px; line-height: 1.45; }
+/* No picture to show yet: say where it will come from, in the box itself. */
+.details-cover.empty { display: grid; place-items: center; padding: 8px; text-align: center;
+  font-size: 11px; color: var(--muted); border: 1px dashed var(--divider); }
 .details-cover { flex: none; width: 92px; aspect-ratio: 2 / 3; min-height: 0;
                  border-radius: var(--radius-cover); overflow: hidden;
                  background: var(--accent-300); position: relative; }

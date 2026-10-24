@@ -347,9 +347,21 @@
           <input class="query" id="build-author" type="text" autocomplete="off"
                  placeholder="Optional">
         </label>
+        <!-- The cover the built book will have: its first part's, or one chosen here. -->
+        <div class="field build-cover-field">
+          <span>Cover</span>
+          <div class="details-head">
+            <span class="details-cover" id="build-cover"></span>
+            <span class="col">
+              <button class="btn ghost" id="build-cover-pick">Choose cover</button>
+              <button class="btn ghost" id="build-cover-clear" hidden>Use the book's own</button>
+              <small class="muted" id="build-cover-note"></small>
+            </span>
+          </div>
+        </div>
         <p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 14px">
           Written into the book itself, so it reads the same here and anywhere
-          you send it. Both can be changed afterwards in the book's details.
+          you send it. All of them can be changed afterwards in the book's details.
         </p>
       </div>
 

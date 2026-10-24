@@ -1132,6 +1132,40 @@ await t('the decoder is the app\'s own, loaded only when a RAR arrives', async (
   }
 });
 
+await t('a cover chosen in Build is the built book\'s, and is in the book', async () => {
+  const covers = await import(new URL('../app/src/main/assets/www/js/coverpage.js', import.meta.url).href);
+  const { chapterHtml } = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  const fixture = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const chosen = new Blob([png, new Uint8Array(32)], { type: 'image/png' });
+
+  build.clear();
+  await build.add([new File([fixture], 'Covered Almanac.epub')]);
+  const { book } = await build.build({ title: 'Built with a cover', cover: chosen });
+  const made = await store.get('books', book.id);
+  assert.equal(made.coverBytes, chosen.size, 'the chosen cover is not the book\'s');
+  assert.equal(made.coverCustom, true);
+  // The app then puts it into the book, as Details does.
+  assert.ok(await covers.placeCover(book.id, chosen));
+  const [first] = (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
+  assert.match(chapterHtml(first), /data-img="grimoire-cover\//, 'the cover is not in the book');
+
+  // Not chosen: the first part's, as before.
+  build.clear();
+  await build.add([new File([fixture], 'Plain Almanac.epub')]);
+  const { book: plain } = await build.build({ title: 'Built without one' });
+  assert.ok(!(await store.get('books', plain.id)).coverCustom);
+  build.clear();
+  await store.deleteBook(book.id);
+  await store.deleteBook(plain.id);
+
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /cover: buildCover,/);
+  assert.match(app, /if \(buildCover\) \{\s*try \{\s*await covers\.placeCover\(book\.id, buildCover\);/);
+  const html = fs.readFileSync(new URL('../app/src/main/assets/www/index.html', import.meta.url), 'utf8');
+  assert.ok(html.includes('id="build-cover-pick"') && html.includes('id="build-cover-clear"'));
+});
+
 await t('opened at a folder, imports and builds are filed in it', async () => {
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
   const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);

@@ -5064,6 +5064,60 @@ function shortenMiddle(name, limit = 64) {
 /** Whether the title field has been typed into, so suggestions stop. */
 let buildTitleTouched = false;
 
+/* The cover a build will have.
+ *
+ * Left alone, it is the first part's -- a book built onto keeps its own, a
+ * run of pictures starts with its first page -- and that is shown here before
+ * building, so it is not a surprise afterwards. One chosen here replaces it,
+ * and goes into the book as a cover chosen in Details does. */
+let buildCover = null;
+const buildCoverUrls = blobs.pool();
+
+async function paintBuildCover() {
+  const box = el('build-cover');
+  const first = build.contents()[0];
+  let shown = buildCover;
+  let note = 'Chosen by you. It goes into the book when it is built.';
+  if (!shown && first) {
+    if (first.bookId) shown = (await store.get('books', first.bookId))?.coverBlob || null;
+    else if (first.pictures?.length) shown = first.pictures[0];
+    note = shown
+      ? `From the first part, “${shortenMiddle(first.name)}”.`
+      : 'From the first part, if it has one. Choose one to be sure.';
+  }
+  buildCoverUrls.release();
+  const url = shown ? buildCoverUrls.url(shown) : null;
+  box.classList.toggle('empty', !url);
+  box.innerHTML = url ? `<img src="${url}" alt="">` : '<span>Cover from the first part</span>';
+  el('build-cover-note').textContent = first ? note : '';
+  el('build-cover-clear').hidden = !buildCover;
+}
+
+function wireBuildCover() {
+  el('build-cover-pick').onclick = () => {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = blobs.COVER_ACCEPT;
+    picker.onchange = async () => {
+      const file = picker.files?.[0];
+      if (!file) return;
+      try {
+        // Decoded and re-encoded, as in Details: a picture the picker offered
+        // but the WebView cannot draw is refused here, not built in blank.
+        buildCover = await blobs.normaliseCover(file);
+        await paintBuildCover();
+      } catch (error) {
+        toast(error.message, 6000);
+      }
+    };
+    picker.click();
+  };
+  el('build-cover-clear').onclick = async () => {
+    buildCover = null;
+    await paintBuildCover();
+  };
+}
+
 function renderWorkshop() {
   const list = el('build-list');
   const parts = build.contents();
@@ -5086,6 +5140,8 @@ function renderWorkshop() {
   if (!buildTitleTouched) el('build-title').value = suggested;
   el('build-eyebrow').textContent = parts.length
     ? (el('build-title').value || suggested) : 'Join files into one';
+  // Follows the first part as parts are added and moved.
+  paintBuildCover();
 
   list.innerHTML = '';
   parts.forEach((part, at) => {
@@ -5164,8 +5220,10 @@ function wireWorkshop() {
     buildTitleTouched = false;
     el('build-title').value = '';
     el('build-author').value = '';
+    buildCover = null;
     renderWorkshop();
   };
+  wireBuildCover();
 
   el('build-go').onclick = async () => {
     const finish = progress.start('Building');
@@ -5175,14 +5233,25 @@ function wireWorkshop() {
         author: el('build-author').value.trim() || undefined,
         // Into the folder the shelf is open at, as an import would be.
         folder: activeFolder || null,
+        cover: buildCover,
         onProgress: (message, fraction, at, total) => {
           finish.say(message, fraction, total > 1 ? `${at + 1} of ${total}` : '');
         },
       });
+      /* Into the book itself, as a cover chosen in Details is: its cover page
+       * shows it, and anything written out of it carries it. */
+      if (buildCover) {
+        try {
+          await covers.placeCover(book.id, buildCover);
+        } catch (error) {
+          toast(`The cover is set, but could not be put into the book: ${error.message}`, 6000);
+        }
+      }
       build.clear();
       buildTitleTouched = false;
       el('build-title').value = '';
       el('build-author').value = '';
+      buildCover = null;
       renderWorkshop();
       await refreshShelf();
       // Said with the parts that failed, not instead of them: a book short

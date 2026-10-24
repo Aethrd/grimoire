@@ -271,7 +271,7 @@ export function describe(part) {
  * two volumes of a serial name their pictures identically, and without a
  * prefix the later ones quietly replace the earlier.
  */
-export async function build({ title, author, folder = null, onProgress } = {}) {
+export async function build({ title, author, folder = null, cover: chosenCover = null, onProgress } = {}) {
   /* One part is a book too.
    *
    * A zip of a volume's saved pages, or a folder of a chapter's images, is a
@@ -407,8 +407,11 @@ export async function build({ title, author, folder = null, onProgress } = {}) {
   const finished = await store.get('books', bookId);
   finished.words = words;
   finished.chapters = index;
-  finished.coverBlob = cover;
-  finished.coverBytes = cover?.size ?? null;
+  // A cover chosen in Build wins over the first part's; the app then puts it
+  // into the book itself (coverpage.js), as a cover chosen in Details is.
+  finished.coverBlob = chosenCover || cover;
+  finished.coverBytes = (chosenCover || cover)?.size ?? null;
+  if (chosenCover) finished.coverCustom = true;
   delete finished.importing;
   await store.put('books', finished);
 
