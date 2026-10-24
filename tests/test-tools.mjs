@@ -997,6 +997,101 @@ await t('a book sent from another app is opened once, not every time the app is'
   assert.ok(!/openBook\(/.test(boot.slice(0, boot.indexOf('\n}\n'))), 'boot opens a book');
 });
 
+/* ── MOBI ────────────────────────────────────────────────────────────── */
+
+console.log('mobi');
+
+await t('a MOBI reads as a book: its title, author, chapters, picture and cover', async () => {
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  const bytes = fs.readFileSync(new URL('./fixtures/lantern.mobi', import.meta.url));
+  const book = await parse.parse(new File([bytes], 'lantern.mobi'), null, {});
+  assert.equal(book.format, 'MOBI');
+  assert.equal(book.title, 'The Lantern Keeper');
+  assert.equal(book.author, 'Ada Lantern');
+  assert.equal(book.lang, 'en');
+  // Cut at its page break, each named by its heading.
+  assert.deepEqual(book.chapters.map((c) => c.title), ['The Lantern Keeper', 'Second Light']);
+  // PalmDOC-packed, UTF-8, and across more than one text record.
+  assert.match(book.chapters[0].html, /The café below stayed open late, and the naïve visitors/);
+  assert.match(book.chapters[0].html, /Line 60 of the first chapter/);
+  assert.match(book.chapters[1].html, /the keeper slept/);
+  // The picture in the text, taken out of its record and pointed at.
+  assert.equal(book.images.length, 1);
+  assert.equal(book.images[0].blob.type, 'image/png');
+  assert.ok(book.chapters[0].html.includes(`data-img="${book.images[0].href}"`));
+  assert.equal(book.coverBlob?.type, 'image/png');
+  // Through the same reader as an EPUB: nothing of Kindle markup survives.
+  assert.ok(!/mbp:|recindex/i.test(book.chapters.map((c) => c.html).join('')));
+  assert.ok(book.words > 1000);
+});
+
+await t('a Kindle book locked with DRM says so, rather than coming out as nonsense', async () => {
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  const bytes = Buffer.from(fs.readFileSync(new URL('./fixtures/lantern.mobi', import.meta.url)));
+  const first = bytes.readUInt32BE(78);
+  bytes.writeUInt16BE(2, first + 12);          // encryption: Mobipocket DRM
+  await assert.rejects(parse.parse(new File([bytes], 'Locked.mobi'), null, {}), /locked to a Kindle \(DRM\)/);
+});
+
+await t('importing a MOBI, or a MOBI in a zip, or one with no extension, puts it on the shelf', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  const JSZip = (await import('jszip')).default;
+  const bytes = fs.readFileSync(new URL('./fixtures/lantern.mobi', import.meta.url));
+  const before = new Set((await store.all('books')).map((b) => b.id));
+  const out = await library.importFiles([new File([bytes], 'Lantern.mobi')], {});
+  assert.equal(out.added, 1, JSON.stringify(out.failed));
+  const [book] = (await store.all('books')).filter((b) => !before.has(b.id));
+  assert.equal(book.title, 'The Lantern Keeper');
+  assert.equal(book.format, 'MOBI');
+  assert.equal(book.chapterCount, 2);
+  assert.equal((await store.byIndex('images', 'bookId', book.id)).length, 1);
+  assert.ok(book.coverBlob, 'no cover');
+  before.add(book.id);
+
+  const zip = new JSZip();
+  zip.file('Kindle/Zipped Lantern.mobi', bytes);
+  const zipped = await library.importFiles([new File([await zip.generateAsync({ type: 'uint8array' })], 'kindle.zip')], {});
+  assert.equal(zipped.added, 1, JSON.stringify(zipped.failed));
+  const [inZip] = (await store.all('books')).filter((b) => !before.has(b.id));
+  assert.equal(inZip.folder, 'Kindle');
+  assert.equal(await parse.nameWithFormat('download', new File([bytes], 'download')), 'download.mobi');
+  for (const b of [book, inZip]) await store.deleteBook(b.id);
+});
+
+await t('Build takes a MOBI as a part', async () => {
+  build.clear();
+  const bytes = fs.readFileSync(new URL('./fixtures/lantern.mobi', import.meta.url));
+  const epub = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+  await build.add([new File([bytes], 'Volume 1.mobi'), new File([epub], 'Volume 2.epub')]);
+  const { book, failed } = await build.build({ title: 'Lantern and Almanac' });
+  assert.equal(failed.length, 0, JSON.stringify(failed));
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
+  // Named with the part it came from, as Build names every part's chapters.
+  assert.equal(chapters[0].title, 'Volume 1 — The Lantern Keeper');
+  assert.ok(chapters.length >= 3, `${chapters.length} chapters`);
+  assert.equal((await store.byIndex('images', 'bookId', book.id)).length >= 1, true);
+  build.clear();
+  await store.deleteBook(book.id);
+});
+
+await t('the Kindle reader runs on the oldest WebView the app supports', async () => {
+  const vendor = fs.readFileSync(new URL('../app/src/main/assets/www/vendor/foliate/mobi.js', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');   // the code, not what is said about it
+  // Chrome 80: no private methods, no ??=, no replaceAll.
+  assert.ok(!/^\s*(async\s+)?#\w+\s*\(/m.test(vendor), 'a private method');
+  assert.ok(!/this\.#\w+\(/.test(vendor), 'a call to a private method');
+  assert.ok(!/\?\?=|\|\|=|&&=/.test(vendor), 'a logical assignment');
+  assert.ok(!/\.replaceAll\(/.test(vendor), 'replaceAll');
+  // Loaded only when a Kindle book arrives.
+  const parseSrc = fs.readFileSync(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url), 'utf8');
+  assert.match(parseSrc, /await \(await import\('\.\/mobi\.js'\)\)\.parseMobi\(/);
+  const mobiSrc = fs.readFileSync(new URL('../app/src/main/assets/www/js/mobi.js', import.meta.url), 'utf8');
+  assert.match(mobiSrc, /await import\('\.\.\/vendor\/foliate\/mobi\.js'\)/);
+  const manifest = fs.readFileSync(new URL('../app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+  assert.ok(manifest.includes('android:mimeType="application/x-mobipocket-ebook"'));
+});
+
 /* ── RAR ─────────────────────────────────────────────────────────────── */
 
 console.log('rar');

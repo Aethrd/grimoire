@@ -184,16 +184,25 @@ await t('counts CJK by character over a per-language factor', () => {
 
 console.log('refusals');
 await t('an unsupported format names a reason rather than failing silently', async () => {
-  // PDF used to be the example here. It is read properly now, so this uses a
-  // format that genuinely is not supported yet.
+  // PDF used to be the example here, and then MOBI. Both are read properly
+  // now, so this uses a format that genuinely is not supported yet.
   await assert.rejects(
-    parse.parse(new File([new Uint8Array([1, 2, 3])], 'book.mobi')),
-    (e) => /PalmDOC|No parser/.test(e.message));
+    parse.parse(new File([new Uint8Array([1, 2, 3])], 'book.rtf')),
+    (e) => /RTF|No parser/.test(e.message));
 });
 
 await t('PDF is no longer in the refusal list', () => {
   assert.equal(parse.UNSUPPORTED_REASON.PDF, undefined);
   assert.ok(parse.SUPPORTED.has('PDF'));
+});
+
+await t('nor are MOBI and AZW3', () => {
+  for (const format of ['MOBI', 'AZW3']) {
+    assert.equal(parse.UNSUPPORTED_REASON[format], undefined);
+    assert.ok(parse.SUPPORTED.has(format));
+  }
+  assert.equal(parse.formatOf('a.azw3'), 'AZW3');
+  assert.equal(parse.formatOf('a.prc'), 'MOBI');
 });
 await t('rejects a zip that is not an EPUB with a useful message', async () => {
   const JSZipMod = (await import('jszip')).default;

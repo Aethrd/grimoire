@@ -926,7 +926,7 @@ export const displayTitle = (book) => titles.get(book.id) || book.title;
  *  book's own. Used to mark it, so the two are never mistaken. */
 export const isTranslatedTitle = (book) => titles.has(book.id);
 
-const EMPTY_NOTE = 'EPUB, PDF, CBZ, CBR, TXT, HTML, Markdown and FB2. Drop in a .zip or .rar and it is unpacked, with the folders inside kept as folders here.';
+const EMPTY_NOTE = 'EPUB, MOBI, AZW3, PDF, CBZ, CBR, TXT, HTML, Markdown and FB2. Drop in a .zip or .rar and it is unpacked, with the folders inside kept as folders here.';
 
 /** The books the shelf drew last, bundles opened out: what "select all"
  *  selects, so it never reaches a book that is not on screen. */

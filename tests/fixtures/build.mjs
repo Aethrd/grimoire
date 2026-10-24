@@ -167,3 +167,108 @@ fs.writeFileSync('tests/fixtures/books.rar', storedRar([
   ['Volume 1/Salt Almanac.epub', fs.readFileSync('tests/fixtures/salt-almanac.epub')],
   ['Comics/Nested Comic.cbr', cbr],
 ]));
+
+
+/* A MOBI, the older Kindle layout, written out by hand.
+ *
+ * Nothing on npm writes MOBI. It is a Palm database: a header, a table of
+ * records, and the records -- the first describing the book (title, author,
+ * language, which record holds the cover), then the text in pieces of at
+ * most 4096 bytes, then the pictures. The text here is "compressed" with
+ * PalmDOC's scheme using only its literal codes, which every reader must
+ * decode the same way; real compressed books are proved separately, against
+ * real files. Two chapters, a page break between them, accented letters, a
+ * picture in the text and that picture as the cover. */
+function palmLiteral(bytes) {
+  const out = [];
+  for (let i = 0; i < bytes.length;) {
+    const b = bytes[i];
+    if (b === 0 || (b >= 0x09 && b <= 0x7f)) { out.push(b); i++; continue; }
+    // Up to eight bytes the format cannot say plainly, after a count.
+    let run = 1;
+    while (run < 8 && i + run < bytes.length && !(bytes[i + run] === 0 || (bytes[i + run] >= 0x09 && bytes[i + run] <= 0x7f))) run++;
+    out.push(run, ...bytes.subarray(i, i + run));
+    i += run;
+  }
+  return Buffer.from(out);
+}
+function mobiBook({ title, author, lang, html, pictures }) {
+  const text = Buffer.from(html, 'utf8');
+  const pieces = [];
+  for (let at = 0; at < text.length; at += 4096) pieces.push(palmLiteral(text.subarray(at, at + 4096)));
+  const resourceStart = 1 + pieces.length;
+
+  const exthRecords = [
+    [100, Buffer.from(author, 'utf8')],
+    [503, Buffer.from(title, 'utf8')],
+    [524, Buffer.from(lang, 'utf8')],
+    [201, (() => { const b = Buffer.alloc(4); b.writeUInt32BE(0); return b; })()],
+  ];
+  let exth = Buffer.concat(exthRecords.map(([type, data]) => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(type, 0);
+    head.writeUInt32BE(8 + data.length, 4);
+    return Buffer.concat([head, data]);
+  }));
+  const exthHead = Buffer.alloc(12);
+  exthHead.write('EXTH', 0, 'latin1');
+  exthHead.writeUInt32BE(12 + exth.length, 4);
+  exthHead.writeUInt32BE(exthRecords.length, 8);
+  exth = Buffer.concat([exthHead, exth]);
+  exth = Buffer.concat([exth, Buffer.alloc((4 - (exth.length % 4)) % 4)]);
+
+  const header = Buffer.alloc(248, 0);
+  header.writeUInt16BE(2, 0);                    // compression: PalmDOC
+  header.writeUInt32BE(text.length, 4);
+  header.writeUInt16BE(pieces.length, 8);
+  header.writeUInt16BE(4096, 10);
+  header.writeUInt16BE(0, 12);                   // not encrypted
+  header.write('MOBI', 16, 'latin1');
+  header.writeUInt32BE(232, 20);                 // header length
+  header.writeUInt32BE(2, 24);                   // a book
+  header.writeUInt32BE(65001, 28);               // UTF-8
+  header.writeUInt32BE(0x6c616e74, 32);          // unique id
+  header.writeUInt32BE(6, 36);                   // version
+  for (let at = 40; at < 80; at += 4) header.writeUInt32BE(0xFFFFFFFF, at);
+  header.writeUInt32BE(resourceStart, 80);       // first record that is not text
+  const name = Buffer.from(title, 'utf8');
+  const nameAt = 248 + exth.length;
+  header.writeUInt32BE(nameAt, 84);
+  header.writeUInt32BE(name.length, 88);
+  header.writeUInt8(0, 94);                      // region
+  header.writeUInt8(9, 95);                      // language: English
+  header.writeUInt32BE(resourceStart, 108);      // first picture
+  header.writeUInt32BE(0, 112);
+  header.writeUInt32BE(0, 116);
+  header.writeUInt32BE(0x40, 128);               // has EXTH
+  header.writeUInt32BE(0, 240);                  // no trailing entries
+  header.writeUInt32BE(0xFFFFFFFF, 244);         // no index
+  const record0 = Buffer.concat([header, exth, name, Buffer.alloc(4 - (name.length % 4))]);
+
+  const records = [record0, ...pieces, ...pictures];
+  const pdb = Buffer.alloc(78 + records.length * 8 + 2, 0);
+  pdb.write(title.replace(/[^\x20-\x7e]/g, '_').slice(0, 31), 0, 'latin1');
+  pdb.write('BOOKMOBI', 60, 'latin1');
+  pdb.writeUInt16BE(records.length, 76);
+  let offset = pdb.length;
+  records.forEach((record, i) => {
+    pdb.writeUInt32BE(offset, 78 + i * 8);
+    pdb.writeUInt32BE(i * 2, 78 + i * 8 + 4);
+    offset += record.length;
+  });
+  return Buffer.concat([pdb, ...records]);
+}
+const lantern = [
+  '<html><head></head><body>',
+  '<h1>The Lantern Keeper</h1>',
+  '<p>Every evening the keeper climbed the stair and lit the lamp. The café below stayed open late, and the naïve visitors asked whether the light ever went out.</p>',
+  '<p><img recindex="00001" /></p>',
+  ...Array.from({ length: 60 }, (_, i) => `<p>Line ${i + 1} of the first chapter, long enough to run across more than one record of text.</p>`),
+  '<mbp:pagebreak/>',
+  '<h2>Second Light</h2>',
+  '<p>In the morning the lamp was cold, and the keeper slept.</p>',
+  '</body></html>',
+].join('');
+fs.writeFileSync('tests/fixtures/lantern.mobi', mobiBook({
+  title: 'The Lantern Keeper', author: 'Ada Lantern', lang: 'en', html: lantern, pictures: [png],
+}));

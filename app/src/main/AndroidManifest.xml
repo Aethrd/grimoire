@@ -63,6 +63,10 @@
                 <data android:mimeType="application/vnd.comicbook+zip" />
                 <data android:mimeType="application/x-cbz" />
                 <data android:mimeType="application/zip" />
+                <!-- Kindle books without DRM, read in the page (js/mobi.js). -->
+                <data android:mimeType="application/x-mobipocket-ebook" />
+                <data android:mimeType="application/vnd.amazon.ebook" />
+                <data android:mimeType="application/vnd.amazon.mobi8-ebook" />
                 <!-- RAR, and comics in it, unpacked in the page (js/rar.js). -->
                 <data android:mimeType="application/vnd.comicbook-rar" />
                 <data android:mimeType="application/x-cbr" />
@@ -83,6 +87,7 @@
                 <data android:mimeType="application/vnd.comicbook-rar" />
                 <data android:mimeType="application/vnd.rar" />
                 <data android:mimeType="application/x-rar-compressed" />
+                <data android:mimeType="application/x-mobipocket-ebook" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>

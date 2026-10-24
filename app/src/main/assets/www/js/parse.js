@@ -75,22 +75,20 @@ const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 export const FORMATS = {
   epub: 'EPUB', cbz: 'CBZ', cbr: 'CBR', txt: 'TXT', md: 'MD',
   html: 'HTML', htm: 'HTML', xhtml: 'HTML', fb2: 'FB2', zip: 'ZIP',
-  pdf: 'PDF', docx: 'DOCX', mobi: 'MOBI', azw3: 'AZW3', rtf: 'RTF',
+  pdf: 'PDF', docx: 'DOCX', mobi: 'MOBI', azw3: 'AZW3', azw: 'MOBI', prc: 'MOBI', rtf: 'RTF',
   mht: 'MHT', mhtml: 'MHT', rar: 'RAR',
 };
 
 /** Formats with a working parser today. The rest are refused with a reason. */
-export const SUPPORTED = new Set(['EPUB', 'PDF', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2', 'MHT']);
+export const SUPPORTED = new Set(['EPUB', 'PDF', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2', 'MHT', 'MOBI', 'AZW3']);
 
 /** Book formats that can live inside an archive. ZIP is not one of them:
  *  nested archives are refused rather than recursed into. */
 export const ARCHIVE_CONTENTS =
-  new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT', 'MD', 'HTML', 'FB2', 'MHT']);
+  new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT', 'MD', 'HTML', 'FB2', 'MHT', 'MOBI', 'AZW3']);
 
 export const UNSUPPORTED_REASON = {
   DOCX: 'DOCX is OOXML in a zip. Readable with JSZip, but the styling model is a project of its own.',
-  MOBI: 'MOBI is a PalmDOC container. No parser yet.',
-  AZW3: 'AZW3 shares the MOBI container. No parser yet.',
   RTF: 'RTF needs a control-word stripper. No parser yet.',
   // A RAR is unpacked before it gets here (see rar.js). One that reaches the
   // parser is a RAR of books packed inside another archive.
@@ -197,7 +195,7 @@ const escapeAttr = (value) => value.replace(/[&<>"]/g,
  * text with the reader's own type scale and the file's stylesheet would
  * fight it.
  */
-function readChapter(root, resolveImage) {
+export function readChapter(root, resolveImage) {
   const html = [];
   const text = [];
 
@@ -1181,6 +1179,10 @@ export async function parse(file, onProgress, options = {}) {
     : format === 'PDF' ? await (await import('./pdf.js')).parsePdf(file, onProgress)
     : format === 'CBZ' ? await parseCbz(file, onProgress, options)
     : format === 'MHT' ? await parseMht(file, onProgress, options)
+    // Loaded on demand, as PDF is: a Kindle reader nobody's library needs
+    // should cost nothing.
+    : format === 'MOBI' || format === 'AZW3'
+      ? await (await import('./mobi.js')).parseMobi(file, onProgress, options)
     : await parseText(file);
 
   result.format = SUPPORTED.has(format) ? format : 'TXT';
@@ -1447,6 +1449,9 @@ export async function nameWithFormat(name, blob) {
 
   if (magic.startsWith('%PDF')) return `${name}.pdf`;
   if (magic === 'Rar!') return `${name}.rar`;
+  // A Kindle book is a Palm database, which says what it holds at byte 60.
+  const palm = String.fromCharCode(...new Uint8Array(await firstBytes(blob, 68)).slice(60, 68));
+  if (palm === 'BOOKMOBI' || palm === 'TEXtREAd') return `${name}.mobi`;
 
   /* Pictures, by their first bytes.
    *
