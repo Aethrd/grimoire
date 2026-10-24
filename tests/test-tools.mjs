@@ -978,6 +978,25 @@ await t('a book written out and given back is the same book, not a second copy',
   assert.equal(theOriginal.already, 1);
 });
 
+await t('a book sent from another app is opened once, not every time the app is', async () => {
+  const java = fs.readFileSync(new URL('../app/src/main/java/com/grimoire/ereader/MainActivity.java', import.meta.url), 'utf8');
+  const create = java.slice(java.indexOf('protected void onCreate('), java.indexOf('private static boolean launchedFromHistory'));
+  // Opened from recent apps, the activity is handed the file it was first
+  // started with; rebuilt after Android reclaimed it, it has saved state.
+  // Neither is a file being sent.
+  assert.match(create, /if \(savedInstanceState == null && !launchedFromHistory\(getIntent\(\)\)\) \{\s*handleIncomingIntent\(getIntent\(\)\);/);
+  assert.match(java, /\(intent\.getFlags\(\) & Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\) != 0/);
+  // Handled, it is forgotten.
+  const handle = java.slice(java.indexOf('private void handleIncomingIntent('), java.indexOf('void onReaderReady()'));
+  assert.match(handle, /pendingUri = data\.toString\(\);[\s\S]{0,200}setIntent\(new Intent\(Intent\.ACTION_MAIN\)\);/);
+  // A file sent while the app is already open still arrives.
+  assert.match(java, /protected void onNewIntent\(@NonNull Intent intent\) \{\s*super\.onNewIntent\(intent\);\s*setIntent\(intent\);\s*handleIncomingIntent\(intent\);/);
+  // And nothing in the page opens a book by itself at launch.
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  const boot = app.slice(app.indexOf('async function boot()'));
+  assert.ok(!/openBook\(/.test(boot.slice(0, boot.indexOf('\n}\n'))), 'boot opens a book');
+});
+
 /* ── RAR ─────────────────────────────────────────────────────────────── */
 
 console.log('rar');

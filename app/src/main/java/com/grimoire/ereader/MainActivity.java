@@ -138,7 +138,24 @@ public class MainActivity extends AppCompatActivity {
             webView.loadUrl(START_URL);
         }
 
-        handleIncomingIntent(getIntent());
+        /* Only a book that has just been sent here is opened.
+         *
+         * Android hands an activity the intent it was first started with for
+         * as long as its task lives. Opened from a file manager once, the app
+         * was given that same file again every time it was opened from recent
+         * apps -- after the book had been closed, and after the app had been
+         * closed -- and every time Android rebuilt it after reclaiming its
+         * memory. Each of those opened the book again. A relaunch from recents
+         * says so in its flags, and a rebuild has saved state; neither is a
+         * file being sent, so neither opens one. */
+        if (savedInstanceState == null && !launchedFromHistory(getIntent())) {
+            handleIncomingIntent(getIntent());
+        }
+    }
+
+    private static boolean launchedFromHistory(@Nullable Intent intent) {
+        return intent != null
+                && (intent.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0;
     }
 
     /* Build the WebView again after its renderer died.
@@ -723,6 +740,9 @@ public class MainActivity extends AppCompatActivity {
          * grantUriPermission takes one of a fixed set of constants.
          */
         pendingUri = data.toString();
+        // Handled: what the activity was started with is from here on just
+        // the app being open, so nothing that asks for it later finds a file.
+        setIntent(new Intent(Intent.ACTION_MAIN));
         // Delivered when the reader says it is ready, not after a guessed
         // delay. Opening a file from elsewhere is always a cold start, and
         // four hundred milliseconds is not enough for the page to have loaded
