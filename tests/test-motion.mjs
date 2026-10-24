@@ -87,7 +87,8 @@ t('page turns animate but re-flows do not', () => {
   // Every jump that is not a turn must go through it.
   // Staying put when the measurement fails, rather than reading "could not
   // measure" as "the beginning".
-  assert.match(js, /show\(pageAtAnchor\(anchor, chapter\) \?\? state\.page, \{ animate: false \}\)/);
+  // Without the slide -- and keeping the place it was given (see show()).
+  assert.match(js, /show\(pageAtAnchor\(anchor, chapter\) \?\? state\.page, \{ animate: false, keepAnchor: true \}\)/);
 });
 
 t('the text itself never animates', () => {

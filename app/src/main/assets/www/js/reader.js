@@ -331,7 +331,7 @@ function withoutMotion(fn) {
   requestAnimationFrame(() => requestAnimationFrame(() => flow.classList.remove('no-motion')));
 }
 
-function show(page, { animate = true } = {}) {
+function show(page, { animate = true, keepAnchor = false } = {}) {
   // A page count that has not measured yet would otherwise clamp every
   // arrival to "the last page" of a one-page chapter.
   const pages = Number.isFinite(state.pageCount) && state.pageCount > 0
@@ -348,7 +348,11 @@ function show(page, { animate = true } = {}) {
     if (animate) move(); else withoutMotion(move);
   }
 
-  state.anchor = currentAnchor();
+  /* A re-flow keeps the place it was given rather than taking the top of the
+   * new page as the place. Taken from the top, every re-flow moved it back to
+   * wherever the page now began -- and showing and hiding the bars, which
+   * re-flows each time, walked the reader backwards a part-page per tap. */
+  if (!keepAnchor) state.anchor = currentAnchor();
   save();
   onChange(state);
 }
@@ -616,13 +620,26 @@ function textNodes(root) {
   return nodes;
 }
 
-/** Column index a range sits in. Paged mode only. */
+/**
+ * Column index a range sits in. Paged mode only.
+ *
+ * Measured from the start of the flow of columns, not from the edge of the
+ * screen. The two agree once a page turn has finished -- but the place is
+ * recorded the moment a turn begins, while the slide is still under way and
+ * the columns are still where the last page left them. Measured from the
+ * screen, the new page's first line came out a page late, the place was
+ * recorded as one page back (on page two of a chapter: its very start), and
+ * the next re-flow -- a tap in the middle to show or hide the bars -- put the
+ * reader there. The flow moves with its columns, so measured from it the
+ * answer is the same whether the slide has finished or not.
+ */
 function pageOfRange(range) {
   const rect = range.getBoundingClientRect();
   if (!rect.width && !rect.height) return null;
-  const origin = viewport.getBoundingClientRect().left;
-  const x = rect.left - origin + state.page * pageWidth();
-  return Math.floor(x / pageWidth());
+  const width = pageWidth();
+  if (width <= 0) return null;
+  const origin = flow.getBoundingClientRect().left;
+  return Math.floor((rect.left - origin) / width);
 }
 
 /** Distance from the top of the scrollable content. Scroll mode only. */
@@ -1153,7 +1170,8 @@ export function repaginate() {
       const after = anchorOffset(anchor, chapter);
       if (after !== null) viewport.scrollTop = Math.max(0, after + within);
       state.page = Math.round(viewport.scrollTop / viewportHeight());
-      state.anchor = currentAnchor();
+      // The same place, kept: see show().
+      if (after === null) state.anchor = currentAnchor();
       save();
       onChange(state);
     });
@@ -1165,7 +1183,7 @@ export function repaginate() {
     estimateTotals();
     // Staying put is the right answer when the measurement fails: the text
     // has not moved, only the chrome around it.
-    show(pageAtAnchor(anchor, chapter) ?? state.page, { animate: false });
+    show(pageAtAnchor(anchor, chapter) ?? state.page, { animate: false, keepAnchor: true });
     keepPassageWhole(anchor, chapter);
   });
 }
@@ -1205,7 +1223,7 @@ function keepPassageWhole(anchor, chapterIndex) {
   // One correction, not a loop: re-flowing to fix a break can create another,
   // and chasing it would be a good way to never stop.
   relayout();
-  show(pageAtAnchor(anchor, chapterIndex) ?? state.page, { animate: false });
+  show(pageAtAnchor(anchor, chapterIndex) ?? state.page, { animate: false, keepAnchor: true });
 }
 
 /* ── navigation ───────────────────────────────────────────────────────── */

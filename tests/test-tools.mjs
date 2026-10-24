@@ -1164,6 +1164,21 @@ await t('a Kindle book is read in blocks, and its pictures are kept as pieces of
   assert.match(mobiSrc, /return type \? file\.slice\(from, to, type\) : null;/);
 });
 
+await t('a tap in the middle shows or hides the bars without moving the page', async () => {
+  const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
+  // The place is measured against the flow of columns, so a page turn still
+  // sliding cannot make it read a page late (which was "the start of the
+  // chapter" on its second page).
+  const measure = src.slice(src.indexOf('function pageOfRange('), src.indexOf('/** Distance from the top'));
+  assert.match(measure, /const origin = flow\.getBoundingClientRect\(\)\.left;/);
+  assert.ok(!/state\.page \* pageWidth\(\)/.test(measure), 'still measured from the screen');
+  // A re-flow keeps the place it was given, rather than taking the top of
+  // the new page -- which walked the reader backwards a part-page per tap.
+  assert.match(src, /if \(!keepAnchor\) state\.anchor = currentAnchor\(\);/);
+  const repaginate = src.slice(src.indexOf('export function repaginate()'), src.indexOf('function keepPassageWhole('));
+  assert.match(repaginate, /show\(pageAtAnchor\(anchor, chapter\) \?\? state\.page, \{ animate: false, keepAnchor: true \}\)/);
+});
+
 /* ── RAR ─────────────────────────────────────────────────────────────── */
 
 console.log('rar');
