@@ -13,6 +13,7 @@ import * as trim from './trim.js';
 import * as covers from './coverpage.js';
 import { zipWriter } from './zipwriter.js';
 import { pictureType, pictureName } from './picturesave.js';
+import * as tags from './tags.js';
 import * as shrink from './shrink.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
@@ -691,6 +692,42 @@ async function openDetails(tapped, { editions = [] } = {}) {
   statusField.appendChild(statusChips);
   body.appendChild(statusField);
 
+  /* Tags: only the book's own are shown here, with one button to choose
+   * more. The long list of common tags lives in its own sheet, folded away. */
+  const startTags = tags.tagsOf(book);
+  let tagList = [...startTags];
+  const tagField = document.createElement('div');
+  tagField.className = 'field';
+  tagField.innerHTML = `<label><span>Tags</span>${
+    editions.length ? '<span class="muted">for every edition</span>' : ''}</label>`;
+  const tagRow = document.createElement('div');
+  tagRow.className = 'chip-row wrap details-tags';
+  tagField.appendChild(tagRow);
+  const paintTags = () => {
+    tagRow.innerHTML = '';
+    for (const tag of tagList) {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.setAttribute('aria-pressed', 'true');
+      chip.textContent = `${tag}  ✕`;
+      chip.title = `Take off ${tag}`;
+      chip.onclick = () => { tagList = tagList.filter((t) => t !== tag); paintTags(); };
+      tagRow.appendChild(chip);
+    }
+    const add = document.createElement('button');
+    add.className = 'chip details-tags-add';
+    add.textContent = tagList.length ? '＋ Tags…' : '＋ Add tags…';
+    add.onclick = async () => {
+      const picked = await tags.openTagPicker({
+        chosen: tagList, used: await tagsInUse(), title: `Tags · ${library.displayTitle(book)}`,
+      });
+      if (picked) { tagList = picked; paintTags(); }
+    };
+    tagRow.appendChild(add);
+  };
+  paintTags();
+  body.appendChild(tagField);
+
   const fields = [
     ['title', 'Title', book.title || ''],
     ['author', 'Author', book.author || ''],
@@ -790,6 +827,8 @@ async function openDetails(tapped, { editions = [] } = {}) {
       book.coverCustom = !!newCover;
     }
     if (pickedStatus !== undefined) setStatusOn(book, pickedStatus);
+    const tagsChanged = !tags.sameTags(tagList, startTags);
+    if (tagsChanged) book.tags = tagList;
 
     await store.put('books', book);
     /* Into the book itself, not only onto the shelf: the cover page shows the
@@ -812,6 +851,9 @@ async function openDetails(tapped, { editions = [] } = {}) {
       edition.folder = book.folder;
       if (!edition.folder) delete edition.folder;
       if (pickedStatus !== undefined) setStatusOn(edition, pickedStatus);
+      // What was added or taken off, rather than the leader's list wholesale:
+      // an edition may carry a tag of its own ("Raw", say).
+      if (tagsChanged) edition.tags = retag(edition, tagList, startTags);
       await store.put('books', edition);
       others.push(edition);
     }
@@ -915,6 +957,54 @@ async function openGroupDetails(books) {
   statusField.appendChild(statusChips);
   body.appendChild(statusField);
 
+  /* Tags for all of them: each tag any of them has, with how many have it --
+   * tapped, it comes off all of them -- and more to put on all of them. */
+  const had = tags.usedTags(books);
+  const dropping = new Set();
+  let adding = [];
+  const tagField = document.createElement('div');
+  tagField.className = 'field';
+  tagField.innerHTML = '<label><span>Tags</span><span class="muted">tap one to take it off all of them</span></label>';
+  const tagRow = document.createElement('div');
+  tagRow.className = 'chip-row wrap details-tags';
+  tagField.appendChild(tagRow);
+  const paintGroupTags = () => {
+    tagRow.innerHTML = '';
+    for (const [tag, count] of had) {
+      const chip = document.createElement('button');
+      const off = dropping.has(tags.tagKey(tag));
+      chip.className = off ? 'chip struck' : 'chip';
+      chip.setAttribute('aria-pressed', String(!off));
+      chip.textContent = `${tag} ${count}/${books.length}`;
+      chip.onclick = () => {
+        const key = tags.tagKey(tag);
+        if (dropping.has(key)) dropping.delete(key); else dropping.add(key);
+        paintGroupTags();
+      };
+      tagRow.appendChild(chip);
+    }
+    for (const tag of adding) {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.setAttribute('aria-pressed', 'true');
+      chip.textContent = `+ ${tag}  ✕`;
+      chip.onclick = () => { adding = adding.filter((t) => t !== tag); paintGroupTags(); };
+      tagRow.appendChild(chip);
+    }
+    const add = document.createElement('button');
+    add.className = 'chip details-tags-add';
+    add.textContent = '＋ Add tags to all…';
+    add.onclick = async () => {
+      const picked = await tags.openTagPicker({
+        chosen: adding, used: await tagsInUse(), title: `Tags for ${books.length} books`,
+      });
+      if (picked) { adding = picked; paintGroupTags(); }
+    };
+    tagRow.appendChild(add);
+  };
+  paintGroupTags();
+  body.appendChild(tagField);
+
   const folder = await folderPicker(body, null, { keep: true });
 
   const actions = document.createElement('div');
@@ -929,6 +1019,16 @@ async function openGroupDetails(books) {
   actions.querySelector('#details-cancel').onclick = close;
   actions.querySelector('#details-save').onclick = async () => {
     if (pickedStatus !== undefined) await applyStatus(books, pickedStatus, { quiet: true });
+    if (dropping.size || adding.length) {
+      for (const book of books) {
+        const stored = (await store.get('books', book.id)) || book;
+        const kept = tags.tagsOf(stored).filter((t) => !dropping.has(tags.tagKey(t)));
+        const next = tags.uniqueTags([...kept, ...adding]);
+        if (tags.sameTags(next, tags.tagsOf(stored))) continue;
+        stored.tags = next;
+        await store.put('books', stored);
+      }
+    }
     const chosen = folder.value;
     if (chosen !== undefined) {
       const clean = String(chosen).trim().replace(/^\/+|\/+$/g, '');
@@ -945,6 +1045,21 @@ async function openGroupDetails(books) {
   };
 
   el('details-sheet').hidden = false;
+}
+
+/** The tags used on the shelf, most used first: offered before the list. */
+async function tagsInUse() {
+  const books = (await store.all('books'))
+    .filter((b) => !b.binnedAt && !b.importing && (!b.inVault || library.vaultUnlocked));
+  return tags.usedTags(books);
+}
+
+/** An edition's tags, changed the way the leader's were: from `before` to `after`. */
+function retag(book, after, before) {
+  const gone = new Set(before.map(tags.tagKey));
+  for (const tag of after) gone.delete(tags.tagKey(tag));
+  const kept = tags.tagsOf(book).filter((t) => !gone.has(tags.tagKey(t)));
+  return tags.uniqueTags([...kept, ...after]);
 }
 
 const escapeText = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -5583,6 +5698,7 @@ window.Grimoire = {
     if (!el('redact-pick').hidden) { closeRedactPick(); return true; }
     if (!el('remove-look').hidden) { closeRemoveLook(); return true; }
     if (!el('remove-confirm').hidden) { el('remove-confirm').hidden = true; return true; }
+    if (tags.closeTagPicker()) return true;
     if (!el('picture-sheet').hidden) { el('picture-sheet').hidden = true; return true; }
     if (!el('folder-actions').hidden) { el('folder-actions').hidden = true; return true; }
     if (!el('export-sheet').hidden) { el('export-sheet').hidden = true; return true; }

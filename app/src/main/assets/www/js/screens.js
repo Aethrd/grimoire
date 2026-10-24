@@ -7,6 +7,7 @@ import * as library from './library.js';
 import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, collapseBundles, vaultUnlocked, offShelf, hiddenFolderList } from './library.js';
 import { pool, measure } from './blobs.js';
 import { holdPicture } from './picturesave.js';
+import { tagKey, tagsOf, usedTags, withEveryTag } from './tags.js';
 
 const el = (id) => document.getElementById(id);
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -604,6 +605,125 @@ let onBookMenu = null;
 
 export function onLongPressBook(fn) { onBookMenu = fn; }
 
+/** The tags picked in the shelf search's Tags scope: books with all of them. */
+let findTags = [];
+
+/* The same books the shelf shows: nothing from the vault while it is locked,
+ * nothing still being imported, and nothing deleted -- a book in the bin is
+ * found in the bin, not offered back as if it were on the shelf. Nor anything
+ * in a folder hidden from the shelf: that is found by opening the folder, not
+ * by a search anyone could type. */
+async function searchableBooks() {
+  const hidden = hiddenFolderList(await store.settings());
+  return (await store.all('books'))
+    .filter((b) => !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked)
+      && !offShelf(b, hidden));
+}
+
+/* Shown the way the shelf shows them: cover first, then the name.
+ *
+ * A list of names is not how anyone recognises a book they own. The title is
+ * the one on the shelf, translated or not, so what you search for and what
+ * you see are the same thing. */
+function bookGrid(hits, onGoToMatch, noteOf) {
+  const grid = document.createElement('div');
+  grid.className = 'shelf find-shelf';
+  for (const book of hits) {
+    const node = library.bookTile(
+      book,
+      () => onGoToMatch({ bookId: book.id }),
+      onBookMenu ? (pressed) => onBookMenu(pressed) : null);
+    const text = noteOf?.(book);
+    if (text) {
+      const note = document.createElement('span');
+      note.className = 'tile-meta';
+      note.textContent = text;
+      node.appendChild(note);
+    }
+    grid.appendChild(node);
+  }
+  return grid;
+}
+
+/**
+ * Finding books by their tags.
+ *
+ * The tags this shelf uses sit in one scrolling line above the results --
+ * only those, not the long list they may have been picked from. Typing
+ * narrows the line and finds books with a tag like what was typed; picking
+ * tags finds the books with every one picked, so a second tag narrows.
+ */
+async function runTagFind(query, onGoToMatch) {
+  const results = el('find-results');
+  el('find-stepper').hidden = true;
+  const books = await searchableBooks();
+  const used = usedTags(books);
+  const key = tagKey(query);
+  results.innerHTML = '';
+
+  if (!used.length) {
+    results.innerHTML = '<p class="muted" style="padding:20px 16px">No tags yet. Hold a book on the shelf, '
+      + 'choose Details, and add some under Tags.</p>';
+    return;
+  }
+
+  const picked = (tag) => findTags.some((t) => tagKey(t) === tagKey(tag));
+  const row = document.createElement('div');
+  row.className = 'chip-row find-tags';
+  const offered = [
+    ...used.filter(([tag]) => picked(tag)),
+    ...used.filter(([tag]) => !picked(tag) && (!key || tagKey(tag).includes(key))),
+  ];
+  for (const [tag, count] of offered) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.setAttribute('aria-pressed', String(picked(tag)));
+    chip.textContent = tag;
+    const small = document.createElement('small');
+    small.textContent = String(count);
+    chip.appendChild(small);
+    chip.onclick = () => {
+      findTags = picked(tag)
+        ? findTags.filter((t) => tagKey(t) !== tagKey(tag))
+        : [...findTags, tag];
+      // A tag picked from what was typed has done the typing's job.
+      if (key) el('find-input').value = '';
+      runTagFind(el('find-input').value, onGoToMatch);
+    };
+    row.appendChild(chip);
+  }
+  results.appendChild(row);
+
+  let hits;
+  if (findTags.length) hits = withEveryTag(books, findTags);
+  else if (key) hits = books.filter((b) => tagsOf(b).some((t) => tagKey(t).includes(key)));
+  else {
+    const hint = document.createElement('p');
+    hint.className = 'muted';
+    hint.style.padding = '12px 16px';
+    hint.textContent = 'Pick a tag, or type to find one. Pick more than one to narrow it down.';
+    results.appendChild(hint);
+    return;
+  }
+
+  if (findTags.length && key) hits = hits.filter((b) => tagsOf(b).some((t) => tagKey(t).includes(key)));
+  hits.sort((a, b) => String(library.displayTitle(a)).localeCompare(String(library.displayTitle(b))));
+  if (!hits.length) {
+    const none = document.createElement('p');
+    none.className = 'muted';
+    none.style.padding = '12px 16px';
+    none.textContent = findTags.length > 1 ? 'No book has all of those tags.' : 'No book has that tag.';
+    results.appendChild(none);
+    return;
+  }
+  results.appendChild(bookGrid(hits, onGoToMatch, (book) => {
+    const wanted = new Set(findTags.map(tagKey));
+    const shown = tagsOf(book).filter((t) => wanted.has(tagKey(t)) || (key && tagKey(t).includes(key)));
+    const rest = tagsOf(book).length - shown.length;
+    return shown.join(', ') + (rest > 0 ? ` +${rest}` : '');
+  }));
+}
+
 /** Who opens the black-out editor for a picture in the reel. */
 let onRedactPicture = null;
 
@@ -637,7 +757,10 @@ export function initFind(onGoToMatch, fromReader = false) {
     matches = [];
     matchCursor = 0;
     el('find-results').innerHTML =
-      '<p class="muted" style="padding:20px 16px">Search your library by title or author.</p>';
+      '<p class="muted" style="padding:20px 16px">Search your library by title, author or tag.</p>';
+    findTags = [];
+    // Opened on Tags, the tags are there to pick before anything is typed.
+    if (shelfScope === 'tags') runFind('', onGoToMatch);
     el('find-stepper').hidden = true;
   }
 
@@ -661,7 +784,7 @@ export function initFind(onGoToMatch, fromReader = false) {
   const options = inBook
     ? [['book', 'Whole book'], ['chapter', 'This chapter'],
        ['names', 'Chapter names'], ['marked', 'Bookmarked']]
-    : [['all', 'Everything'], ['title', 'Titles'], ['author', 'Authors']];
+    : [['all', 'Everything'], ['title', 'Titles'], ['author', 'Authors'], ['tags', 'Tags']];
   const selected = () => (inBook ? findScope : shelfScope);
 
   for (const [key, label] of options) {
@@ -671,6 +794,7 @@ export function initFind(onGoToMatch, fromReader = false) {
     chip.setAttribute('aria-pressed', String(selected() === key));
     chip.onclick = () => {
       if (inBook) findScope = key; else shelfScope = key;
+      if (key !== 'tags') findTags = [];
       for (const other of scope.children) {
         other.setAttribute('aria-pressed', String(other === chip));
       }
@@ -696,6 +820,9 @@ async function runFind(query, onGoToMatch) {
   const stepper = el('find-stepper');
   matches = [];
   matchCursor = 0;
+
+  // Tags are picked as much as typed, so this search starts with nothing typed.
+  if (!findInBook && shelfScope === 'tags') return runTagFind(query, onGoToMatch);
 
   const needle = foldDiacritics(query.trim());
   if (needle.length < 2) {
@@ -725,10 +852,7 @@ async function runFind(query, onGoToMatch) {
     // the bin is found in the bin, not offered back as if it were on the shelf.
     // Nor anything in a folder hidden from the shelf: that is found by
     // opening the folder, not by a search anyone could type.
-    const hidden = hiddenFolderList(await store.settings());
-    const books = (await store.all('books'))
-      .filter((b) => !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked)
-        && !offShelf(b, hidden));
+    const books = await searchableBooks();
 
     const only = shelfScope === 'title' ? ['title', 'shown']
       : shelfScope === 'author' ? ['author']
@@ -738,36 +862,20 @@ async function runFind(query, onGoToMatch) {
     results.innerHTML = hits.length
       ? '' : '<p class="muted" style="padding:20px 16px">No book found.</p>';
 
-    /* Shown the way the shelf shows them: cover first, then the name.
+    /* Why each book is in the list.
      *
-     * A list of names is not how anyone recognises a book they own. The title
-     * is the one on the shelf, translated or not, so what you search for and
-     * what you see are the same thing.
-     */
-    const grid = document.createElement('div');
-    grid.className = 'shelf find-shelf';
-
-    for (const book of hits) {
-      const node = library.bookTile(
-        book,
-        () => onGoToMatch({ bookId: book.id }),
-        onBookMenu ? (pressed) => onBookMenu(pressed) : null);
-
-      /* Why this book is in the list.
-       *
-       * A book matched on its folder or its series looks like a mistake
-       * beside one matched on its title, unless it says so. */
+     * A book matched on its folder or its series looks like a mistake beside
+     * one matched on its title, unless it says so. */
+    const words = foldDiacritics(query).split(/\s+/).filter(Boolean);
+    results.appendChild(bookGrid(hits, onGoToMatch, (book) => {
       const where = library.matchedOn(book, query, only);
-      if (where && where !== 'author') {
-        const note = document.createElement('span');
-        note.className = 'tile-meta';
-        note.textContent = `in ${String(book[where] ?? where)}`;
-        node.appendChild(note);
+      if (!where || where === 'author') return '';
+      if (where === 'tags') {
+        const matched = tagsOf(book).filter((t) => words.some((w) => tagKey(t).includes(w)));
+        return `tagged ${matched.join(', ')}`;
       }
-      grid.appendChild(node);
-    }
-
-    if (hits.length) results.appendChild(grid);
+      return `in ${String(book[where] ?? where)}`;
+    }));
     stepper.hidden = true;
     return;
   }

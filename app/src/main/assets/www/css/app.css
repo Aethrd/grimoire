@@ -1035,6 +1035,29 @@ body[data-view="reader"] .stepper {
 .sheet-scrim { position: fixed; inset: 0; z-index: 40; display: flex;
                align-items: flex-end; background: rgba(0, 0, 0, .45); }
 .sheet-scrim[hidden] { display: none; }
+/* Tags. The sheet keeps its search box and buttons in place and scrolls only
+   the list between them, so a long list never pushes them off screen. */
+#tag-sheet { z-index: 46; }
+#tag-sheet .tag-sheet { display: flex; flex-direction: column; max-height: 80%; overflow: hidden; }
+.tag-input { flex: none; width: 100%; margin: 4px 0 8px; padding: 10px 12px;
+             border: 1px solid var(--divider); border-radius: var(--radius-sm); }
+.tag-chosen { flex: none; max-height: 96px; overflow-y: auto; margin-bottom: 6px; }
+.tag-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.tag-group { border-top: 1px solid var(--divider); padding: 6px 0; }
+.tag-group > summary { cursor: pointer; padding: 8px 0; font-size: 13px; color: var(--muted);
+                       list-style: none; }
+.tag-group > summary::-webkit-details-marker { display: none; }
+.tag-group > summary::before { content: '▸ '; }
+.tag-group[open] > summary::before { content: '▾ '; }
+.tag-chip, .tag-new, .tag-more, .details-tags .chip, .find-tags .chip { text-transform: none; letter-spacing: 0; }
+.tag-chip small, .find-tags .chip small { margin-left: 6px; opacity: .65; font-size: 11px; }
+.tag-more { opacity: .75; }
+.chip.struck { text-decoration: line-through; opacity: .55; }
+/* The search's tags: one scrolling line, not a wall above the results. */
+.find-tags { flex-wrap: nowrap; overflow-x: auto; padding: 4px 16px 10px; scrollbar-width: none; }
+.find-tags::-webkit-scrollbar { display: none; }
+.find-tags .chip { flex: none; }
+
 /* Over the full-size viewer too, which it can be opened from. */
 #picture-sheet { z-index: 45; }
 /* The file name as it will be saved, not shouted. */

@@ -646,6 +646,68 @@ await t('a status set by hand holds until the book is next read, then reading ta
   await library.binBooks([id]);
 });
 
+await t('tags: one of each, spelled as the list spells them, and found by search', async () => {
+  const tg = await import(new URL('../app/src/main/assets/www/js/tags.js', import.meta.url).href);
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  // The list: every kind from the directory, the Chinese table left out, each tag once.
+  assert.equal(tg.TAG_GROUPS.length, 15);
+  const all = tg.TAG_GROUPS.flatMap(([, list]) => list);
+  assert.equal(new Set(all.map(tg.tagKey)).size, all.length, 'a tag is listed twice');
+  assert.ok(!all.some((t) => /[一-鿿]/.test(t)), 'a Chinese tag got in');
+  assert.ok(all.includes('Slow Burn') && all.includes('Kingdom Building') && all.includes('LitRPG'));
+  // Typed any which way, a listed tag is the listed tag; anything else is kept as typed.
+  assert.equal(tg.normaliseTag('  slow-burn '), 'Slow Burn');
+  assert.equal(tg.normaliseTag('litrpg'), 'LitRPG');
+  assert.equal(tg.normaliseTag('cozy vibes'), 'cozy vibes');
+  assert.deepEqual(tg.uniqueTags(['System', 'system', ' SYSTEM ', '', 'Harem']), ['System', 'Harem']);
+  assert.deepEqual(tg.tagsOf({ tags: 'Fantasy, Harem' }), ['Fantasy', 'Harem']);
+  assert.ok(tg.sameTags(['Harem', 'Fantasy'], ['fantasy', 'harem']));
+
+  // Search: the Tags scope finds books with every tag picked.
+  const a = await aBook({ title: 'Tagged A', tags: ['Slow Burn', 'Regression'] });
+  const b = await aBook({ title: 'Tagged B', tags: ['Slow Burn', 'Harem'] });
+  const c = await aBook({ title: 'Tagged C', tags: ['Fantasy'] });
+  screensMod.initFind(() => {}, false);
+  const scopes = [...el('find-scope').children];
+  const tagScope = scopes.find((chip) => chip.textContent === 'Tags');
+  assert.ok(tagScope, 'there is no Tags search');
+  tagScope.click();
+  await settle(300);
+  const row = () => [...el('find-results').querySelectorAll('.find-tags .chip')];
+  assert.ok(row().some((chip) => chip.textContent.startsWith('Slow Burn')), 'the shelf\'s tags are not offered');
+  // Only tags in use are offered there -- not the long list.
+  assert.ok(row().length < 20, `${row().length} tags offered`);
+  const found = () => [...el('find-results').querySelectorAll('[data-book]')].map((n) => Number(n.dataset.book));
+  row().find((chip) => chip.textContent.startsWith('Slow Burn')).click();
+  await settle(300);
+  assert.deepEqual(found().sort(), [a, b].sort());
+  row().find((chip) => chip.textContent.startsWith('Harem')).click();
+  await settle(300);
+  assert.deepEqual(found(), [b], 'a second tag did not narrow it');
+  el('find-scope').firstElementChild.click();   // Everything
+  el('find-input').value = 'regression';
+  el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle(450);
+  assert.ok(found().includes(a), 'Everything does not search tags');
+  await library.binBooks([a, b, c]);
+});
+
+await t('tags are set from Details, for one book, a bundle, or several', async () => {
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  // One book: its own tags and a button; the list is in its own sheet.
+  assert.match(app, /add\.textContent = tagList\.length \? '＋ Tags…' : '＋ Add tags…'/);
+  assert.match(app, /if \(tagsChanged\) book\.tags = tagList/);
+  // A bundle's other editions get what was added and lose what was taken off.
+  assert.match(app, /if \(tagsChanged\) edition\.tags = retag\(edition, tagList, startTags\)/);
+  // Several: take one off all of them, or put more on all of them.
+  assert.match(app, /const next = tags\.uniqueTags\(\[\.\.\.kept, \.\.\.adding\]\)/);
+  // Back shuts the picker before anything else.
+  assert.match(app, /if \(tags\.closeTagPicker\(\)\) return true;/);
+  const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/tags.js', import.meta.url), 'utf8');
+  // The long list stays out of the way: folded until searched, capped when it is.
+  assert.match(src, /section\(label, tags\.filter\(fits\), \{ open: searching, cap: searching \? 8 : Infinity \}\)/);
+});
+
 await t('a folder hidden from the shelf is only found under Folders', async () => {
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
   const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);

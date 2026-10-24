@@ -486,6 +486,20 @@
   <button class="btn danger" id="confirm-yes">Delete</button>
 </div>
 
+<!-- Choosing tags: the ones on the shelf, the common ones, or a new one. -->
+<div class="sheet-scrim" id="tag-sheet" hidden>
+  <div class="sheet tag-sheet">
+    <p class="eyebrow" id="tag-sheet-title">Tags</p>
+    <input class="query tag-input" id="tag-input" type="search" placeholder="Find a tag, or type a new one" autocomplete="off" autocapitalize="off">
+    <div class="chip-row wrap tag-chosen" id="tag-chosen" hidden></div>
+    <div class="tag-list" id="tag-list"></div>
+    <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
+      <button class="btn ghost" id="tag-cancel">Cancel</button>
+      <button class="btn primary" id="tag-done">Done</button>
+    </div>
+  </div>
+</div>
+
 <!-- What to do with a picture held down in a book or its reel. -->
 <div class="sheet-scrim" id="picture-sheet" hidden>
   <div class="sheet">
