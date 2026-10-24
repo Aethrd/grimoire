@@ -1119,6 +1119,51 @@ await t('the Kindle reader runs on the oldest WebView the app supports', async (
   assert.ok(manifest.includes('android:mimeType="application/x-mobipocket-ebook"'));
 });
 
+await t('what finishes while you read waits for the book to be put down', async () => {
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  // One place decides: in a book (the reader, or its own screens), or not.
+  assert.match(app, /function viewChanged\(\) \{\s*if \(current === 'reader'\) inBook = true;\s*else if \(!BESIDE_THE_BOOK\.has\(current\)\) inBook = false;/);
+  assert.equal((app.match(/viewChanged\(\);/g) || []).length, 2, 'show() and back() both report the change');
+  // A finished build opens its book only if Build is still on screen.
+  assert.match(app, /if \(made && current === 'workshop'\) await openBook\(made\);/);
+  assert.match(app, /whenNotReading\(\(\) => toast\(failed\.length/);
+  // An import's report, and the save screen of an export, wait too.
+  const importer = app.slice(app.indexOf('async function importNow('), app.indexOf('return results;\n}', app.indexOf('async function importNow(')));
+  assert.ok(!/(?<![\w.])toast\(/.test(importer.slice(importer.indexOf('const besides'))), 'an import still reports over the page');
+  assert.equal((app.match(/await untilNotReading\(startedReading\);/g) || []).length, 2);
+  // And the progress panel is a pill in a book, gone with the bars.
+  const css = fs.readFileSync(new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
+  assert.match(css, /body\.in-book\[data-chrome="none"\] \.import-progress/);
+});
+
+await t('the copy button\'s amount part is about a fifth of the copy part', async () => {
+  const css = fs.readFileSync(new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
+  // Specific enough to win over ".copy-row .btn.primary { flex: 1 }".
+  assert.match(css, /\.copy-row \.copy-split \.copy-amount \{ flex: 0 0 18%;/);
+  assert.match(css, /\.copy-row \.copy-split #copy-chapter \{ flex: 1 1 auto;/);
+});
+
+await t('a Kindle book is read in blocks, and its pictures are kept as pieces of the file', async () => {
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  const bytes = fs.readFileSync(new URL('./fixtures/lantern.mobi', import.meta.url));
+  let slices = 0;
+  const file = new File([bytes], 'lantern.mobi');
+  const counting = new Proxy(file, {
+    get(target, key) {
+      if (key === 'slice') return (...args) => { slices += 1; return target.slice(...args); };
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  Object.defineProperty(counting, 'name', { value: 'lantern.mobi' });
+  const book = await parse.parse(counting, null, {});
+  assert.equal(book.chapters.length, 2);
+  // A handful of reads, not one per record.
+  assert.ok(slices < 25, `${slices} reads of a ${bytes.length}-byte book`);
+  const mobiSrc = fs.readFileSync(new URL('../app/src/main/assets/www/js/mobi.js', import.meta.url), 'utf8');
+  assert.match(mobiSrc, /return type \? file\.slice\(from, to, type\) : null;/);
+});
+
 /* ── RAR ─────────────────────────────────────────────────────────────── */
 
 console.log('rar');
@@ -1286,6 +1331,50 @@ await t('a cover chosen in Build is the built book\'s, and is in the book', asyn
   assert.match(app, /if \(buildCover\) \{\s*try \{\s*await covers\.placeCover\(book\.id, buildCover\);/);
   const html = fs.readFileSync(new URL('../app/src/main/assets/www/index.html', import.meta.url), 'utf8');
   assert.ok(html.includes('id="build-cover-pick"') && html.includes('id="build-cover-clear"'));
+});
+
+await t('Build shows the first book\'s cover, and offers every picture in every book', async () => {
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  const { readArrayBuffer } = await import(new URL('../app/src/main/assets/www/js/blobs.js', import.meta.url).href);
+  const fixture = (name, as = name) => new File([fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url))], as);
+  // Found without reading the book: a Kindle book's cover record, a comic's
+  // first page.
+  const kindle = await parse.coverOf(fixture('lantern.mobi'));
+  assert.equal(kindle?.type, 'image/png');
+  const comic = await parse.coverOf(fixture('comic.cbz'));
+  assert.ok(comic && comic.size > 0, 'no first page for a comic');
+  assert.equal(await parse.coverOf(fixture('sample.pdf')), null, 'a PDF was read through for a cover');
+  // Every picture, listed, each loaded only when asked for.
+  const inComic = await parse.picturesInFile(fixture('comic.cbz'));
+  // The fixtures' pictures are 1x1 spacers, which a cover is never chosen
+  // from -- so none are offered.
+  assert.deepEqual(inComic, []);
+  assert.deepEqual(await parse.picturesInFile(fixture('lantern.mobi')), []);
+  // A real picture is.
+  const JSZip = (await import('jszip')).default;
+  const zip = new JSZip();
+  const big = new Uint8Array(4096); big.set([0x89, 0x50, 0x4E, 0x47, 13, 10, 26, 10]);
+  zip.file('p/2.png', big); zip.file('p/10.png', big); zip.file('p/spacer.png', big.subarray(0, 100));
+  const listed = await parse.picturesInFile(new File([await zip.generateAsync({ type: 'uint8array' })], 'pages.cbz'));
+  assert.deepEqual(listed.map((p) => p.name), ['2.png', '10.png']);
+  assert.equal(new Uint8Array(await readArrayBuffer(await listed[0].load()))[1], 0x50);   // PNG, when loaded
+
+  build.clear();
+  await build.add([fixture('lantern.mobi', 'Volume 1.mobi'), fixture('comic.cbz', 'Volume 2.cbz')]);
+  assert.equal((await build.firstCover())?.type, 'image/png', 'Build does not know the first book\'s cover');
+  const lists = await Promise.all(build.contents().map((part) => build.picturesOf(part)));
+  assert.deepEqual(lists.map((list) => list.length), [0, 0], 'spacers were offered as covers');
+  build.clear();
+
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /shown = await build\.firstCover\(\);/);
+  assert.match(app, /const pictures = await build\.picturesOf\(part\);/);
+  assert.match(app, /buildCoverFrom = 'book';/);
+  assert.match(app, /if \(closeCoverPick\(\)\) return true;/);
+  const html = fs.readFileSync(new URL('../app/src/main/assets/www/index.html', import.meta.url), 'utf8');
+  for (const id of ['build-cover-clear', 'build-cover-from-books', 'build-cover-pick', 'cover-pick-sheet']) {
+    assert.ok(html.includes(`id="${id}"`), id);
+  }
 });
 
 await t('opened at a folder, imports and builds are filed in it', async () => {

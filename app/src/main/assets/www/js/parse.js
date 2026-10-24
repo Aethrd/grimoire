@@ -551,6 +551,79 @@ async function blobOf(zip, path) {
 }
 
 
+/**
+ * A book's cover, found without reading the book.
+ *
+ * Build shows what a combined book's cover will be before it is built, and
+ * the first part is usually a file that has not been opened yet. Reading all
+ * of it to find one picture would be a parse of the whole book; this goes
+ * straight to the picture -- an EPUB's named cover, a comic's first page, a
+ * Kindle book's cover record -- and gives up quietly where there is none, or
+ * where finding it would mean reading everything (a PDF, a RAR).
+ */
+export async function coverOf(file) {
+  const format = formatOf(file?.name || '');
+  try {
+    if (format === 'MOBI' || format === 'AZW3') {
+      return await (await import('./mobi.js')).mobiCover(file);
+    }
+    if (format !== 'EPUB' && format !== 'CBZ') return null;
+    const zip = await openArchive(file);
+    if (format === 'CBZ') {
+      const first = zip.names()
+        .filter((n) => /\.(jpe?g|png|gif|webp|avif|bmp)$/i.test(n) && !n.startsWith('__MACOSX/'))
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))[0];
+      return first ? await blobOf(zip, first) : null;
+    }
+    const containerXml = await zip.text('META-INF/container.xml');
+    const opfPath = containerXml && DOMP.parseFromString(containerXml, 'application/xml')
+      .querySelector('rootfile')?.getAttribute('full-path');
+    if (!opfPath) return null;
+    const opf = DOMP.parseFromString(await zip.text(opfPath), 'application/xml');
+    const items = byLocalName(opf, 'manifest', 'item').map((item) => ({
+      id: item.getAttribute('id'),
+      href: resolve(opfPath, item.getAttribute('href')),
+      type: item.getAttribute('media-type') || '',
+      props: item.getAttribute('properties') || '',
+    }));
+    // As parseEpub chooses: the EPUB3 property, the EPUB2 pointer, a guess.
+    let cover = items.find((m) => m.props.includes('cover-image'));
+    if (!cover) {
+      const metas = [...opf.getElementsByTagName('*')].filter((n) => n.localName === 'meta');
+      const id = metas.find((m) => m.getAttribute('name') === 'cover')?.getAttribute('content');
+      cover = items.find((m) => m.id === id);
+    }
+    if (!cover) cover = items.find((m) => m.type.startsWith('image/') && /cover/i.test(m.href));
+    return cover ? await blobOf(zip, cover.href) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every picture in a book, listed without reading the book: for choosing one
+ * as a cover. Each is { name, load() }, and is only taken out of the file
+ * when it is loaded.
+ */
+export async function picturesInFile(file) {
+  const format = formatOf(file?.name || '');
+  try {
+    if (format === 'MOBI' || format === 'AZW3') {
+      return await (await import('./mobi.js')).mobiPictures(file);
+    }
+    if (format !== 'EPUB' && format !== 'CBZ') return [];
+    const zip = await openArchive(file);
+    return zip.names()
+      .filter((n) => /\.(jpe?g|png|gif|webp|avif|bmp)$/i.test(n) && !n.startsWith('__MACOSX/'))
+      // Not the tiny spacers and bullets books use for layout.
+      .filter((n) => !(zip.sizeOf(n) > 0 && zip.sizeOf(n) < 1024))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((name) => ({ name: name.split('/').pop(), load: () => blobOf(zip, name) }));
+  } catch {
+    return [];
+  }
+}
+
 /* ── CBZ ──────────────────────────────────────────────────────────────── */
 
 export async function parseCbz(file, onProgress, { onImage, prefix = null } = {}) {

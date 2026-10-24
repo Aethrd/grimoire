@@ -36,6 +36,41 @@ function screenNode(name) {
   return document.getElementById('screens').querySelector(`[data-screen="${name}"]`);
 }
 
+/* ── what finishes while you read ─────────────────────────────────────
+ *
+ * Imports, builds and exports run on while you do something else, and that
+ * something is often reading. Finishing used to break in on it: a build
+ * opened the book it had made in place of the one being read, an import's
+ * summary sat over the text, and an export brought up Android's save screen
+ * mid-page. Now, while a book is open -- the reader, or one of its own
+ * screens such as the index -- what was started elsewhere keeps its news and
+ * its save screen until the book is put down. What was started from inside
+ * the book still answers straight away: that was asked for there. */
+let inBook = false;
+const held = [];
+
+function viewChanged() {
+  if (current === 'reader') inBook = true;
+  else if (!BESIDE_THE_BOOK.has(current)) inBook = false;
+  document.body.classList.toggle('in-book', inBook);
+  if (!inBook && held.length) {
+    for (const deliver of held.splice(0)) {
+      try { deliver(); } catch (error) { console.warn('A held notice could not be shown', error); }
+    }
+  }
+}
+
+/** Now, or once the book is put down. */
+function whenNotReading(deliver, startedReading = false) {
+  if (inBook && !startedReading) held.push(deliver);
+  else deliver();
+}
+
+/** Resolves now, or once the book is put down. */
+function untilNotReading(startedReading = false) {
+  return new Promise((resolve) => whenNotReading(resolve, startedReading));
+}
+
 async function show(name, { replace = false } = {}) {
   if (name === current) return;
   /* A screen that does not exist is not navigated to.
@@ -88,6 +123,7 @@ async function show(name, { replace = false } = {}) {
   if (name !== 'library') clearSelection();
   // The tab bar is app furniture; it has no business over a page of prose.
   document.body.dataset.view = name;
+  viewChanged();
   el('tabbar').hidden = name === 'reader' || selecting();
   if (name !== 'reader') { hideEdgeHint(); el('chapter-pad').hidden = true; }
   else store.settings().then(paintChapterPad);
@@ -158,6 +194,7 @@ function back() {
   screenNode(target)?.setAttribute('data-active', '');
   current = target;
   document.body.dataset.view = target;
+  viewChanged();
   if (previous === 'reader') reader.pauseSession();   // back() is sync; the
   // stats screen re-reads on every open, so a late arrival still shows up.
   el('tabbar').hidden = target === 'reader';
@@ -1471,6 +1508,7 @@ async function exportMany(books) {
  * download made of the same pieces.
  */
 function exportSink(name) {
+  const startedReading = inBook;
   const bridge = window.GrimoireNative;
   const native = !!bridge?.beginExport;
   const handle = native ? bridge.beginExport(name) : null;
@@ -1507,6 +1545,8 @@ function exportSink(name) {
     },
     async done(mimeType, share = false) {
       flush();
+      // Android's save screen, not over a page being read.
+      await untilNotReading(startedReading);
       if (native) { bridge.finishExport(handle, mimeType, share); return; }
       const url = URL.createObjectURL(new Blob(kept, { type: mimeType }));
       const anchor = document.createElement('a');
@@ -2121,6 +2161,10 @@ function handleFiles(files, options = {}) {
 }
 
 async function importNow(files, { transient = false, into = '' } = {}, done) {
+  // Its report waits for the book to be put down, unless it was asked for
+  // from inside one -- a file opened from another app, say.
+  const startedReading = inBook;
+  const say = (...args) => whenNotReading(() => toast(...args), startedReading);
   done.say('Opening…', 0, '');
 
   /* The shelf is refreshed as books land rather than only at the end, so an
@@ -2185,12 +2229,12 @@ async function importNow(files, { transient = false, into = '' } = {}, done) {
     const why = refused.get(first.name);
     // Failed only if nothing at all came of it; some books in and one refused
     // is a finish with a note, not a failure.
-    toast(`${results.added} added${note} · ${first.name}: ${
+    say(`${results.added} added${note} · ${first.name}: ${
       why ? plainReason(why) : plainReason(first.reason)}`, 8000,
     { kind: results.added ? 'done' : 'failed' });
   } else if (!results.added && besides) {
     // Nothing new, and nothing wrong: not a failure, and not a tick either.
-    toast(`Nothing new to add · ${besides}`, 7000);
+    say(`Nothing new to add · ${besides}`, 7000);
   } else {
     const folders = results.folders?.size || 0;
     const seconds = (results.elapsedMs || 0) / 1000;
@@ -2202,7 +2246,7 @@ async function importNow(files, { transient = false, into = '' } = {}, done) {
     const one = results.added === 1 && results.titles?.[0];
     // Where they went, when that was the folder the shelf is open at.
     const where = into ? ` to “${into}”` : '';
-    toast((one
+    say((one
       ? `Added “${one}”${where}${took}`
       : folders
         ? `${results.added} book${results.added === 1 ? '' : 's'} added${where} across ${folders} folder${folders === 1 ? '' : 's'}${took}`
@@ -2213,7 +2257,7 @@ async function importNow(files, { transient = false, into = '' } = {}, done) {
    * of it is in the count above; this says why it might not be everything. */
   const [rescued] = results.recovered || [];
   if (rescued) {
-    toast(`“${rescued.name}” was damaged at the end, so its ${rescued.books} complete book${
+    say(`“${rescued.name}” was damaged at the end, so its ${rescued.books} complete book${
       rescued.books === 1 ? ' was' : 's were'} read from the front of it. Anything that was cut off is not included.`, 10000);
   }
 
@@ -2224,7 +2268,7 @@ async function importNow(files, { transient = false, into = '' } = {}, done) {
    * reader that cannot read Chinese, unless it is told otherwise. */
   const [damaged] = results.damaged || [];
   if (damaged) {
-    toast(`“${damaged}” was already damaged before it reached the app — most of its characters `
+    say(`“${damaged}” was already damaged before it reached the app — most of its characters `
       + 'were lost when it was saved in the wrong encoding. A fresh copy of the file should read properly.', 12000);
   }
 
@@ -2234,7 +2278,7 @@ async function importNow(files, { transient = false, into = '' } = {}, done) {
   const [run] = results.chapterRuns || [];
   if (run && results.added) {
     const more = results.chapterRuns.length - 1;
-    toast(`“${run.title}” came as ${run.count} chapter files${
+    say(`“${run.title}” came as ${run.count} chapter files${
       more ? ` (and ${more} more like it)` : ''} — Build can join them into one book`, 9000);
   }
 
@@ -5071,26 +5115,118 @@ let buildTitleTouched = false;
  * building, so it is not a surprise afterwards. One chosen here replaces it,
  * and goes into the book as a cover chosen in Details does. */
 let buildCover = null;
+// Where it came from: the first book ('first'), a picture in one of the
+// books ('book', with what it was), or a picture of your own ('file').
+let buildCoverFrom = 'first';
+let buildCoverWhat = '';
 const buildCoverUrls = blobs.pool();
+const coverPickUrls = blobs.pool();
 
 async function paintBuildCover() {
   const box = el('build-cover');
   const first = build.contents()[0];
   let shown = buildCover;
-  let note = 'Chosen by you. It goes into the book when it is built.';
+  let note = buildCoverFrom === 'book'
+    ? `${buildCoverWhat}. It goes into the book as its cover.`
+    : 'Your own picture. It goes into the book as its cover.';
   if (!shown && first) {
-    if (first.bookId) shown = (await store.get('books', first.bookId))?.coverBlob || null;
-    else if (first.pictures?.length) shown = first.pictures[0];
+    // The first book's own, looked for in the file if it is not on the shelf.
+    shown = await build.firstCover();
     note = shown
-      ? `From the first part, “${shortenMiddle(first.name)}”.`
-      : 'From the first part, if it has one. Choose one to be sure.';
+      ? `The cover of the first book, “${shortenMiddle(first.name)}”.`
+      : 'The first book has no cover to show. The next one that does is used, or pick one.';
   }
   buildCoverUrls.release();
   const url = shown ? buildCoverUrls.url(shown) : null;
   box.classList.toggle('empty', !url);
-  box.innerHTML = url ? `<img src="${url}" alt="">` : '<span>Cover from the first part</span>';
+  box.innerHTML = url ? `<img src="${url}" alt="">` : '<span>No cover yet</span>';
   el('build-cover-note').textContent = first ? note : '';
-  el('build-cover-clear').hidden = !buildCover;
+  el('build-cover-clear').setAttribute('aria-pressed', String(!buildCover));
+  el('build-cover-from-books').setAttribute('aria-pressed', String(!!buildCover && buildCoverFrom === 'book'));
+  el('build-cover-pick').setAttribute('aria-pressed', String(!!buildCover && buildCoverFrom === 'file'));
+}
+
+/* Any picture in any of the books, as the combined book's cover.
+ *
+ * Each book is looked into for its pictures -- a book on the shelf has them
+ * already; a file is opened only as far as its list of pictures -- and they
+ * are shown a few rows at a time, since a volume of a comic is hundreds of
+ * pages and drawing them all at once is a wall and a lot of memory. */
+const PICK_BATCH = 16;
+
+async function openCoverPick() {
+  const sheet = el('cover-pick-sheet');
+  const list = el('cover-pick-list');
+  coverPickUrls.release();
+  list.innerHTML = '';
+  sheet.hidden = false;
+  const parts = build.contents();
+  let any = false;
+  for (const part of parts) {
+    const section = document.createElement('section');
+    section.className = 'cover-pick-part';
+    section.innerHTML = `<h3>${escapeText(shortenMiddle(part.name))}</h3><p class="muted" style="font-size:12px;margin:0">Looking…</p>`;
+    list.appendChild(section);
+    const pictures = await build.picturesOf(part);
+    if (sheet.hidden) return;              // closed while looking
+    const note = section.querySelector('p');
+    if (!pictures.length) { note.textContent = 'No pictures in this one.'; continue; }
+    any = true;
+    note.remove();
+    const grid = document.createElement('div');
+    grid.className = 'cover-pick-grid';
+    section.appendChild(grid);
+    let shown = 0;
+    const more = document.createElement('button');
+    more.className = 'btn ghost cover-pick-more';
+    const showMore = async () => {
+      const batch = pictures.slice(shown, shown + PICK_BATCH);
+      shown += batch.length;
+      more.hidden = shown >= pictures.length;
+      more.textContent = `Show more (${pictures.length - shown} left)`;
+      for (const [n, picture] of batch.entries()) {
+        const button = document.createElement('button');
+        button.title = picture.name;
+        grid.appendChild(button);
+        const blob = await picture.load().catch(() => null);
+        if (sheet.hidden) return;
+        const url = blob ? coverPickUrls.url(blob) : null;
+        if (!url) { button.remove(); continue; }
+        button.innerHTML = `<img src="${url}" alt="" loading="lazy">`;
+        // A spacer that slipped through by size is dropped by its shape.
+        button.firstChild.onload = function () {
+          if (this.naturalWidth < 60 && this.naturalHeight < 60) button.remove();
+        };
+        const number = shown - batch.length + n + 1;
+        button.onclick = async () => {
+          try {
+            // Decoded and re-encoded, as a picture of your own is.
+            buildCover = await blobs.normaliseCover(new File([blob], picture.name || 'cover', { type: blob.type }));
+            buildCoverFrom = 'book';
+            buildCoverWhat = `Picture ${number} of “${shortenMiddle(part.name)}”`;
+            closeCoverPick();
+            await paintBuildCover();
+          } catch (error) {
+            toast(error.message, 6000);
+          }
+        };
+      }
+    };
+    more.onclick = showMore;
+    section.appendChild(more);
+    await showMore();
+  }
+  if (!any && !sheet.hidden) {
+    list.insertAdjacentHTML('beforeend', '<p class="muted" style="padding:8px 0">None of these books has pictures in it that can be read before building. Choose a picture of your own instead.</p>');
+  }
+}
+
+function closeCoverPick() {
+  if (el('cover-pick-sheet').hidden) return false;
+  el('cover-pick-sheet').hidden = true;
+  coverPickUrls.release();
+  el('cover-pick-list').innerHTML = '';
+  return true;
 }
 
 function wireBuildCover() {
@@ -5105,6 +5241,7 @@ function wireBuildCover() {
         // Decoded and re-encoded, as in Details: a picture the picker offered
         // but the WebView cannot draw is refused here, not built in blank.
         buildCover = await blobs.normaliseCover(file);
+        buildCoverFrom = 'file';
         await paintBuildCover();
       } catch (error) {
         toast(error.message, 6000);
@@ -5114,8 +5251,12 @@ function wireBuildCover() {
   };
   el('build-cover-clear').onclick = async () => {
     buildCover = null;
+    buildCoverFrom = 'first';
     await paintBuildCover();
   };
+  el('build-cover-from-books').onclick = () => openCoverPick();
+  el('cover-pick-cancel').onclick = () => closeCoverPick();
+  el('cover-pick-sheet').onclick = (e) => { if (e.target === el('cover-pick-sheet')) closeCoverPick(); };
 }
 
 function renderWorkshop() {
@@ -5221,6 +5362,7 @@ function wireWorkshop() {
     el('build-title').value = '';
     el('build-author').value = '';
     buildCover = null;
+    buildCoverFrom = 'first';
     renderWorkshop();
   };
   wireBuildCover();
@@ -5252,21 +5394,24 @@ function wireWorkshop() {
       el('build-title').value = '';
       el('build-author').value = '';
       buildCover = null;
+      buildCoverFrom = 'first';
       renderWorkshop();
       await refreshShelf();
       // Said with the parts that failed, not instead of them: a book short
       // three volumes should not look like a complete one.
       const filed = book.folder ? ` · in “${book.folder}”` : '';
-      toast(failed.length
+      whenNotReading(() => toast(failed.length
         ? `Built “${book.title}” — ${book.chapters} chapters${filed} · ${failed.length} part${failed.length === 1 ? '' : 's'} skipped: ${failed[0].reason}`
-        : `Built “${book.title}” — ${book.chapters} chapters${filed}`, 8000, { kind: 'done' });
+        : `Built “${book.title}” — ${book.chapters} chapters${filed}`, 8000, { kind: 'done' }));
       /* Straight into the book that was just made, not out to the shelf to
        * go looking for it. */
+      /* Only if Build is still what is on screen. Gone off to read, or to
+       * the shelf, while it worked, you are not taken out of that. */
       const made = await store.get('books', book.id);
-      if (made) await openBook(made);
+      if (made && current === 'workshop') await openBook(made);
     } catch (error) {
       finish.fail();
-      toast(error.message || 'That could not be built', 6000, { kind: 'failed' });
+      whenNotReading(() => toast(error.message || 'That could not be built', 6000, { kind: 'failed' }));
     } finally {
       finish();
     }
@@ -5838,6 +5983,7 @@ function base64Of(bytes) {
 }
 
 async function writeOut(blob, name, mimeType, { share = false, toPictures = false, onProgress } = {}) {
+  const startedReading = inBook;
   const bridge = window.GrimoireNative;
   if (!bridge?.beginExport) {
     // In an ordinary browser there is no native side; fall back to the
@@ -5866,6 +6012,8 @@ async function writeOut(blob, name, mimeType, { share = false, toPictures = fals
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
+  // Android's save screen, not over a page being read.
+  await untilNotReading(startedReading);
   // Straight into the phone's pictures, where the gallery shows it. A shell
   // from before this existed asks where to put it instead.
   if (toPictures && bridge.saveToPictures) bridge.saveToPictures(handle, mimeType);
@@ -5956,6 +6104,7 @@ window.Grimoire = {
     if (!el('remove-look').hidden) { closeRemoveLook(); return true; }
     if (!el('remove-confirm').hidden) { el('remove-confirm').hidden = true; return true; }
     if (closeCopyMenu()) return true;
+    if (closeCoverPick()) return true;
     if (tags.closeTagPicker()) return true;
     if (!el('picture-sheet').hidden) { el('picture-sheet').hidden = true; return true; }
     if (!el('folder-actions').hidden) { el('folder-actions').hidden = true; return true; }

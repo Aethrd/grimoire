@@ -674,8 +674,11 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
 .copy-row .btn.primary { flex: 1; text-align: center; }
 /* Copy, and beside it -- part of the same button -- how much. */
 .copy-split { flex: 1; display: flex; min-width: 0; }
-.copy-split #copy-chapter { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.copy-split .copy-amount { flex: none; width: 46px; padding: 0; display: grid; place-items: center;
+.copy-row .copy-split #copy-chapter { flex: 1 1 auto; min-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+/* About a fifth of the copy part beside it. Written to outrank
+   ".copy-row .btn.primary { flex: 1 }" above, which otherwise reached this
+   button too and made the two halves nearly equal. */
+.copy-row .copy-split .copy-amount { flex: 0 0 18%; min-width: 40px; width: auto; padding: 0; display: grid; place-items: center;
   border-top-left-radius: 0; border-bottom-left-radius: 0;
   border-left: 1px solid rgba(0, 0, 0, .2); }
 .copy-amount svg { width: 20px; height: 20px; fill: none; stroke: currentColor;
@@ -1155,6 +1158,25 @@ body[data-view="reader"] .stepper {
 
 .details-head { display: flex; gap: 14px; margin-bottom: 16px; }
 .build-cover-field > span { display: block; margin-bottom: 8px; }
+/* The three ways to a cover, the one in use marked. */
+.build-cover-field .btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent); }
+.build-cover-field .col { gap: 8px; }
+
+/* Choosing a cover from the books: a part at a time, a few rows at a time. */
+#cover-pick-sheet { z-index: 45; }
+#cover-pick-sheet .cover-pick { display: flex; flex-direction: column; max-height: 82%; overflow: hidden; }
+.cover-pick-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.cover-pick-part { padding: 8px 0 12px; border-top: 1px solid var(--divider); }
+.cover-pick-part:first-child { border-top: 0; }
+.cover-pick-part h3 { margin: 4px 0 8px; font-size: 13px; color: var(--muted); font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cover-pick-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.cover-pick-grid button { position: relative; aspect-ratio: 2 / 3; min-height: 0; overflow: hidden;
+  border-radius: var(--radius-sm); background: var(--neutral-600); }
+.cover-pick-grid img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cover-pick-grid button:active { outline: 2px solid var(--accent); }
+.cover-pick-more { margin-top: 8px; }
 #build-cover-note { font-size: 12px; line-height: 1.45; }
 /* No picture to show yet: say where it will come from, in the box itself. */
 .details-cover.empty { display: grid; place-items: center; padding: 8px; text-align: center;
@@ -1223,6 +1245,19 @@ body[data-view="reader"] .stepper {
 .import-progress.minimised .jobs,
 .import-progress.minimised .jobs-more { display: none; }
 .import-progress.minimised .jobs-summary { display: block; }
+
+/* In a book, the panel keeps to a small pill under the top bar -- not a
+   card over the page -- and is gone altogether when the bars are hidden for
+   reading. What it reports is still there when the book is put down. */
+body.in-book .import-progress { left: auto; right: 12px; bottom: auto;
+  top: calc(var(--safe-top) + 62px); padding: 8px 46px 8px 14px; min-height: 46px;
+  display: flex; align-items: center; }
+body.in-book .import-progress[hidden],
+body.in-book[data-chrome="none"] .import-progress,
+body.in-book[data-chrome="copy"] .import-progress { display: none; }
+body.in-book .import-progress .jobs,
+body.in-book .import-progress .jobs-more { display: none; }
+body.in-book .import-progress .jobs-summary { display: block; }
 
 
 /* Fifty-odd languages behind a disclosure, so the handful your library

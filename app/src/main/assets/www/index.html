@@ -353,8 +353,9 @@
           <div class="details-head">
             <span class="details-cover" id="build-cover"></span>
             <span class="col">
-              <button class="btn ghost" id="build-cover-pick">Choose cover</button>
-              <button class="btn ghost" id="build-cover-clear" hidden>Use the book's own</button>
+              <button class="btn ghost" id="build-cover-clear" aria-pressed="true">First book's cover</button>
+              <button class="btn ghost" id="build-cover-from-books" aria-pressed="false">Pick from the books…</button>
+              <button class="btn ghost" id="build-cover-pick" aria-pressed="false">Choose a picture…</button>
               <small class="muted" id="build-cover-note"></small>
             </span>
           </div>
@@ -517,6 +518,17 @@
   <span class="select-count" id="confirm-text"></span>
   <button class="btn ghost" id="confirm-no">Cancel</button>
   <button class="btn danger" id="confirm-yes">Delete</button>
+</div>
+
+<!-- Any picture in any of the books being built, as the built book's cover. -->
+<div class="sheet-scrim" id="cover-pick-sheet" hidden>
+  <div class="sheet cover-pick">
+    <p class="eyebrow">Cover from the books</p>
+    <div class="cover-pick-list" id="cover-pick-list"></div>
+    <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
+      <button class="btn ghost" id="cover-pick-cancel">Cancel</button>
+    </div>
+  </div>
 </div>
 
 <!-- Choosing tags: the ones on the shelf, the common ones, or a new one. -->

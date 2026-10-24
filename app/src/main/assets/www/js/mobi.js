@@ -23,7 +23,17 @@ const EMBED = /kindle:embed:(\w+)/i;
 const FLOW = /kindle:flow:(\w+)/i;
 
 /* A File, as the reader asks for one: slices that read as ArrayBuffers.
+ *
+ * Read in blocks of a few megabytes and handed out from those. A Kindle book
+ * is thousands of records of four kilobytes, read one after another, and each
+ * read of a File costs the same however little it fetches: read singly, an
+ * omnibus spent most of its build fetching, not reading. Three blocks are
+ * kept, which is all the reader ever needs at once -- it moves through the
+ * file in order, and pictures sit together at the end.
+ *
  * Read through FileReader where an old WebView has no Blob.arrayBuffer. */
+const BLOCK = 4 * 1024 * 1024;
+
 function source(file, onRead) {
   const read = (blob) => (typeof blob.arrayBuffer === 'function'
     ? blob.arrayBuffer()
@@ -33,18 +43,40 @@ function source(file, onRead) {
       reader.onerror = () => reject(reader.error);
       reader.readAsArrayBuffer(blob);
     }));
+  const blocks = new Map();             // block number -> Promise<Uint8Array>
+  const block = (n) => {
+    if (!blocks.has(n)) {
+      blocks.set(n, read(file.slice(n * BLOCK, Math.min(file.size, (n + 1) * BLOCK)))
+        .then((bytes) => new Uint8Array(bytes)));
+      // The oldest goes once there are more than three.
+      if (blocks.size > 3) blocks.delete(blocks.keys().next().value);
+    }
+    return blocks.get(n);
+  };
+  const bytes = async (start, end) => {
+    const from = Math.max(0, start || 0);
+    const to = Math.min(file.size, end == null ? file.size : end);
+    if (to <= from) return new ArrayBuffer(0);
+    // Large pieces are read as they are; blocks are for the many small ones.
+    if (to - from > BLOCK) return read(file.slice(from, to));
+    const out = new Uint8Array(to - from);
+    for (let n = Math.floor(from / BLOCK); n * BLOCK < to; n++) {
+      const data = await block(n);
+      const lo = Math.max(from, n * BLOCK);
+      const hi = Math.min(to, n * BLOCK + data.length);
+      out.set(data.subarray(lo - n * BLOCK, hi - n * BLOCK), lo - from);
+    }
+    return out.buffer;
+  };
   return {
     size: file.size,
-    slice: (start, end) => {
-      const piece = file.slice(start, end);
-      return {
-        arrayBuffer: async () => {
-          const bytes = await read(piece);
-          onRead?.();
-          return bytes;
-        },
-      };
-    },
+    slice: (start, end) => ({
+      arrayBuffer: async () => {
+        const data = await bytes(start, end);
+        onRead?.();
+        return data;
+      },
+    }),
   };
 }
 
@@ -52,7 +84,8 @@ const ascii = (bytes) => String.fromCharCode(...bytes);
 
 /** What kind of Palm book this is, read from its first record. */
 async function inspect(file) {
-  const read = (start, end) => source(file).slice(start, end).arrayBuffer();
+  const src = source(file);
+  const read = (start, end) => src.slice(start, end).arrayBuffer();
   const head = new Uint8Array(await read(0, 86));
   if (head.length < 86) throw new Error('This file is too short to be a Kindle book.');
   const type = ascii(head.subarray(60, 68));
@@ -92,12 +125,13 @@ function unpackPalmDoc(bytes) {
 
 async function palmText(file, info) {
   const { parseText } = await import('./parse.js');
-  const offsets = new DataView(await source(file).slice(78, 78 + (info.textRecords + 2) * 8).arrayBuffer());
+  const src = source(file);
+  const offsets = new DataView(await src.slice(78, 78 + (info.textRecords + 2) * 8).arrayBuffer());
   const pieces = [];
   for (let i = 1; i <= info.textRecords; i++) {
     const start = offsets.getUint32(i * 8);
     const end = i + 1 < offsets.byteLength / 8 ? offsets.getUint32((i + 1) * 8) : file.size;
-    const raw = new Uint8Array(await source(file).slice(start, end).arrayBuffer());
+    const raw = new Uint8Array(await src.slice(start, end).arrayBuffer());
     pieces.push(info.compression === 2 ? unpackPalmDoc(raw) : raw);
   }
   const name = file.name.replace(/\.[a-z0-9]{2,5}$/i, '');
@@ -118,7 +152,83 @@ async function palmText(file, info) {
   return { ...book, format: 'MOBI' };
 }
 
+/**
+ * A Kindle book's cover, read straight from the record its header names,
+ * without opening the book: three small reads, however large the file.
+ */
+export async function mobiCover(file) {
+  const book = await palmBook(file);
+  if (!book) return null;
+  const offset = book.cover != null ? book.cover : book.thumb;
+  if (offset == null || book.resourceStart + offset >= book.count) return null;
+  return book.picture(book.resourceStart + offset);
+}
+
+/**
+ * Every picture in a Kindle book, found without opening it: each record
+ * from the first picture on is looked at by its first bytes, and only the
+ * ones that are pictures are listed. Each is read when it is asked for.
+ */
+export async function mobiPictures(file) {
+  const book = await palmBook(file);
+  if (!book) return [];
+  const found = [];
+  for (let i = book.resourceStart; i < book.count; i++) {
+    const [from, to] = await book.recordAt(i);
+    // Not the 1x1 spacers books use for layout: nobody wants one as a cover.
+    if (to - from < 1024) continue;
+    const [type] = typeOf(await book.read(from, from + 12));
+    if (!type) continue;
+    found.push({ name: `Picture ${found.length + 1}`, load: () => book.picture(i) });
+  }
+  return found;
+}
+
+/** The parts of a Kindle book's container that finding its pictures needs. */
+async function palmBook(file) {
+  const src = source(file);
+  const read = (start, end) => src.slice(start, end).arrayBuffer();
+  const info = await inspect(file);
+  if (info.encryption || info.type !== 'BOOKMOBI') return null;
+  const count = new DataView(await read(76, 78)).getUint16(0);
+  // The whole table of records in one read, not one read per record: an
+  // omnibus has well over a thousand of them.
+  const table = new DataView(await read(78, 78 + count * 8));
+  const recordAt = async (i) => [table.getUint32(i * 8), i + 1 < count ? table.getUint32((i + 1) * 8) : file.size];
+  const [start, end] = await recordAt(0);
+  const record = new Uint8Array(await read(start, end));
+  const view = new DataView(record.buffer);
+  if (ascii(record.subarray(16, 20)) !== 'MOBI') return null;
+  const resourceStart = view.getUint32(108);
+  let cover = null;
+  let thumb = null;
+  const exth = 16 + view.getUint32(20);
+  if ((view.getUint32(128) & 0x40) && ascii(record.subarray(exth, exth + 4)) === 'EXTH') {
+    let at = exth + 12;
+    for (let i = 0, n = view.getUint32(exth + 8); i < n && at + 12 <= record.length; i++) {
+      const type = view.getUint32(at);
+      const size = view.getUint32(at + 4);
+      const value = view.getUint32(at + 8);
+      if (type === 201 && value !== 0xffffffff) cover = value;
+      if (type === 202 && value !== 0xffffffff) thumb = value;
+      at += Math.max(8, size);
+    }
+  }
+  /* A picture is a piece of the file, handed on as that piece: never read
+   * into memory and copied, only stored -- which reads it once, straight
+   * from the file. An omnibus is over a hundred megabytes of them. */
+  const picture = async (i) => {
+    if (i >= count) return null;
+    const [from, to] = await recordAt(i);
+    const [type] = typeOf(await read(from, Math.min(to, from + 12)));
+    return type ? file.slice(from, to, type) : null;
+  };
+  return { count, resourceStart, cover, thumb, recordAt, read, picture };
+}
+
 /* ── pictures ─────────────────────────────────────────────────────────── */
+
+const EXT = { 'image/gif': 'gif', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/bmp': 'bmp' };
 
 function typeOf(bytes) {
   const b = new Uint8Array(bytes.slice ? bytes.slice(0, 12) : bytes);
@@ -172,17 +282,18 @@ export async function parseMobi(file, onProgress, { onImage } = {}) {
    * in has its number. */
   const pictures = new Map();          // record -> { href, blob, animated }
   let order = 0;
+  const palm = await palmBook(file);
   const picture = async (record) => {
     if (!Number.isFinite(record) || record < 0) return null;
     if (pictures.has(record)) return pictures.get(record);
     let found = null;
     try {
-      const bytes = await mobi.loadResource(record);
-      const [type, ext] = typeOf(bytes);
+      const blob = palm ? await palm.picture(palm.resourceStart + record) : null;
+      const [type, ext] = blob ? [blob.type, EXT[blob.type]] : [null, null];
       if (type) {
         found = {
           href: `mobi/${record}.${ext}`,
-          blob: new Blob([bytes], { type }),
+          blob,
           animated: type === 'image/gif',
           handed: false,
         };
@@ -263,14 +374,17 @@ export async function parseMobi(file, onProgress, { onImage } = {}) {
     open = null;
     // A chapter can still be a whole novel; long ones are cut as a text
     // file's would be, so no chapter is too long to lay out.
-    for (const part of boundedChapters([{ title: chapter.title, html: chapter.html.join('') }])) {
+    const parts = boundedChapters([{ title: chapter.title, html: chapter.html.join('') }]);
+    for (const part of parts) {
       const index = chapters.length;
       chapters.push({
         index,
         title: part.title,
         fromToc: chapter.fromToc,
         html: part.html,
-        words: countWords(plainTextOf(part.html), lang),
+        // Counted from the text already in hand where the chapter is whole;
+        // a chapter cut in parts has each part counted for itself.
+        words: countWords(parts.length === 1 ? chapter.text.join('\n') : plainTextOf(part.html), lang),
       });
       for (const found of chapter.wanted.values()) {
         if (found.handed || !part.html.includes(`data-img="${found.href}"`)) continue;
@@ -345,17 +459,20 @@ export async function parseMobi(file, onProgress, { onImage } = {}) {
 
       if (group.label || !open || !named) {
         await finish();
-        const heading = box.querySelector('h1, h2, h3')?.textContent?.replace(/\s+/g, ' ').trim();
-        const line = firstLine(text);
+        // Looked for only when the book has not named it.
+        const heading = group.label ? '' : box.querySelector('h1, h2, h3')?.textContent?.replace(/\s+/g, ' ').trim();
+        const line = group.label || heading ? '' : firstLine(text.slice(0, 400));
         open = {
           title: group.label || heading || (line && line.length <= 70 ? line : '')
             || (chapters.length ? `Section ${chapters.length + 1}` : title),
           fromToc: !!group.label,
           html: [],
+          text: [],
           wanted: new Map(),
         };
       }
       open.html.push(html);
+      open.text.push(text);
       for (const [src, found] of wanted) open.wanted.set(src, found);
     }
   }

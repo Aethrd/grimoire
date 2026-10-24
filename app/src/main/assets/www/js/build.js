@@ -20,6 +20,7 @@ import { isRar, rarToZip, zipNameFor } from './rar.js';
 import * as store from './store.js';
 import {
   parse, parseChapters, formatOf, expandArchive, asEpubName, nameWithFormat, chapterHtml, UNSUPPORTED_REASON,
+  coverOf, picturesInFile,
 } from './parse.js';
 import { planBooks } from './group.js';
 
@@ -27,6 +28,42 @@ import { planBooks } from './group.js';
 let parts = [];
 
 export const contents = () => parts;
+
+/* The first part's cover, looked up once per part rather than on every
+ * redraw of the workshop: finding it can mean opening the file. */
+const covers = new WeakMap();
+
+/**
+ * The pictures a part holds, for choosing a cover from: [{ name, load() }].
+ * A book on the shelf has them stored already; a file is looked into without
+ * being read through (see picturesInFile).
+ */
+export async function picturesOf(part) {
+  if (part.bookId) {
+    const stored = (await store.byIndex('images', 'bookId', part.bookId))
+      .filter((image) => image.blob && !image.removed && image.blob.size >= 1024)
+      .sort((a, b) => a.order - b.order);
+    return stored.map((image) => ({ name: image.href.split('/').pop(), load: async () => image.blob }));
+  }
+  if (part.pictures?.length) return part.pictures.map((file) => ({ name: file.name, load: async () => file }));
+  if (part.file && !part.prefix) return picturesInFile(part.file);
+  return [];
+}
+
+/** The cover a build gets when none is chosen: the first part's. */
+export function firstCover() {
+  const first = parts[0];
+  if (!first) return Promise.resolve(null);
+  if (!covers.has(first)) {
+    covers.set(first, (async () => {
+      if (first.bookId) return (await store.get('books', first.bookId))?.coverBlob || null;
+      if (first.pictures?.length) return first.pictures[0];
+      if (first.file && !first.prefix) return coverOf(first.file);
+      return null;
+    })().catch(() => null));
+  }
+  return covers.get(first);
+}
 export const isEmpty = () => parts.length === 0;
 
 /** 'Volume 2' before 'Volume 10', which plain text sorting gets backwards. */
