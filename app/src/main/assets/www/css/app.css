@@ -2392,18 +2392,6 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .web-link.lost .web-tag { color: #c0553f; border-color: currentColor; }
 .web-list.painting .web-link { cursor: ns-resize; }
 
-/* The + on the shelf: a file, or a website. */
-#library-head { position: relative; }
-.add-menu { position: absolute; right: 12px; top: calc(100% - 4px); z-index: 30;
-  width: min(290px, calc(100vw - 24px)); padding: 6px; border-radius: var(--radius-md);
-  background: var(--surface); border: 1px solid var(--divider);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, .35); }
-.add-menu[hidden] { display: none; }
-.add-menu button { display: grid; width: 100%; text-align: left; gap: 2px;
-  padding: 11px 12px; border-radius: var(--radius-sm); }
-.add-menu button + button { border-top: 1px solid var(--hairline); }
-.add-menu button span { font-family: var(--font-heading); font-weight: 600; font-size: 14px; }
-.add-menu button small { font-size: 12px; color: var(--muted); }
 
 /* A page held still while the reader's bars come and go (holdPageAt in
    reader.js): it begins where it began, and a paragraph divided to make that

@@ -264,17 +264,19 @@ await t('the native side fetches only web addresses, and only when asked', () =>
   assert.ok(!/SharedPreferences|getSharedPreferences/.test(java));
 });
 
-await t('the screen is reachable from the shelf', () => {
+await t('the screen is reached from Build, and only from there', () => {
   const html = read('app/src/main/assets/www/index.html');
   assert.match(html, /data-screen="web"/);
-  // From the shelf's +, beside Import files, and from an empty shelf.
-  const menu = html.slice(html.indexOf('id="add-menu"'), html.indexOf('</div>', html.indexOf('id="add-menu"')));
-  assert.match(menu, /data-import/);
-  assert.match(menu, /data-go="web"/);
-  assert.match(html, /<button class="btn ghost" data-go="web">Download from a website<\/button>/);
+  assert.match(html, /id="build-web"/);
+  // The shelf's + is the file picker again, in one tap.
+  assert.match(html, /<button class="icon-btn accent" data-import title="Import files">/);
+  assert.ok(!/data-go="web"/.test(html), 'still offered somewhere other than Build');
+  assert.ok(!/id="add-menu"/.test(html));
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /case 'web': return renderWeb\(\);/);
   assert.match(app, /settleWeb: web\.settleWeb/);
+  assert.match(app, /el\('build-web'\)\.onclick = \(\) => show\('web'\);/);
+  assert.match(app, /el\('web-go'\)\.onclick = addWebToBuild;/);
 });
 
 /* ── into Build ──────────────────────────────────────────────────────── */
@@ -337,7 +339,6 @@ await t('the link list is ticked by holding and dragging, with nothing to read f
   const wire = app.slice(app.indexOf('function wireWeb('), app.indexOf('/* ── global wiring'));
   assert.match(wire, /list\.addEventListener\('touchmove', \(e\) => \{[\s\S]*?if \(e\.cancelable\) e\.preventDefault\(\);[\s\S]*?\}, \{ passive: false \}\);/);
   assert.match(wire, /const want = pos >= low && pos <= high \? paint\.value : paint\.was\.get\(at\);/);
-  assert.match(wire, /webState\.forBuild = true;/);
 });
 
 console.log(`\n${pass} assertions passed`);

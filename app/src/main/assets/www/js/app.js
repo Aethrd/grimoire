@@ -5810,8 +5810,10 @@ function wireCopy() {
 /* ── from the web ─────────────────────────────────────────────────────────
  *
  * A contents page in, every link on it listed, the clutter taken out by the
- * reader, the rest downloaded into one book (web.js does the work). Like a
- * batch link downloader, run from the app and owing nobody a subscription.
+ * reader, and the rest into Build as a part -- downloaded when the book is
+ * built, beside whatever else is in the list (web.js does the fetching). Like
+ * a batch link downloader, run from the app and owing nobody a subscription.
+ * Reached from Build only.
  */
 
 const webState = {
@@ -5822,9 +5824,7 @@ const webState = {
   sources: [],
   reversed: false,
   pictures: true,
-  running: null,      // { stop } while a download is under way
   titleTouched: false,
-  forBuild: false,    // opened from Build: the chosen pages become a part there
 };
 
 /* What the screen says before anything has been asked of it. */
@@ -5844,23 +5844,18 @@ function renderWeb() {
   el('web-reverse').setAttribute('aria-pressed', String(webState.reversed));
   el('web-pictures').setAttribute('aria-pressed', String(webState.pictures));
   if (!webState.titleTouched) el('web-title').value = webState.title;
-  el('web-eyebrow').textContent = (el('web-title').value || '').trim()
-    || (webState.forBuild ? 'Chapters from a website, for Build' : 'Download a book from a website');
+  el('web-eyebrow').textContent = (el('web-title').value || '').trim() || 'Chapters from a website, for Build';
   paintWebCount();
 }
 
 function paintWebCount() {
   const picked = webState.links.filter((link) => link.picked).length;
   el('web-count').textContent = webState.links.length
-    ? `${picked} of ${webState.links.length}${activeFolder && !webState.forBuild ? ` · into “${activeFolder}”` : ''}`
+    ? `${picked} of ${webState.links.length}`
     : '';
   const go = el('web-go');
-  go.textContent = webState.running ? 'Stop'
-    : webState.forBuild ? `Add${picked ? ` ${picked}` : ''} to Build`
-    : `Download${picked ? ` ${picked}` : ''}`;
-  go.disabled = !webState.running && picked === 0;
-  go.classList.toggle('danger', !!webState.running);
-  go.classList.toggle('primary', !webState.running);
+  go.textContent = `Add${picked ? ` ${picked}` : ''} to Build`;
+  go.disabled = picked === 0;
 }
 
 /** Where a link goes, said briefly: the path, not the whole address. */
@@ -5939,7 +5934,6 @@ const shownWebLinks = () => [...el('web-list').children]
   .map((row) => webState.links[Number(row.dataset.at)]);
 
 async function findWebLinks() {
-  if (webState.running) return;
   const addresses = web.addressesIn(el('web-address').value);
   if (!addresses.length) {
     webNote('Paste a web address first — the page that lists the chapters.', true);
@@ -6043,70 +6037,7 @@ async function addWebToBuild() {
   }
 }
 
-async function startWebDownload() {
-  if (webState.forBuild && !webState.running) { await addWebToBuild(); return; }
-  if (webState.running) {
-    webState.running.stop = true;
-    el('web-go').textContent = 'Stopping…';
-    return;
-  }
-  const chosen = webState.links.filter((link) => link.picked);
-  if (!chosen.length) return;
-  const title = (el('web-title').value || '').trim() || webState.title || 'Downloaded book';
-  const into = activeFolder || '';
-  const run = { stop: false };
-  webState.running = run;
-  for (const link of chosen) link.got = undefined;
-  repaintWebRows();
-
-  // Told when it is done -- unless a book is open by then, in which case it
-  // waits until the book is put down.
-  const say = (...args) => whenNotReading(() => toast(...args));
-  const job = progress.start(`Downloading ${title}`);
-  const rowOf = new Map([...el('web-list').children]
-    .map((row) => [webState.links[Number(row.dataset.at)], row]));
-  try {
-    const result = await web.downloadBook({
-      title, author: webState.author, cover: webState.cover,
-      links: chosen, folder: into, pictures: webState.pictures,
-      sources: webState.sources, stop: () => run.stop,
-      onProgress: (fraction, done, total) => job.say(`Downloading ${title}`, fraction, `${done} of ${total}`),
-      onPage: (link, ok) => {
-        link.got = ok;
-        const row = rowOf.get(link);
-        if (row) paintWebRow(row, link);
-      },
-    });
-    job();
-    const failed = result.failed.length;
-    const head = `“${title}” — ${result.done} chapter${result.done === 1 ? '' : 's'} downloaded`;
-    const tail = result.stopped ? ' before it was stopped'
-      : failed ? `, ${failed} could not be` : '';
-    say(`${head}${tail}`, 6000, { kind: 'done' });
-    webNote(`${head}${tail}.`
-      + (failed ? ` ${result.failed[0].text || webWhere(result.failed[0].url)}: ${result.failed[0].reason}.` : '')
-      + ' Anything in it that is not the book can still be taken out: open it, then Take out.', failed > 0);
-    if (current === 'library') refreshShelf();
-  } catch (error) {
-    job.fail();
-    say(error.message || 'That download failed', 6000);
-    webNote(error.message || 'That download failed.', true);
-  } finally {
-    webState.running = null;
-    paintWebCount();
-  }
-}
-
-function closeAddMenu() {
-  const menu = el('add-menu');
-  if (!menu || menu.hidden) return false;
-  menu.hidden = true;
-  el('add-btn').setAttribute('aria-expanded', 'false');
-  return true;
-}
-
 function clearWeb() {
-  if (webState.running) return;
   Object.assign(webState, {
     links: [], title: '', author: '', cover: '', sources: [], reversed: false, titleTouched: false,
   });
@@ -6119,21 +6050,8 @@ function clearWeb() {
 }
 
 function wireWeb() {
-  el('add-btn').onclick = (e) => {
-    e.stopPropagation();
-    if (closeAddMenu()) return;
-    el('add-menu').hidden = false;
-    el('add-btn').setAttribute('aria-expanded', 'true');
-  };
-  // Either choice, or a tap anywhere else, puts it away. Captured, so the
-  // choice itself still goes on to do what it says.
-  document.addEventListener('click', (e) => {
-    if (el('add-menu').hidden || e.target.closest?.('#add-btn')) return;
-    closeAddMenu();
-  }, true);
-
   el('web-find').onclick = findWebLinks;
-  el('web-go').onclick = startWebDownload;
+  el('web-go').onclick = addWebToBuild;
   el('web-clear').onclick = clearWeb;
   el('web-paste').onclick = async () => {
     try {
@@ -6165,7 +6083,6 @@ function wireWeb() {
     repaintWebRows();
   };
   el('web-reverse').onclick = () => {
-    if (webState.running) return;
     webState.links.reverse();
     webState.reversed = !webState.reversed;
     drawWebList();
@@ -6299,16 +6216,8 @@ function wireWeb() {
     paintWebCount();
   });
 
-  // Opened from Build, the pages chosen go there; from anywhere else, they
-  // are downloaded as a book of their own.
-  el('build-web').onclick = () => {
-    if (webState.running) { toast('A download is still running'); return; }
-    webState.forBuild = true;
-    show('web');
-  };
-  document.addEventListener('click', (e) => {
-    if (e.target.closest?.('[data-go="web"]')) webState.forBuild = false;
-  }, true);
+  // Reached from Build, and only from there: what is chosen becomes a part.
+  el('build-web').onclick = () => show('web');
 }
 
 /* ── global wiring ────────────────────────────────────────────────────── */
@@ -6612,7 +6521,6 @@ window.Grimoire = {
     if (!el('remove-look').hidden) { closeRemoveLook(); return true; }
     if (!el('remove-confirm').hidden) { el('remove-confirm').hidden = true; return true; }
     if (closeCopyMenu()) return true;
-    if (closeAddMenu()) return true;
     if (closeCoverPick()) return true;
     if (tags.closeTagPicker()) return true;
     if (!el('picture-sheet').hidden) { el('picture-sheet').hidden = true; return true; }
