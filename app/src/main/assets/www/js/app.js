@@ -6089,14 +6089,16 @@ async function findWebLinks() {
     let title = '';
     let author = '';
     let cover = '';
+    let newestFirstList = false;
+    let wordpress = false;
     if (el('web-direct').checked) {
       // Given the chapters themselves: nothing to look for.
       links = addresses.map((url) => ({ url, text: '', chrome: false, kind: null }));
     } else {
       button.textContent = 'Finding…';
       const found = await web.findLinks(addresses, {
-        onProgress: (fraction, address) => {
-          if (address) webNote(`Reading ${webWhere(address)}…`);
+        onProgress: (fraction, address, page) => {
+          if (address) webNote(page > 1 ? `Reading page ${page} of the list…` : `Reading ${webWhere(address)}…`);
         },
       });
       if (!found.links.length) {
@@ -6109,6 +6111,8 @@ async function findWebLinks() {
       title = found.title;
       author = found.author;
       cover = found.cover;
+      newestFirstList = found.newestFirstList;
+      wordpress = found.wordpress;
       if (found.failed.length) {
         toast(`${found.failed.length} of those pages could not be read: ${found.failed[0].reason}`, 6000);
       }
@@ -6125,7 +6129,7 @@ async function findWebLinks() {
     // and says so: a book read from its last chapter is no book.
     // Only the chapters are turned round: the menus stay where the page had
     // them, at the top and the bottom, out of the way.
-    webState.reversed = web.newestFirst(webState.links.filter((link) => link.likely));
+    webState.reversed = web.readsBackwards(webState.links.filter((link) => link.likely), newestFirstList);
     if (webState.reversed) webState.links = web.reverseWhere(webState.links, (link) => link.likely);
 
     const chapters = webState.links.filter((link) => link.likely).length;
@@ -6133,6 +6137,7 @@ async function findWebLinks() {
       ? `${webState.links.length} page${webState.links.length === 1 ? '' : 's'} to download, in the order given.`
       : `${webState.links.length} links found${chapters ? `, ${chapters} of them look like chapters` : ''}. `
         + 'Everything is ticked: untick what is not the book, or tap Just the chapters.'
+        + (wordpress && newestFirstList ? ' A WordPress list of posts: every page of it was read.' : '')
         + (webState.reversed ? ' The site listed them newest first, so the order has been turned round.' : ''));
     el('web-filter').value = '';
     drawWebList();

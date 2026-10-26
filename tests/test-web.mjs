@@ -516,4 +516,107 @@ await t('an answer that never comes is given up on', async () => {
   delete window.GrimoireWeb;
 });
 
+/* ── WordPress ───────────────────────────────────────────────────────── */
+
+console.log('WordPress');
+
+const WP = 'https://lanterntl.wordpress.example';
+const wpHead = (title, bodyClass) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>${title} – Lantern Translations</title>
+<meta name="generator" content="WordPress 6.6.2">
+<link rel="https://api.w.org/" href="${WP}/wp-json/">
+<link rel="stylesheet" href="${WP}/wp-content/themes/twentytwentyone/style.css"></head>
+<body class="${bodyClass}"><header id="masthead" class="site-header"><a href="${WP}/">Lantern Translations</a>
+<nav class="primary-navigation"><a href="${WP}/about/">About</a><a href="${WP}/donate/">Donate</a></nav></header>`;
+const wpPost = (slug, name, extra = '') => wpHead(name, 'post-template-default single single-post') + `
+<article class="post type-post status-publish">
+<header class="entry-header"><h1 class="entry-title">${name}</h1>
+<div class="entry-meta"><a href="${WP}/author/keeper/">keeper</a> · <a href="${WP}/${slug}/#respond">Leave a comment</a></div></header>
+<div class="entry-content">
+<p><a href="${WP}/prev/">Previous Chapter</a> | <a href="${WP}/toc/">Index</a> | <a href="${WP}/next/">Next Chapter</a></p>
+<p>The lamp was lit again in ${name}, and the harbour watched it burn until the morning came grey over the water.</p>
+${extra}
+<p>She wrote the hour in the logbook and went down, counting the steps as she always did, and slept.</p>
+<div class="wpcnt"><div class="wpa"><span class="wpa-about">Advertisements</span></div></div>
+<div class="sharedaddy sd-sharing-enabled"><h3 class="sd-title">Share this:</h3><ul><li><a href="${WP}/${slug}/?share=twitter">Twitter</a></li></ul></div>
+<div id="jp-post-flair" class="sharedaddy sd-like"><h3>Like this:</h3><span>Like Loading...</span></div>
+<div id="jp-relatedposts" class="jp-relatedposts"><h3 class="jp-relatedposts-headline"><em>Related</em></h3></div>
+</div>
+<footer class="entry-footer"><span class="cat-links">Posted in <a href="${WP}/category/lantern/">The Lantern</a></span></footer>
+</article>
+<nav class="navigation post-navigation"><div class="nav-links"><a href="${WP}/prev/" rel="prev">Previous post</a></div></nav>
+<div id="comments" class="comments-area"><p>Thanks for the chapter!</p></div>
+<footer id="colophon" class="site-footer">Proudly powered by WordPress</footer></body></html>`;
+// Posts named without numbers: only the list's order says which comes first.
+const NAMES = ['The Stair', 'Salt', 'The Gate', 'Low Tide', 'The Logbook'];
+const SLUGS = NAMES.map((n) => n.toLowerCase().replace(/\s+/g, '-'));
+const archivePage = (n, posts, older) => wpHead('The Lantern', `archive category category-lantern${n > 1 ? ' paged' : ''}`) + `
+<h1 class="page-title">Category: <span>The Lantern</span></h1>
+${posts.map((i) => `<article class="post"><h2 class="entry-title"><a href="${WP}/${SLUGS[i]}/">${NAMES[i]}</a></h2>
+<div class="entry-summary"><p>…</p><a class="more-link" href="${WP}/${SLUGS[i]}/">Continue reading</a></div>
+<div class="entry-meta"><a href="${WP}/${SLUGS[i]}/#comments">3 Comments</a></div></article>`).join('')}
+<nav class="navigation pagination"><div class="nav-links">${older ? `<a class="next page-numbers" href="${older}">Older posts</a>` : ''}</div></nav>
+<footer id="colophon" class="site-footer"><a href="${WP}/privacy/">Privacy</a></footer></body></html>`;
+
+const wpPages = {
+  [`${WP}/category/lantern/`]: archivePage(1, [4, 3], `${WP}/category/lantern/page/2/`),
+  [`${WP}/category/lantern/page/2/`]: archivePage(2, [2, 1], `${WP}/category/lantern/page/3/`),
+  [`${WP}/category/lantern/page/3/`]: archivePage(3, [0], null),
+};
+SLUGS.forEach((slug, i) => {
+  wpPages[`${WP}/${slug}/`] = wpPost(slug, NAMES[i], i === 1
+    ? `<p><img src="data:image/svg+xml,%3Csvg%3E%3C/svg%3E" data-lazy-src="${WP}/wp-content/uploads/map.png" alt="map"></p>` : '');
+});
+const wpAsked = [];
+const wpFetch = async (url) => {
+  wpAsked.push(url);
+  if (url === `${WP}/wp-content/uploads/map.png`) return { url, status: 200, type: 'image/png', blob: new Blob([PNG], { type: 'image/png' }) };
+  const body = wpPages[url];
+  if (!body) throw new Error('that page does not exist (404)');
+  return { url, status: 200, type: 'text/html; charset=UTF-8', blob: new Blob([body], { type: 'text/html' }) };
+};
+
+await t('a WordPress category is followed through every page of it, and turned into reading order', async () => {
+  const found = await web.findLinks([`${WP}/category/lantern/`], { fetchPage: wpFetch });
+  assert.equal(found.wordpress, true);
+  assert.equal(found.newestFirstList, true);
+  assert.ok(wpAsked.includes(`${WP}/category/lantern/page/3/`), 'the older pages were not read');
+  assert.equal(found.title, 'The Lantern');
+  const likely = web.likelyChapters(found.links, `${WP}/category/lantern/`);
+  const chapters = found.links.filter((link) => likely.has(link.url));
+  // Every post, named by its title rather than "Continue reading", and
+  // nothing else: not the menus, the comments, nor the list's own pages.
+  assert.deepEqual(chapters.map((l) => l.text), ['The Logbook', 'Low Tide', 'The Gate', 'Salt', 'The Stair']);
+  assert.ok(!found.links.some((l) => /\/page\/\d/.test(l.url)), 'a page of the list is listed as a link');
+  // No numbers to go by: a list of posts is newest first, so it is turned.
+  assert.equal(web.readsBackwards(chapters, found.newestFirstList), true);
+  const ordered = web.reverseWhere(found.links, (l) => likely.has(l.url)).filter((l) => likely.has(l.url));
+  assert.deepEqual(ordered.map((l) => l.text), NAMES);
+  // Menus stay marked as menus.
+  const about = found.links.find((l) => l.url === `${WP}/about/`);
+  assert.equal(about.chrome, true);
+});
+
+await t('a WordPress post is read for its writing alone', async () => {
+  const { chapter, images } = await web.readPage({ url: `${WP}/salt/`, text: '' }, 0, { fetchPage: wpFetch });
+  assert.equal(chapter.title, 'Salt');
+  assert.match(chapter.html, /The lamp was lit again in Salt/);
+  assert.match(chapter.html, /counting the steps/);
+  for (const clutter of ['Previous Chapter', 'Index', 'Next Chapter', 'Share this', 'Twitter', 'Like this',
+    'Related', 'Advertisements', 'Leave a comment', 'Posted in', 'Thanks for the chapter', 'Proudly powered', 'Donate']) {
+    assert.ok(!chapter.html.includes(clutter), `${clutter} survived`);
+  }
+  // Nothing left of the bar between the links.
+  assert.ok(!/<p>\s*\|\s*\|\s*<\/p>/.test(chapter.html), chapter.html.slice(0, 200));
+  // The picture WordPress loads late, from where it really is.
+  assert.equal(images.length, 1);
+  assert.ok(wpAsked.includes(`${WP}/wp-content/uploads/map.png`));
+});
+
+await t('a site that is not WordPress is read as before', () => {
+  const plain = web.linksOf(contents, SITE);
+  assert.equal(plain.wordpress, false);
+  assert.equal(plain.list, false);
+});
+
 console.log(`\n${pass} assertions passed`);

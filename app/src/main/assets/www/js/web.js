@@ -164,15 +164,109 @@ export function decodePage(bytes, type = '') {
 
 const parseHtml = (html) => new DOMParser().parseFromString(html, 'text/html');
 
+/* ── WordPress ────────────────────────────────────────────────────────
+ *
+ * A great many translated serials live on WordPress sites, and WordPress is
+ * regular enough to be read properly rather than guessed at. Its posts keep
+ * the writing in one known place (.entry-content), its clutter has known
+ * names -- the share buttons, "Like this:", related posts, the ads, the
+ * links to the chapters either side -- and its lists of posts run newest
+ * first, a page at a time, with a link to the older ones. So a WordPress
+ * contents page or category is followed through all of its pages, turned
+ * into reading order, and each chapter is read from its post alone.
+ */
+
+/** Whether a page was made by WordPress, by any of the marks it leaves. */
+export function isWordPress(doc, html = '') {
+  const generator = doc.querySelector('meta[name="generator"]')?.getAttribute('content') || '';
+  return /wordpress/i.test(generator)
+    || !!doc.querySelector('link[rel="https://api.w.org/"], link[href*="/wp-json/"], link[href*="/wp-content/"], script[src*="/wp-includes/"], script[src*="/wp-content/"]')
+    || /\/wp-content\/|\/wp-includes\/|wp-json/.test(html.slice(0, 200000));
+}
+
+/* Where a WordPress post keeps its writing, across the themes in use: the
+ * classic themes, the block themes, and the page builders' own names. */
+const WP_STORY = [
+  '.entry-content', '.wp-block-post-content', '.post-content', '.single-content',
+  '.post-entry', '.entry-body', '.td-post-content', '.elementor-widget-theme-post-content',
+  '.chapter-content', '#chapter-content', '.text_story', '.reading-content',
+].join(', ');
+
+/* What WordPress and its usual plugins put in and around a post that is not
+ * the post: sharing, likes, related posts, subscription boxes, ads, the
+ * links to the posts either side, the comments. */
+export const WP_CLUTTER = [
+  '.sharedaddy', '.sd-sharing-enabled', '.sd-like', '#jp-post-flair', '.jp-relatedposts', '#jp-relatedposts',
+  '.wpcnt', '.wordads-ad-wrapper', '.wordads-tag', '.wpa', '.wpadcenter-ad-container', '.code-block',
+  '.adsbygoogle', 'ins.adsbygoogle', '[id^="div-gpt-ad"]', '.ezoic-ad', '[class*="ezoic"]', '.mv-ad-box',
+  '.post-navigation', '.nav-links', '.navigation', '.wp-block-post-navigation-link', '.single-navigation',
+  '.entry-meta', '.entry-footer', '.post-meta', '.byline', '.cat-links', '.tags-links', '.edit-link',
+  '.author-box', '.author-bio', '.wp-block-jetpack-subscriptions', '.jetpack_subscription_widget',
+  '.wp-block-buttons', '.comments-area', '#comments', '.comment-respond', '#respond',
+  '.wpdiscuz_top_clearing', '#wpdcom', '.yarpp-related', '.crp_related', '.addtoany_share_save_container',
+  '.a2a_kit', '.heateor_sss_sharing_container', '.wp-block-jetpack-like', '.patreon-button',
+  'script', 'style', 'noscript', 'iframe', 'form',
+].join(', ');
+
+/** A WordPress page that lists posts -- a category, a tag, the blog -- as
+ *  opposed to a single post or page. */
+function isWordPressList(doc, pageUrl = '') {
+  const classes = doc.body?.className || '';
+  if (/\b(single|single-post|page-template)\b/.test(classes) && !/\b(archive|blog|category|tag|search)\b/.test(classes)) return false;
+  return /\b(archive|category|tag|blog|search|paged)\b/.test(classes)
+    || /\/(category|tag|series|author)\//.test(pageUrl)
+    || doc.querySelectorAll('.entry-title a, .wp-block-post-title a, .post-title a').length >= 3;
+}
+
+/** The page of older posts after this one, if WordPress offers one. */
+function olderPostsOf(doc, pageUrl) {
+  const found = doc.querySelector(
+    'link[rel="next"], a.next.page-numbers, .nav-previous a, .pagination a.next, a.next, '
+    + '.wp-block-query-pagination-next, a[rel="next"], .older-posts a, .nav-links .next');
+  const href = found?.getAttribute('href');
+  if (!href) return null;
+  try {
+    const url = new URL(href, pageUrl);
+    url.hash = '';
+    return /^https?:$/.test(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The writing of a WordPress post, with the post's clutter taken out. */
+function wordPressStory(doc) {
+  for (const node of doc.querySelectorAll(WP_CLUTTER)) node.remove();
+  const candidates = [...doc.querySelectorAll(WP_STORY)];
+  // The longest, not the first: a theme may put an excerpt or a sidebar
+  // post in the same kind of box before the post itself.
+  let best = null;
+  let length = 0;
+  for (const candidate of candidates) {
+    const size = (candidate.textContent || '').trim().length + candidate.querySelectorAll('img').length * 200;
+    if (size > length) { best = candidate; length = size; }
+  }
+  return length > 0 ? best : null;
+}
+
+/* Words that mark a link as the site's own furniture on a WordPress page --
+ * the share buttons and the like, whose class names are their own. */
+const WP_CHROME = /sharedaddy|sd-sharing|sd-like|jp-relatedposts|jp-post-flair|wpcnt|wordads|post-navigation|nav-links|comment|respond|widget|wp-block-navigation|menu-item|site-header|site-footer|entry-meta|entry-footer|cat-links|tags-links|author-box|subscri|addtoany|a2a_|heateor/i;
+
 /** Whether a link sits in the site's furniture: a menu, a header, a footer. */
 function inChrome(node) {
   for (let at = node.parentElement; at && at.tagName !== 'BODY'; at = at.parentElement) {
     if (/^(NAV|HEADER|FOOTER|ASIDE|FORM)$/.test(at.tagName)) return true;
     const label = `${typeof at.className === 'string' ? at.className : ''} ${at.id || ''}`;
-    if (CHROME_WORDS.test(label)) return true;
+    if (CHROME_WORDS.test(label) || WP_CHROME.test(label)) return true;
   }
   return false;
 }
+
+/* What a link to a post says when it is not the post's name: the "read
+ * more" under an excerpt, the comment count beside it. The post's title,
+ * found elsewhere in the list, is the better name. */
+const WEAK_TEXT = /^(continue reading|read more|read the rest|more|leave a comment|\d+\s+comments?|comments?|reply|permalink|→|»)\b/i;
 
 /** What a link points at, when it is a file rather than a page. */
 function fileKind(path) {
@@ -213,18 +307,27 @@ export function linksOf(html, pageUrl) {
     if (href === self) continue;
     const text = tidy(anchor.textContent) || tidy(anchor.getAttribute('title'))
       || tidy(anchor.querySelector('img')?.getAttribute('alt'));
+    // A post's title in a list of posts: a chapter, whatever it is called.
+    const post = !!anchor.closest('.entry-title, .wp-block-post-title, .post-title, h2.title');
     const known = seen.get(href);
     if (known) {
-      // The same chapter linked twice -- a thumbnail and its title -- keeps
-      // the first place it appeared and the better of the two names.
-      if (!known.text && text) known.text = text;
+      // The same chapter linked twice -- a thumbnail and its title, a title
+      // and its "read more" -- keeps the first place it appeared and the
+      // better of the names.
+      if (text && (!known.text || (WEAK_TEXT.test(known.text) && !WEAK_TEXT.test(text)))) known.text = text;
+      if (post) { known.post = true; known.chrome = false; }
       continue;
     }
-    const link = { url: href, text, chrome: inChrome(anchor), kind: fileKind(url.pathname) };
+    const link = { url: href, text, chrome: !post && inChrome(anchor), kind: fileKind(url.pathname), post };
     seen.set(href, link);
     links.push(link);
   }
-  return { links, title: pageTitle(doc), author: pageAuthor(doc), cover: pageCover(doc, base) };
+  const wordpress = isWordPress(doc, html);
+  const list = wordpress && isWordPressList(doc, pageUrl);
+  return {
+    links, title: pageTitle(doc), author: pageAuthor(doc), cover: pageCover(doc, base),
+    wordpress, list, older: list ? olderPostsOf(doc, pageUrl) : null,
+  };
 }
 
 /** Who wrote it, where the page says so in a way meant to be read by
@@ -254,7 +357,10 @@ function pageCover(doc, base) {
 /** The name of the book a contents page is for. */
 function pageTitle(doc) {
   const og = doc.querySelector('meta[property="og:title"]')?.getAttribute('content');
-  return tidy(og) || tidy(titleOf(doc, '')) || '';
+  const archive = doc.querySelector('.archive-title, .page-title, .wp-block-query-title')?.textContent;
+  // "Category: The Lantern" is the book's name with WordPress's label on it.
+  const named = tidy(og) || tidy(archive) || tidy(titleOf(doc, '')) || '';
+  return named.replace(/^(category|tag|series|archives?)\s*:\s*/i, '').replace(/\s+archives?$/i, '');
 }
 
 /* ── telling the chapters apart ──────────────────────────────────────── */
@@ -323,6 +429,8 @@ export function likelyChapters(links, pageUrl = '') {
   }
   const likely = new Set((best || []).map((link) => link.url));
   for (const link of links) {
+    // A post in a WordPress list of posts is one of the chapters.
+    if (link.post && !link.kind) { likely.add(link.url); continue; }
     if (link.chrome || link.kind) continue;
     if (host && !link.url.includes(`//${host}/`)) continue;
     if (looksLikeChapter(link.text) && !/^\s*(next|previous|prev|last|first|latest)\b/i.test(link.text)) {
@@ -380,33 +488,69 @@ export function addressesIn(text) {
  *
  * Several contents pages -- page 1, page 2 of a long list -- read as one.
  */
-export async function findLinks(addresses, { onProgress } = {}) {
+export async function findLinks(addresses, { onProgress, fetchPage = download, maxPages = 100, listGap = 250 } = {}) {
   const links = [];
   const seen = new Set();
   const failed = [];
   let title = '';
   let author = '';
   let cover = '';
+  let wordpress = false;
+  // A list of posts, newest first: its chapters want turning round.
+  let newestFirstList = false;
+  const visited = new Set();
   for (const [at, address] of addresses.entries()) {
-    onProgress?.(at / addresses.length, address);
-    try {
-      const page = await download(address);
-      const html = decodePage(await bytesOf(page.blob), page.type);
-      const found = linksOf(html, page.url);
-      if (!title) title = found.title;
-      if (!author) author = found.author;
-      if (!cover) cover = found.cover;
-      for (const link of found.links) {
-        if (seen.has(link.url)) continue;
-        seen.add(link.url);
-        links.push({ ...link, from: at });
+    /* A WordPress list of posts goes on, a page at a time, to the oldest
+     * post: each page's "older posts" is followed, so the whole serial is
+     * listed from its contents page alone rather than its newest ten. */
+    let next = address;
+    let pages = 0;
+    while (next && !visited.has(next) && pages < maxPages) {
+      visited.add(next);
+      pages += 1;
+      onProgress?.(at / addresses.length, next, pages);
+      try {
+        const page = await fetchPage(next);
+        visited.add(page.url);
+        const html = decodePage(await bytesOf(page.blob), page.type);
+        const found = linksOf(html, page.url);
+        if (!title) title = found.title;
+        if (!author) author = found.author;
+        if (!cover) cover = found.cover;
+        if (found.wordpress) wordpress = true;
+        if (found.list) newestFirstList = true;
+        for (const link of found.links) {
+          if (seen.has(link.url) || visited.has(link.url)) continue;
+          seen.add(link.url);
+          links.push({ ...link, from: at });
+        }
+        next = found.list ? found.older : null;
+        // Gently, as the chapters are: a site with a hundred pages of posts.
+        if (next && listGap) await pause(listGap);
+      } catch (error) {
+        // The first page failing is the address failing; a later one is the
+        // end of what could be listed.
+        if (pages === 1) failed.push({ url: next, reason: error.message });
+        next = null;
       }
-    } catch (error) {
-      failed.push({ url: address, reason: error.message });
     }
   }
+  // The pages of the list themselves are not chapters.
+  const listed = links.filter((link) => !visited.has(link.url));
   onProgress?.(1, '');
-  return { links, title, author, cover, failed };
+  return { links: listed, title, author, cover, failed, wordpress, newestFirstList };
+}
+
+/**
+ * Whether the chapters as listed run newest first.
+ *
+ * Read off the numbers in their names where they have them. Where they do
+ * not, a WordPress list of posts is newest first by its nature.
+ */
+export function readsBackwards(chapters, newestFirstList = false) {
+  const numbered = chapters.filter((link) => numberIn(link.text) !== null).length;
+  if (numbered >= 3) return newestFirst(chapters);
+  return !!newestFirstList && chapters.length > 1;
 }
 
 /* ── a chapter out of a page ─────────────────────────────────────────── */
@@ -420,16 +564,17 @@ function stripPageLinks(story) {
   for (const anchor of [...story.querySelectorAll('a')]) {
     if (PAGE_LINKS.test(tidy(anchor.textContent))) anchor.remove();
   }
-  // Whatever held only those links is empty now.
-  for (const block of [...story.querySelectorAll('p, div, span, li, ul, ol, td, tr, table')].reverse()) {
-    if (!tidy(block.textContent) && !block.querySelector('img')) block.remove();
+  // Whatever held only those links is empty now -- or holds only the bars
+  // and arrows that sat between them.
+  for (const block of [...story.querySelectorAll('p, div, span, li, ul, ol, td, tr, table, center')].reverse()) {
+    if (/^[\s|/\\·•\-–—<>«»‹›←→]*$/.test(block.textContent || '') && !block.querySelector('img')) block.remove();
   }
 }
 
 /** Where a picture really is: sites that load pictures late keep the
  *  address in an attribute of their own until it scrolls into view. */
 function pictureSource(img) {
-  for (const name of ['data-src', 'data-original', 'data-lazy-src', 'data-url', 'data-orig-file']) {
+  for (const name of ['data-src', 'data-original', 'data-lazy-src', 'data-url', 'data-orig-file', 'data-large-file']) {
     const value = img.getAttribute(name);
     if (value && !value.startsWith('data:')) return value;
   }
@@ -472,8 +617,12 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
   const html = decodePage(await bytesOf(page.blob), page.type);
   const doc = parseHtml(html);
   const lang = doc.documentElement.getAttribute('lang') || null;
-  const heading = tidy(titleOf(doc, ''));
-  const story = findStory(doc);
+  // On WordPress, the post's own title, which the theme marks as such.
+  const wordpress = isWordPress(doc, html);
+  const postTitle = wordpress
+    ? tidy(doc.querySelector('.entry-title, .wp-block-post-title, h1.post-title')?.textContent) : '';
+  const heading = postTitle || tidy(titleOf(doc, ''));
+  const story = (wordpress && wordPressStory(doc)) || findStory(doc);
   stripPageLinks(story);
 
   // Pictures found as the chapter is read, fetched once it has been.
