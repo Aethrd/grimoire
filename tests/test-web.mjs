@@ -302,7 +302,7 @@ await t('pages read for Build come in order, and stop at the first that will not
     { url: `${SITE}chapter-2`, text: 'Two' },
     { url: `${SITE}missing`, text: 'Gone' },
     { url: `${SITE}chapter-3`, text: 'Three' },
-  ], { fetchPage: slow, gap: 0, patience: { retry: 0, refresh: [0] }, onImage: (image) => pictures.push(image) });
+  ], { fetchPage: slow, gap: 0, patience: { retry: 0, refresh: [0], backoff: [0] }, onImage: (image) => pictures.push(image) });
   assert.deepEqual(parsed.chapters.map((c) => [c.index, c.title]), [[0, 'One'], [1, 'Two']]);
   assert.equal(parsed.failed.length, 1);
   assert.equal(parsed.failed[0].text, 'Gone');
@@ -325,7 +325,7 @@ await t('a page that came after the stop is left for the rest, not kept', async 
     { url: `${SITE}missing`, text: 'Gone' },
     { url: `${SITE}chapter-2`, text: 'Two' },
     { url: `${SITE}chapter-3`, text: 'Three' },
-  ], { fetchPage: late, gap: 0, patience: { retry: 0, refresh: [0] } });
+  ], { fetchPage: late, gap: 0, patience: { retry: 0, refresh: [0], backoff: [0] } });
   assert.deepEqual(parsed.chapters.map((c) => c.title), ['One']);
   assert.deepEqual(parsed.rest.map((l) => l.text), ['Gone', 'Two', 'Three']);
 });
@@ -342,7 +342,7 @@ await t('a website is a part in Build, joined with the rest and downloaded when 
   assert.match(build.describe(part), /From the web · 3 pages, downloaded when built · novels\.example/);
   part.web.fetchPage = fakeFetch;
   asked.length = 0;
-  Object.assign(part.web, { gap: 0, patience: { retry: 0, refresh: [0] } });
+  Object.assign(part.web, { gap: 0, patience: { retry: 0, refresh: [0], backoff: [0] } });
   const { book, failed } = await build.build({ title: 'Built Lantern' });
   assert.ok(asked.includes(`${SITE}chapter-1`), 'nothing was downloaded');
   assert.equal(book.chapters, 2);
@@ -380,7 +380,7 @@ await t('pages a site would not give are kept, to download as another book', asy
   };
   const links = [1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `Chapter ${n}` }));
   build.addWeb({ name: 'The Lantern', links, sources: [SITE], author: 'A. Keeper' });
-  Object.assign(build.contents()[0].web, { fetchPage: busy, gap: 0, patience: { retry: 0, refresh: [0, 0, 0] } });
+  Object.assign(build.contents()[0].web, { fetchPage: busy, gap: 0, patience: { retry: 0, refresh: [0, 0, 0], backoff: [0] } });
   const { book, failed } = await build.build({ title: 'The Lantern' });
   assert.equal(book.chapters, 1);
   assert.equal(failed.length, 1);
@@ -396,7 +396,7 @@ await t('pages a site would not give are kept, to download as another book', asy
   build.addWeb({ name: 'Refused', links, sources: [SITE] });
   Object.assign(build.contents()[0].web, {
     fetchPage: async () => { throw new Error('the site turned the request away (429, too many requests)'); },
-    gap: 0, patience: { retry: 0, refresh: [0, 0, 0] },
+    gap: 0, patience: { retry: 0, refresh: [0, 0, 0], backoff: [0] },
   });
   const error = await build.build({ title: 'Refused' }).catch((e) => e);
   assert.match(error.message, /None of those parts could be read/);
@@ -415,7 +415,7 @@ await t('a page turned away is fetched afresh at once, not given up on', async (
   };
   const started = Date.now();
   const parsed = await web.readPages([1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `Chapter ${n}` })),
-    { fetchPage: moody, gap: 0, patience: { retry: 0, refresh: [5, 5, 5] } });
+    { fetchPage: moody, gap: 0, patience: { retry: 0, refresh: [5, 5, 5], backoff: [5] } });
   assert.equal(parsed.chapters.length, 3);
   assert.equal(parsed.failed.length, 0);
   assert.ok(Date.now() - started < 2000, 'it waited instead of asking again');
@@ -460,6 +460,60 @@ await t('Build offers the rest as another book, and remembers it across a restar
   // And slower once the site has said so.
   const src = read('app/src/main/assets/www/js/web.js');
   assert.ok(!/pace = Math\.max/.test(src), 'the rate is changed behind the reader\'s back');
+});
+
+await t('a page having a bad moment is asked for again, patiently, before anything stops', async () => {
+  // A connection dropped three times running, then fine: no stop.
+  const tries = new Map();
+  const flaky = async (url) => {
+    const n = (tries.get(url) || 0) + 1;
+    tries.set(url, n);
+    if (url.endsWith('chapter-2') && n <= 3) throw new Error('unexpected end of stream');
+    return fakeFetch(url);
+  };
+  const parsed = await web.readPages([1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `Chapter ${n}` })),
+    { fetchPage: flaky, gap: 0, patience: { retry: 0, refresh: [0], backoff: [1, 1, 1, 1, 1] } });
+  assert.equal(parsed.chapters.length, 3);
+  assert.equal(parsed.rest.length, 0);
+  // A page that is not there is not asked for a minute: one more try, then stop.
+  tries.clear();
+  const missing = await web.readPages([{ url: `${SITE}chapter-1`, text: 'One' }, { url: `${SITE}nope`, text: 'Gone' }],
+    { fetchPage: async (url) => { tries.set(url, (tries.get(url) || 0) + 1); return fakeFetch(url); },
+      gap: 0, patience: { retry: 0, refresh: [0], backoff: [1, 1, 1, 1, 1] } });
+  assert.equal(tries.get(`${SITE}nope`), 2);
+  assert.match(missing.failed[0].reason, /404.*tried 2 times/);
+});
+
+await t('a try cut short by the app going off screen does not count', async () => {
+  // The phone paused the app mid-request: the request failed with it.
+  let first = true;
+  const paused = async (url) => {
+    if (url.endsWith('chapter-2') && first) {
+      first = false;
+      document.dispatchEvent(new window.Event('freeze'));
+      throw new Error('the site took too long to answer');
+    }
+    return fakeFetch(url);
+  };
+  // No tries to spare at all, and still nothing stops.
+  const parsed = await web.readPages([1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `Chapter ${n}` })),
+    { fetchPage: paused, gap: 0, patience: { retry: 0, refresh: [], backoff: [] } });
+  assert.equal(parsed.chapters.length, 3);
+  assert.equal(parsed.rest.length, 0);
+  // And waiting for an answer counts only time the app is running.
+  const src = read('app/src/main/assets/www/js/web.js');
+  assert.match(src, /if \(offScreen\(\) \|\| step > 5000\) return;/);
+  // The screen is kept on while a website downloads.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /if \(online\) \{ try \{ window\.GrimoireNative\?\.keepScreenOn\?\.\(true\); \}/);
+});
+
+await t('an answer that never comes is given up on', async () => {
+  window.GrimoireWeb = { fetch() {}, release() {} };
+  const started = Date.now();
+  await assert.rejects(web.download('https://novels.example/slow', { timeout: 200 }), /took too long/);
+  assert.ok(Date.now() - started < 2000);
+  delete window.GrimoireWeb;
 });
 
 console.log(`\n${pass} assertions passed`);

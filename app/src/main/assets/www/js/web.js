@@ -25,9 +25,45 @@ export function settleWeb(id, ok, payload) {
   const entry = pending.get(id);
   if (!entry) return;
   pending.delete(id);
-  clearTimeout(entry.timer);
+  clearInterval(entry.timer);
   if (ok) entry.resolve(payload);
   else entry.reject(new Error(payload || 'That page could not be downloaded'));
+}
+
+/* ── time off screen ──────────────────────────────────────────────────
+ *
+ * A long download outlives the screen staying on. When the app goes to the
+ * background, or the phone sleeps, Android pauses it -- and when it comes
+ * back, every timer that was running fires at once, as though the site had
+ * kept it waiting all that while. That is what cut downloads short at a page
+ * that then came perfectly well when asked for again. So time off screen is
+ * not counted against a site, and a page that failed while the app was away
+ * is asked for again once it is back, without counting as a try.
+ */
+let interruptions = 0;
+if (typeof document !== 'undefined') {
+  const away = () => { interruptions += 1; };
+  document.addEventListener('visibilitychange', () => { if (offScreen()) away(); });
+  document.addEventListener('freeze', away);
+}
+/* Asked as "hidden", not by document.hidden: a page still being set up --
+ * and a test's pretend document -- reports itself as not yet visible, which
+ * is not the same as having been put away. */
+function offScreen() {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
+/** Resolves once the app is on screen again (at once if it is). */
+export function whenOnScreen() {
+  if (!offScreen()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const back = () => {
+      if (offScreen()) return;
+      document.removeEventListener('visibilitychange', back);
+      resolve();
+    };
+    document.addEventListener('visibilitychange', back);
+  });
 }
 
 /** Whether this build can download at all: the app can, a plain browser not. */
@@ -46,11 +82,23 @@ export function download(url, { timeout = 90000 } = {}) {
       return;
     }
     const id = `w${Date.now().toString(36)}${++counter}`;
-    // An answer that never comes would stop a download for good.
-    const timer = setTimeout(() => {
+    /* An answer that never comes would stop a download for good -- but only
+     * time the app is on screen and running counts towards giving up. A
+     * jump of more than a few seconds between ticks is the app having been
+     * paused, not the site being slow. */
+    let waited = 0;
+    let last = Date.now();
+    const timer = setInterval(() => {
+      const now = Date.now();
+      const step = now - last;
+      last = now;
+      if (offScreen() || step > 5000) return;
+      waited += step;
+      if (waited < timeout) return;
+      clearInterval(timer);
       pending.delete(id);
       reject(new Error('the site took too long to answer'));
-    }, timeout);
+    }, Math.min(1000, Math.max(10, timeout / 4)));
     pending.set(id, {
       timer,
       reject,
@@ -74,7 +122,7 @@ export function download(url, { timeout = 90000 } = {}) {
       window.GrimoireWeb.fetch(id, url);
     } catch (error) {
       pending.delete(id);
-      clearTimeout(timer);
+      clearInterval(timer);
       reject(error);
     }
   });
@@ -633,8 +681,9 @@ async function closeGaps(bookId, kept) {
  */
 export async function readPages(links, {
   title = '', author = '', cover = null, pictures = true, onImage, onProgress,
-  fetchPage = download, gap = 250, patience = { retry: 1000, refresh: [400, 1200, 3000] },
+  fetchPage = download, gap = 250, patience = {},
 } = {}) {
+  const wait = { ...PATIENCE, ...patience };
   const chapters = [];
   const waiting = new Array(links.length);
   let handed = 0;        // the next page to hand on
@@ -682,28 +731,44 @@ export async function readPages(links, {
     if (wait) await pause(wait);
   };
 
-  /* Asked again, at once, as a refresh would.
+  /* Asked again before it is given up on -- patiently.
    *
-   * A smaller site that says "too many requests" mostly means that one
-   * request: asked again a moment later it answers, with no need to wait
-   * minutes. So a refused page is fetched afresh a few times in quick
-   * succession before it counts as failed. Anything else (a page that is
-   * not there) gets one more try. */
+   * Stopping the whole download at a page means a page has to really be
+   * refusing, not having a bad moment: a dropped connection, a site busy for
+   * a few seconds, a "too many requests" that a refresh clears. So a page is
+   * asked for again and again, a little longer between each, for up to about
+   * a minute, before it counts as failed. A site turning requests away is
+   * asked again at once first, as a refresh would. Only a page that plainly
+   * is not there gets a single second try. And a try that was cut off by the
+   * app going off screen does not count at all.
+   */
   const fetchAgain = async (link, at) => {
     let lastError = null;
-    const waits = [patience.retry];
-    for (let attempt = 0; attempt <= waits.length; attempt++) {
+    let waits = null;
+    let tries = 0;
+    let uncounted = 0;
+    while (true) {
       if (at > stopAt) throw new Error('stopped');
+      await whenOnScreen();
+      const before = interruptions;
       try {
-        if (attempt === 0) await myTurn();
+        if (tries === 0 && uncounted === 0) await myTurn();
         return await readPage(link, at, { pictures, fetchPage });
       } catch (error) {
         lastError = error;
-        if (attempt === 0 && tooMany(error)) waits.splice(0, waits.length, ...patience.refresh);
-        if (attempt < waits.length) await pause(waits[attempt]);
+        // Failed while the app was away: asked again once it is back.
+        if (interruptions !== before && uncounted < 20) { uncounted += 1; continue; }
+        if (!waits) {
+          waits = gone(error) ? [wait.retry]
+            : tooMany(error) ? [...wait.refresh, ...wait.backoff]
+            : [...wait.backoff];
+        }
+        if (tries >= waits.length) break;
+        await pause(waits[tries]);
+        tries += 1;
       }
     }
-    throw lastError;
+    throw Object.assign(lastError || new Error('could not be read'), { tries: tries + 1 });
   };
 
   const worker = async () => {
@@ -718,7 +783,8 @@ export async function readPages(links, {
         // fails meanwhile is part of the rest anyway.
         if (at < stopAt) {
           stopAt = at;
-          stopped = { at, url: link.url, text: link.text, reason: error.message || 'could not be read' };
+          const tried = error.tries > 1 ? ` (tried ${error.tries} times)` : '';
+          stopped = { at, url: link.url, text: link.text, reason: `${error.message || 'could not be read'}${tried}` };
         }
         got = false;
       }
@@ -746,6 +812,17 @@ export async function readPages(links, {
     chapters, images: [], imageCount, words, coverBlob: cover, failed, rest,
   };
 }
+
+/** How long to wait between tries of a page, in milliseconds. */
+export const PATIENCE = {
+  retry: 1000,                          // a page that is not there: once more
+  refresh: [300, 1000, 2500],           // a site turning requests away: at once
+  backoff: [1500, 4000, 8000, 15000, 30000],   // anything else: longer each time
+};
+
+/** A page that is not there, which no amount of asking will change. */
+export const gone = (error) => /\b(404|410)\b|does not exist|not a web address|only web addresses/i
+  .test(String(error?.message || error || ''));
 
 /** A site asking to be asked less often. */
 export const tooMany = (error) => /\b429\b|too many requests/i.test(String(error?.message || error || ''));

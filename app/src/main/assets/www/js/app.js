@@ -5492,6 +5492,11 @@ function wireWorkshop() {
     const finish = progress.start('Building');
     // Leftovers being tried again in this build: settled by it either way.
     const retried = build.contents().map((part) => part.leftover).filter(Boolean);
+    /* The screen kept on while a website is downloading. With it off the
+     * phone soon pauses the app, and a download of a few hundred chapters
+     * then stalls until someone looks at it again. */
+    const online = build.contents().some((part) => part.web);
+    if (online) { try { window.GrimoireNative?.keepScreenOn?.(true); } catch { /* not in a browser */ } }
     try {
       const { book, failed } = await build.build({
         title: el('build-title').value.trim() || undefined,
@@ -5545,6 +5550,10 @@ function wireWorkshop() {
       whenNotReading(() => toast(error.message || 'That could not be built', 6000, { kind: 'failed' }));
     } finally {
       finish();
+      // Let go again, unless a book is open to read.
+      if (online && current !== 'reader') {
+        try { window.GrimoireNative?.keepScreenOn?.(false); } catch { /* not in a browser */ }
+      }
     }
   };
 }
