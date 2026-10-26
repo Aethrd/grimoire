@@ -495,9 +495,32 @@ function chapterSection(chapter) {
   section.className = 'chapter';
   section.dataset.chapter = String(chapter.index);
   section.innerHTML = chapterHtml(chapter);
+  flattenLayoutIndents(section);
   hydrateImages(section, chapter.index);
   paintMarks(section, chapter.index);
   return section;
+}
+
+/**
+ * The book's own margins, taken out, so the reader's are the only ones.
+ *
+ * A book's stylesheet is dropped at import, but some of its margins are not
+ * in the stylesheet: they are in the markup. A Kindle book in particular
+ * indents by wrapping the text in quotation blocks -- the whole chapter in
+ * one, or two, nested -- and a list of definitions indents its every entry
+ * by the browser's default. Each of those added its own band of space inside
+ * the reader's margin, so the text sat well in from where the margin said it
+ * should, and narrowing the margin to nothing still left it there.
+ *
+ * A real quotation is a few lines. A block holding paragraph after paragraph
+ * is not a quotation; it is the book's margin, and it is flattened.
+ */
+function flattenLayoutIndents(section) {
+  for (const block of section.querySelectorAll('blockquote, dd, dl')) {
+    const paragraphs = block.querySelectorAll('p, div, blockquote').length;
+    const words = (block.textContent || '').length;
+    if (paragraphs >= 3 || words > 700) block.classList.add('book-indent');
+  }
 }
 
 /**
@@ -1160,6 +1183,7 @@ export function applyLayout(layout, settings) {
   root.setProperty('--read-leading', String(layout.leading));
   root.setProperty('--read-para', `${layout.para}px`);
   root.setProperty('--read-margin', `${layout.margin}px`);
+  root.setProperty('--read-vmargin', `${Number.isFinite(layout.vmargin) ? layout.vmargin : 16}px`);
   root.setProperty('--read-align', layout.justified ? 'justify' : 'left');
   // Justified text needs a first-line indent or the paragraph breaks vanish.
   root.setProperty('--read-indent', layout.justified ? '1.2em' : '0');
@@ -1175,8 +1199,16 @@ export function applyLayout(layout, settings) {
   state.mergeMarks = settings ? settings.mergeMarks !== false : true;
   document.body.dataset.marks = state.markDensity;
 
-  const mode = settings?.readingMode || layout.mode || 'paged';
-  state.endless = settings ? settings.endlessScroll !== false : layout.endless !== false;
+  /* Without the settings, the mode already showing stands. The layout sheet
+     re-applies the layout on every move of a slider and passes no settings,
+     and taking that as "paged" turned a book being read by scrolling into
+     pages part-way through -- so the margins, the type size, everything on
+     that sheet seemed not to work in scroll mode. */
+  const mode = settings
+    ? settings.readingMode || layout.mode || 'paged'
+    : (state.book ? state.mode : layout.mode || state.mode || 'paged');
+  if (settings) state.endless = settings.endlessScroll !== false;
+  else if (!state.book) state.endless = layout.endless !== false;
 
   if (mode !== state.mode) {
     state.mode = mode;

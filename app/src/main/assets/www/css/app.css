@@ -58,6 +58,7 @@
   --read-leading: 1.62;
   --read-para: 12px;
   --read-margin: 24px;
+  --read-vmargin: 16px;
   --read-align: left;
   --read-indent: 0;
   --read-face: var(--font-body);
@@ -377,11 +378,17 @@ section.block > h2 { margin-top: 18px; }
 /* Padding lives on the viewport, not the flow: it keeps each column exactly
    one viewport wide, so turning a page is a translate of exactly 100%. */
 .page-viewport { position: absolute; inset: 0; overflow: hidden;
-                 padding: 16px var(--read-margin); }
+                 padding: var(--read-vmargin) var(--read-margin); }
 
-/* Scroll mode: the same text, flowing down instead of across. */
+/* Scroll mode: the same text, flowing down instead of across.
+   The top and bottom margins are the edges of the window the text scrolls
+   through, not space at the two ends of the chapter: padding would only be
+   seen at the very top and the very bottom, and the text would run to the
+   edges of the screen everywhere in between. */
 .page-viewport.scrolling { overflow-y: auto; overscroll-behavior: contain;
-                           -webkit-overflow-scrolling: touch; }
+                           -webkit-overflow-scrolling: touch;
+                           top: var(--read-vmargin); bottom: var(--read-vmargin);
+                           padding-top: 0; padding-bottom: 0; }
 
 /* Pagination is CSS columns: one column exactly the viewport's width, and the
    flow is translated sideways one page at a time. */
@@ -623,6 +630,11 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
 
 .page-flow blockquote { margin: 1em 0; padding-left: 1em;
                         border-left: 2px solid var(--accent-400); }
+/* The book's own margins, written into its markup (see flattenLayoutIndents
+   in reader.js): the reader's margins replace them. A figure is indented by
+   the browser by default, which is the same thing. */
+.page-flow .book-indent { margin: 0 !important; padding: 0 !important; border: 0 !important; }
+.page-flow figure { margin-left: 0; margin-right: 0; }
 .page-flow hr { border: 0; border-top: 1px solid var(--divider); margin: 1.5em 0; }
 .page-flow mark { background: var(--accent-300); color: var(--accent-900); }
 .page-flow .fig-flash { animation: flash 1.1s ease-out 1; }

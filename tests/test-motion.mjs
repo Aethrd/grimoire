@@ -38,7 +38,10 @@ t('how you read is a setting, not a property of one book', () => {
   assert.match(reader, /store\.saveSettings\(\{ endlessScroll: on \}\)/);
   // An older install still carrying it in a layout row is honoured once, so
   // nobody loses the mode they had.
-  assert.match(reader, /settings\?\.readingMode \|\| layout\.mode \|\| 'paged'/);
+  assert.match(reader, /settings\.readingMode \|\| layout\.mode \|\| 'paged'/);
+  // And re-applying the layout with no settings -- every slider in the layout
+  // sheet does -- keeps the mode on screen rather than falling back to paged.
+  assert.match(reader, /\(state\.book \? state\.mode : layout\.mode \|\| state\.mode \|\| 'paged'\)/);
 });
 
 t('the reader exposes both switches', () => {

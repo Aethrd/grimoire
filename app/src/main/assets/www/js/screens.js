@@ -135,12 +135,18 @@ const RANGES = {
   leading: [1.1, 2.6, 0.05, ''],
   para: [0, 44, 1, 'px'],
   margin: [8, 64, 1, 'px'],
+  vmargin: [0, 80, 1, 'px'],
 };
 
 const LABELS = {
   size: 'Font size', leading: 'Line spacing',
   para: 'Paragraph spacing', margin: 'Side margins',
+  vmargin: 'Top and bottom margins',
 };
+/* Margins are the same for every book (see SCREEN_KEYS in store.js), and the
+   sheet says so: a margin changed here that turned up in the next book would
+   otherwise look like a fault. */
+const EVERY_BOOK = new Set(['margin', 'vmargin']);
 
 export async function openLayout(bookId) {
   const layout = await store.layoutFor(bookId);
@@ -279,7 +285,8 @@ export async function openLayout(bookId) {
   for (const [key, [min, max, step, unit]] of Object.entries(RANGES)) {
     const field = document.createElement('label');
     field.className = 'field';
-    field.innerHTML = `<label><span>${LABELS[key]}</span><span>${layout[key]}${unit}</span></label>`;
+    field.innerHTML = `<label><span>${LABELS[key]}${EVERY_BOOK.has(key)
+      ? ' <small class="muted">· every book</small>' : ''}</span><span>${layout[key]}${unit}</span></label>`;
     const input = document.createElement('input');
     Object.assign(input, { type: 'range', min, max, step, value: layout[key] });
     // The page behind re-flows live on every move, at the current anchor.

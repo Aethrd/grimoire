@@ -2420,4 +2420,45 @@ await t('a book of pictures read by scrolling reaches its end, and is Finished',
   assert.match(repag, /if \(atEnd\) viewport\.scrollTop = viewport\.scrollHeight;/);
 });
 
+await t("margins are every book's, and a book keeps only what was changed in it", async () => {
+  await store.resetLayout(0);
+  await store.saveLayout(0, { size: 17, margin: 24, vmargin: 16 });
+  // Changed in one book: the font stays with it, the margin goes to all.
+  await store.saveLayout(901, { size: 22, margin: 40, vmargin: 30 });
+  let own = await store.layoutFor(901);
+  assert.equal(own.size, 22);
+  assert.equal(own.margin, 40);
+  assert.equal(own.vmargin, 30);
+  const other = await store.layoutFor(902);
+  assert.equal(other.size, 17, 'the font leaked into another book');
+  assert.equal(other.margin, 40, 'the margin stayed in one book');
+  assert.equal(other.vmargin, 30);
+  // A default changed later in Settings reaches the book, apart from what
+  // was set in it.
+  await store.saveLayout(0, { leading: 2, margin: 12 });
+  own = await store.layoutFor(901);
+  assert.equal(own.leading, 2, 'the book froze every setting when one was changed');
+  assert.equal(own.margin, 12);
+  assert.equal(own.size, 22);
+  // A row from before -- a full copy of the layout -- keeps what it set
+  // differently, and its margins give way to the app's.
+  await store.put('layout', { bookId: 903, value: { ...store.DEFAULT_LAYOUT, size: 25, leading: 2, margin: 60 } });
+  const legacy = await store.layoutFor(903);
+  assert.equal(legacy.size, 25);
+  assert.equal(legacy.margin, 12, 'an old row still pins the margin');
+  await store.resetLayout(0);
+});
+
+await t("the book's own indents give way to the reader's margins", async () => {
+  const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
+  assert.match(src, /section\.innerHTML = chapterHtml\(chapter\);\n  flattenLayoutIndents\(section\);/);
+  const css = fs.readFileSync(new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
+  assert.match(css, /\.page-flow \.book-indent \{ margin: 0 !important; padding: 0 !important; border: 0 !important; \}/);
+  // Top and bottom margins: the page's padding when paged, the edges of the
+  // window the text scrolls through when scrolling.
+  assert.match(css, /padding: var\(--read-vmargin\) var\(--read-margin\);/);
+  assert.match(css, /top: var\(--read-vmargin\); bottom: var\(--read-vmargin\);/);
+  assert.match(src, /root\.setProperty\('--read-vmargin'/);
+});
+
 console.log(`\n${pass} assertions passed`);

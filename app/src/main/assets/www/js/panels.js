@@ -1195,8 +1195,9 @@ function renderDataPane(body, onVaultChange) { return openVault(onVaultChange, b
 async function renderTextPane(body) {
   const layout = await store.layoutFor(0);
   body.innerHTML = `<p class="muted" style="font-size:12px;line-height:1.55">
-    Defaults for every book. A book you have set up individually keeps its own
-    settings; the Reset in a book's layout sheet brings it back to these.</p>`;
+    Defaults for every book. A setting you change inside a book stays with
+    that book; the Reset in its layout sheet brings it back to these. Margins
+    are the same in every book, and override the book's own.</p>`;
 
   const faces = document.createElement('div');
   faces.innerHTML = '<p class="eyebrow">Face</p>';
@@ -1219,6 +1220,7 @@ async function renderTextPane(body) {
     ['leading', 'Line spacing', 1.1, 2.6, 0.05, ''],
     ['para', 'Paragraph spacing', 0, 44, 1, 'px'],
     ['margin', 'Side margins', 8, 64, 1, 'px'],
+    ['vmargin', 'Top and bottom margins', 0, 80, 1, 'px'],
   ]) {
     body.appendChild(slider(label, layout[key], min, max, step, unit,
       (value) => store.saveLayout(0, { [key]: value })));

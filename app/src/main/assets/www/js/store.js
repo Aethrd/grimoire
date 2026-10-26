@@ -308,22 +308,69 @@ export const DEFAULT_LAYOUT = {
   size: 17,          // 13–30
   leading: 1.62,     // 1.1–2.6
   para: 12,          // 0–44
-  margin: 24,        // 8–64
+  margin: 24,        // 8–64, left and right
+  vmargin: 16,       // 0–80, top and bottom
   justified: false,
   ink: null,         // null inherits the theme's text colour
 };
 
+/* Margins belong to the screen, not the book.
+ *
+ * How far the text sits from the edges of the phone is a matter of the phone
+ * and the hand holding it, and it is the same for every book. Kept per book,
+ * a margin set once in one book and changed later in Settings never reached
+ * it -- which is how the margin setting came to look as though it did
+ * nothing. So these are always the app's, wherever they are changed from. */
+export const SCREEN_KEYS = ['margin', 'vmargin'];
+
+/**
+ * What a book has been set to itself.
+ *
+ * Only the settings changed in that book. Every row used to be a full copy of
+ * the layout as it stood when anything at all was changed, so moving the font
+ * size once in a book froze every other setting for it, and the defaults in
+ * Settings stopped reaching it. A row from then is read for what differs from
+ * the defaults now, which is the most that can be told of what was meant.
+ */
+function ownOf(row, base) {
+  if (!row || !row.value) return {};
+  const own = {};
+  const keys = Array.isArray(row.own) ? row.own : Object.keys(row.value);
+  for (const key of keys) {
+    if (SCREEN_KEYS.includes(key) || !(key in row.value)) continue;
+    if (!Array.isArray(row.own) && row.value[key] === base[key]) continue;
+    own[key] = row.value[key];
+  }
+  return own;
+}
+
 /** Per-book override wins over the app default; deleting the row inherits again. */
 export async function layoutFor(bookId) {
-  const [own, base] = await Promise.all([get('layout', bookId), get('layout', 0)]);
-  return Object.assign({}, DEFAULT_LAYOUT, base ? base.value : {}, own ? own.value : {});
+  const [own, base] = await Promise.all([bookId ? get('layout', bookId) : null, get('layout', 0)]);
+  const defaults = Object.assign({}, DEFAULT_LAYOUT, base ? base.value : {});
+  return Object.assign({}, defaults, bookId ? ownOf(own, defaults) : {});
 }
 
 export async function saveLayout(bookId, patch) {
-  const current = await layoutFor(bookId);
-  const next = Object.assign({}, current, patch);
-  await put('layout', { bookId, value: next });
-  return next;
+  const screen = {};
+  const book = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (bookId && SCREEN_KEYS.includes(key)) screen[key] = value;
+    else book[key] = value;
+  }
+  if (Object.keys(screen).length) await saveLayout(0, screen);
+  if (!bookId) {
+    const current = await layoutFor(0);
+    await put('layout', { bookId: 0, value: Object.assign({}, current, book) });
+    return layoutFor(0);
+  }
+  if (Object.keys(book).length) {
+    const row = await get('layout', bookId);
+    const base = await layoutFor(0);
+    const own = Object.assign(ownOf(row, base), book);
+    await put('layout', { bookId, value: own, own: Object.keys(own) });
+  }
+  return layoutFor(bookId);
 }
 
 export async function resetLayout(bookId) {
