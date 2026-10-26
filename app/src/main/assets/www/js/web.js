@@ -633,10 +633,9 @@ async function closeGaps(bookId, kept) {
  */
 export async function readPages(links, {
   title = '', author = '', cover = null, pictures = true, onImage, onProgress,
-  fetchPage = download, gap = 250,
+  fetchPage = download, gap = 250, patience = { retry: 1000, refresh: [400, 1200, 3000] },
 } = {}) {
   const chapters = [];
-  const failed = [];
   const waiting = new Array(links.length);
   let handed = 0;        // the next page to hand on
   let next = 0;
@@ -645,8 +644,18 @@ export async function readPages(links, {
   let words = 0;
   let lang = null;
 
+  /* Stopped at the first page that will not come.
+   *
+   * What is built is then the chapters up to it, whole and in order, and
+   * the page that failed is where the rest begins -- kept to download as a
+   * book of its own, which continues this one exactly. Nothing has to be
+   * taken out of the middle before the two can sit side by side, or be
+   * built together later. */
+  let stopAt = links.length;
+  let stopped = null;    // { at, url, text, reason } of the page it stopped at
+
   const handOn = async () => {
-    while (handed < links.length && waiting[handed] !== undefined) {
+    while (handed < stopAt && waiting[handed] !== undefined) {
       const got = waiting[handed];
       waiting[handed] = null;
       handed += 1;
@@ -662,42 +671,84 @@ export async function readPages(links, {
     }
   };
 
+  /* The rate is the reader's: `gap` milliseconds between one page being
+   * asked for and the next, across both of the requests that run at once.
+   * Nought is as fast as the two will go. */
+  let nextAt = 0;
+  const myTurn = async () => {
+    const now = Date.now();
+    const wait = Math.max(0, nextAt - now);
+    nextAt = Math.max(now, nextAt) + Math.max(0, gap || 0);
+    if (wait) await pause(wait);
+  };
+
+  /* Asked again, at once, as a refresh would.
+   *
+   * A smaller site that says "too many requests" mostly means that one
+   * request: asked again a moment later it answers, with no need to wait
+   * minutes. So a refused page is fetched afresh a few times in quick
+   * succession before it counts as failed. Anything else (a page that is
+   * not there) gets one more try. */
+  const fetchAgain = async (link, at) => {
+    let lastError = null;
+    const waits = [patience.retry];
+    for (let attempt = 0; attempt <= waits.length; attempt++) {
+      if (at > stopAt) throw new Error('stopped');
+      try {
+        if (attempt === 0) await myTurn();
+        return await readPage(link, at, { pictures, fetchPage });
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0 && tooMany(error)) waits.splice(0, waits.length, ...patience.refresh);
+        if (attempt < waits.length) await pause(waits[attempt]);
+      }
+    }
+    throw lastError;
+  };
+
   const worker = async () => {
-    while (next < links.length) {
+    while (next < stopAt) {
       const at = next++;
       const link = links[at];
       let got = false;
       try {
-        try {
-          got = await readPage(link, at, { pictures, fetchPage });
-        } catch {
-          await pause(1500);
-          got = await readPage(link, at, { pictures, fetchPage });
-        }
+        got = await fetchAgain(link, at);
       } catch (error) {
-        failed.push({ at, url: link.url, text: link.text, reason: error.message || 'could not be read' });
+        // The earliest page to fail is where it stops; a later one that
+        // fails meanwhile is part of the rest anyway.
+        if (at < stopAt) {
+          stopAt = at;
+          stopped = { at, url: link.url, text: link.text, reason: error.message || 'could not be read' };
+        }
         got = false;
       }
-      waiting[at] = got;
+      // Past the stop, a page that came is left for the rest, not kept.
+      waiting[at] = at < stopAt ? got : null;
       settled += 1;
-      onProgress?.(settled / links.length, settled, links.length);
+      onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length);
       await handOn();
-      if (gap) await pause(gap);
     }
   };
   await Promise.all([worker(), worker()]);
   await handOn();
 
+  const failed = stopped ? [stopped] : [];
+  const rest = stopped
+    ? links.slice(stopAt).map(({ url, text }, n) => ({ url, text, ...(n === 0 ? { reason: stopped.reason } : {}) }))
+    : [];
   if (!chapters.length) {
-    const why = failed[0]?.reason;
-    throw new Error(`none of its pages could be downloaded${why ? ` — ${why}` : ''}`);
+    const why = stopped?.reason;
+    // With the pages, so they can be tried again as they are.
+    throw Object.assign(new Error(`none of its pages could be downloaded${why ? ` — ${why}` : ''}`), { failed, rest });
   }
-  failed.sort((a, b) => a.at - b.at);
   return {
     title, author: author || null, lang, format: 'WEB',
-    chapters, images: [], imageCount, words, coverBlob: cover, failed,
+    chapters, images: [], imageCount, words, coverBlob: cover, failed, rest,
   };
 }
+
+/** A site asking to be asked less often. */
+export const tooMany = (error) => /\b429\b|too many requests/i.test(String(error?.message || error || ''));
 
 /** The site's picture of the book, fetched, or null. */
 export async function fetchCover(url, { fetchPage = download } = {}) {

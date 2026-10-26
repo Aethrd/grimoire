@@ -1021,7 +1021,7 @@ t('the workshop shows the order and lets it be changed', () => {
   assert.match(build, /\[\.\.\.archive\.books\]\.sort\(\(a, b\) => naturalOrder\(/);
   assert.ok(!/found\.sort\(/.test(build), 'everything added is sorted together again');
   // A part that will not open costs that part, not the build.
-  assert.match(build, /failed\.push\(\{ name: part\.name, reason: error\.message \}\)/);
+  assert.match(build, /failed\.push\(\{ name: part\.name, reason: error\.message, \.\.\.leftOf\(part, error\.rest, error\.failed\?\.\[0\]\?\.reason\) \}\)/);
 });
 
 t('a bundle asks which edition to open', () => {

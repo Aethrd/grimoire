@@ -259,6 +259,22 @@ export function addBook(book) {
 export const hasBook = (bookId) => parts.some((part) => part.bookId === bookId);
 
 /**
+ * The pages of a website part that did not come, kept to try again: where
+ * they are, what they were called, and what the part was set to.
+ */
+function leftOf(part, pages, reason = '') {
+  if (!part.web) return {};
+  const links = (pages || part.web.links).map(({ url, text }) => ({ url, text }));
+  if (!links.length) return {};
+  return {
+    web: {
+      name: part.name, links, sources: part.web.sources || [], pictures: part.web.pictures !== false,
+      author: part.web.author || '', gap: part.web.gap, reason,
+    },
+  };
+}
+
+/**
  * Chapters from a website, as a part.
  *
  * Listed and ordered like any file, and downloaded when the book is built,
@@ -268,11 +284,15 @@ export const hasBook = (bookId) => parts.some((part) => part.bookId === bookId);
  * @param links  [{ url, text }] in reading order
  * @param cover  the site's picture of the book, already fetched, or null
  */
-export function addWeb({ name, links, pictures = true, cover = null, author = '', sources = [] }) {
+export function addWeb({
+  name, links, pictures = true, cover = null, author = '', sources = [], leftover = null, gap = 250,
+}) {
   parts = [...parts, {
     id: `web-${Date.now()}`,
+    // Pages left over from an earlier build, being tried again.
+    leftover,
     name: name || 'From the web',
-    web: { links: links.map(({ url, text }) => ({ url, text })), pictures, author, sources },
+    web: { links: links.map(({ url, text }) => ({ url, text })), pictures, author, sources, gap },
     coverBlob: cover,
     chapterCount: links.length,
   }];
@@ -311,7 +331,8 @@ export function describe(part) {
     let site = '';
     try { site = ` · ${new URL(part.web.sources[0] || part.web.links[0].url).host}`; } catch { /* no address to name */ }
     const count = part.web.links.length;
-    return `From the web · ${count} page${count === 1 ? '' : 's'}, downloaded when built${site}`;
+    const rate = Number.isFinite(part.web.gap) ? ` · ${part.web.gap} ms apart` : '';
+    return `From the web · ${count} page${count === 1 ? '' : 's'}, downloaded when built${site}${rate}`;
   }
   if (part.pictures) {
     const size = part.size ? ` · ${(part.size / 1048576).toFixed(1)}MB` : '';
@@ -426,6 +447,8 @@ export async function build({ title, author, folder = null, cover: chosenCover =
           cover: part.coverBlob,
           pictures: part.web.pictures,
           fetchPage: part.web.fetchPage,
+          gap: part.web.gap,
+          patience: part.web.patience,
           onImage,
           onProgress: (fraction, done, total) => onProgress?.(
             `Downloading ${part.name} · ${done} of ${total}`, (at + fraction) / parts.length, at, parts.length),
@@ -451,16 +474,19 @@ export async function build({ title, author, folder = null, cover: chosenCover =
       for (const image of await store.byIndex('images', 'bookId', bookId)) {
         if (image.href.startsWith(prefix)) await store.del('images', [bookId, image.href]);
       }
-      failed.push({ name: part.name, reason: error.message });
+      failed.push({ name: part.name, reason: error.message, ...leftOf(part, error.rest, error.failed?.[0]?.reason) });
       continue;
     }
     if (!cover && parsed.coverBlob) cover = parsed.coverBlob;
-    // Pages of a website that would not come cost those pages, and are said.
-    if (parsed.failed?.length) {
-      const count = parsed.failed.length;
+    /* A website that stopped at a page it would not give: built up to there,
+     * and the rest -- that page on -- said, and kept to try again. */
+    if (parsed.rest?.length) {
+      const count = parsed.rest.length;
+      const at = parsed.failed[0];
       failed.push({
-        name: `${part.name}: ${count} page${count === 1 ? '' : 's'}`,
-        reason: `${parsed.failed[0].text || parsed.failed[0].url} — ${parsed.failed[0].reason}`,
+        name: `${part.name}: the last ${count} page${count === 1 ? '' : 's'}`,
+        reason: `stopped at ${at?.text || at?.url} — ${at?.reason}`,
+        ...leftOf(part, parsed.rest, at?.reason),
       });
     }
 
@@ -512,9 +538,10 @@ export async function build({ title, author, folder = null, cover: chosenCover =
      * "None of those parts could be read" is true and useless: every part had
      * a reason, and throwing them away left nothing to act on. */
     const why = failed[0]?.reason;
-    throw new Error(why
+    // With what failed, so pages from a website can be tried again.
+    throw Object.assign(new Error(why
       ? `None of those parts could be read — ${failed[0].name}: ${why}`
-      : 'None of those parts could be read.');
+      : 'None of those parts could be read.'), { failed });
   }
 
   const finished = await store.get('books', bookId);

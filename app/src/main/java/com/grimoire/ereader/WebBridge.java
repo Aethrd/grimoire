@@ -137,6 +137,12 @@ public class WebBridge {
                         "text/html,application/xhtml+xml,application/xml;q=0.9,image/*,*/*;q=0.8");
                 connection.setRequestProperty("Accept-Language",
                         Locale.getDefault().toLanguageTag() + ",en;q=0.8");
+                // Fresh every time, as a refresh is: a refusal or an error
+                // page kept by a cache along the way would only be served
+                // again when the page is asked for again.
+                connection.setUseCaches(false);
+                connection.setRequestProperty("Cache-Control", "no-cache");
+                connection.setRequestProperty("Pragma", "no-cache");
                 addCookies(connection, url);
 
                 int status = connection.getResponseCode();
@@ -190,7 +196,7 @@ public class WebBridge {
         }
         if (status == 404) return "that page does not exist (404)";
         if (status == 401 || status == 403) return "the site refused (" + status + ") -- it may need you to be signed in";
-        if (status == 429) return "the site says too many requests (429) -- wait a while and try again";
+        if (status == 429) return "the site turned the request away (429, too many requests)";
         return "the site answered " + status;
     }
 

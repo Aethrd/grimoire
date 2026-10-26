@@ -289,9 +289,10 @@ await t('the screen is reached from Build, and only from there', () => {
 
 console.log('into Build');
 
-await t('pages read for Build come in order, numbered without a gap, pictures with them', async () => {
+await t('pages read for Build come in order, and stop at the first that will not come', async () => {
   const pictures = [];
-  // The second page is slow, the third missing: the order still holds.
+  // The second page is slow, the third missing: what comes before the
+  // missing one is kept whole, and the rest starts there.
   const slow = async (url) => {
     if (url.endsWith('chapter-2')) await new Promise((r) => setTimeout(r, 30));
     return fakeFetch(url);
@@ -301,14 +302,32 @@ await t('pages read for Build come in order, numbered without a gap, pictures wi
     { url: `${SITE}chapter-2`, text: 'Two' },
     { url: `${SITE}missing`, text: 'Gone' },
     { url: `${SITE}chapter-3`, text: 'Three' },
-  ], { fetchPage: slow, gap: 0, onImage: (image) => pictures.push(image) });
-  assert.deepEqual(parsed.chapters.map((c) => [c.index, c.title]), [[0, 'One'], [1, 'Two'], [2, 'Three']]);
+  ], { fetchPage: slow, gap: 0, patience: { retry: 0, refresh: [0] }, onImage: (image) => pictures.push(image) });
+  assert.deepEqual(parsed.chapters.map((c) => [c.index, c.title]), [[0, 'One'], [1, 'Two']]);
   assert.equal(parsed.failed.length, 1);
   assert.equal(parsed.failed[0].text, 'Gone');
+  // The rest: the page it stopped at, and everything after, in order.
+  assert.deepEqual(parsed.rest.map((l) => l.text), ['Gone', 'Three']);
+  assert.match(parsed.rest[0].reason, /404/);
   assert.equal(pictures.length, 1);
   assert.equal(pictures[0].chapterIndex, 1);
-  assert.equal(parsed.imageCount, 1);
   assert.equal(parsed.format, 'WEB');
+});
+
+await t('a page that came after the stop is left for the rest, not kept', async () => {
+  // The first page is the slow one and fails; the second has already come.
+  const late = async (url) => {
+    if (url.endsWith('missing')) { await new Promise((r) => setTimeout(r, 40)); throw new Error('that page does not exist (404)'); }
+    return fakeFetch(url);
+  };
+  const parsed = await web.readPages([
+    { url: `${SITE}chapter-1`, text: 'One' },
+    { url: `${SITE}missing`, text: 'Gone' },
+    { url: `${SITE}chapter-2`, text: 'Two' },
+    { url: `${SITE}chapter-3`, text: 'Three' },
+  ], { fetchPage: late, gap: 0, patience: { retry: 0, refresh: [0] } });
+  assert.deepEqual(parsed.chapters.map((c) => c.title), ['One']);
+  assert.deepEqual(parsed.rest.map((l) => l.text), ['Gone', 'Two', 'Three']);
 });
 
 await t('a website is a part in Build, joined with the rest and downloaded when built', async () => {
@@ -323,11 +342,14 @@ await t('a website is a part in Build, joined with the rest and downloaded when 
   assert.match(build.describe(part), /From the web · 3 pages, downloaded when built · novels\.example/);
   part.web.fetchPage = fakeFetch;
   asked.length = 0;
+  Object.assign(part.web, { gap: 0, patience: { retry: 0, refresh: [0] } });
   const { book, failed } = await build.build({ title: 'Built Lantern' });
   assert.ok(asked.includes(`${SITE}chapter-1`), 'nothing was downloaded');
   assert.equal(book.chapters, 2);
   assert.equal(failed.length, 1);
-  assert.match(failed[0].name, /The Lantern: 1 page/);
+  assert.match(failed[0].name, /The Lantern: the last 1 page/);
+  assert.match(failed[0].reason, /stopped at Gone — .*404/);
+  assert.deepEqual(failed[0].web.links.map((l) => l.text), ['Gone']);
   const chapters = (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
   assert.deepEqual(chapters.map((c) => c.title), ['One', 'Two']);
   const images = await store.byIndex('images', 'bookId', book.id);
@@ -345,6 +367,99 @@ await t('the link list is ticked by holding and dragging, with nothing to read f
   const wire = app.slice(app.indexOf('function wireWeb('), app.indexOf('/* ── global wiring'));
   assert.match(wire, /list\.addEventListener\('touchmove', \(e\) => \{[\s\S]*?if \(e\.cancelable\) e\.preventDefault\(\);[\s\S]*?\}, \{ passive: false \}\);/);
   assert.match(wire, /const want = pos >= low && pos <= high \? paint\.value : paint\.was\.get\(at\);/);
+});
+
+await t('pages a site would not give are kept, to download as another book', async () => {
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  build.clear();
+  // A site that has had enough after the first page.
+  let served = 0;
+  const busy = async (url) => {
+    if (url.includes('chapter-') && ++served > 1) throw new Error('the site turned the request away (429, too many requests)');
+    return fakeFetch(url);
+  };
+  const links = [1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `Chapter ${n}` }));
+  build.addWeb({ name: 'The Lantern', links, sources: [SITE], author: 'A. Keeper' });
+  Object.assign(build.contents()[0].web, { fetchPage: busy, gap: 0, patience: { retry: 0, refresh: [0, 0, 0] } });
+  const { book, failed } = await build.build({ title: 'The Lantern' });
+  assert.equal(book.chapters, 1);
+  assert.equal(failed.length, 1);
+  assert.ok(web.tooMany(failed[0].reason), failed[0].reason);
+  // What is needed to try again: the pages, where they came from, how.
+  assert.deepEqual(failed[0].web.links.map((l) => l.text), ['Chapter 2', 'Chapter 3']);
+  assert.deepEqual(failed[0].web.sources, [SITE]);
+  assert.equal(failed[0].web.author, 'A. Keeper');
+  assert.equal(failed[0].web.name, 'The Lantern');
+
+  // Nothing at all from the site: the whole part is kept, and the error says so.
+  build.clear();
+  build.addWeb({ name: 'Refused', links, sources: [SITE] });
+  Object.assign(build.contents()[0].web, {
+    fetchPage: async () => { throw new Error('the site turned the request away (429, too many requests)'); },
+    gap: 0, patience: { retry: 0, refresh: [0, 0, 0] },
+  });
+  const error = await build.build({ title: 'Refused' }).catch((e) => e);
+  assert.match(error.message, /None of those parts could be read/);
+  assert.equal(error.failed[0].web.links.length, 3);
+  build.clear();
+});
+
+await t('a page turned away is fetched afresh at once, not given up on', async () => {
+  // Refused twice, then answered: as a smaller site does when asked again.
+  const refusals = new Map();
+  const moody = async (url) => {
+    const seen = (refusals.get(url) || 0) + 1;
+    refusals.set(url, seen);
+    if (url.includes('chapter-') && seen <= 2) throw new Error('the site turned the request away (429, too many requests)');
+    return fakeFetch(url);
+  };
+  const started = Date.now();
+  const parsed = await web.readPages([1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `Chapter ${n}` })),
+    { fetchPage: moody, gap: 0, patience: { retry: 0, refresh: [5, 5, 5] } });
+  assert.equal(parsed.chapters.length, 3);
+  assert.equal(parsed.failed.length, 0);
+  assert.ok(Date.now() - started < 2000, 'it waited instead of asking again');
+  // Nothing tells anyone to wait.
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  assert.ok(!/wait a while/.test(java));
+  assert.match(java, /setRequestProperty\("Cache-Control", "no-cache"\)/);
+  assert.ok(!/wait a few minutes|Waiting a few minutes/i.test(read('app/src/main/assets/www/js/app.js')));
+});
+
+await t('the pages are asked for at the rate set, in milliseconds', async () => {
+  const times = [];
+  const timed = async (url) => { times.push(Date.now()); return fakeFetch(url); };
+  await web.readPages([1, 2, 3, 1, 2].map((n, i) => ({ url: `${SITE}chapter-${n}`, text: `P${i}` })),
+    { fetchPage: timed, gap: 120, pictures: false });
+  const pageTimes = times.slice(0, 5);
+  for (let i = 1; i < pageTimes.length; i++) {
+    assert.ok(pageTimes[i] - pageTimes[i - 1] >= 110, `pages ${i - 1} and ${i} were ${pageTimes[i] - pageTimes[i - 1]}ms apart`);
+  }
+  // Set on the website screen, remembered, and carried by the part.
+  const html = read('app/src/main/assets/www/index.html');
+  assert.match(html, /id="web-delay" type="number"/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /store\.saveSettings\(\{ webDelay: value \}\)/);
+  assert.match(app, /gap: webDelay\(\)/);
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  build.clear();
+  build.addWeb({ name: 'Slow', links: [{ url: `${SITE}chapter-1`, text: 'One' }], gap: 1500 });
+  assert.equal(build.contents()[0].web.gap, 1500);
+  assert.match(build.describe(build.contents()[0]), /1500 ms apart/);
+  build.clear();
+});
+
+await t('Build offers the rest as another book, and remembers it across a restart', () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /const kept = keepLeftovers\(failed, retried\);/);
+  assert.match(app, /if \(kept\) showLeftoverInWeb\(kept\);/);
+  assert.match(app, /store\.saveSettings\(\{ webLeftovers \}\)/);
+  assert.match(app, /data-retry>Download as another book</);
+  const html = read('app/src/main/assets/www/index.html');
+  assert.match(html, /id="build-leftovers"/);
+  // And slower once the site has said so.
+  const src = read('app/src/main/assets/www/js/web.js');
+  assert.ok(!/pace = Math\.max/.test(src), 'the rate is changed behind the reader\'s back');
 });
 
 console.log(`\n${pass} assertions passed`);

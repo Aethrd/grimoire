@@ -2399,3 +2399,18 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .page-flow .page-start { break-before: column; -webkit-column-break-before: always; }
 .page-flow .page-start.continued { text-indent: 0 !important; margin-top: 0 !important; }
 .page-flow li.page-start.continued { list-style: none; }
+
+/* Chapters a website would not give, kept in Build to try again. */
+.build-leftover { border: 1px solid var(--accent-300); border-radius: var(--radius-md);
+                  padding: 12px; margin: 0 0 14px; background: var(--surface); }
+.build-leftover p { margin: 0 0 10px; font-size: 13px; line-height: 1.5; }
+.build-leftover small { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+.build-leftover .web-row { margin: 0; justify-content: flex-end; }
+
+/* How gently a site is asked: a pause between one page and the next. */
+.web-rate { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px; font-size: 13px; }
+.web-rate span:first-child { flex: 1; color: var(--muted); }
+.web-rate input { width: 92px; padding: 8px 10px; border-radius: var(--radius-md);
+  border: 1px solid var(--hairline); background: var(--surface); color: var(--text);
+  font: 15px var(--font-ui); text-align: right; }
+.web-rate input:focus-visible { outline: none; border-color: var(--accent); }

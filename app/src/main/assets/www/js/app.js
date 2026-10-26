@@ -5264,6 +5264,7 @@ function wireBuildCover() {
 function renderWorkshop() {
   const list = el('build-list');
   const parts = build.contents();
+  paintLeftovers(parts);
 
   el('build-empty').hidden = parts.length > 0;
   el('build-naming').hidden = parts.length === 0;
@@ -5320,6 +5321,123 @@ function renderWorkshop() {
   });
 }
 
+/* ── chapters a website would not give ────────────────────────────────
+ *
+ * A site that has had enough -- "too many requests" -- or a page that was
+ * down for a minute leaves a built book short a few chapters. Those pages
+ * are kept, address and all, and offered in Build to download as another
+ * book once the site is willing. Kept in the settings, so closing the app in
+ * the meantime loses nothing.
+ */
+
+let webLeftovers = [];
+store.settings().then((settings) => {
+  webLeftovers = Array.isArray(settings.webLeftovers) ? settings.webLeftovers : [];
+  if (current === 'workshop') renderWorkshop();
+}).catch(() => {});
+
+const saveLeftovers = () => store.saveSettings({ webLeftovers }).catch(() => {});
+const LEFTOVER_SUFFIX = /\s+— (the rest|from .*)$/;
+
+/** Take a build's failures in; returns the newest kept, or null. */
+function keepLeftovers(failed, retried = []) {
+  webLeftovers = webLeftovers.filter((left) => !retried.includes(left.id));
+  let newest = null;
+  for (const failure of failed || []) {
+    if (!failure.web?.links?.length) continue;
+    /* Named for the book and where it picks up -- "The Lantern — from
+     * Chapter 38" -- not for how many times it has been tried, so two of
+     * them on the shelf can be told apart and put in order. */
+    const base = String(failure.web.name || 'From the web').replace(LEFTOVER_SUFFIX, '');
+    const from = String(failure.web.links[0]?.text || '').trim();
+    newest = {
+      id: `left-${Date.now()}-${webLeftovers.length}`,
+      name: from ? `${base} — from ${from.length > 48 ? `${from.slice(0, 47)}…` : from}` : `${base} — the rest`,
+      links: failure.web.links,
+      sources: failure.web.sources || [],
+      pictures: failure.web.pictures !== false,
+      author: failure.web.author || '',
+      gap: failure.web.gap,
+      reason: failure.web.reason || failure.reason || '',
+      at: Date.now(),
+    };
+    webLeftovers.push(newest);
+  }
+  saveLeftovers();
+  return newest;
+}
+
+function paintLeftovers(parts) {
+  const host = el('build-leftovers');
+  if (!host) return;
+  host.replaceChildren();
+  const busy = parts.length > 0;
+  for (const left of webLeftovers) {
+    // Already in the list, being tried again.
+    if (parts.some((part) => part.leftover === left.id)) continue;
+    const count = left.links.length;
+    const crowded = web.tooMany(left.reason);
+    const book = escapeText(left.name.replace(LEFTOVER_SUFFIX, ''));
+    const first = escapeText(left.links[0]?.text || 'a page');
+    const box = document.createElement('div');
+    box.className = 'build-leftover';
+    box.innerHTML = `<p><b>“${book}” stopped at ${first}</b>`
+      + (left.reason ? ` — ${escapeText(left.reason)}` : '') + '. '
+      + `${count === 1 ? 'That chapter is' : `It and the ${count - 1} after it are`} kept, to download as another book that carries on where that one stops.`
+      + `<small>${crowded
+        ? 'The site turned a request away. Trying again usually works straight away.'
+        : 'If that page is not the book, look them over and untick it first.'}`
+      + (busy ? ' Build or clear the list above first.' : '') + '</small></p>'
+      + '<div class="web-row"><button class="btn ghost" data-forget>Forget</button>'
+      + '<button class="btn ghost" data-look>Look over</button>'
+      + '<button class="btn primary" data-retry>Download as another book</button></div>';
+    box.querySelector('[data-look]').disabled = busy;
+    box.querySelector('[data-look]').onclick = () => {
+      showLeftoverInWeb(left);
+      show('web');
+    };
+    box.querySelector('[data-retry]').disabled = busy;
+    box.querySelector('[data-forget]').onclick = () => {
+      webLeftovers = webLeftovers.filter((each) => each.id !== left.id);
+      saveLeftovers();
+      renderWorkshop();
+    };
+    box.querySelector('[data-retry]').onclick = () => {
+      if (build.contents().length) return;
+      build.addWeb({
+        name: left.name, links: left.links, pictures: left.pictures,
+        author: left.author, sources: left.sources, leftover: left.id,
+        gap: Number.isFinite(left.gap) ? left.gap : webDelay(),
+      });
+      el('build-title').value = left.name;
+      buildTitleTouched = true;
+      if (left.author) el('build-author').value = left.author;
+      renderWorkshop();
+      // Straight on: a book of its own is what was asked for.
+      el('build-go').click();
+    };
+    host.appendChild(box);
+  }
+}
+
+/** The website screen, holding what was left over: its address, and the
+ *  pages, ticked, ready to look over or add again. */
+function showLeftoverInWeb(left) {
+  clearWeb();
+  webState.leftover = left.id;
+  if (Number.isFinite(left.gap)) el('web-delay').value = String(left.gap);
+  el('web-address').value = left.sources.join('\n');
+  webState.links = left.links.map((link) => ({
+    url: link.url, text: link.text, chrome: false, kind: null, likely: true, picked: true,
+  }));
+  webState.sources = left.sources;
+  webState.title = left.name;
+  webState.author = left.author;
+  webNote(`Stopped last time at ${left.links[0]?.text || 'the first of these'}`
+    + (left.reason ? ` — ${left.reason}` : '') + `. It and what comes after it are here, to add to Build as another book.`);
+  drawWebList();
+}
+
 function wireWorkshop() {
   el('build-add').onclick = () => {
     const picker = document.createElement('input');
@@ -5372,6 +5490,8 @@ function wireWorkshop() {
 
   el('build-go').onclick = async () => {
     const finish = progress.start('Building');
+    // Leftovers being tried again in this build: settled by it either way.
+    const retried = build.contents().map((part) => part.leftover).filter(Boolean);
     try {
       const { book, failed } = await build.build({
         title: el('build-title').value.trim() || undefined,
@@ -5398,16 +5518,21 @@ function wireWorkshop() {
       el('build-author').value = '';
       buildCover = null;
       buildCoverFrom = 'first';
-      // The website screen starts empty for the next one: its address and
-      // list belong to the book just built.
-      clearWeb();
+      /* Pages a website would not give are kept, not dropped with the
+       * list: a site that said "too many requests" will usually give them an
+       * hour later, as a book of their own. The website screen holds them too,
+       * address and all; otherwise it starts empty for the next one. */
+      const kept = keepLeftovers(failed, retried);
+      if (kept) showLeftoverInWeb(kept);
+      else clearWeb();
       renderWorkshop();
       await refreshShelf();
       // Said with the parts that failed, not instead of them: a book short
       // three volumes should not look like a complete one.
       const filed = book.folder ? ` · in “${book.folder}”` : '';
+      const later = kept ? ' — the rest is kept in Build to download as another book' : '';
       whenNotReading(() => toast(failed.length
-        ? `Built “${book.title}” — ${book.chapters} chapters${filed} · skipped ${failed[0].name}${failed.length > 1 ? ` and ${failed.length - 1} more` : ''}: ${failed[0].reason}`
+        ? `Built “${book.title}” — ${book.chapters} chapters${filed} · skipped ${failed[0].name}${failed.length > 1 ? ` and ${failed.length - 1} more` : ''}: ${failed[0].reason}${later}`
         : `Built “${book.title}” — ${book.chapters} chapters${filed}`, 8000, { kind: 'done' }));
       /* Straight into the book that was just made, not out to the shelf to
        * go looking for it. */
@@ -6020,7 +6145,12 @@ async function findWebLinks() {
 async function addWebToBuild() {
   const chosen = webState.links.filter((link) => link.picked);
   if (!chosen.length) return;
-  const name = (el('web-title').value || '').trim() || webState.title || 'From the web';
+  let name = (el('web-title').value || '').trim() || webState.title || 'From the web';
+  // Left over pages, looked over: named for where they now pick up.
+  if (webState.leftover && !webState.titleTouched && chosen[0]?.text) {
+    const from = chosen[0].text.trim();
+    name = `${name.replace(LEFTOVER_SUFFIX, '')} — from ${from.length > 48 ? `${from.slice(0, 47)}…` : from}`;
+  }
   const go = el('web-go');
   go.disabled = true;
   go.textContent = 'Adding…';
@@ -6028,7 +6158,9 @@ async function addWebToBuild() {
     const cover = await web.fetchCover(webState.cover);
     build.addWeb({
       name, links: chosen, pictures: webState.pictures, cover,
-      author: webState.author, sources: webState.sources,
+      author: webState.author, sources: webState.sources, gap: webDelay(),
+      // Pages left over from an earlier build: this settles them.
+      leftover: webState.leftover || null,
     });
     if (webState.author && !el('build-author').value) el('build-author').value = webState.author;
     clearWeb();
@@ -6041,9 +6173,15 @@ async function addWebToBuild() {
   }
 }
 
+/** The pause between pages, in milliseconds, as set on the website screen. */
+function webDelay() {
+  const value = Math.round(Number(el('web-delay')?.value));
+  return Number.isFinite(value) ? Math.max(0, Math.min(60000, value)) : 250;
+}
+
 function clearWeb() {
   Object.assign(webState, {
-    links: [], title: '', author: '', cover: '', sources: [], reversed: false, titleTouched: false,
+    links: [], title: '', author: '', cover: '', sources: [], reversed: false, titleTouched: false, leftover: null,
   });
   el('web-list').replaceChildren();
   el('web-address').value = '';
@@ -6056,6 +6194,15 @@ function clearWeb() {
 function wireWeb() {
   el('web-find').onclick = findWebLinks;
   el('web-go').onclick = addWebToBuild;
+  // Remembered: a site that wants a slower pace wants it every time.
+  store.settings().then((settings) => {
+    if (Number.isFinite(settings.webDelay)) el('web-delay').value = String(settings.webDelay);
+  }).catch(() => {});
+  el('web-delay').addEventListener('change', () => {
+    const value = webDelay();
+    el('web-delay').value = String(value);
+    store.saveSettings({ webDelay: value });
+  });
   el('web-clear').onclick = clearWeb;
   el('web-paste').onclick = async () => {
     try {

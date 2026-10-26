@@ -367,6 +367,9 @@
         </p>
       </div>
 
+      <!-- Chapters a website would not give last time, kept to try again. -->
+      <div id="build-leftovers"></div>
+
       <p class="muted" id="build-empty" style="line-height:1.6">
         Add the parts of a serial — volumes, chapters, image archives, or the
         chapters on a website — and they become one book, in order. Zips,
@@ -415,6 +418,9 @@
         </label>
         <input class="query" id="web-filter" type="search" autocomplete="off"
                placeholder="Show only links containing…">
+        <label class="web-rate"><span>Delay between pages</span>
+          <input id="web-delay" type="number" inputmode="numeric" min="0" max="60000" step="50" value="250">
+          <span>ms</span></label>
         <div class="chip-row web-tools">
           <button class="chip" id="web-likely" title="Tick the links that look like chapters, untick the rest">Just the chapters</button>
           <button class="chip" id="web-all">Tick shown</button>
