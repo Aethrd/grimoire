@@ -23,6 +23,7 @@ import {
   coverOf, picturesInFile,
 } from './parse.js';
 import { planBooks } from './group.js';
+import { readPages } from './web.js';
 
 /** The parts waiting to be built, in the order they will be joined. */
 let parts = [];
@@ -45,6 +46,7 @@ export async function picturesOf(part) {
       .sort((a, b) => a.order - b.order);
     return stored.map((image) => ({ name: image.href.split('/').pop(), load: async () => image.blob }));
   }
+  if (part.web) return part.coverBlob ? [{ name: 'cover', load: async () => part.coverBlob }] : [];
   if (part.pictures?.length) return part.pictures.map((file) => ({ name: file.name, load: async () => file }));
   if (part.file && !part.prefix) return picturesInFile(part.file);
   return [];
@@ -56,6 +58,7 @@ export function firstCover() {
   if (!first) return Promise.resolve(null);
   if (!covers.has(first)) {
     covers.set(first, (async () => {
+      if (first.coverBlob) return first.coverBlob;
       if (first.bookId) return (await store.get('books', first.bookId))?.coverBlob || null;
       if (first.pictures?.length) return first.pictures[0];
       if (first.file && !first.prefix) return coverOf(first.file);
@@ -255,6 +258,27 @@ export function addBook(book) {
 
 export const hasBook = (bookId) => parts.some((part) => part.bookId === bookId);
 
+/**
+ * Chapters from a website, as a part.
+ *
+ * Listed and ordered like any file, and downloaded when the book is built,
+ * not before -- so the pages chosen can sit in the list beside the volumes
+ * they continue, and nothing is fetched for a build that never happens.
+ *
+ * @param links  [{ url, text }] in reading order
+ * @param cover  the site's picture of the book, already fetched, or null
+ */
+export function addWeb({ name, links, pictures = true, cover = null, author = '', sources = [] }) {
+  parts = [...parts, {
+    id: `web-${Date.now()}`,
+    name: name || 'From the web',
+    web: { links: links.map(({ url, text }) => ({ url, text })), pictures, author, sources },
+    coverBlob: cover,
+    chapterCount: links.length,
+  }];
+  return parts;
+}
+
 export function move(id, by) {
   const at = parts.findIndex((p) => p.id === id);
   const to = at + by;
@@ -282,6 +306,12 @@ export function describe(part) {
       ? `${part.chapterCount} chapter${part.chapterCount === 1 ? '' : 's'}`
       : 'on the shelf';
     return `From the shelf · ${chapters}`;
+  }
+  if (part.web) {
+    let site = '';
+    try { site = ` · ${new URL(part.web.sources[0] || part.web.links[0].url).host}`; } catch { /* no address to name */ }
+    const count = part.web.links.length;
+    return `From the web · ${count} page${count === 1 ? '' : 's'}, downloaded when built${site}`;
   }
   if (part.pictures) {
     const size = part.size ? ` · ${(part.size / 1048576).toFixed(1)}MB` : '';
@@ -389,7 +419,18 @@ export async function build({ title, author, folder = null, cover: chosenCover =
 
     let parsed;
     try {
-      parsed = part.bookId
+      parsed = part.web
+        ? await readPages(part.web.links, {
+          title: part.name,
+          author: part.web.author,
+          cover: part.coverBlob,
+          pictures: part.web.pictures,
+          fetchPage: part.web.fetchPage,
+          onImage,
+          onProgress: (fraction, done, total) => onProgress?.(
+            `Downloading ${part.name} · ${done} of ${total}`, (at + fraction) / parts.length, at, parts.length),
+        })
+        : part.bookId
         ? await readShelfBook(part)
         : part.pictures
         ? await readPictures(part)
@@ -414,6 +455,14 @@ export async function build({ title, author, folder = null, cover: chosenCover =
       continue;
     }
     if (!cover && parsed.coverBlob) cover = parsed.coverBlob;
+    // Pages of a website that would not come cost those pages, and are said.
+    if (parsed.failed?.length) {
+      const count = parsed.failed.length;
+      failed.push({
+        name: `${part.name}: ${count} page${count === 1 ? '' : 's'}`,
+        reason: `${parsed.failed[0].text || parsed.failed[0].url} — ${parsed.failed[0].reason}`,
+      });
+    }
 
     await store.putAll('chapters', parsed.chapters.map((chapter, n) => ({
       bookId,

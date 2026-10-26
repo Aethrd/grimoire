@@ -616,3 +616,96 @@ async function closeGaps(bookId, kept) {
     await store.putAll('images', moved.map((image) => ({ ...image, chapterIndex: place.get(image.chapterIndex) })));
   }
 }
+
+/**
+ * Pages read into chapters for Build, as a part like any file.
+ *
+ * Shaped as a parsed file is, so the workshop treats a website the way it
+ * treats a volume: joined, in order, with whatever else is in the list.
+ * Pages are fetched two at a time but handed on strictly in order, each one
+ * as soon as every page before it has come or failed -- so a page that fails
+ * leaves no hole in the numbering, and nothing is held for longer than it
+ * takes the pages ahead of it to arrive.
+ *
+ * @param onImage  called with each picture, numbered to its final chapter
+ * @returns { title, author, chapters, images: [], imageCount, coverBlob,
+ *   words, format, failed: [{ url, text, reason }] }
+ */
+export async function readPages(links, {
+  title = '', author = '', cover = null, pictures = true, onImage, onProgress,
+  fetchPage = download, gap = 250,
+} = {}) {
+  const chapters = [];
+  const failed = [];
+  const waiting = new Array(links.length);
+  let handed = 0;        // the next page to hand on
+  let next = 0;
+  let settled = 0;
+  let imageCount = 0;
+  let words = 0;
+  let lang = null;
+
+  const handOn = async () => {
+    while (handed < links.length && waiting[handed] !== undefined) {
+      const got = waiting[handed];
+      waiting[handed] = null;
+      handed += 1;
+      if (!got) continue;
+      const index = chapters.length;
+      for (const image of got.images) {
+        imageCount += 1;
+        await onImage?.({ ...image, chapterIndex: index });
+      }
+      if (!lang && got.lang) lang = got.lang;
+      words += got.chapter.words || 0;
+      chapters.push({ ...got.chapter, index });
+    }
+  };
+
+  const worker = async () => {
+    while (next < links.length) {
+      const at = next++;
+      const link = links[at];
+      let got = false;
+      try {
+        try {
+          got = await readPage(link, at, { pictures, fetchPage });
+        } catch {
+          await pause(1500);
+          got = await readPage(link, at, { pictures, fetchPage });
+        }
+      } catch (error) {
+        failed.push({ at, url: link.url, text: link.text, reason: error.message || 'could not be read' });
+        got = false;
+      }
+      waiting[at] = got;
+      settled += 1;
+      onProgress?.(settled / links.length, settled, links.length);
+      await handOn();
+      if (gap) await pause(gap);
+    }
+  };
+  await Promise.all([worker(), worker()]);
+  await handOn();
+
+  if (!chapters.length) {
+    const why = failed[0]?.reason;
+    throw new Error(`none of its pages could be downloaded${why ? ` — ${why}` : ''}`);
+  }
+  failed.sort((a, b) => a.at - b.at);
+  return {
+    title, author: author || null, lang, format: 'WEB',
+    chapters, images: [], imageCount, words, coverBlob: cover, failed,
+  };
+}
+
+/** The site's picture of the book, fetched, or null. */
+export async function fetchCover(url, { fetchPage = download } = {}) {
+  if (!url) return null;
+  try {
+    const got = await fetchPage(url);
+    return String(got.type || '').toLowerCase().startsWith('image/') && got.blob.size > 2048 ? got.blob : null;
+  } catch {
+    return null;
+  }
+}

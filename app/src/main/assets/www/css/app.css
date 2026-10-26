@@ -2390,7 +2390,7 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .web-link.likely .web-tag { color: var(--accent-ink); border-color: var(--accent-300); }
 .web-link.got .web-tag { background: var(--accent-100); color: var(--accent-ink); }
 .web-link.lost .web-tag { color: #c0553f; border-color: currentColor; }
-.web-link.anchor { box-shadow: inset 3px 0 0 var(--accent); }
+.web-list.painting .web-link { cursor: ns-resize; }
 
 /* The + on the shelf: a file, or a website. */
 #library-head { position: relative; }

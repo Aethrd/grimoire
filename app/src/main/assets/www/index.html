@@ -340,6 +340,7 @@
   <section class="screen" data-screen="workshop">
     <header class="app-head">
       <div class="app-head-title"><h1>Build a book</h1><p class="eyebrow" id="build-eyebrow">Join files into one</p></div>
+      <button class="btn ghost" id="build-web" title="Chapters from a website">Website</button>
       <button class="btn primary" id="build-add">Add files</button>
     </header>
 
@@ -373,8 +374,9 @@
       </div>
 
       <p class="muted" id="build-empty" style="line-height:1.6">
-        Add the parts of a serial — volumes, chapters, image archives — and
-        they become one book, in order. Zips, comics, EPUBs and PDFs all mix.
+        Add the parts of a serial — volumes, chapters, image archives, or the
+        chapters on a website — and they become one book, in order. Zips,
+        comics, EPUBs, PDFs and websites all mix.
       </p>
       <div id="build-list"></div>
     </div>
@@ -426,8 +428,6 @@
           <button class="chip" id="web-reverse" aria-pressed="false">Reverse order</button>
           <button class="chip" id="web-pictures" aria-pressed="true">Pictures</button>
         </div>
-        <p class="muted web-hint">Tap a link to tick or untick it. Hold one to set
-          everything from the last link you tapped down to it the same way.</p>
         <ol class="web-list" id="web-list"></ol>
       </div>
     </div>

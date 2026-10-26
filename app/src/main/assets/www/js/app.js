@@ -5403,7 +5403,7 @@ function wireWorkshop() {
       // three volumes should not look like a complete one.
       const filed = book.folder ? ` · in “${book.folder}”` : '';
       whenNotReading(() => toast(failed.length
-        ? `Built “${book.title}” — ${book.chapters} chapters${filed} · ${failed.length} part${failed.length === 1 ? '' : 's'} skipped: ${failed[0].reason}`
+        ? `Built “${book.title}” — ${book.chapters} chapters${filed} · skipped ${failed[0].name}${failed.length > 1 ? ` and ${failed.length - 1} more` : ''}: ${failed[0].reason}`
         : `Built “${book.title}” — ${book.chapters} chapters${filed}`, 8000, { kind: 'done' }));
       /* Straight into the book that was just made, not out to the shelf to
        * go looking for it. */
@@ -5822,9 +5822,9 @@ const webState = {
   sources: [],
   reversed: false,
   pictures: true,
-  anchor: -1,         // the link last tapped, where a held range starts
   running: null,      // { stop } while a download is under way
   titleTouched: false,
+  forBuild: false,    // opened from Build: the chosen pages become a part there
 };
 
 /* What the screen says before anything has been asked of it. */
@@ -5844,17 +5844,20 @@ function renderWeb() {
   el('web-reverse').setAttribute('aria-pressed', String(webState.reversed));
   el('web-pictures').setAttribute('aria-pressed', String(webState.pictures));
   if (!webState.titleTouched) el('web-title').value = webState.title;
-  el('web-eyebrow').textContent = (el('web-title').value || '').trim() || 'Download a book from a website';
+  el('web-eyebrow').textContent = (el('web-title').value || '').trim()
+    || (webState.forBuild ? 'Chapters from a website, for Build' : 'Download a book from a website');
   paintWebCount();
 }
 
 function paintWebCount() {
   const picked = webState.links.filter((link) => link.picked).length;
   el('web-count').textContent = webState.links.length
-    ? `${picked} of ${webState.links.length}${activeFolder ? ` · into “${activeFolder}”` : ''}`
+    ? `${picked} of ${webState.links.length}${activeFolder && !webState.forBuild ? ` · into “${activeFolder}”` : ''}`
     : '';
   const go = el('web-go');
-  go.textContent = webState.running ? 'Stop' : `Download${picked ? ` ${picked}` : ''}`;
+  go.textContent = webState.running ? 'Stop'
+    : webState.forBuild ? `Add${picked ? ` ${picked}` : ''} to Build`
+    : `Download${picked ? ` ${picked}` : ''}`;
   go.disabled = !webState.running && picked === 0;
   go.classList.toggle('danger', !!webState.running);
   go.classList.toggle('primary', !webState.running);
@@ -5899,7 +5902,6 @@ function paintWebRow(row, link) {
   row.classList.toggle('likely', !!link.likely);
   row.classList.toggle('got', link.got === true);
   row.classList.toggle('lost', link.got === false);
-  row.classList.toggle('anchor', Number(row.dataset.at) === webState.anchor);
   const tag = row.querySelector('.web-tag');
   const said = webTag(link);
   if (tag) tag.textContent = said;
@@ -5950,7 +5952,6 @@ async function findWebLinks() {
 
   const button = el('web-find');
   button.disabled = true;
-  webState.anchor = -1;
   try {
     let links;
     let title = '';
@@ -6011,7 +6012,39 @@ async function findWebLinks() {
   }
 }
 
+/**
+ * The chosen pages, into Build as a part.
+ *
+ * Downloaded when the book is built, beside whatever else is in the list,
+ * rather than now: only the site's picture of the book is fetched here, so
+ * the workshop can offer it as the cover.
+ */
+async function addWebToBuild() {
+  const chosen = webState.links.filter((link) => link.picked);
+  if (!chosen.length) return;
+  const name = (el('web-title').value || '').trim() || webState.title || 'From the web';
+  const go = el('web-go');
+  go.disabled = true;
+  go.textContent = 'Adding…';
+  try {
+    const cover = await web.fetchCover(webState.cover);
+    build.addWeb({
+      name, links: chosen, pictures: webState.pictures, cover,
+      author: webState.author, sources: webState.sources,
+    });
+    if (webState.author && !el('build-author').value) el('build-author').value = webState.author;
+    clearWeb();
+    toast(`${chosen.length} page${chosen.length === 1 ? '' : 's'} added to Build — downloaded when it is built`);
+    // Back to the workshop, which draws itself on the way in.
+    back();
+  } finally {
+    go.disabled = false;
+    paintWebCount();
+  }
+}
+
 async function startWebDownload() {
+  if (webState.forBuild && !webState.running) { await addWebToBuild(); return; }
   if (webState.running) {
     webState.running.stop = true;
     el('web-go').textContent = 'Stopping…';
@@ -6075,7 +6108,7 @@ function closeAddMenu() {
 function clearWeb() {
   if (webState.running) return;
   Object.assign(webState, {
-    links: [], title: '', author: '', cover: '', sources: [], reversed: false, anchor: -1, titleTouched: false,
+    links: [], title: '', author: '', cover: '', sources: [], reversed: false, titleTouched: false,
   });
   el('web-list').replaceChildren();
   el('web-address').value = '';
@@ -6117,7 +6150,7 @@ function wireWeb() {
   });
   el('web-title').addEventListener('input', () => {
     webState.titleTouched = true;
-    el('web-eyebrow').textContent = el('web-title').value.trim() || 'Download a book from a website';
+    renderWeb();
   });
   el('web-filter').addEventListener('input', filterWebList);
 
@@ -6135,7 +6168,6 @@ function wireWeb() {
     if (webState.running) return;
     webState.links.reverse();
     webState.reversed = !webState.reversed;
-    webState.anchor = -1;
     drawWebList();
   };
   el('web-pictures').onclick = () => {
@@ -6143,32 +6175,66 @@ function wireWeb() {
     renderWeb();
   };
 
-  /* A tap ticks one; a hold ticks a run.
+  /* A tap ticks one; a hold and a drag ticks a run.
    *
-   * A contents page of five hundred chapters with the menu at the top and
-   * "other novels" at the bottom is two holds, not five hundred taps: tap the
-   * first link of the clutter, hold the last, and everything between follows
-   * the first. */
+   * Hold a link until it changes, then drag up or down: every link the
+   * finger passes over is set the way the first one went, and dragging back
+   * puts them as they were. A contents page of five hundred chapters with
+   * the menus above and "other novels" below is two drags, not five hundred
+   * taps. Near the top or bottom of the screen the list scrolls on by
+   * itself. */
   const list = el('web-list');
+  const scroller = el('web-body');
+  const rowAt = (target) => target?.closest?.('.web-link');
   let holdTimer = null;
   let heldAt = 0;
   let startX = 0;
   let startY = 0;
-  const rowAt = (target) => target?.closest?.('.web-link');
-  const holdRange = (row) => {
-    const to = Number(row.dataset.at);
-    const from = webState.anchor;
-    if (from < 0 || from === to) return;
-    const value = !!webState.links[from].picked;
-    const [low, high] = from < to ? [from, to] : [to, from];
-    for (const each of list.children) {
+  let paint = null;   // { value, rows, from, was: Map(at -> picked), x, y }
+  let creep = null;
+
+  const paintTo = (row) => {
+    const to = paint.rows.indexOf(row);
+    if (to < 0) return;
+    const [low, high] = paint.from < to ? [paint.from, to] : [to, paint.from];
+    paint.rows.forEach((each, pos) => {
       const at = Number(each.dataset.at);
-      if (at >= low && at <= high && !each.hidden) webState.links[at].picked = value;
-    }
-    webState.anchor = to;
-    repaintWebRows();
-    toast(`${high - low + 1} links ${value ? 'ticked' : 'unticked'}`);
+      const want = pos >= low && pos <= high ? paint.value : paint.was.get(at);
+      if (webState.links[at].picked !== want) {
+        webState.links[at].picked = want;
+        paintWebRow(each, webState.links[at]);
+      }
+    });
+    paintWebCount();
   };
+  const rowUnder = () => {
+    const hit = document.elementFromPoint(paint.x, paint.y);
+    return rowAt(hit) && list.contains(rowAt(hit)) ? rowAt(hit) : null;
+  };
+  const stopCreep = () => { if (creep) cancelAnimationFrame(creep); creep = null; };
+  const creepOn = () => {
+    creep = null;
+    if (!paint) return;
+    const box = scroller.getBoundingClientRect();
+    const edge = 72;
+    let by = 0;
+    if (paint.y < box.top + edge) by = -Math.ceil((box.top + edge - paint.y) / 6);
+    else if (paint.y > box.bottom - edge) by = Math.ceil((paint.y - (box.bottom - edge)) / 6);
+    if (by) {
+      scroller.scrollTop += by;
+      const row = rowUnder();
+      if (row) paintTo(row);
+      creep = requestAnimationFrame(creepOn);
+    }
+  };
+  const endPaint = () => {
+    stopCreep();
+    if (!paint) return;
+    list.classList.remove('painting');
+    paint = null;
+    heldAt = Date.now();
+  };
+
   list.addEventListener('touchstart', (e) => {
     const row = rowAt(e.target);
     if (!row || e.touches.length !== 1) return;
@@ -6177,44 +6243,72 @@ function wireWeb() {
     clearTimeout(holdTimer);
     holdTimer = setTimeout(() => {
       holdTimer = null;
-      heldAt = Date.now();
-      holdRange(row);
-    }, 500);
+      const rows = [...list.children].filter((each) => !each.hidden);
+      const at = Number(row.dataset.at);
+      paint = {
+        value: !webState.links[at].picked,
+        rows,
+        from: rows.indexOf(row),
+        was: new Map(rows.map((each) => [Number(each.dataset.at), !!webState.links[Number(each.dataset.at)].picked])),
+        x: startX,
+        y: startY,
+      };
+      list.classList.add('painting');
+      paintTo(row);
+    }, 380);
   }, { passive: true });
+
+  // Not passive: once a drag is ticking links, it must not also scroll.
   list.addEventListener('touchmove', (e) => {
-    if (!holdTimer) return;
-    const t = e.touches[0];
-    if (Math.abs(t.clientX - startX) > 10 || Math.abs(t.clientY - startY) > 10) {
+    const touch = e.touches[0];
+    if (holdTimer && (Math.abs(touch.clientX - startX) > 10 || Math.abs(touch.clientY - startY) > 10)) {
       clearTimeout(holdTimer);
       holdTimer = null;
     }
-  }, { passive: true });
-  list.addEventListener('touchend', (e) => {
+    if (!paint) return;
+    if (e.cancelable) e.preventDefault();
+    paint.x = touch.clientX;
+    paint.y = touch.clientY;
+    const row = rowUnder();
+    if (row) paintTo(row);
+    if (!creep) creep = requestAnimationFrame(creepOn);
+  }, { passive: false });
+
+  const lift = (e) => {
     clearTimeout(holdTimer);
     holdTimer = null;
-    if (Date.now() - heldAt < 700 && e.cancelable) e.preventDefault();
-  });
-  list.addEventListener('contextmenu', (e) => {
-    const row = rowAt(e.target);
-    if (!row) return;
-    e.preventDefault();
-    // A mouse's long press, which is a right click.
-    if (Date.now() - heldAt > 700) { heldAt = Date.now(); holdRange(row); }
-  });
+    const painted = !!paint;
+    endPaint();
+    // The lift that ends a drag is not also a tap on the row under it.
+    if (painted && e.cancelable) e.preventDefault();
+  };
+  list.addEventListener('touchend', lift);
+  list.addEventListener('touchcancel', lift);
+  // The system's own long press -- a menu, a text selection -- is this one's.
+  list.addEventListener('contextmenu', (e) => { if (rowAt(e.target)) e.preventDefault(); });
+
   list.addEventListener('click', (e) => {
     const row = rowAt(e.target);
     if (!row) return;
-    if (Date.now() - heldAt < 700) return;
-    const at = Number(row.dataset.at);
-    const link = webState.links[at];
+    // The lift that ended a drag is already swallowed; this is only for a
+    // browser that sends the click anyway.
+    if (Date.now() - heldAt < 300) return;
+    const link = webState.links[Number(row.dataset.at)];
     link.picked = !link.picked;
-    const before = webState.anchor;
-    webState.anchor = at;
     paintWebRow(row, link);
-    const old = before >= 0 ? list.querySelector(`[data-at="${before}"]`) : null;
-    if (old) paintWebRow(old, webState.links[before]);
     paintWebCount();
   });
+
+  // Opened from Build, the pages chosen go there; from anywhere else, they
+  // are downloaded as a book of their own.
+  el('build-web').onclick = () => {
+    if (webState.running) { toast('A download is still running'); return; }
+    webState.forBuild = true;
+    show('web');
+  };
+  document.addEventListener('click', (e) => {
+    if (e.target.closest?.('[data-go="web"]')) webState.forBuild = false;
+  }, true);
 }
 
 /* ── global wiring ────────────────────────────────────────────────────── */

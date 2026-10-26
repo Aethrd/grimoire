@@ -277,4 +277,67 @@ await t('the screen is reachable from the shelf', () => {
   assert.match(app, /settleWeb: web\.settleWeb/);
 });
 
+/* ── into Build ──────────────────────────────────────────────────────── */
+
+console.log('into Build');
+
+await t('pages read for Build come in order, numbered without a gap, pictures with them', async () => {
+  const pictures = [];
+  // The second page is slow, the third missing: the order still holds.
+  const slow = async (url) => {
+    if (url.endsWith('chapter-2')) await new Promise((r) => setTimeout(r, 30));
+    return fakeFetch(url);
+  };
+  const parsed = await web.readPages([
+    { url: `${SITE}chapter-1`, text: 'One' },
+    { url: `${SITE}chapter-2`, text: 'Two' },
+    { url: `${SITE}missing`, text: 'Gone' },
+    { url: `${SITE}chapter-3`, text: 'Three' },
+  ], { fetchPage: slow, gap: 0, onImage: (image) => pictures.push(image) });
+  assert.deepEqual(parsed.chapters.map((c) => [c.index, c.title]), [[0, 'One'], [1, 'Two'], [2, 'Three']]);
+  assert.equal(parsed.failed.length, 1);
+  assert.equal(parsed.failed[0].text, 'Gone');
+  assert.equal(pictures.length, 1);
+  assert.equal(pictures[0].chapterIndex, 1);
+  assert.equal(parsed.imageCount, 1);
+  assert.equal(parsed.format, 'WEB');
+});
+
+await t('a website is a part in Build, joined with the rest and downloaded when built', async () => {
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  build.clear();
+  build.addWeb({
+    name: 'The Lantern',
+    links: [{ url: `${SITE}chapter-1`, text: 'One' }, { url: `${SITE}chapter-2`, text: 'Two' }, { url: `${SITE}nope`, text: 'Gone' }],
+    sources: [SITE],
+  });
+  const [part] = build.contents();
+  assert.match(build.describe(part), /From the web · 3 pages, downloaded when built · novels\.example/);
+  part.web.fetchPage = fakeFetch;
+  asked.length = 0;
+  const { book, failed } = await build.build({ title: 'Built Lantern' });
+  assert.ok(asked.includes(`${SITE}chapter-1`), 'nothing was downloaded');
+  assert.equal(book.chapters, 2);
+  assert.equal(failed.length, 1);
+  assert.match(failed[0].name, /The Lantern: 1 page/);
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
+  assert.deepEqual(chapters.map((c) => c.title), ['One', 'Two']);
+  const images = await store.byIndex('images', 'bookId', book.id);
+  assert.equal(images.length, 1);
+  assert.ok(images[0].href.startsWith('p0/web/'), images[0].href);
+  assert.match(chapters[1].html, new RegExp(`data-img="${images[0].href}"`));
+  build.clear();
+});
+
+await t('the link list is ticked by holding and dragging, with nothing to read first', () => {
+  const html = read('app/src/main/assets/www/index.html');
+  assert.ok(!/web-hint/.test(html), 'the instructions are still there');
+  assert.match(html, /id="build-web"/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  const wire = app.slice(app.indexOf('function wireWeb('), app.indexOf('/* ── global wiring'));
+  assert.match(wire, /list\.addEventListener\('touchmove', \(e\) => \{[\s\S]*?if \(e\.cancelable\) e\.preventDefault\(\);[\s\S]*?\}, \{ passive: false \}\);/);
+  assert.match(wire, /const want = pos >= low && pos <= high \? paint\.value : paint\.was\.get\(at\);/);
+  assert.match(wire, /webState\.forBuild = true;/);
+});
+
 console.log(`\n${pass} assertions passed`);
