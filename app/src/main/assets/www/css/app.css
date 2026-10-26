@@ -2404,3 +2404,10 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .add-menu button + button { border-top: 1px solid var(--hairline); }
 .add-menu button span { font-family: var(--font-heading); font-weight: 600; font-size: 14px; }
 .add-menu button small { font-size: 12px; color: var(--muted); }
+
+/* A page held still while the reader's bars come and go (holdPageAt in
+   reader.js): it begins where it began, and a paragraph divided to make that
+   so reads on as one -- no indent, no gap where it was divided. */
+.page-flow .page-start { break-before: column; -webkit-column-break-before: always; }
+.page-flow .page-start.continued { text-indent: 0 !important; margin-top: 0 !important; }
+.page-flow li.page-start.continued { list-style: none; }

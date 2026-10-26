@@ -1252,8 +1252,14 @@ export function repaginate(opts = {}) {
       relayout();
       estimateTotals();
       const after = anchorOffset(anchor, chapter);
+      /* And kept where it is on the screen, not only in the view. The bar at
+       * the top going moves the top of the view up; held the same distance
+       * from it, the text moved up with it -- a tap to put the bars away
+       * scrolled the page. Moved back by as much, nothing moves, and the
+       * room gained shows more text above and below. */
+      const shift = Number.isFinite(opts.viewTop) ? viewport.getBoundingClientRect().top - opts.viewTop : 0;
       if (atEnd) viewport.scrollTop = viewport.scrollHeight;
-      else if (after !== null) viewport.scrollTop = Math.max(0, after + within);
+      else if (after !== null) viewport.scrollTop = Math.max(0, after + within + shift);
       state.page = Math.round(viewport.scrollTop / viewportHeight());
       // The same place, kept: see show().
       if (after === null) state.anchor = currentAnchor();
@@ -1264,6 +1270,10 @@ export function repaginate(opts = {}) {
   }
 
   requestAnimationFrame(() => {
+    // A page held for the bars (holdPageAt) is let go: anything else that
+    // re-flows the chapter -- a new type size, the phone turned -- wants the
+    // pages as they fall.
+    releaseHeldPage(sectionFor(chapter));
     relayout();
     estimateTotals();
     // Staying put is the right answer when the measurement fails: the text
@@ -1545,13 +1555,128 @@ export function cycleChrome() {
   // Asked before the bars change the height of the view, which is the
   // question repaginate would otherwise answer after it.
   const atEnd = isScroll() && scrolledToEnd();
+  const viewTop = measurable() ? viewport.getBoundingClientRect().top : null;
+  const top = isScroll() ? null : topOfPage();
   state.chrome = CYCLE[state.chrome];
   document.body.dataset.chrome = state.chrome;
   // The column width does not change, but the viewport height does, so the
   // page count does too.
-  repaginate({ atEnd });
+  if (top) holdPageAt(top);
+  else repaginate({ atEnd, viewTop });
   onChange(state);
   return state.chrome;
+}
+
+/* ── the page held still while the bars come and go ──────────────────────
+ *
+ * Showing or hiding the bars changes how tall the page is, and every page
+ * break in the chapter moves with it. Re-paginated, the page on screen was
+ * whichever new page held the place -- which began a few lines earlier or
+ * later than the one being read, so a tap meant to put the bars away
+ * scrolled the text instead, and a second tap jumped to a different page
+ * altogether.
+ *
+ * So the page is made to begin where it already began. The paragraph the
+ * page starts in is divided at that character, and the second part is told
+ * to start a new page; everything after it flows on into pages of the new
+ * height. The line at the top stays at the top -- and where the bars going
+ * has freed space above it, it is held down by that much on this page, so
+ * nothing moves at all and the room gained shows as more text at the bottom.
+ * Turn the page and the pages are full height again.
+ */
+
+const BLOCKS_SELECTOR = 'p, li, blockquote, div, h1, h2, h3, h4, h5, h6, dd, dt, pre, figcaption, td, th, figure';
+
+/** The first character on the page and where on the screen it sits. */
+function topOfPage() {
+  if (!state.book || isScroll() || !measurable()) return null;
+  const span = pageSpan();
+  if (!span || span.end <= span.start) return null;
+  // Only a page that begins with words: a page of a picture has nothing to
+  // hold, and no paragraph to divide.
+  let offset = span.start;
+  let rect = null;
+  for (; offset < Math.min(span.end, span.start + 64); offset++) {
+    const entry = span.entryAt(offset);
+    const box = rangeAt(entry, offset - entry.start).getBoundingClientRect();
+    if (box.width || box.height) { rect = box; break; }
+  }
+  if (!rect || span.side(offset) !== 0) return null;
+  return { chapter: span.index, offset, y: rect.top };
+}
+
+/** Undo a page held earlier: the divided paragraph made whole again. */
+function releaseHeldPage(section) {
+  if (!section) return;
+  for (const part of [...section.querySelectorAll('.page-start')]) {
+    if (part.classList.contains('continued')) {
+      const whole = part.previousElementSibling;
+      if (whole) {
+        while (part.firstChild) whole.appendChild(part.firstChild);
+        part.remove();
+        whole.normalize();
+        continue;
+      }
+      part.classList.remove('continued');
+    }
+    part.classList.remove('page-start');
+    part.style.removeProperty('padding-top');
+  }
+}
+
+/** Make the page begin at a character: see above. */
+function holdPageAt(top) {
+  const section = sectionFor(top.chapter);
+  releaseHeldPage(section);
+  const entry = section && textNodes(section).find((n) => top.offset >= n.start && top.offset < n.start + n.length);
+  const block = entry?.node.parentElement?.closest(BLOCKS_SELECTOR);
+  if (!block || !section.contains(block) || block === section) {
+    repaginate();
+    return;
+  }
+
+  // At the very start of its paragraph, the paragraph itself starts the page.
+  const before = document.createRange();
+  before.setStart(block, 0);
+  before.setEnd(entry.node, top.offset - entry.start);
+  let starts = block;
+  if (before.toString().trim()) {
+    const rest = document.createRange();
+    rest.setStart(entry.node, top.offset - entry.start);
+    rest.setEnd(block, block.childNodes.length);
+    const part = block.cloneNode(false);
+    part.removeAttribute('id');
+    part.classList.add('continued');
+    part.appendChild(rest.extractContents());
+    block.after(part);
+    starts = part;
+  }
+  starts.classList.add('page-start');
+
+  /* The page the held character is on, asked of the character itself. The
+   * text it is in now begins exactly there, and asking by offset would find
+   * the end of the text before it -- on the page before. */
+  const pageOfHeld = () => {
+    const held = textNodes(section).find((n) => top.offset >= n.start && top.offset < n.start + n.length);
+    return held ? pageOfRange(rangeAt(held, top.offset - held.start)) : null;
+  };
+  const settle = () => {
+    relayout();
+    estimateTotals();
+    show(pageOfHeld() ?? state.page, { animate: false, keepAnchor: true });
+  };
+  settle();
+
+  // Held down by however far the top of the page moved up, so the line
+  // stays where the eye left it.
+  const now = topOfPage();
+  const lift = now && now.offset === top.offset ? Math.round(top.y - now.y) : 0;
+  if (lift > 0) {
+    starts.style.paddingTop = `${lift}px`;
+    settle();
+  }
+  state.anchor = top.offset;
+  save();
 }
 
 export function setChrome(chrome) {
@@ -1630,22 +1755,21 @@ export async function copyChapter() {
 }
 
 /**
- * The text on the page being read -- what is on screen, cut where the page
- * cuts it, so a paragraph running on to the next page is copied up to the
- * edge and the rest goes with the next page.
+ * Where the page on screen begins and ends, as character offsets into its
+ * chapter: the first character on it, and the first after it.
  *
  * Worked out from the page itself rather than from the chapter's source:
  * where a page begins and ends is a matter of layout. Each character's box is
  * asked which page it is on, and the first and last on this one are found by
  * halving -- a few dozen measurements, not one per character.
  */
-export function pageText() {
-  if (!measurable()) return '';
+function pageSpan() {
+  if (!measurable()) return null;
   const index = isScroll() ? chapterAtViewport() : state.chapterIndex;
   const section = sectionFor(index);
-  if (!section) return '';
+  if (!section) return null;
   const nodes = textNodes(section).filter((entry) => entry.length);
-  if (!nodes.length) return '';
+  if (!nodes.length) return null;
   const last = nodes[nodes.length - 1];
   const total = last.start + last.length;
 
@@ -1694,6 +1818,18 @@ export function pageText() {
   };
   const start = firstWhere((where) => where >= 0);
   const end = firstWhere((where) => where > 0);
+  return { index, section, nodes, entryAt, side, start, end, total, last };
+}
+
+/**
+ * The text on the page being read -- what is on screen, cut where the page
+ * cuts it, so a paragraph running on to the next page is copied up to the
+ * edge and the rest goes with the next page.
+ */
+export function pageText() {
+  const span = pageSpan();
+  if (!span) return '';
+  const { start, end, total, last, entryAt } = span;
   if (end <= start) return '';
 
   const range = document.createRange();

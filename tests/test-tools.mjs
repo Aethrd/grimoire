@@ -2415,7 +2415,7 @@ await t('a book of pictures read by scrolling reaches its end, and is Finished',
   // Showing the bars at the end keeps the end in view.
   const cycle = src.slice(src.indexOf('export function cycleChrome('), src.indexOf('export function setChrome('));
   assert.ok(cycle.indexOf('scrolledToEnd()') < cycle.indexOf('document.body.dataset.chrome'), 'asked after the bars moved');
-  assert.match(cycle, /repaginate\(\{ atEnd \}\)/);
+  assert.match(cycle, /repaginate\(\{ atEnd, viewTop \}\)/);
   const repag = src.slice(src.indexOf('export function repaginate('), src.indexOf('function keepPassageWhole('));
   assert.match(repag, /if \(atEnd\) viewport\.scrollTop = viewport\.scrollHeight;/);
 });
@@ -2459,6 +2459,51 @@ await t("the book's own indents give way to the reader's margins", async () => {
   assert.match(css, /padding: var\(--read-vmargin\) var\(--read-margin\);/);
   assert.match(css, /top: var\(--read-vmargin\); bottom: var\(--read-vmargin\);/);
   assert.match(src, /root\.setProperty\('--read-vmargin'/);
+});
+
+await t('the bars coming and going leave the page where it is', async () => {
+  const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
+  const cycle = src.slice(src.indexOf('export function cycleChrome('), src.indexOf('export function setChrome('));
+  // Measured before the bars change anything.
+  const change = cycle.indexOf('document.body.dataset.chrome');
+  assert.ok(cycle.indexOf('topOfPage()') < change && cycle.indexOf('getBoundingClientRect().top') < change);
+  // Paged: the page begins where it began, divided there if need be.
+  assert.match(cycle, /if \(top\) holdPageAt\(top\);/);
+  const hold = src.slice(src.indexOf('function holdPageAt('), src.indexOf('/* ── copy'));
+  assert.match(hold, /part\.classList\.add\('continued'\)/);
+  assert.match(hold, /starts\.classList\.add\('page-start'\)/);
+  assert.match(hold, /starts\.style\.paddingTop = `\$\{lift\}px`/);
+  // Any other re-flow lets the held page go.
+  const repag = src.slice(src.indexOf('export function repaginate('), src.indexOf('function keepPassageWhole('));
+  assert.match(repag, /releaseHeldPage\(sectionFor\(chapter\)\);/);
+  // Scroll: moved back by as far as the top of the view moved.
+  assert.match(repag, /after \+ within \+ shift/);
+  const css = fs.readFileSync(new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
+  assert.match(css, /\.page-flow \.page-start \{ break-before: column; -webkit-column-break-before: always; \}/);
+});
+
+await t('a divided paragraph is made whole again, with its text as it was', async () => {
+  // The same steps holdPageAt and releaseHeldPage take, on a paragraph with a
+  // highlight running across the place it is divided.
+  const host = document.createElement('section');
+  host.innerHTML = '<p>One two <mark data-id="4">three four</mark> five.</p>';
+  const p = host.firstChild;
+  const text = p.textContent;
+  const mark = p.querySelector('mark').firstChild;
+  const rest = document.createRange();
+  rest.setStart(mark, 6);
+  rest.setEnd(p, p.childNodes.length);
+  const part = p.cloneNode(false);
+  part.classList.add('continued', 'page-start');
+  part.appendChild(rest.extractContents());
+  p.after(part);
+  assert.equal(p.textContent + part.textContent, text);
+  assert.equal(part.textContent, 'four five.');
+  while (part.firstChild) p.appendChild(part.firstChild);
+  part.remove();
+  p.normalize();
+  assert.equal(host.textContent, text);
+  assert.equal(host.querySelectorAll('p').length, 1);
 });
 
 console.log(`\n${pass} assertions passed`);
