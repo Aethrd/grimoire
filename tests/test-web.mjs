@@ -277,6 +277,12 @@ await t('the screen is reached from Build, and only from there', () => {
   assert.match(app, /settleWeb: web\.settleWeb/);
   assert.match(app, /el\('build-web'\)\.onclick = \(\) => show\('web'\);/);
   assert.match(app, /el\('web-go'\)\.onclick = addWebToBuild;/);
+  // Emptied for the next one: on adding, on a build, and on Clear in Build.
+  const add = app.slice(app.indexOf('async function addWebToBuild('), app.indexOf('function clearWeb('));
+  assert.match(add, /clearWeb\(\);/);
+  const go = app.slice(app.indexOf("el('build-go').onclick"), app.indexOf("el('build-go').onclick") + 2500);
+  assert.match(go, /clearWeb\(\);/);
+  assert.match(app, /el\('build-clear'\)\.onclick = \(\) => \{\n    build\.clear\(\);\n    clearWeb\(\);/);
 });
 
 /* ── into Build ──────────────────────────────────────────────────────── */

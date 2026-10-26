@@ -703,7 +703,8 @@ export async function readPages(links, {
 export async function fetchCover(url, { fetchPage = download } = {}) {
   if (!url) return null;
   try {
-    const got = await fetchPage(url);
+    // Briefly: adding pages to Build should not sit waiting on a picture.
+    const got = await fetchPage(url, { timeout: 15000 });
     return String(got.type || '').toLowerCase().startsWith('image/') && got.blob.size > 2048 ? got.blob : null;
   } catch {
     return null;

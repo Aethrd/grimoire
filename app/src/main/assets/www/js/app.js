@@ -5360,6 +5360,7 @@ function wireWorkshop() {
 
   el('build-clear').onclick = () => {
     build.clear();
+    clearWeb();
     buildTitleTouched = false;
     el('build-title').value = '';
     el('build-author').value = '';
@@ -5397,6 +5398,9 @@ function wireWorkshop() {
       el('build-author').value = '';
       buildCover = null;
       buildCoverFrom = 'first';
+      // The website screen starts empty for the next one: its address and
+      // list belong to the book just built.
+      clearWeb();
       renderWorkshop();
       await refreshShelf();
       // Said with the parts that failed, not instead of them: a book short
