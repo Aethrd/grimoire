@@ -1574,8 +1574,25 @@ export function chapterText(index = state.chapterIndex) {
   return plainText(holder);
 }
 
-/** The words in some markup, a paragraph to a paragraph, as copying wants
- *  them: footnote marks kept as [1], pictures left out. */
+/** Elements that begin a new block of text: what a paragraph break is made of. */
+const BLOCKS = new Set([
+  'P', 'DIV', 'SECTION', 'ARTICLE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'UL', 'OL',
+  'BLOCKQUOTE', 'PRE', 'DL', 'DT', 'DD', 'TABLE', 'TR', 'FIGURE', 'FIGCAPTION', 'HR',
+]);
+
+/**
+ * The words in some markup, a paragraph to a paragraph, as copying wants
+ * them: footnote marks kept as [1], pictures left out.
+ *
+ * Read in order, the whole of it. This used to collect only paragraphs,
+ * headings, list items and quotations -- so a book that sets its text in
+ * plain blocks, or as lines with breaks between them, as a great many web
+ * novels do, copied its chapter heading and nothing else. And a quotation
+ * holding paragraphs was copied twice, once whole and once a paragraph at a
+ * time. Now every piece of text is taken once, where it stands, and the
+ * breaks between blocks -- and blank lines made of line breaks -- are the
+ * paragraph breaks.
+ */
 function plainText(holder) {
   for (const sup of holder.querySelectorAll('sup')) {
     sup.replaceWith(document.createTextNode(` [${sup.textContent.trim()}]`));
@@ -1583,10 +1600,28 @@ function plainText(holder) {
   for (const img of holder.querySelectorAll('img')) img.remove();
 
   const blocks = [];
-  for (const node of holder.querySelectorAll('p, h1, h2, h3, h4, li, blockquote, pre')) {
-    const text = node.textContent.replace(/\s+/g, ' ').trim();
-    if (text) blocks.push(text);
-  }
+  let line = '';
+  const flush = () => {
+    // A single line break inside a block is kept as one; two or more, a
+    // paragraph break.
+    for (const part of line.split(/\n[ \t]*\n[\s]*/)) {
+      const text = part.split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+      if (text) blocks.push(text);
+    }
+    line = '';
+  };
+  const walk = (node) => {
+    for (let child = node.firstChild; child; child = child.nextSibling) {
+      if (child.nodeType === Node.TEXT_NODE) { line += child.nodeValue.replace(/\n/g, ' '); continue; }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+      const tag = child.tagName.toUpperCase();
+      if (tag === 'BR') { line += '\n'; continue; }
+      if (tag === 'SCRIPT' || tag === 'STYLE') continue;
+      if (BLOCKS.has(tag)) { flush(); walk(child); flush(); } else walk(child);
+    }
+  };
+  walk(holder);
+  flush();
   return blocks.join('\n\n');
 }
 
@@ -1671,9 +1706,7 @@ export function pageText() {
   }
   const holder = document.createElement('div');
   holder.appendChild(range.cloneContents());
-  const text = plainText(holder);
-  // Text not in a paragraph -- a line set straight in a div -- is still text.
-  return text || holder.textContent.replace(/\s+/g, ' ').trim();
+  return plainText(holder);
 }
 
 /** Whether the page being read is the chapter's last. */

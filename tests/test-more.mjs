@@ -64,6 +64,21 @@ await t('normalises runs of whitespace', () => assert.match(text, /The harbour k
 await t('keeps the heading as its own block', () => assert.ok(text.startsWith('Salt and Tide')));
 
 
+await t('a chapter set without paragraphs is copied whole, not just its heading', () => {
+  // Plain blocks, and lines with breaks between them: how a great many web
+  // novels are set. Only the heading used to come out.
+  reader.state.chapters = [{ index: 0, title: 'D', html:
+    '<h1>Chapter One</h1><div>First line of the story.</div><div>Second line.</div>'
+    + 'Loose text straight in the chapter.<br><br>After a blank line.<br>And the next line.' }];
+  const copied = reader.chapterText(0);
+  assert.equal(copied, 'Chapter One\n\nFirst line of the story.\n\nSecond line.\n\n'
+    + 'Loose text straight in the chapter.\n\nAfter a blank line.\nAnd the next line.');
+  // A quotation holding paragraphs is copied once, not twice.
+  reader.state.chapters = [{ index: 0, title: 'Q', html:
+    '<blockquote><p>One.</p><p>Two.</p></blockquote><p>Three.</p>' }];
+  assert.equal(reader.chapterText(0), 'One.\n\nTwo.\n\nThree.');
+});
+
 await t('half a chapter: split between paragraphs, near the middle, nothing lost', () => {
   const para = (n) => `<p>${`Word${n} `.repeat(40).trim()}.</p>`;
   reader.state.chapters = [{ index: 0, title: 'H', html: Array.from({ length: 10 }, (_, i) => para(i)).join('') }];
