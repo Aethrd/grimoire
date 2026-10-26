@@ -619,4 +619,167 @@ await t('a site that is not WordPress is read as before', () => {
   assert.equal(plain.list, false);
 });
 
+/* ── a real site's shape: Halosty's Tales ────────────────────────────── */
+
+console.log("a real contents page's shape");
+
+/* Laid out as https://halostystales.wordpress.com/strengthindex/ is: a
+ * menu of the author's other stories, then chapters 1-74, a run of Google
+ * Docs collections, chapters 301-316, and 75-300 last under "Old links";
+ * share buttons, comments, a sidebar of recent posts, the WordPress.com
+ * footer. */
+const HT = 'https://halostystales.wordpress.com';
+const ch = (n, label = `Chapter ${n}`) => `<a href="${HT}/strength${n}/">${label}</a><br>`;
+const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+// The collections as the page lists them -- 116 is in none of their names.
+const DOCS = ['74-83', '84-100', '101-115', '117-135', '136-149', '150-164', '165-178', '179-193', '194-207',
+  '208-220', '221-232', '233-245', '246-258', '259-270', '271-280', '281-290', '291-300'];
+const htIndex = `<!doctype html><html lang="en"><head><meta charset="UTF-8">
+<title>The Only Thing I Can Upgrade Is Strength – Halosty's Tales</title>
+<link rel="https://api.w.org/" href="${HT}/wp-json/">
+<meta property="og:title" content="The Only Thing I Can Upgrade Is Strength"></head>
+<body class="page-template-default page page-id-5388">
+<a class="skip-link" href="#content">Skip to content</a>
+<header id="masthead" class="site-header"><a href="${HT}/">Halosty's Tales</a>
+<nav id="site-navigation" class="main-navigation"><ul class="menu">
+<li class="menu-item"><a href="${HT}/">Home</a></li><li class="menu-item"><a href="${HT}/stories/">Stories</a>
+<ul class="sub-menu"><li class="menu-item"><a href="https://halostystales.com/eldercultivator">Elder Cultivator</a></li>
+<li class="menu-item"><a href="${HT}/berserkerindex/">The Immortal Berserker</a></li>
+<li class="menu-item"><a href="${HT}/strengthindex/">The Only Thing I Can Upgrade Is Strength</a></li></ul></li>
+<li class="menu-item"><a href="${HT}/about/">About the Author</a></li></ul></nav></header>
+<div id="content"><main id="main"><article class="page type-page">
+<header class="entry-header"><h1 class="entry-title">The Only Thing I Can Upgrade Is Strength</h1></header>
+<div class="entry-content">
+<p>Summary of the story goes here, a man who can only raise one stat.</p>
+<p>${range(1, 74).map((n) => ch(n)).join('')}</p>
+<p>${DOCS.map((r, i) => `<a href="https://docs.google.com/document/d/e/doc${i}/pub">${r.startsWith('136') || r.startsWith('179') ? 'Chapter' : 'Chapters'} ${r}</a><br>`).join('')}</p>
+<p>${range(301, 316).map((n) => ch(n, n === 316 ? 'Chapter 316 (Final)' : `Chapter ${n}`)).join('')}</p>
+<p>Old links</p>
+<p>${range(75, 300).map((n) => ch(n)).join('')}</p>
+<div class="sharedaddy sd-sharing-enabled"><h3 class="sd-title">Share this:</h3>
+<a href="${HT}/strengthindex/?share=twitter">X</a><a href="${HT}/strengthindex/?share=facebook">Facebook</a></div>
+</div></article>
+<div id="comments" class="comments-area"><h2 class="comments-title">6 thoughts</h2>
+<ol class="comment-list"><li class="comment"><a href="${HT}/strengthindex/#comment-1433">March 8, 2018</a>
+<a href="${HT}/strengthindex/?like_comment=1433&amp;_wpnonce=0200d73fdd">Like</a>
+<a class="comment-reply-link" href="${HT}/strengthindex/?replytocom=1433#respond">Reply</a></li></ol></div>
+</main>
+<aside id="secondary" class="widget-area"><section class="widget widget_recent_entries"><h2>Recent Posts</h2><ul>
+<li><a href="${HT}/2026/10/23/truthful-transmigration-chapter-634/">Truthful Transmigration Chapter 634</a></li>
+<li><a href="${HT}/2026/10/23/mage-among-superheroes-chapter-553/">Mage Among Superheroes Chapter 553</a></li>
+<li><a href="${HT}/2026/10/22/truthful-transmigration-chapter-633/">Truthful Transmigration Chapter 633</a></li></ul></section>
+<section class="widget widget_recent_comments"><a href="${HT}/2015/07/21/many-worlds-chapter-3/comment-page-1/#comment-2811">Many Worlds Chapter 3</a></section></aside></div>
+<footer id="colophon" class="site-footer"><a href="https://wordpress.com/?ref=footer_blog">Blog at WordPress.com.</a></footer>
+<div id="actionbar"><a href="https://wp.me/P6rMdZ-1oU">Copy shortlink</a>
+<a href="https://wordpress.com/log-in?redirect_to=x">Log in</a></div></body></html>`;
+
+const htChapter = (n) => `<!doctype html><html lang="en"><head><meta charset="UTF-8">
+<title>The Only Thing I Can Upgrade is Strength chapter ${n} – Halosty's Tales</title>
+<link rel="https://api.w.org/" href="${HT}/wp-json/"></head>
+<body class="page-template-default page">
+<header id="masthead" class="site-header"><a href="${HT}/">Halosty's Tales</a></header>
+<main id="main"><article class="page type-page">
+<header class="entry-header"><h1 class="entry-title">The Only Thing I Can Upgrade is Strength chapter ${n}</h1></header>
+<div class="entry-content">
+<p>${n === 1 ? 'Table of Contents– ' : `<a href="${HT}/strength${n - 1}/">Previous Chapter</a>–Table of Contents–`}<a href="${HT}/strength${n + 1}/">Next Chapter</a></p>
+<p>“Put everything in Strength!” was what I said back then. The wording… was rather poor, chapter ${n}.</p>
+<p>To say I was small and weak would be somewhat of an understatement.</p>
+<p>—–</p>
+<p>“Next!”</p>
+<p>Ah. A heart attack it was, then. Or a dream?</p>
+<p>${n === 1 ? 'Table of Contents– ' : `<a href="${HT}/strength${n - 1}/">Previous Chapter</a>–Table of Contents–`}<a href="${HT}/strength${n + 1}/">Next Chapter</a></p>
+<div class="sharedaddy sd-sharing-enabled"><h3 class="sd-title">Share this:</h3><a href="${HT}/strength${n}/?share=twitter">X</a></div>
+<div class="sharedaddy sd-block sd-like jetpack-likes-widget-wrapper"><h3 class="sd-title">Like this:</h3><span>Like Loading...</span></div>
+</div></article>
+<div id="comments" class="comments-area"><h2>8 thoughts on “The Only Thing I Can Upgrade is Strength chapter ${n}”</h2></div></main>
+<footer id="colophon" class="site-footer">Blog at WordPress.com.</footer></body></html>`;
+
+await t('Halosty\'s contents page: the chapters where they now are, in order, and nothing else', () => {
+  const found = web.linksOf(htIndex, `${HT}/strengthindex/`);
+  assert.equal(found.wordpress, true);
+  assert.equal(found.list, false, 'a contents page taken for a list of posts');
+  assert.equal(found.title, 'The Only Thing I Can Upgrade Is Strength');
+  const likely = web.likelyChapters(found.links, `${HT}/strengthindex/`);
+  const picked = found.links.filter((l) => likely.has(l.url));
+  // Chapters 1-74 on the site, 74-115 in the Google Docs the author moved
+  // them to, 301-316 on the site again. Not the "old links" to 75-300,
+  // whose pages are gone and whose chapters the Docs hold.
+  assert.deepEqual(picked.map((l) => l.text), [
+    ...range(1, 74).map((n) => `Chapter ${n}`),
+    ...DOCS.map((r) => `${r.startsWith('136') || r.startsWith('179') ? 'Chapter' : 'Chapters'} ${r}`),
+    ...range(301, 315).map((n) => `Chapter ${n}`), 'Chapter 316 (Final)',
+  ]);
+  // Not the menus, the recent posts, the comments or the footer.
+  for (const clutter of ['/stories/', 'truthful-transmigration', 'many-worlds', 'like_comment', 'wp.me', '?share=', '/strength75/', '/strength116/', '/strength300/']) {
+    assert.ok(!picked.some((l) => l.url.includes(clutter)), `${clutter} was taken for a chapter`);
+  }
+  // Already in reading order as the page lists them: left alone.
+  const order = web.inReadingOrder(found.links, (l) => likely.has(l.url), found.list);
+  assert.equal(order.how, null);
+});
+
+await t('chapters listed out of order are put in order', () => {
+  const links = [1, 2, 7, 8, 3, 4, 5, 6].map((n) => ({ url: `${SITE}c${n}`, text: `Chapter ${n}` }));
+  const order = web.inReadingOrder([{ url: `${SITE}`, text: 'Home' }, ...links], (l) => l.text.startsWith('Chapter'));
+  assert.equal(order.how, 'sorted');
+  assert.deepEqual(order.links.map((l) => l.text), ['Home', ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => `Chapter ${n}`)]);
+  assert.deepEqual(web.rangeIn('Chapters 74-83'), [74, 83]);
+  assert.deepEqual(web.rangeIn('Chapter 136–149'), [136, 149]);
+  assert.equal(web.rangeIn('Chapter 12: 3 Days'), null);
+  assert.equal(web.numberIn('Chapters 74-83'), 74);
+});
+
+await t('Halosty\'s chapters: the writing alone, without the links round it', async () => {
+  const pages = { [`${HT}/strength1/`]: htChapter(1), [`${HT}/strength2/`]: htChapter(2) };
+  const fetchHt = async (url) => {
+    if (!pages[url]) throw new Error('that page does not exist (404)');
+    return { url, status: 200, type: 'text/html; charset=UTF-8', blob: new Blob([pages[url]], { type: 'text/html' }) };
+  };
+  for (const n of [1, 2]) {
+    const { chapter } = await web.readPage({ url: `${HT}/strength${n}/`, text: `Chapter ${n}` }, n - 1, { fetchPage: fetchHt });
+    assert.equal(chapter.title, `Chapter ${n}`);
+    assert.match(chapter.html, /Put everything in Strength/);
+    assert.match(chapter.html, /Or a dream\?/);
+    for (const clutter of ['Table of Contents', 'Next Chapter', 'Previous Chapter', 'Share this', 'Like this', 'thoughts on', 'WordPress.com', '– </p>', '<p>–']) {
+      assert.ok(!chapter.html.includes(clutter), `chapter ${n}: ${clutter} survived\n${chapter.html.slice(0, 300)}`);
+    }
+    // The scene break and the one-word line of dialogue are the story's.
+    assert.match(chapter.html, /<p>—–<\/p>/);
+    assert.match(chapter.html, /<p>“Next!”<\/p>/);
+    assert.equal(chapter.html.split('<p>').length - 1, 5, chapter.html);
+  }
+});
+
+await t('a Google Doc of several chapters becomes each of them, in order', async () => {
+  const para = (n, k) => `<p class="c1"><span class="c0">Paragraph ${k} of chapter ${n}: the stat screen glowed and he put everything in Strength again, as he always did.</span></p>`;
+  const docHtml = `<!doctype html><html><head><title>Strength 74-76</title><meta charset="utf-8"></head><body>
+<div id="banners"><div id="publish-banner">Published using Google Docs <a href="https://docs.google.com/abuse?id=1">Report abuse</a><a href="https://support.google.com/docs">Learn more</a></div></div>
+<div id="header"><div id="title">Strength 74-76</div><div id="interval"><span>Updated automatically every 5 minutes</span></div></div>
+<div id="contents"><style type="text/css">.c0{color:#000}.c1{margin:0}</style>
+<p class="c2 title"><span>Strength 74-76</span></p>
+<p class="c1"><span class="c0 c3">Chapter 74</span></p>${[1, 2, 3].map((k) => para(74, k)).join('')}
+<table><tr><td>Strength</td><td>9001</td></tr></table>
+<h2 class="c4"><span>Chapter 75 – The Wall</span></h2>${[1, 2, 3].map((k) => para(75, k)).join('')}
+<p class="c1"><span class="c0">Chapter 76</span></p>${[1, 2, 3].map((k) => para(76, k)).join('')}
+</div><div id="footer">Published by Google Docs – Report abuse – Updated automatically every 5 minutes</div></body></html>`;
+  const docUrl = 'https://docs.google.com/document/d/e/2PACX-test/pub';
+  const fetchDoc = async (url) => ({ url, status: 200, type: 'text/html; charset=utf-8', blob: new Blob([docHtml], { type: 'text/html' }) });
+  const parsed = await web.readPages([{ url: docUrl, text: 'Chapters 74-76' }, { url: docUrl + '?again', text: 'Chapter 77' }],
+    { fetchPage: fetchDoc, gap: 0 });
+  // Three from the first link, and the second link's page after them.
+  assert.deepEqual(parsed.chapters.slice(0, 3).map((c) => [c.index, c.title]),
+    [[0, 'Chapter 74'], [1, 'Chapter 75 – The Wall'], [2, 'Chapter 76']]);
+  assert.equal(parsed.chapters[3].index, 3);
+  const [first, second] = parsed.chapters;
+  assert.match(first.html, /Paragraph 3 of chapter 74/);
+  assert.ok(!/chapter 75/.test(first.html), 'chapter 75 ran into 74');
+  assert.match(first.html, /<table>/);
+  assert.match(second.html, /Paragraph 1 of chapter 75/);
+  for (const chapter of parsed.chapters.slice(0, 3)) {
+    for (const clutter of ['Published using Google Docs', 'Report abuse', 'Updated automatically', 'Strength 74-76', '.c0']) {
+      assert.ok(!chapter.html.includes(clutter), `${clutter} survived in ${chapter.title}`);
+    }
+  }
+});
+
 console.log(`\n${pass} assertions passed`);

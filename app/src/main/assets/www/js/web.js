@@ -365,7 +365,7 @@ function pageTitle(doc) {
 
 /* ── telling the chapters apart ──────────────────────────────────────── */
 
-const CHAPTER_WORDS = /\b(chapter|chap|ch|episode|ep|part|vol(ume)?|book|prologue|epilogue|interlude|intermission|side ?story|extra|afterword|foreword|preface)\b\.?/i;
+const CHAPTER_WORDS = /\b(chapters?|chaps?|ch|episodes?|eps?|parts?|vols?|volumes?|book|prologue|epilogue|interlude|intermission|side ?story|extra|afterword|foreword|preface)\b\.?/i;
 const CJK_CHAPTER = /第\s*[0-9０-９零〇一二两三四五六七八九十百千万]+\s*[章话話回节節卷部篇幕]/;
 const LEADING_NUMBER = /^\s*[#№]?\s*\d+(\.\d+)?\s*([:.)\-–—]|$|\s)/;
 
@@ -393,9 +393,19 @@ export function shapeOf(href) {
 
 /** The chapter number a link's name gives, if it gives one. */
 export function numberIn(text) {
-  const match = /(?:chapter|chap|ch|episode|ep|part|第)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(text)
+  const match = /(?:chapters?|chaps?|ch|episodes?|eps?|parts?|第)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(text)
     || /^\s*[#№]?\s*(\d+(?:\.\d+)?)/.exec(text);
   return match ? parseFloat(match[1]) : null;
+}
+
+/** The chapters a link says it holds when it holds several: "Chapters
+ *  74-83" is [74, 83]. Null for a single chapter. */
+export function rangeIn(text) {
+  const match = /(?:chapters?|chaps?|ch|episodes?|eps?|第)?\s*\.?\s*(\d+)\s*(?:-|–|—|to|~|〜)\s*(\d+)/i.exec(String(text || ''));
+  if (!match) return null;
+  const from = parseInt(match[1], 10);
+  const to = parseInt(match[2], 10);
+  return to > from ? [from, to] : null;
 }
 
 /**
@@ -432,11 +442,39 @@ export function likelyChapters(links, pageUrl = '') {
     // A post in a WordPress list of posts is one of the chapters.
     if (link.post && !link.kind) { likely.add(link.url); continue; }
     if (link.chrome || link.kind) continue;
-    if (host && !link.url.includes(`//${host}/`)) continue;
-    if (looksLikeChapter(link.text) && !/^\s*(next|previous|prev|last|first|latest)\b/i.test(link.text)) {
-      likely.add(link.url);
-    }
+    if (!looksLikeChapter(link.text) || /^\s*(next|previous|prev|last|first|latest)\b/i.test(link.text)) continue;
+    /* On another site only when it says which chapters it holds: authors
+     * move a run of chapters elsewhere -- a Google Doc of "Chapters 74-83"
+     * -- and link it from the contents in its place. */
+    if (host && !link.url.includes(`//${host}/`) && numberIn(link.text) === null) continue;
+    likely.add(link.url);
   }
+
+  /* Chapters already held by a run listed before them are left out. A
+   * contents page that moved chapters 74 to 300 into collections keeps the
+   * old one-chapter links further down, under "old links", and those pages
+   * are mostly gone; downloaded, they would be the same chapters twice. */
+  const covered = [];
+  const copies = new Set();
+  const late = [];
+  let highest = -Infinity;
+  for (const link of links) {
+    if (!likely.has(link.url)) continue;
+    const run = rangeIn(link.text);
+    const number = run ? run[0] : numberIn(link.text);
+    if (number === null) continue;
+    if (!run && covered.some(([from, to]) => number >= from && number <= to)) copies.add(link.url);
+    // Listed after a later chapter: part of a section listed again.
+    if (number < highest) late.push(link.url);
+    if (run) covered.push(run);
+    highest = Math.max(highest, run ? run[1] : number);
+  }
+  for (const url of copies) likely.delete(url);
+  /* A section listed again further down that is mostly copies is a list of
+   * old links, all of it -- including the odd chapter no collection names,
+   * whose page has gone the same way as the rest. */
+  const lateCopies = late.filter((url) => copies.has(url)).length;
+  if (late.length >= 5 && lateCopies >= late.length * 0.8) for (const url of late) likely.delete(url);
   return likely;
 }
 
@@ -465,6 +503,53 @@ export function reverseWhere(items, test) {
   const out = items.slice();
   places.forEach((at, n) => { out[at] = turned[n]; });
   return out;
+}
+
+/**
+ * The chapters put in the order they are read, in the places they held.
+ *
+ * Contents pages are not always in order. Some run newest first; some grow
+ * by sections added over the years -- chapters 1 to 74, then 301 to 316 at
+ * the top of the "new" list, then 75 to 300 under "old links" -- and read
+ * in the order listed, a book jumps from 74 to 301 and back. Where the
+ * chapters are numbered, they are put in number order; where they are not,
+ * a WordPress list of posts, newest first by its nature, is turned round.
+ *
+ * @returns { links, how } -- how is 'sorted', 'reversed' or null (as it was)
+ */
+export function inReadingOrder(links, isChapter, newestFirstList = false) {
+  const places = [];
+  links.forEach((link, at) => { if (isChapter(link)) places.push(at); });
+  const chapters = places.map((at) => links[at]);
+  const numbers = chapters.map((link) => numberIn(link.text));
+  const known = numbers.filter((n) => n !== null);
+  let ordered = null;
+  let how = null;
+  if (chapters.length >= 3 && known.length >= chapters.length * 0.8) {
+    const rising = known.every((n, i) => i === 0 || n >= known[i - 1]);
+    const falling = known.every((n, i) => i === 0 || n <= known[i - 1]);
+    if (!rising && falling) {
+      ordered = [...chapters].reverse();
+      how = 'reversed';
+    } else if (!rising) {
+      // A chapter with no number stays just after the one before it.
+      let carried = -Infinity;
+      const keyed = chapters.map((link, at) => {
+        if (numbers[at] !== null) carried = numbers[at];
+        return { link, key: carried, at };
+      });
+      keyed.sort((a, b) => (a.key - b.key) || (a.at - b.at));
+      ordered = keyed.map((each) => each.link);
+      how = 'sorted';
+    }
+  } else if (newestFirstList && chapters.length > 1) {
+    ordered = [...chapters].reverse();
+    how = 'reversed';
+  }
+  if (!ordered) return { links, how: null };
+  const out = links.slice();
+  places.forEach((at, n) => { out[at] = ordered[n]; });
+  return { links: out, how };
 }
 
 /** All the web addresses in what was pasted, in order, once each. */
@@ -562,14 +647,36 @@ const PAGE_LINKS = /^[\s<«‹←]*(previous|prev|next|back|table of contents|co
 
 function stripPageLinks(story) {
   for (const anchor of [...story.querySelectorAll('a')]) {
-    if (PAGE_LINKS.test(tidy(anchor.textContent))) anchor.remove();
+    if (!PAGE_LINKS.test(tidy(anchor.textContent))) continue;
+    // Marked where it was, so what is left around it can be judged.
+    anchor.parentElement?.setAttribute('data-had-nav', '');
+    anchor.remove();
   }
-  // Whatever held only those links is empty now -- or holds only the bars
-  // and arrows that sat between them.
-  for (const block of [...story.querySelectorAll('p, div, span, li, ul, ol, td, tr, table, center')].reverse()) {
-    if (/^[\s|/\\·•\-–—<>«»‹›←→]*$/.test(block.textContent || '') && !block.querySelector('img')) block.remove();
+  /* Whatever held only those links is empty now -- or holds only the bars
+   * and arrows that sat between them, or the words of a link that was not
+   * linked: "Table of Contents – Next Chapter" on a first chapter, where
+   * there is no previous one and the contents are not a link either.
+   *
+   * Only a line that held such links, or that names them outright, is taken.
+   * A scene break -- "—–", "* * *" -- is part of the chapter and stays, and
+   * so does a line of dialogue that happens to be "Next!" or "Home." */
+  for (const block of [...story.querySelectorAll('p, div, span, li, ul, ol, td, tr, table, center, h3, h4, h5, h6')].reverse()) {
+    if (block.querySelector('img')) continue;
+    const words = tidy(block.textContent);
+    if (words.length > 90) continue;
+    const held = block.hasAttribute('data-had-nav') || !!block.querySelector('[data-had-nav]');
+    if (!held && !NAV_NAMED.test(words)) continue;
+    const left = words.replace(NAV_WORDS, ' ').replace(/[\s|/\\·•\-–—:<>«»‹›←→()[\]]+/g, '');
+    if (!left) block.remove();
   }
+  for (const marked of story.querySelectorAll('[data-had-nav]')) marked.removeAttribute('data-had-nav');
 }
+
+/* The links between chapters named outright, linked or not. */
+const NAV_NAMED = /table of contents|(previous|next|prev)\s+chapter|chapter list|all chapters|目录|目錄|上一[章页頁]|下一[章页頁]/i;
+
+/* The words of the links between chapters, linked or not. */
+const NAV_WORDS = /(previous|prev|next|back to|back)\s*(chapter|page|post|part|episode)?|table of contents|contents|index|toc|chapter list|all chapters|home|上一[章页頁]|下一[章页頁]|目录|目錄|返回/gi;
 
 /** Where a picture really is: sites that load pictures late keep the
  *  address in an attribute of their own until it scrolls into view. */
@@ -627,20 +734,30 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
 
   // Pictures found as the chapter is read, fetched once it has been.
   const wanted = [];
+  let part = 0;
   const resolveImage = (src) => {
     if (!pictures) return null;
     let absolute;
     try { absolute = new URL(src, page.url).href; } catch { return null; }
     if (!/^https?:/.test(absolute)) return null;
     const href = `web/${index}-${wanted.length}`;
-    wanted.push({ href, url: absolute });
+    wanted.push({ href, url: absolute, part });
     return href;
   };
   for (const img of story.querySelectorAll('img')) {
     const src = pictureSource(img);
     if (src) img.setAttribute('src', src);
   }
-  let { html: body, text } = readChapter(story, resolveImage);
+
+  /* A page that holds several chapters -- a Google Doc of "Chapters 74-83",
+   * a post of two -- is divided at its chapter headings, so the book has
+   * each as a chapter of its own rather than one long one named for ten. */
+  const several = rangeIn(link.text) || /docs\.google\.com\/document\//.test(page.url)
+    ? chaptersIn(story) : null;
+  const read = (several || [{ node: story, title: '' }]).map((each, at) => {
+    part = at;
+    return { ...readChapter(each.node, resolveImage), title: each.title };
+  });
 
   const images = [];
   for (const [n, picture] of wanted.entries()) {
@@ -651,13 +768,15 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
       images.push({
         // Numbered across the book, so the picture reel runs in reading order.
         href: picture.href, blob: got.blob, order: index * 1000 + n, chapterIndex: index,
-        animated: kind === 'image/gif', width: 0, height: 0,
+        part: picture.part, animated: kind === 'image/gif', width: 0, height: 0,
       });
     } catch {
       // A picture that will not come costs its place, not the chapter.
-      body = body.split(`<img data-img="${picture.href}">`).join('');
+      const piece = read[picture.part];
+      if (piece) piece.html = piece.html.split(`<img data-img="${picture.href}">`).join('');
     }
   }
+  let { html: body, text } = read[0];
 
   /* Named by the link it was reached from: that is the name it had in the
    * list, where it was chosen. Without one, by the page's title with the
@@ -674,11 +793,56 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
     body = `<p>Nothing readable came from this page: ${escapeHtml(page.url)}</p>`;
     text = '';
   }
+  const chapter = { index, title, fromToc: true, html: body, words: countWords(text, lang), url: page.url };
   return {
-    chapter: { index, title, fromToc: true, html: body, words: countWords(text, lang), url: page.url },
+    chapter,
+    // Each chapter the page held, when it held several.
+    chapters: several ? read.map((each) => ({
+      index, title: each.title, fromToc: true, html: each.html, words: countWords(each.text, lang), url: page.url,
+    })) : [chapter],
     images,
     lang,
   };
+}
+
+/* A line that starts a chapter: "Chapter 75", "Ch. 75 – The Gate", "第七十五章". */
+const CHAPTER_HEADING = /^(chapter|ch\.?|episode|ep\.?)\s*\d+|^第\s*[0-9０-９零〇一二两三四五六七八九十百千万]+\s*[章话話回]/i;
+
+/**
+ * A page that holds several chapters, divided at the line that starts each.
+ *
+ * The line is a heading, or a short paragraph that says nothing but which
+ * chapter it is -- which is how most documents mark them. Anything before
+ * the first is the document's own title, and is left out unless it is
+ * writing. Null when there are not at least two to divide at.
+ */
+function chaptersIn(story) {
+  const starts = [...story.querySelectorAll('h1, h2, h3, h4, h5, p, div')]
+    .filter((node) => {
+      const words = tidy(node.textContent);
+      if (!words || words.length > 90 || !CHAPTER_HEADING.test(words)) return false;
+      // The innermost: a heading inside a <div> is the heading.
+      return ![...node.children].some((child) => CHAPTER_HEADING.test(tidy(child.textContent)) && /^(H\d|P|DIV)$/.test(child.tagName));
+    });
+  if (starts.length < 2) return null;
+  const doc = story.ownerDocument;
+  const pieces = [];
+  const before = doc.createRange();
+  before.setStart(story, 0);
+  before.setEndBefore(starts[0]);
+  const opening = doc.createElement('div');
+  opening.appendChild(before.cloneContents());
+  if (tidy(opening.textContent).length > 400) pieces.push({ node: opening, title: 'Before the first chapter' });
+  starts.forEach((start, at) => {
+    const range = doc.createRange();
+    range.setStartBefore(start);
+    if (starts[at + 1]) range.setEndBefore(starts[at + 1]);
+    else range.setEnd(story, story.childNodes.length);
+    const node = doc.createElement('div');
+    node.appendChild(range.cloneContents());
+    pieces.push({ node, title: tidy(start.textContent) });
+  });
+  return pieces;
 }
 
 const escapeHtml = (text) => String(text).replace(/[&<>"]/g,
@@ -861,11 +1025,14 @@ export async function readPages(links, {
       const index = chapters.length;
       for (const image of got.images) {
         imageCount += 1;
-        await onImage?.({ ...image, chapterIndex: index });
+        const { part, ...picture } = image;
+        await onImage?.({ ...picture, chapterIndex: index + (part || 0) });
       }
       if (!lang && got.lang) lang = got.lang;
-      words += got.chapter.words || 0;
-      chapters.push({ ...got.chapter, index });
+      for (const [at, chapter] of (got.chapters || [got.chapter]).entries()) {
+        words += chapter.words || 0;
+        chapters.push({ ...chapter, index: index + at });
+      }
     }
   };
 

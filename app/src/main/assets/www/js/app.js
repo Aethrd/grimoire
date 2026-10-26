@@ -6127,10 +6127,11 @@ async function findWebLinks() {
     webState.titleTouched = false;
     // A contents page that lists the newest chapter first is turned round,
     // and says so: a book read from its last chapter is no book.
-    // Only the chapters are turned round: the menus stay where the page had
+    // Only the chapters are put in order: the menus stay where the page had
     // them, at the top and the bottom, out of the way.
-    webState.reversed = web.readsBackwards(webState.links.filter((link) => link.likely), newestFirstList);
-    if (webState.reversed) webState.links = web.reverseWhere(webState.links, (link) => link.likely);
+    const order = web.inReadingOrder(webState.links, (link) => link.likely, newestFirstList);
+    webState.links = order.links;
+    webState.reversed = order.how === 'reversed';
 
     const chapters = webState.links.filter((link) => link.likely).length;
     webNote(el('web-direct').checked
@@ -6138,7 +6139,8 @@ async function findWebLinks() {
       : `${webState.links.length} links found${chapters ? `, ${chapters} of them look like chapters` : ''}. `
         + 'Everything is ticked: untick what is not the book, or tap Just the chapters.'
         + (wordpress && newestFirstList ? ' A WordPress list of posts: every page of it was read.' : '')
-        + (webState.reversed ? ' The site listed them newest first, so the order has been turned round.' : ''));
+        + (order.how === 'reversed' ? ' The site listed them newest first, so the order has been turned round.' : '')
+        + (order.how === 'sorted' ? ' The site listed them out of order, so they have been put in chapter order.' : ''));
     el('web-filter').value = '';
     drawWebList();
   } catch (error) {
