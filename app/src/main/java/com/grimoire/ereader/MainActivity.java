@@ -221,6 +221,9 @@ public class MainActivity extends AppCompatActivity {
         // Kept in its own object because it is the only thing in the app that
         // touches the network, and it should be obvious where that boundary is.
         webView.addJavascriptInterface(new TranslateBridge(this, webView), "GrimoireTranslate");
+        // The downloader's, kept apart for the same reason: it reaches the
+        // network, and only for an address the reader was given.
+        webView.addJavascriptInterface(new WebBridge(this, webView), "GrimoireWeb");
         CookieManager.getInstance().setAcceptCookie(false);
 
         webView.setWebViewClient(new WebViewClient() {

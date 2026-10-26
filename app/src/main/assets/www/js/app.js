@@ -19,6 +19,7 @@ import * as translate from './translate.js';
 import * as blobs from './blobs.js';
 import * as redact from './redact.js';
 import * as frames from './frame.js';
+import * as web from './web.js';
 
 const el = (id) => document.getElementById(id);
 const { toast } = screens;
@@ -139,6 +140,7 @@ async function enter(name) {
     case 'library': return refreshShelf();
     case 'sort': return screens.openSort();
     case 'workshop': return renderWorkshop();
+    case 'web': return renderWeb();
     case 'divide': return renderDivide();
     case 'remove': return renderRemove();
     case 'bin': return renderBin();
@@ -5805,6 +5807,416 @@ function wireCopy() {
   }, true);
 }
 
+/* ── from the web ─────────────────────────────────────────────────────────
+ *
+ * A contents page in, every link on it listed, the clutter taken out by the
+ * reader, the rest downloaded into one book (web.js does the work). Like a
+ * batch link downloader, run from the app and owing nobody a subscription.
+ */
+
+const webState = {
+  links: [],          // { url, text, chrome, kind, likely, picked, got }
+  title: '',
+  author: '',
+  cover: '',          // the site's picture of the book, from its link preview
+  sources: [],
+  reversed: false,
+  pictures: true,
+  anchor: -1,         // the link last tapped, where a held range starts
+  running: null,      // { stop } while a download is under way
+  titleTouched: false,
+};
+
+/* What the screen says before anything has been asked of it. */
+let webIntro = null;
+
+function webNote(message, problem = false) {
+  const note = el('web-note');
+  if (webIntro === null) webIntro = note.textContent;
+  note.textContent = message;
+  note.classList.toggle('problem', problem);
+  note.hidden = !message;
+}
+
+function renderWeb() {
+  el('web-picked').hidden = !webState.links.length;
+  el('web-foot').hidden = !webState.links.length;
+  el('web-reverse').setAttribute('aria-pressed', String(webState.reversed));
+  el('web-pictures').setAttribute('aria-pressed', String(webState.pictures));
+  if (!webState.titleTouched) el('web-title').value = webState.title;
+  el('web-eyebrow').textContent = (el('web-title').value || '').trim() || 'Download a book from a website';
+  paintWebCount();
+}
+
+function paintWebCount() {
+  const picked = webState.links.filter((link) => link.picked).length;
+  el('web-count').textContent = webState.links.length
+    ? `${picked} of ${webState.links.length}${activeFolder ? ` · into “${activeFolder}”` : ''}`
+    : '';
+  const go = el('web-go');
+  go.textContent = webState.running ? 'Stop' : `Download${picked ? ` ${picked}` : ''}`;
+  go.disabled = !webState.running && picked === 0;
+  go.classList.toggle('danger', !!webState.running);
+  go.classList.toggle('primary', !webState.running);
+}
+
+/** Where a link goes, said briefly: the path, not the whole address. */
+function webWhere(url) {
+  try {
+    const u = new URL(url);
+    return decodeURIComponent(`${u.host}${u.pathname}${u.search}`).replace(/\/$/, '');
+  } catch {
+    return url;
+  }
+}
+
+function webTag(link) {
+  if (link.got === true) return 'in book';
+  if (link.got === false) return 'failed';
+  if (link.kind === 'picture') return 'picture';
+  if (link.kind === 'file') return 'file';
+  if (link.chrome) return 'menu';
+  if (link.likely) return 'chapter';
+  return '';
+}
+
+function webRow(link, at) {
+  const row = document.createElement('li');
+  row.className = 'web-link';
+  row.dataset.at = String(at);
+  row.setAttribute('role', 'checkbox');
+  const tag = webTag(link);
+  row.innerHTML = '<span class="web-tick"></span>'
+    + `<span class="web-what"><b>${escapeText(link.text || '(no name)')}</b>`
+    + `<small>${escapeText(webWhere(link.url))}</small></span>`
+    + (tag ? `<span class="web-tag">${tag}</span>` : '');
+  paintWebRow(row, link);
+  return row;
+}
+
+function paintWebRow(row, link) {
+  row.setAttribute('aria-checked', String(!!link.picked));
+  row.classList.toggle('likely', !!link.likely);
+  row.classList.toggle('got', link.got === true);
+  row.classList.toggle('lost', link.got === false);
+  row.classList.toggle('anchor', Number(row.dataset.at) === webState.anchor);
+  const tag = row.querySelector('.web-tag');
+  const said = webTag(link);
+  if (tag) tag.textContent = said;
+  else if (said) row.insertAdjacentHTML('beforeend', `<span class="web-tag">${said}</span>`);
+}
+
+function drawWebList() {
+  const list = el('web-list');
+  const rows = document.createDocumentFragment();
+  webState.links.forEach((link, at) => rows.appendChild(webRow(link, at)));
+  list.replaceChildren(rows);
+  filterWebList();
+  renderWeb();
+}
+
+function repaintWebRows() {
+  for (const row of el('web-list').children) {
+    paintWebRow(row, webState.links[Number(row.dataset.at)]);
+  }
+  paintWebCount();
+}
+
+/** The filter narrows what is shown, and what Tick and Untick act on. */
+function filterWebList() {
+  const words = (el('web-filter').value || '').toLowerCase().split(/\s+/).filter(Boolean);
+  for (const row of el('web-list').children) {
+    const link = webState.links[Number(row.dataset.at)];
+    const haystack = `${link.text} ${link.url}`.toLowerCase();
+    row.hidden = words.length > 0 && !words.every((word) => haystack.includes(word));
+  }
+}
+
+const shownWebLinks = () => [...el('web-list').children]
+  .filter((row) => !row.hidden)
+  .map((row) => webState.links[Number(row.dataset.at)]);
+
+async function findWebLinks() {
+  if (webState.running) return;
+  const addresses = web.addressesIn(el('web-address').value);
+  if (!addresses.length) {
+    webNote('Paste a web address first — the page that lists the chapters.', true);
+    return;
+  }
+  if (!web.available()) {
+    webNote('Downloading needs the Android app. This copy of the reader cannot reach websites.', true);
+    return;
+  }
+
+  const button = el('web-find');
+  button.disabled = true;
+  webState.anchor = -1;
+  try {
+    let links;
+    let title = '';
+    let author = '';
+    let cover = '';
+    if (el('web-direct').checked) {
+      // Given the chapters themselves: nothing to look for.
+      links = addresses.map((url) => ({ url, text: '', chrome: false, kind: null }));
+    } else {
+      button.textContent = 'Finding…';
+      const found = await web.findLinks(addresses, {
+        onProgress: (fraction, address) => {
+          if (address) webNote(`Reading ${webWhere(address)}…`);
+        },
+      });
+      if (!found.links.length) {
+        webNote(found.failed.length
+          ? `That page could not be downloaded: ${found.failed[0].reason}.`
+          : 'No links were found on that page. Some sites build their chapter list with scripts this app does not run — try the site\'s plain contents page, or paste the chapter addresses themselves and tick "These are the chapters".', true);
+        return;
+      }
+      links = found.links;
+      title = found.title;
+      author = found.author;
+      cover = found.cover;
+      if (found.failed.length) {
+        toast(`${found.failed.length} of those pages could not be read: ${found.failed[0].reason}`, 6000);
+      }
+    }
+
+    const likely = web.likelyChapters(links, addresses[0]);
+    webState.links = links.map((link) => ({ ...link, likely: likely.has(link.url), picked: true, got: undefined }));
+    webState.sources = addresses;
+    webState.title = title;
+    webState.author = author;
+    webState.cover = cover;
+    webState.titleTouched = false;
+    // A contents page that lists the newest chapter first is turned round,
+    // and says so: a book read from its last chapter is no book.
+    // Only the chapters are turned round: the menus stay where the page had
+    // them, at the top and the bottom, out of the way.
+    webState.reversed = web.newestFirst(webState.links.filter((link) => link.likely));
+    if (webState.reversed) webState.links = web.reverseWhere(webState.links, (link) => link.likely);
+
+    const chapters = webState.links.filter((link) => link.likely).length;
+    webNote(el('web-direct').checked
+      ? `${webState.links.length} page${webState.links.length === 1 ? '' : 's'} to download, in the order given.`
+      : `${webState.links.length} links found${chapters ? `, ${chapters} of them look like chapters` : ''}. `
+        + 'Everything is ticked: untick what is not the book, or tap Just the chapters.'
+        + (webState.reversed ? ' The site listed them newest first, so the order has been turned round.' : ''));
+    el('web-filter').value = '';
+    drawWebList();
+  } catch (error) {
+    webNote(error.message || 'Those links could not be found.', true);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Find links';
+  }
+}
+
+async function startWebDownload() {
+  if (webState.running) {
+    webState.running.stop = true;
+    el('web-go').textContent = 'Stopping…';
+    return;
+  }
+  const chosen = webState.links.filter((link) => link.picked);
+  if (!chosen.length) return;
+  const title = (el('web-title').value || '').trim() || webState.title || 'Downloaded book';
+  const into = activeFolder || '';
+  const run = { stop: false };
+  webState.running = run;
+  for (const link of chosen) link.got = undefined;
+  repaintWebRows();
+
+  // Told when it is done -- unless a book is open by then, in which case it
+  // waits until the book is put down.
+  const say = (...args) => whenNotReading(() => toast(...args));
+  const job = progress.start(`Downloading ${title}`);
+  const rowOf = new Map([...el('web-list').children]
+    .map((row) => [webState.links[Number(row.dataset.at)], row]));
+  try {
+    const result = await web.downloadBook({
+      title, author: webState.author, cover: webState.cover,
+      links: chosen, folder: into, pictures: webState.pictures,
+      sources: webState.sources, stop: () => run.stop,
+      onProgress: (fraction, done, total) => job.say(`Downloading ${title}`, fraction, `${done} of ${total}`),
+      onPage: (link, ok) => {
+        link.got = ok;
+        const row = rowOf.get(link);
+        if (row) paintWebRow(row, link);
+      },
+    });
+    job();
+    const failed = result.failed.length;
+    const head = `“${title}” — ${result.done} chapter${result.done === 1 ? '' : 's'} downloaded`;
+    const tail = result.stopped ? ' before it was stopped'
+      : failed ? `, ${failed} could not be` : '';
+    say(`${head}${tail}`, 6000, { kind: 'done' });
+    webNote(`${head}${tail}.`
+      + (failed ? ` ${result.failed[0].text || webWhere(result.failed[0].url)}: ${result.failed[0].reason}.` : '')
+      + ' Anything in it that is not the book can still be taken out: open it, then Take out.', failed > 0);
+    if (current === 'library') refreshShelf();
+  } catch (error) {
+    job.fail();
+    say(error.message || 'That download failed', 6000);
+    webNote(error.message || 'That download failed.', true);
+  } finally {
+    webState.running = null;
+    paintWebCount();
+  }
+}
+
+function closeAddMenu() {
+  const menu = el('add-menu');
+  if (!menu || menu.hidden) return false;
+  menu.hidden = true;
+  el('add-btn').setAttribute('aria-expanded', 'false');
+  return true;
+}
+
+function clearWeb() {
+  if (webState.running) return;
+  Object.assign(webState, {
+    links: [], title: '', author: '', cover: '', sources: [], reversed: false, anchor: -1, titleTouched: false,
+  });
+  el('web-list').replaceChildren();
+  el('web-address').value = '';
+  el('web-filter').value = '';
+  el('web-title').value = '';
+  webNote(webIntro || '');
+  renderWeb();
+}
+
+function wireWeb() {
+  el('add-btn').onclick = (e) => {
+    e.stopPropagation();
+    if (closeAddMenu()) return;
+    el('add-menu').hidden = false;
+    el('add-btn').setAttribute('aria-expanded', 'true');
+  };
+  // Either choice, or a tap anywhere else, puts it away. Captured, so the
+  // choice itself still goes on to do what it says.
+  document.addEventListener('click', (e) => {
+    if (el('add-menu').hidden || e.target.closest?.('#add-btn')) return;
+    closeAddMenu();
+  }, true);
+
+  el('web-find').onclick = findWebLinks;
+  el('web-go').onclick = startWebDownload;
+  el('web-clear').onclick = clearWeb;
+  el('web-paste').onclick = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) { el('web-address').value = text.trim(); return; }
+    } catch {
+      // Not allowed here: the box takes a paste the ordinary way.
+    }
+    el('web-address').focus();
+    toast('Hold in the box and choose Paste');
+  };
+  el('web-address').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); findWebLinks(); }
+  });
+  el('web-title').addEventListener('input', () => {
+    webState.titleTouched = true;
+    el('web-eyebrow').textContent = el('web-title').value.trim() || 'Download a book from a website';
+  });
+  el('web-filter').addEventListener('input', filterWebList);
+
+  el('web-likely').onclick = () => {
+    for (const link of webState.links) link.picked = link.likely;
+    repaintWebRows();
+  };
+  el('web-all').onclick = () => { for (const link of shownWebLinks()) link.picked = true; repaintWebRows(); };
+  el('web-none').onclick = () => { for (const link of shownWebLinks()) link.picked = false; repaintWebRows(); };
+  el('web-menus').onclick = () => {
+    for (const link of webState.links) if (link.chrome || link.kind === 'asset') link.picked = false;
+    repaintWebRows();
+  };
+  el('web-reverse').onclick = () => {
+    if (webState.running) return;
+    webState.links.reverse();
+    webState.reversed = !webState.reversed;
+    webState.anchor = -1;
+    drawWebList();
+  };
+  el('web-pictures').onclick = () => {
+    webState.pictures = !webState.pictures;
+    renderWeb();
+  };
+
+  /* A tap ticks one; a hold ticks a run.
+   *
+   * A contents page of five hundred chapters with the menu at the top and
+   * "other novels" at the bottom is two holds, not five hundred taps: tap the
+   * first link of the clutter, hold the last, and everything between follows
+   * the first. */
+  const list = el('web-list');
+  let holdTimer = null;
+  let heldAt = 0;
+  let startX = 0;
+  let startY = 0;
+  const rowAt = (target) => target?.closest?.('.web-link');
+  const holdRange = (row) => {
+    const to = Number(row.dataset.at);
+    const from = webState.anchor;
+    if (from < 0 || from === to) return;
+    const value = !!webState.links[from].picked;
+    const [low, high] = from < to ? [from, to] : [to, from];
+    for (const each of list.children) {
+      const at = Number(each.dataset.at);
+      if (at >= low && at <= high && !each.hidden) webState.links[at].picked = value;
+    }
+    webState.anchor = to;
+    repaintWebRows();
+    toast(`${high - low + 1} links ${value ? 'ticked' : 'unticked'}`);
+  };
+  list.addEventListener('touchstart', (e) => {
+    const row = rowAt(e.target);
+    if (!row || e.touches.length !== 1) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      heldAt = Date.now();
+      holdRange(row);
+    }, 500);
+  }, { passive: true });
+  list.addEventListener('touchmove', (e) => {
+    if (!holdTimer) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - startX) > 10 || Math.abs(t.clientY - startY) > 10) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+  }, { passive: true });
+  list.addEventListener('touchend', (e) => {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    if (Date.now() - heldAt < 700 && e.cancelable) e.preventDefault();
+  });
+  list.addEventListener('contextmenu', (e) => {
+    const row = rowAt(e.target);
+    if (!row) return;
+    e.preventDefault();
+    // A mouse's long press, which is a right click.
+    if (Date.now() - heldAt > 700) { heldAt = Date.now(); holdRange(row); }
+  });
+  list.addEventListener('click', (e) => {
+    const row = rowAt(e.target);
+    if (!row) return;
+    if (Date.now() - heldAt < 700) return;
+    const at = Number(row.dataset.at);
+    const link = webState.links[at];
+    link.picked = !link.picked;
+    const before = webState.anchor;
+    webState.anchor = at;
+    paintWebRow(row, link);
+    const old = before >= 0 ? list.querySelector(`[data-at="${before}"]`) : null;
+    if (old) paintWebRow(old, webState.links[before]);
+    paintWebCount();
+  });
+}
+
 /* ── global wiring ────────────────────────────────────────────────────── */
 
 /* The three tab screens sit in a row you can swipe between, in the order the
@@ -6090,6 +6502,8 @@ window.Grimoire = {
   /** Called from Java to settle an async bridge call. Not a reader API. */
   settle: translate.settle,
   settleFile,
+  /** Called from Java when a page asked for has been downloaded. */
+  settleWeb: web.settleWeb,
 
   /** Return true to swallow the back gesture. */
   onBack() {
@@ -6104,6 +6518,7 @@ window.Grimoire = {
     if (!el('remove-look').hidden) { closeRemoveLook(); return true; }
     if (!el('remove-confirm').hidden) { el('remove-confirm').hidden = true; return true; }
     if (closeCopyMenu()) return true;
+    if (closeAddMenu()) return true;
     if (closeCoverPick()) return true;
     if (tags.closeTagPicker()) return true;
     if (!el('picture-sheet').hidden) { el('picture-sheet').hidden = true; return true; }
@@ -6212,6 +6627,7 @@ async function boot() {
   wireAnnotations();
   wireDesk();
   wireWorkshop();
+  wireWeb();
   wireDivide();
   wireRemove();
   wireRedact();

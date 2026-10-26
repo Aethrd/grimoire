@@ -71,8 +71,8 @@ t('the Java bridge exposes nothing account-shaped', () => {
 console.log('no network');
 
 t('the manifest declares INTERNET and nothing else', () => {
-  // One permission, for DeepL translation. Anything else means a dependency
-  // merged something in.
+  // One permission, for translation and the web downloader, both of which
+  // only act when asked. Anything else means a dependency merged something in.
   const manifest = read('app/src/main/AndroidManifest.xml');
   const withoutComments = manifest.replace(/<!--[\s\S]*?-->/g, '');
   const declared = [...withoutComments.matchAll(/<uses-permission android:name="([^"]+)"/g)]

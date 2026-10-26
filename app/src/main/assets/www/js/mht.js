@@ -79,14 +79,14 @@ function decodeBytes(part) {
 /* What a saved page carries besides the story. Removed before anything is
  * measured, so a long navigation menu cannot win the "most text" contest
  * below. */
-const NOT_THE_STORY = [
+export const NOT_THE_STORY = [
   'script', 'style', 'noscript', 'iframe', 'nav', 'header', 'footer', 'aside',
   'form', 'button', 'svg', 'video', 'audio',
 ].join(',');
 
 /* Plurals count. "comments" is the usual class name and "comment" was the
  * only spelling matched, so the comment section survived every strip. */
-const CHROME_WORDS = new RegExp(
+export const CHROME_WORDS = new RegExp(
   '(^|[-_ ])('
   + ['nav', 'navigation', 'menu', 'header', 'footer', 'sidebar', 'comments?',
     'disqus', 'adverts?', 'ads?', 'share', 'sharing', 'social', 'related',
@@ -102,7 +102,7 @@ const CHROME_WORDS = new RegExp(
  * there is none, the block with the most text in the fewest links is a good
  * proxy — navigation is short and link-dense, prose is long and link-sparse.
  */
-function findStory(doc) {
+export function findStory(doc) {
   for (const element of doc.querySelectorAll(NOT_THE_STORY)) element.remove();
   for (const element of doc.querySelectorAll('[class],[id]')) {
     const label = `${element.className} ${element.id}`;
@@ -130,7 +130,7 @@ function findStory(doc) {
 }
 
 /** The page's own title, with the site's name trimmed off the end. */
-function titleOf(doc, fallback) {
+export function titleOf(doc, fallback) {
   const heading = doc.querySelector('h1, h2')?.textContent?.trim();
   const title = (doc.querySelector('title')?.textContent || '').trim();
   const cleaned = title

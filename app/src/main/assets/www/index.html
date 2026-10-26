@@ -33,9 +33,14 @@
       <button class="icon-btn" data-go="settings" title="Settings">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></svg>
       </button>
-      <button class="icon-btn accent" data-import title="Import files">
+      <button class="icon-btn accent" id="add-btn" title="Add books" aria-haspopup="menu" aria-expanded="false">
         <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
       </button>
+      <!-- Two ways a book arrives: a file, or a website. -->
+      <div class="add-menu" id="add-menu" role="menu" hidden>
+        <button role="menuitem" data-import><span>Import files</span><small>EPUB, MOBI, PDF, comics, archives…</small></button>
+        <button role="menuitem" data-go="web"><span>Download from a website</span><small>Its chapters, as one book</small></button>
+      </div>
     </header>
 
     <div class="scroll" id="shelf-scroll">
@@ -80,6 +85,7 @@
         <h2 id="library-empty-title">No books yet</h2>
         <p class="muted" id="library-empty-note">EPUB, MOBI, AZW3, PDF, CBZ, CBR, TXT, HTML, Markdown and FB2. Drop in a .zip or .rar and it is unpacked, with the folders inside kept as folders here.</p>
         <button class="btn primary" data-import>Import files</button>
+        <button class="btn ghost" data-go="web">Download from a website</button>
       </div>
     </div>
   </section>
@@ -377,6 +383,59 @@
       <button class="btn ghost" id="build-clear">Clear</button>
       <span class="muted" id="build-count"></span>
       <button class="btn primary" id="build-go">Build</button>
+    </footer>
+  </section>
+
+  <!-- From the web: a contents page in, every link on it listed, the
+       reader takes out what is not the book, and the rest is downloaded. -->
+  <section class="screen" data-screen="web">
+    <header class="app-head">
+      <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="app-head-title"><h1>From the web</h1><p class="eyebrow" id="web-eyebrow">Download a book from a website</p></div>
+    </header>
+
+    <div class="scroll pad" id="web-body">
+      <label class="field"><span>Web address</span>
+        <textarea class="query web-address" id="web-address" rows="2" autocomplete="off"
+                  autocapitalize="off" spellcheck="false"
+                  placeholder="The page that lists the chapters"></textarea>
+      </label>
+      <div class="web-row">
+        <button class="btn ghost" id="web-paste">Paste</button>
+        <label class="web-check"><input type="checkbox" id="web-direct"> These are the chapters</label>
+        <button class="btn primary" id="web-find">Find links</button>
+      </div>
+      <p class="muted web-note" id="web-note">
+        Paste the address of a book's contents page. Every link on it is listed
+        — the chapters, and whatever else the site put there. Untick what is
+        not the book, and the rest is downloaded as one, a chapter a page.
+        More than one address, one per line, and their links are put together.
+      </p>
+
+      <div id="web-picked" hidden>
+        <label class="field"><span>Title</span>
+          <input class="query" id="web-title" type="text" autocomplete="off" placeholder="What the book will be called">
+        </label>
+        <input class="query" id="web-filter" type="search" autocomplete="off"
+               placeholder="Show only links containing…">
+        <div class="chip-row web-tools">
+          <button class="chip" id="web-likely" title="Tick the links that look like chapters, untick the rest">Just the chapters</button>
+          <button class="chip" id="web-all">Tick shown</button>
+          <button class="chip" id="web-none">Untick shown</button>
+          <button class="chip" id="web-menus">Untick menus</button>
+          <button class="chip" id="web-reverse" aria-pressed="false">Reverse order</button>
+          <button class="chip" id="web-pictures" aria-pressed="true">Pictures</button>
+        </div>
+        <p class="muted web-hint">Tap a link to tick or untick it. Hold one to set
+          everything from the last link you tapped down to it the same way.</p>
+        <ol class="web-list" id="web-list"></ol>
+      </div>
+    </div>
+
+    <footer class="stepper" id="web-foot" hidden>
+      <button class="btn ghost" id="web-clear">Clear</button>
+      <span class="muted" id="web-count"></span>
+      <button class="btn primary" id="web-go">Download</button>
     </footer>
   </section>
 
