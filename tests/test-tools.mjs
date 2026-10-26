@@ -1175,7 +1175,7 @@ await t('a tap in the middle shows or hides the bars without moving the page', a
   // A re-flow keeps the place it was given, rather than taking the top of
   // the new page -- which walked the reader backwards a part-page per tap.
   assert.match(src, /if \(!keepAnchor\) state\.anchor = currentAnchor\(\);/);
-  const repaginate = src.slice(src.indexOf('export function repaginate()'), src.indexOf('function keepPassageWhole('));
+  const repaginate = src.slice(src.indexOf('export function repaginate('), src.indexOf('function keepPassageWhole('));
   assert.match(repaginate, /show\(pageAtAnchor\(anchor, chapter\) \?\? state\.page, \{ animate: false, keepAnchor: true \}\)/);
 });
 
@@ -2396,6 +2396,28 @@ await t('Settings offers the frame, and Fill, beside the other fittings', async 
   assert.ok(pane.querySelector('#picture-frame-edit'), 'nothing to draw the frame with');
   const defaults = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
   assert.equal(defaults.DEFAULT_SETTINGS.pictureFrame, null);
+});
+
+await t('a book of pictures read by scrolling reaches its end, and is Finished', async () => {
+  const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
+  // The last screen of a chapter is its last page, not a screen short of it.
+  const within = src.slice(src.indexOf('function pageInChapter('), src.indexOf('/* ── layout override'));
+  assert.match(within, /if \(atEnd\) return screens - 1;/);
+  assert.match(within, /Math\.min\(screens - 1, within\)/);
+  // The bottom of the last chapter is the end of the book.
+  const inBook = src.slice(src.indexOf('export function pageInBook('), src.indexOf('function pageInChapter('));
+  assert.match(inBook, /if \(isScroll\(\) && atBottomOfBook\(\)\) return state\.totalPages;/);
+  // ...but not while the pictures are still arriving, when every comic is short.
+  assert.match(inBook, /if \(arriving > 0 \|\| !state\.loaded\.includes\(last\)\) return false;/);
+  // The count is made again as the chapter grows, not only at a new chapter.
+  const scrolled = src.slice(src.indexOf('function onScrolled('), src.indexOf('/* ── book-level position'));
+  assert.match(scrolled, /screensInChapter\(\) !== state\.measuredPages\) estimateTotals\(\);/);
+  // Showing the bars at the end keeps the end in view.
+  const cycle = src.slice(src.indexOf('export function cycleChrome('), src.indexOf('export function setChrome('));
+  assert.ok(cycle.indexOf('scrolledToEnd()') < cycle.indexOf('document.body.dataset.chrome'), 'asked after the bars moved');
+  assert.match(cycle, /repaginate\(\{ atEnd \}\)/);
+  const repag = src.slice(src.indexOf('export function repaginate('), src.indexOf('function keepPassageWhole('));
+  assert.match(repag, /if \(atEnd\) viewport\.scrollTop = viewport\.scrollHeight;/);
 });
 
 console.log(`\n${pass} assertions passed`);

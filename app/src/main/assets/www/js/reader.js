@@ -1023,7 +1023,12 @@ function onScrolled() {
   const previous = state.chapterIndex;
   state.anchor = currentAnchor();
   state.page = Math.round(viewport.scrollTop / viewportHeight());
-  if (state.chapterIndex !== previous) estimateTotals();
+  /* Counted again when the chapter has changed size, not only when another
+   * chapter is reached. The pictures of a comic are still arriving when the
+   * count is first made, and a book that is one long chapter of them never
+   * reaches another chapter -- so the count from opening stood all the way
+   * through, and the end of the book was some pages short of its total. */
+  if (state.chapterIndex !== previous || screensInChapter() !== state.measuredPages) estimateTotals();
 
   /* Scrolling is reading.
    *
@@ -1060,11 +1065,16 @@ function picturesIn(chapter) {
   return (html.match(/<img\b|<image\b/gi) || []).length;
 }
 
+/** How many screenfuls the open chapter is in scroll mode, as it stands now.
+ *  Pictures arriving change it, so it is asked again rather than kept. */
+function screensInChapter() {
+  return Math.max(1, Math.ceil((sectionFor(state.chapterIndex)?.getBoundingClientRect().height || 0) / viewportHeight()));
+}
+
 function estimateTotals() {
   const current = state.chapters.find((c) => c.index === state.chapterIndex);
-  const measured = isScroll()
-    ? Math.max(1, Math.ceil((sectionFor(state.chapterIndex)?.getBoundingClientRect().height || 0) / viewportHeight()))
-    : state.pageCount;
+  const measured = isScroll() ? screensInChapter() : state.pageCount;
+  state.measuredPages = measured;
   /* A book of pictures is measured in pictures.
    *
    * The estimate works from word counts, and a comic has none -- so every
@@ -1093,11 +1103,48 @@ function estimateTotals() {
 }
 
 export function pageInBook() {
-  const within = isScroll()
-    ? Math.round(Math.max(0, viewport.scrollTop
-        - (sectionFor(state.chapterIndex)?.offsetTop || 0)) / viewportHeight())
-    : state.page;
-  return (state.pagesBefore[state.chapterIndex] || 0) + within + 1;
+  /* The bottom of the last chapter is the end of the book, whichever chapter
+   * the top of the view is still in: a closing chapter shorter than a screen
+   * never reaches the top, and the book would stop a page from its end. */
+  if (isScroll() && atBottomOfBook()) return state.totalPages;
+  return (state.pagesBefore[state.chapterIndex] || 0) + pageInChapter() + 1;
+}
+
+/** Scrolled as far down as what is loaded goes. */
+function scrolledToEnd() {
+  return viewport.clientHeight > 0
+    && viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 2;
+}
+
+function atBottomOfBook() {
+  const last = state.chapters.length ? state.chapters[state.chapters.length - 1].index : -1;
+  // Not while pictures are still arriving: a chapter of them is short until
+  // they have, and every comic would be at its end the moment it opened.
+  if (arriving > 0 || !state.loaded.includes(last)) return false;
+  return scrolledToEnd();
+}
+
+function pageInChapter() {
+  if (!isScroll()) return state.page;
+  const section = sectionFor(state.chapterIndex);
+  const height = viewportHeight();
+  if (!section || height <= 0) return 0;
+  const screens = screensInChapter();
+  const top = section.offsetTop || 0;
+  /* The end of a chapter is its last page.
+   *
+   * The page was the screenful at the top of the view, and a chapter counted
+   * as however many screens it is tall, rounded up -- so scrolled as far as
+   * it goes, the top of the view was still a screen short of the end, and the
+   * last page was never reached. A book of pictures read by scrolling, which
+   * is often one long chapter, stopped at 97% and never became Finished. When
+   * the bottom of the view is at the end of the chapter, that is its last
+   * page. */
+  const bottom = top + (section.offsetHeight || 0);
+  const atEnd = viewport.scrollTop + viewport.clientHeight >= Math.min(bottom, viewport.scrollHeight) - 2;
+  if (atEnd) return screens - 1;
+  const within = Math.round(Math.max(0, viewport.scrollTop - top) / height);
+  return Math.min(screens - 1, within);
 }
 
 export function percent() {
@@ -1148,7 +1195,7 @@ export function applyLayout(layout, settings) {
 }
 
 /** Re-flow at the current anchor, so the reader never jumps. */
-export function repaginate() {
+export function repaginate(opts = {}) {
   if (!state.book) return;
   const anchor = state.anchor;
   const chapter = state.chapterIndex;
@@ -1163,12 +1210,18 @@ export function repaginate() {
      * putting it back the same distance down, leaves it where it was. */
     const before = anchorOffset(anchor, chapter);
     const within = before === null ? 0 : viewport.scrollTop - before;
+    /* At the end, kept at the end. A page of pictures has no words to
+     * anchor to, so showing the bars -- which makes the view shorter --
+     * left the last screen hanging part-way up it, and a book just finished
+     * was put back on the shelf at 88%. */
+    const atEnd = typeof opts.atEnd === 'boolean' ? opts.atEnd : scrolledToEnd();
 
     requestAnimationFrame(() => {
       relayout();
       estimateTotals();
       const after = anchorOffset(anchor, chapter);
-      if (after !== null) viewport.scrollTop = Math.max(0, after + within);
+      if (atEnd) viewport.scrollTop = viewport.scrollHeight;
+      else if (after !== null) viewport.scrollTop = Math.max(0, after + within);
       state.page = Math.round(viewport.scrollTop / viewportHeight());
       // The same place, kept: see show().
       if (after === null) state.anchor = currentAnchor();
@@ -1457,11 +1510,14 @@ export function refreshPicture(bookId, href, blob) {
 const CYCLE = { full: 'copy', copy: 'none', none: 'full' };
 
 export function cycleChrome() {
+  // Asked before the bars change the height of the view, which is the
+  // question repaginate would otherwise answer after it.
+  const atEnd = isScroll() && scrolledToEnd();
   state.chrome = CYCLE[state.chrome];
   document.body.dataset.chrome = state.chrome;
   // The column width does not change, but the viewport height does, so the
   // page count does too.
-  repaginate();
+  repaginate({ atEnd });
   onChange(state);
   return state.chrome;
 }
