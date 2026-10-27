@@ -205,6 +205,7 @@ export const WP_CLUTTER = [
   '.wp-block-buttons', '.comments-area', '#comments', '.comment-respond', '#respond',
   '.wpdiscuz_top_clearing', '#wpdcom', '.yarpp-related', '.crp_related', '.addtoany_share_save_container',
   '.a2a_kit', '.heateor_sss_sharing_container', '.wp-block-jetpack-like', '.patreon-button',
+  '.saboxplugin-wrap', '.nv-author-biography', '.nv-post-navigation', '[class*="patreon"]', '.ko-fi-button',
   'script', 'style', 'noscript', 'iframe', 'form',
 ].join(', ');
 
@@ -296,6 +297,7 @@ export function linksOf(html, pageUrl) {
 
   const seen = new Map();
   const links = [];
+  const contexts = contextOf(doc);
   for (const anchor of doc.querySelectorAll('a[href]')) {
     const raw = (anchor.getAttribute('href') || '').trim();
     if (!raw || raw.startsWith('#') || /^(javascript|mailto|tel|data|sms):/i.test(raw)) continue;
@@ -305,8 +307,9 @@ export function linksOf(html, pageUrl) {
     url.hash = '';
     const href = url.href;
     if (href === self) continue;
-    const text = tidy(anchor.textContent) || tidy(anchor.getAttribute('title'))
+    const own = tidy(anchor.textContent) || tidy(anchor.getAttribute('title'))
       || tidy(anchor.querySelector('img')?.getAttribute('alt'));
+    const text = labelled(own, contexts.get(anchor));
     // A post's title in a list of posts: a chapter, whatever it is called.
     const post = !!anchor.closest('.entry-title, .wp-block-post-title, .post-title, h2.title');
     const known = seen.get(href);
@@ -365,7 +368,7 @@ function pageTitle(doc) {
 
 /* ── telling the chapters apart ──────────────────────────────────────── */
 
-const CHAPTER_WORDS = /\b(chapters?|chaps?|ch|episodes?|eps?|parts?|vols?|volumes?|book|prologue|epilogue|interlude|intermission|side ?story|extra|afterword|foreword|preface)\b\.?/i;
+const CHAPTER_WORDS = /\b(chapters?|chaps?|ch|episodes?|eps?|parts?|vols?|volumes?|book|prologue|epilogue|interlude|intermission|side[ -]?stor(y|ies)|extras?|afterword|foreword|preface|special)\b\.?/i;
 const CJK_CHAPTER = /第\s*[0-9０-９零〇一二两三四五六七八九十百千万]+\s*[章话話回节節卷部篇幕]/;
 const LEADING_NUMBER = /^\s*[#№]?\s*\d+(\.\d+)?\s*([:.)\-–—]|$|\s)/;
 
@@ -389,6 +392,59 @@ export function shapeOf(href) {
   } catch {
     return href;
   }
+}
+
+/** The chapter a name gives by itself -- "Chapter 16", "Ep. 4", "12." --
+ *  as opposed to a part of one ("part 2"), which means nothing without the
+ *  chapter it is a part of. */
+function ownNumber(text) {
+  const match = /(?:chapters?|chaps?|ch|episodes?|eps?|第)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(text)
+    || /^\s*[#№]?\s*(\d+(?:\.\d+)?)\s*([:.)\-–—]|$|\s)/.exec(text);
+  return match ? parseFloat(match[1]) : null;
+}
+
+/* A line that names what the links after it belong to: "Chapter 16:",
+ * "Side-story 1:", "第十六章". Short, and a heading in all but markup. */
+const CONTEXT_LINE = /^(chapters?|chaps?|ch\.?|episodes?|ep\.?|side[ -]?stor(y|ies)|extras?|special|vol(ume)?\.?|book|part|arc)\b.{0,40}$|^第.{1,12}[章话話回卷部]|:\s*$/i;
+
+/**
+ * What each link is called, with the line it sits under where its own name
+ * means nothing alone.
+ *
+ * A contents page that splits chapters into parts lists them as "Chapter 16:
+ * part 1 · part 2", and a book of a hundred and twenty chapters is then two
+ * hundred and forty links called "part 1" and "part 2" -- in the list, as
+ * chapter titles, and to anything trying to put them in order, where every
+ * "part 1" sorted ahead of every "part 2". Named "Chapter 16: part 1", each
+ * says which it is.
+ */
+function contextOf(doc) {
+  const contexts = new Map();
+  const body = doc.body;
+  if (!body) return contexts;
+  const walker = doc.createTreeWalker(body, 0x1 | 0x4);   // elements and text
+  let last = '';
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.nodeType === 1) {
+      if (node.tagName === 'A') contexts.set(node, last);
+      // A new section of the page starts afresh.
+      else if (/^(H[1-6])$/.test(node.tagName)) last = '';
+      continue;
+    }
+    if (node.parentElement?.closest('a, script, style')) continue;
+    const words = tidy(node.nodeValue);
+    if (!/[\p{L}\p{N}]/u.test(words)) continue;
+    last = words.length <= 80 ? words : '';
+  }
+  return contexts;
+}
+
+/** A link's name, with the line it sits under when it needs one. */
+function labelled(text, context) {
+  if (!context || ownNumber(text) !== null || !CONTEXT_LINE.test(context)) return text;
+  const lead = context.replace(/[:：]\s*$/, '').trim();
+  if (!lead || lead.length > 60) return text;
+  return text ? `${lead}: ${text}` : lead;
 }
 
 /** The chapter number a link's name gives, if it gives one. */
@@ -443,10 +499,12 @@ export function likelyChapters(links, pageUrl = '') {
     if (link.post && !link.kind) { likely.add(link.url); continue; }
     if (link.chrome || link.kind) continue;
     if (!looksLikeChapter(link.text) || /^\s*(next|previous|prev|last|first|latest)\b/i.test(link.text)) continue;
-    /* On another site only when it says which chapters it holds: authors
-     * move a run of chapters elsewhere -- a Google Doc of "Chapters 74-83"
-     * -- and link it from the contents in its place. */
-    if (host && !link.url.includes(`//${host}/`) && numberIn(link.text) === null) continue;
+    /* On another site only when it is a document that says which chapters
+     * it holds: authors move a run of chapters elsewhere -- a Google Doc of
+     * "Chapters 74-83" -- and link it from the contents in its place. A
+     * link to a listing site's page about the book is not the chapters. */
+    if (host && !link.url.includes(`//${host}/`)
+      && !(numberIn(link.text) !== null && /\/\/(docs|drive)\.google\.com\//.test(link.url))) continue;
     likely.add(link.url);
   }
 

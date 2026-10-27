@@ -782,4 +782,67 @@ await t('a Google Doc of several chapters becomes each of them, in order', async
   }
 });
 
+/* ── parts listed under their chapters: Ruby Maybe Translations ─────── */
+
+console.log('parts under their chapters');
+
+/* Laid out as https://rubymaybetranslations.com/table-of-contents/ is:
+ * "Chapter 16:" as a line, then links called "part 1" and "part 2"; a
+ * chapter or two called "full"; a side story after chapter 64; and a book
+ * of side stories at the end, each a line ("Side-story 1:") with links
+ * called "Damian(1)", "Damian(2)" -- some at addresses with no words in. */
+const RM = 'https://rubymaybetranslations.com';
+const rmTOC = `<!doctype html><html><head><title>Table of Contents – Ruby Maybe Translations</title>
+<meta name="generator" content="WordPress 6.4"></head>
+<body class="page-template-default page"><header class="site-header"><nav class="main-navigation"><a href="${RM}/">Home</a><a href="${RM}/table-of-contents/">Table of Contents</a></nav></header>
+<article class="page"><h1 class="entry-title">Table of Content [Lucia]</h1><div class="entry-content">
+<p>Korean Novel: Lucia</p><p><a href="${RM}/lucia">Synopsis</a></p><p>Status: Completed</p><p>{Click the images}</p>
+<h3>[BOOK 1] (1-15)</h3>
+<p><a href="${RM}/2018/11/05/lucia-prologue/">Prologue</a></p>
+<p><a href="https://www.novelupdates.com/series/lucia/?pg=18">Chapter 1-15</a></p>
+<h3>[BOOK 2] (16-24)</h3><p>THE DUCAL COUPLE:</p>
+<p>Chapter 16: <a href="${RM}/2018/03/30/chapter-16-a/">part 1</a> <a href="${RM}/2018/04/01/lucia-chapter-16-b/">part 2</a></p>
+<p>Chapter 17: <a href="${RM}/2018/04/03/lucia-chapter-17-part-1/">part 1</a> <a href="${RM}/2018/04/04/lucia-chapter-17-part-2/">part 2</a></p>
+<p>Chapter 18: <a href="${RM}/2018/04/05/lucia-chapter-18/">full</a></p>
+<p>Chapter 48: <a href="${RM}/2018/09/06/lucia-chapter-48-part-1/">part 1</a> <a href="${RM}/2018/09/07/lucia-chapter-48-part-2/">part 2</a></p>
+<p>Chapter 64: <a href="${RM}/2018/10/31/lucia-chapter-64-part-1/">part 1</a> <a href="${RM}/2018/10/31/lucia-chapter-64-part-2/">part 2</a></p>
+<p><a href="${RM}/2018/11/03/lucia-side-story-1/">Side-story</a></p>
+<h3>[BOOK 5] (65-83)</h3>
+<p>Chapter 66: <a href="${RM}/2018/11/08/1294899/">part 1</a> <a href="${RM}/lucia-chapter-66-part-2">part 2</a></p>
+<p>Chapter 67: <a href="${RM}/lucia-chapter-67-part-1/">part 1</a> <a href="${RM}/lucia-chapter-67-part-2/">part 2</a></p>
+<p>Chapter 95: <a href="${RM}/lucia-chapter-95/">full</a></p>
+<p>Chapter 120: <a href="${RM}/lucia-chapter-120-part-1/">part 1</a> <a href="${RM}/lucia-chapter-120-part-2/">part 2</a> <a href="${RM}/lucia-chapter-120-part-3/">part 3</a></p>
+<h3>[BOOK 8] (side-stories)</h3>
+<p>Side-story 1:</p>
+<p><a href="${RM}/sidestory-1-1-damian/">Damian(1)</a> <a href="${RM}/lucia-side-story-1-2-damian/">Damian(2)</a> <a href="${RM}/832247153-2/">Damian(11)</a> <a href="${RM}/15337-2/">Damian(12)</a></p>
+<p>Side-story 2:</p>
+<p><a href="${RM}/88889000-2/">In Another Future-Hugo (1)</a> <a href="${RM}/lucia-side-story-2-2-in-another-future-hugo/">In Another Future-Hugo (2)</a></p>
+<p>Side-story 3:</p>
+<p><a href="${RM}/2019/09/27/sidestory-3-1-happily-ever-after/">Happily ever after (1)</a> <a href="${RM}/lucia-side-story-3-2-happily-ever-after/">Happily ever after (2)</a></p>
+</div></article>
+<aside class="widget-area"><a href="${RM}/2019/12/04/sidestory-7-6-the-beginning-of-all-stories/">Recent: Side story 7-6</a></aside>
+</body></html>`;
+
+await t('parts are named for their chapters, and the side stories stay in the order given', () => {
+  const found = web.linksOf(rmTOC, `${RM}/table-of-contents/`);
+  const likely = web.likelyChapters(found.links, `${RM}/table-of-contents/`);
+  const order = web.inReadingOrder(found.links, (l) => likely.has(l.url), found.list);
+  const chapters = order.links.filter((l) => likely.has(l.url)).map((l) => l.text);
+  assert.deepEqual(chapters, [
+    'Prologue',
+    'Chapter 16: part 1', 'Chapter 16: part 2', 'Chapter 17: part 1', 'Chapter 17: part 2', 'Chapter 18: full',
+    'Chapter 48: part 1', 'Chapter 48: part 2', 'Chapter 64: part 1', 'Chapter 64: part 2', 'Chapter 64: Side-story',
+    'Chapter 66: part 1', 'Chapter 66: part 2', 'Chapter 67: part 1', 'Chapter 67: part 2', 'Chapter 95: full',
+    'Chapter 120: part 1', 'Chapter 120: part 2', 'Chapter 120: part 3',
+    'Side-story 1: Damian(1)', 'Side-story 1: Damian(2)', 'Side-story 1: Damian(11)', 'Side-story 1: Damian(12)',
+    'Side-story 2: In Another Future-Hugo (1)', 'Side-story 2: In Another Future-Hugo (2)',
+    'Side-story 3: Happily ever after (1)', 'Side-story 3: Happily ever after (2)',
+  ]);
+  // Already in order as listed: nothing is moved.
+  assert.equal(order.how, null);
+  // Not the listing site's page about the book, nor the sidebar.
+  assert.ok(!chapters.includes('Chapter 1-15'));
+  assert.ok(!chapters.some((c) => /Recent/.test(c)));
+});
+
 console.log(`\n${pass} assertions passed`);
