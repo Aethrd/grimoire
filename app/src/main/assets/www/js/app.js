@@ -6125,6 +6125,7 @@ async function findWebLinks() {
     webState.author = author;
     webState.cover = cover;
     webState.titleTouched = false;
+    webState.manualOrder = false;
     // A contents page that lists the newest chapter first is turned round,
     // and says so: a book read from its last chapter is no book.
     // Only the chapters are put in order: the menus stay where the page had
@@ -6159,8 +6160,12 @@ async function findWebLinks() {
  * the workshop can offer it as the cover.
  */
 async function addWebToBuild() {
-  const chosen = webState.links.filter((link) => link.picked);
+  let chosen = webState.links.filter((link) => link.picked);
   if (!chosen.length) return;
+  /* Put in reading order again as they go in -- what is ticked can be a
+   * different set from what was ordered when the list was found -- unless
+   * the order was turned round by hand, which is the reader's say. */
+  if (!webState.manualOrder) chosen = web.inReadingOrder(chosen, () => true).links;
   let name = (el('web-title').value || '').trim() || webState.title || 'From the web';
   // Left over pages, looked over: named for where they now pick up.
   if (webState.leftover && !webState.titleTouched && chosen[0]?.text) {
@@ -6198,6 +6203,7 @@ function webDelay() {
 function clearWeb() {
   Object.assign(webState, {
     links: [], title: '', author: '', cover: '', sources: [], reversed: false, titleTouched: false, leftover: null,
+    manualOrder: false,
   });
   el('web-list').replaceChildren();
   el('web-address').value = '';
@@ -6252,6 +6258,7 @@ function wireWeb() {
   el('web-reverse').onclick = () => {
     webState.links.reverse();
     webState.reversed = !webState.reversed;
+    webState.manualOrder = true;
     drawWebList();
   };
   el('web-pictures').onclick = () => {

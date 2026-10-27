@@ -372,8 +372,66 @@ const CHAPTER_WORDS = /\b(chapters?|chaps?|ch|episodes?|eps?|parts?|vols?|volume
 const CJK_CHAPTER = /第\s*[0-9０-９零〇一二两三四五六七八九十百千万]+\s*[章话話回节節卷部篇幕]/;
 const LEADING_NUMBER = /^\s*[#№]?\s*\d+(\.\d+)?\s*([:.)\-–—]|$|\s)/;
 
+/* The other parts of a Chinese, Japanese or Korean serial: side stories,
+ * extras, the prologue, the ending and the afterword. */
+const CJK_PARTS = /番外|外[傳传]|特別篇|特别篇|特典|序章|楔子|引子|尾[聲声]|終章|终章|後記|后记|完結感言|完结感言|외전|에필로그|프롤로그|番外編|閑話|閒話|幕間/;
+
 export const looksLikeChapter = (text) =>
-  CHAPTER_WORDS.test(text) || CJK_CHAPTER.test(text) || LEADING_NUMBER.test(text);
+  CHAPTER_WORDS.test(text) || CJK_CHAPTER.test(text) || CJK_PARTS.test(text) || LEADING_NUMBER.test(text);
+
+/* ── numbers in any script ───────────────────────────────────────────── */
+
+const CJK_DIGITS = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+const CJK_UNITS = { 十: 10, 百: 100, 千: 1000, 万: 10000, 萬: 10000 };
+
+/** "十二" is 12, "一百零五" is 105, "１２" is 12, "12" is 12. */
+export function cjkNumber(text) {
+  const plain = String(text || '').replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xFEE0));
+  if (/^\d+(\.\d+)?$/.test(plain)) return parseFloat(plain);
+  if (!/^[零〇一二两兩三四五六七八九十百千万萬]+$/.test(plain)) return null;
+  let total = 0;
+  let section = 0;
+  let digit = 0;
+  for (const ch of plain) {
+    if (ch in CJK_DIGITS) { digit = CJK_DIGITS[ch]; continue; }
+    const unit = CJK_UNITS[ch];
+    if (unit === 10000) { total += (section + digit) * unit; section = 0; digit = 0; continue; }
+    // "十二" starts with the unit: one ten.
+    section += (digit || 1) * unit;
+    digit = 0;
+  }
+  return total + section + digit;
+}
+
+const NUMERAL = '[0-9０-９]+(?:\\.[0-9]+)?|[零〇一二两兩三四五六七八九十百千万萬]+';
+
+/* What kind of chapter a name is, and its number among its kind.
+ *   prologue  the prologue, 序章, 楔子
+ *   main      "Chapter 12", "第十二章", "12."
+ *   side      side stories and extras: "番外三", "Side Story 2", "Extra 1"
+ *   after     the ending's afterword, 後記, 完結感言
+ */
+export function chapterKind(text) {
+  const name = String(text || '');
+  if (/後記|后记|完結感言|完结感言|作者的話|作者的话|\bafterword\b|\bauthor'?s? note\b/i.test(name)) return { kind: 'after', number: null };
+  const side = new RegExp(`(?:番外(?:篇|編)?|外[傳传]|特別篇|特别篇|特典|閑話|閒話|외전|\\bside[ -]?stor(?:y|ies)\\b|\\bextras?\\b|\\bspecial\\b|\\bbonus\\b|\\bSS\\b)\\s*[:：.·・\\-–—]?\\s*(?:第\\s*)?(${NUMERAL})?`, 'i').exec(name);
+  if (side) {
+    // A side story in a chapter's place ("Chapter 64: Side-story") is
+    // that chapter's, and reads where it stands.
+    const own = mainNumber(name.slice(0, side.index));
+    if (own !== null) return { kind: 'main', number: own };
+    return { kind: 'side', number: side[1] ? cjkNumber(side[1]) : null };
+  }
+  if (/序章|楔子|引子|프롤로그|\bprologue\b/i.test(name) && mainNumber(name) === null) return { kind: 'prologue', number: 0 };
+  const number = mainNumber(name);
+  return number === null ? { kind: null, number: null } : { kind: 'main', number };
+}
+
+function mainNumber(name) {
+  const cjk = new RegExp(`第\\s*(${NUMERAL})\\s*[章话話回节節]`).exec(name);
+  if (cjk) return cjkNumber(cjk[1]);
+  return numberIn(name);
+}
 
 /**
  * A link's shape: its site and path with the numbers taken out. Chapters of
@@ -449,6 +507,8 @@ function labelled(text, context) {
 
 /** The chapter number a link's name gives, if it gives one. */
 export function numberIn(text) {
+  const cjk = new RegExp(`第\\s*(${NUMERAL})\\s*[章话話回节節]`).exec(text || '');
+  if (cjk) return cjkNumber(cjk[1]);
   const match = /(?:chapters?|chaps?|ch|episodes?|eps?|parts?|第)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(text)
     || /^\s*[#№]?\s*(\d+(?:\.\d+)?)/.exec(text);
   return match ? parseFloat(match[1]) : null;
@@ -566,39 +626,75 @@ export function reverseWhere(items, test) {
 /**
  * The chapters put in the order they are read, in the places they held.
  *
- * Contents pages are not always in order. Some run newest first; some grow
- * by sections added over the years -- chapters 1 to 74, then 301 to 316 at
- * the top of the "new" list, then 75 to 300 under "old links" -- and read
- * in the order listed, a book jumps from 74 to 301 and back. Where the
- * chapters are numbered, they are put in number order; where they are not,
- * a WordPress list of posts, newest first by its nature, is turned round.
+ * Contents pages are not always in order. Some run newest first; some put a
+ * block of the latest chapters at the top; some grow by sections added over
+ * the years; and side stories are as often listed in the order they were
+ * posted as in their own order -- 番外三 before 番外一, "Extra 10" before
+ * "Extra 2". So each chapter is told by what it is -- prologue, chapter,
+ * side story, afterword -- and its number among its kind:
+ *
+ *   - already in order, nothing moves;
+ *   - numbered chapters running backwards are turned round;
+ *   - otherwise they are put in order: the prologue, the chapters by
+ *     number, then the side stories by theirs, then the afterword. A chapter
+ *     with no number stays just after the one listed before it.
+ *
+ * Where nothing is numbered, a WordPress list of posts, newest first by its
+ * nature, is turned round.
  *
  * @returns { links, how } -- how is 'sorted', 'reversed' or null (as it was)
  */
+const SECTION = { prologue: 0, main: 1, side: 2, after: 3 };
+
 export function inReadingOrder(links, isChapter, newestFirstList = false) {
   const places = [];
   links.forEach((link, at) => { if (isChapter(link)) places.push(at); });
   const chapters = places.map((at) => links[at]);
-  const numbers = chapters.map((link) => numberIn(link.text));
-  const known = numbers.filter((n) => n !== null);
+  const kinds = chapters.map((link) => chapterKind(link.text));
+  const known = kinds.filter((k) => k.kind && k.number !== null);
+
+  // Keys: [section, number, place]. Unnumbered ones follow what was before.
+  let carried = [SECTION.main, -Infinity];
+  const keyed = chapters.map((link, at) => {
+    const { kind, number } = kinds[at];
+    if (kind && (number !== null || kind === 'after')) {
+      carried = [SECTION[kind], number === null ? Infinity : number];
+    } else if (kind === 'side') {
+      carried = [SECTION.side, carried[0] === SECTION.side ? carried[1] : -Infinity];
+    }
+    return { link, key: carried, at };
+  });
+  const ascending = (list) => list.every((each, i) => i === 0
+    || each.key[0] > list[i - 1].key[0]
+    || (each.key[0] === list[i - 1].key[0] && each.key[1] >= list[i - 1].key[1]));
+
+  /* In order already: each kind in its own order, the prologue before the
+   * chapters and the afterword after them. A side story the author placed
+   * between two chapters, in its turn, reads where it was put. */
+  const ofKind = (kind) => keyed.filter((each) => kinds[each.at].kind === kind);
+  const rising = (list) => list.every((each, i) => i === 0 || each.key[1] >= list[i - 1].key[1]);
+  const placeOf = (list, pick) => (list.length ? pick(list.map((each) => each.at)) : null);
+  const firstMain = placeOf(ofKind('main'), (ats) => Math.min(...ats));
+  const lastMain = placeOf(ofKind('main'), (ats) => Math.max(...ats));
+  const inOrder = rising(ofKind('main')) && rising(ofKind('side'))
+    && ofKind('prologue').every((each) => firstMain === null || each.at < firstMain)
+    && ofKind('after').every((each) => lastMain === null || each.at > lastMain);
+
   let ordered = null;
   let how = null;
-  if (chapters.length >= 3 && known.length >= chapters.length * 0.8) {
-    const rising = known.every((n, i) => i === 0 || n >= known[i - 1]);
-    const falling = known.every((n, i) => i === 0 || n <= known[i - 1]);
-    if (!rising && falling) {
-      ordered = [...chapters].reverse();
-      how = 'reversed';
-    } else if (!rising) {
-      // A chapter with no number stays just after the one before it.
-      let carried = -Infinity;
-      const keyed = chapters.map((link, at) => {
-        if (numbers[at] !== null) carried = numbers[at];
-        return { link, key: carried, at };
-      });
-      keyed.sort((a, b) => (a.key - b.key) || (a.at - b.at));
-      ordered = keyed.map((each) => each.link);
-      how = 'sorted';
+  if (chapters.length >= 3 && known.length >= chapters.length * 0.6) {
+    if (!inOrder) {
+      const mains = keyed.filter((each) => kinds[each.at].kind === 'main');
+      const backwards = mains.length >= 3 && mains.every((each, i) => i === 0 || each.key[1] <= mains[i - 1].key[1]);
+      const reversed = [...keyed].reverse();
+      if (backwards && ascending(reversed)) {
+        ordered = reversed.map((each) => each.link);
+        how = 'reversed';
+      } else {
+        const sorted = [...keyed].sort((x, y) => (x.key[0] - y.key[0]) || (x.key[1] - y.key[1]) || (x.at - y.at));
+        ordered = sorted.map((each) => each.link);
+        how = 'sorted';
+      }
     }
   } else if (newestFirstList && chapters.length > 1) {
     ordered = [...chapters].reverse();
@@ -698,6 +794,36 @@ export function readsBackwards(chapters, newestFirstList = false) {
 
 /* ── a chapter out of a page ─────────────────────────────────────────── */
 
+/* "Next page", as opposed to "next chapter". */
+const NEXT_PAGE = /^[\s<«‹]*(下一[頁页]|下[頁页]|下一分[頁页]|next page|next part|continue reading|继续阅读|繼續閱讀)[\s>»›→]*$/i;
+
+/** The address of the rest of this chapter, if the page is one of several. */
+export function nextPageOf(doc, pageUrl) {
+  for (const anchor of doc.querySelectorAll('a[href]')) {
+    if (!NEXT_PAGE.test(tidy(anchor.textContent))) continue;
+    let url;
+    try { url = new URL(anchor.getAttribute('href'), pageUrl); } catch { continue; }
+    url.hash = '';
+    if (url.href !== pageUrl && sameChapter(pageUrl, url.href)) return url.href;
+  }
+  return null;
+}
+
+/** Whether two addresses are pages of one chapter: the same page asked
+ *  for with another page number, or the chapter's address with one added. */
+function sameChapter(a, b) {
+  let x;
+  let y;
+  try { x = new URL(a); y = new URL(b); } catch { return false; }
+  if (x.host !== y.host) return false;
+  if (x.pathname === y.pathname) return x.search !== y.search;
+  const bare = (path) => path.replace(/\.(html?|php|aspx?)$/i, '').replace(/\/+$/, '');
+  const stem = (path) => bare(path).replace(/[_-]?\d+$/, '');
+  const [pa, pb] = [bare(x.pathname), bare(y.pathname)];
+  if (stem(pa) === stem(pb) && /[_-]\d+$/.test(pb)) return true;
+  return pb.startsWith(`${pa}_`) || pb.startsWith(`${pa}-`) || pb.startsWith(`${pa}/`);
+}
+
 /* The links a chapter page puts round its own text: to the chapters either
  * side, and back to the contents. In the chapter they would be a line of
  * "Previous Chapter Next Chapter" above and below every one. */
@@ -764,7 +890,7 @@ const EXT_OF_TYPE = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif
  * @param getPicture  fetches a picture, or null to leave pictures out
  * @returns { chapter, images, lang }
  */
-export async function readPage(link, index, { pictures = true, fetchPage = download } = {}) {
+export async function readPage(link, index, { pictures = true, fetchPage = download, chapterUrls = null } = {}) {
   const page = await fetchPage(link.url);
   const type = String(page.type || '').toLowerCase();
 
@@ -787,8 +913,42 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
   const postTitle = wordpress
     ? tidy(doc.querySelector('.entry-title, .wp-block-post-title, h1.post-title')?.textContent) : '';
   const heading = postTitle || tidy(titleOf(doc, ''));
+  // A chapter a site splits across pages: "下一页" to the rest of it.
+  let further = nextPageOf(doc, page.url);
   const story = (wordpress && wordPressStory(doc)) || findStory(doc);
   stripPageLinks(story);
+
+  /* The rest of a chapter split across pages, joined on, in order. Many
+   * Chinese serial sites give a chapter as two or three pages, each ending
+   * "下一页"; downloaded a page at a time, every chapter stopped a third of
+   * the way through. Only a page of the same chapter is followed -- never
+   * the next chapter, which is a link of its own in the list. */
+  const visited = new Set([page.url, link.url]);
+  // Never a page that is itself one of the chapters being downloaded.
+  const another = (url) => !!chapterUrls && chapterUrls.has(url);
+  for (let more = 0; further && !visited.has(further) && !another(further) && more < 30; more += 1) {
+    visited.add(further);
+    let next;
+    try {
+      next = await fetchPage(further);
+    } catch {
+      break;
+    }
+    const nextDoc = parseHtml(decodePage(await bytesOf(next.blob), next.type));
+    const then = nextPageOf(nextDoc, next.url);
+    const rest = (isWordPress(nextDoc) && wordPressStory(nextDoc)) || findStory(nextDoc);
+    stripPageLinks(rest);
+    // The chapter's heading, repeated on each page, said once.
+    const repeat = rest.querySelector('h1, h2, h3');
+    if (repeat && heading && tidy(repeat.textContent).startsWith(heading.slice(0, 12))) repeat.remove();
+    for (const img of rest.querySelectorAll('img')) {
+      const src = pictureSource(img);
+      if (src) { try { img.setAttribute('src', new URL(src, next.url).href); } catch { /* left */ } }
+    }
+    // Moved, not copied: appended, each leaves the page it came from.
+    for (const node of [...rest.childNodes]) story.appendChild(doc.adoptNode(node));
+    further = then;
+  }
 
   // Pictures found as the chapter is read, fetched once it has been.
   const wanted = [];
@@ -1116,6 +1276,7 @@ export async function readPages(links, {
    * is not there gets a single second try. And a try that was cut off by the
    * app going off screen does not count at all.
    */
+  const chapterUrls = new Set(links.map((link) => link.url));
   const fetchAgain = async (link, at) => {
     let lastError = null;
     let waits = null;
@@ -1127,7 +1288,7 @@ export async function readPages(links, {
       const before = interruptions;
       try {
         if (tries === 0 && uncounted === 0) await myTurn();
-        return await readPage(link, at, { pictures, fetchPage });
+        return await readPage(link, at, { pictures, fetchPage, chapterUrls });
       } catch (error) {
         lastError = error;
         // Failed while the app was away: asked again once it is back.

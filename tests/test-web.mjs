@@ -845,4 +845,100 @@ await t('parts are named for their chapters, and the side stories stay in the or
   assert.ok(!chapters.some((c) => /Recent/.test(c)));
 });
 
+/* ── side stories out of order: a Chinese contents page ─────────────── */
+
+console.log('side stories out of order');
+
+/* Shaped as Chinese serial sites lay out a book's directory: a block of
+ * the latest chapters at the top, then every chapter -- with the side
+ * stories (番外) in the order they were posted, not their own. */
+const CN = 'https://www.novel.example/0122618456';
+const cnLink = (n, name) => `<li><a href="${CN}/${8000 + n}_1.html">${name}</a></li>`;
+const cnMain = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => [n, `第${n}章 ${'风雨'.repeat(1 + (n % 2))}`]);
+const cnSide = [[103, '番外三 雪夜'], [101, '番外一 初见'], [110, '番外十 归途'], [102, '番外二：旧事'], [104, '番外四 尾声之后']];
+const cnDir = `<!doctype html><html><head><meta charset="utf-8"><title>某书 最新章节 - 小说网</title></head><body>
+<div class="nav"><a href="https://www.novel.example/">首页</a><a href="https://www.novel.example/rank">排行榜</a></div>
+<h1>某书</h1><div class="intro">作者：某人</div>
+<h2>最新章节</h2><ul class="latest">${cnLink(104, '番外四 尾声之后')}${cnLink(110, '番外十 归途')}${cnLink(12, '第12章 大结局')}</ul>
+<h2>全部章节</h2><ul class="all">${cnMain.map(([n, name]) => cnLink(n, n === 12 ? '第12章 大结局' : name)).join('')}
+${cnSide.map(([n, name]) => cnLink(n, name)).join('')}${cnLink(120, '后记')}</ul>
+<div class="footer"><a href="https://www.novel.example/about">关于我们</a></div></body></html>`;
+
+await t('Chinese numbers are read', () => {
+  assert.equal(web.cjkNumber('十二'), 12);
+  assert.equal(web.cjkNumber('二十'), 20);
+  assert.equal(web.cjkNumber('一百零五'), 105);
+  assert.equal(web.cjkNumber('一千二百三十四'), 1234);
+  assert.equal(web.cjkNumber('两万'), 20000);
+  assert.equal(web.cjkNumber('１２'), 12);
+  assert.deepEqual(web.chapterKind('第十二章 风雨'), { kind: 'main', number: 12 });
+  assert.deepEqual(web.chapterKind('番外三 雪夜'), { kind: 'side', number: 3 });
+  assert.deepEqual(web.chapterKind('番外篇·十'), { kind: 'side', number: 10 });
+  assert.deepEqual(web.chapterKind('Side Story 2: Hugo'), { kind: 'side', number: 2 });
+  assert.deepEqual(web.chapterKind('后记'), { kind: 'after', number: null });
+  assert.deepEqual(web.chapterKind('Chapter 64: Side-story'), { kind: 'main', number: 64 });
+});
+
+await t('side stories listed out of order are put in their order, after the chapters', () => {
+  const found = web.linksOf(cnDir, `${CN}/dir`);
+  const likely = web.likelyChapters(found.links, `${CN}/dir`);
+  const order = web.inReadingOrder(found.links, (l) => likely.has(l.url), found.list);
+  assert.equal(order.how, 'sorted');
+  const chapters = order.links.filter((l) => likely.has(l.url)).map((l) => l.text);
+  assert.deepEqual(chapters, [
+    ...cnMain.map(([n, name]) => (n === 12 ? '第12章 大结局' : name)),
+    '番外一 初见', '番外二：旧事', '番外三 雪夜', '番外四 尾声之后', '番外十 归途', '后记',
+  ]);
+  // The site's own links stay out of it.
+  assert.ok(!chapters.includes('首页') && !chapters.includes('排行榜') && !chapters.includes('关于我们'));
+});
+
+await t('side stories already in order are not moved, wherever they stand', () => {
+  const links = ['Prologue', 'Chapter 1', 'Chapter 2', 'Side Story 1', 'Chapter 3', 'Side Story 2']
+    .map((text, i) => ({ url: `${SITE}s${i}`, text }));
+  // A side story between chapters, in order, reads where the author put it.
+  const order = web.inReadingOrder(links, () => true);
+  assert.equal(order.how, null);
+});
+
+await t('a chapter split across pages is joined, and never runs into the next chapter', async () => {
+  const pagesOf = {
+    [`${CN}/8001_1.html`]: `<html><body><div class="nav"><a href="${CN}/dir">目录</a></div><div id="content"><h1>第1章 风雨</h1>
+      <p>第一页的第一段，雨下了一整夜，城门外的灯一直亮着，没有人知道守门的人去了哪里。</p><p>第一页的第二段。</p>
+      <p><a href="${CN}/dir">目录</a> <a href="${CN}/8001_2.html">下一页</a></p></div></body></html>`,
+    [`${CN}/8001_2.html`]: `<html><body><div id="content"><h1>第1章 风雨</h1>
+      <p>第二页的第一段，天亮的时候，有人在城墙上看见了一只白色的鸟，它一直往北飞去。</p>
+      <p><a href="${CN}/8001_1.html">上一页</a> <a href="${CN}/8001_3.html">下一页</a></p></div></body></html>`,
+    [`${CN}/8001_3.html`]: `<html><body><div id="content"><h1>第1章 风雨</h1>
+      <p>第三页，这一章的最后一段，城门终于关上了，风也停了，只剩下远处的钟声。</p>
+      <p><a href="${CN}/8001_2.html">上一页</a> <a href="${CN}/8002_1.html">下一页</a></p></div></body></html>`,
+    [`${CN}/8002_1.html`]: `<html><body><div id="content"><h1>第2章 雪夜</h1><p>第二章的内容，雪下得很大，路上一个人也没有，只有马车的声音。</p></div></body></html>`,
+  };
+  const fetchCn = async (url) => {
+    if (!pagesOf[url]) throw new Error('that page does not exist (404)');
+    return { url, status: 200, type: 'text/html; charset=utf-8', blob: new Blob([pagesOf[url]], { type: 'text/html' }) };
+  };
+  const parsed = await web.readPages([
+    { url: `${CN}/8001_1.html`, text: '第1章 风雨' },
+    { url: `${CN}/8002_1.html`, text: '第2章 雪夜' },
+  ], { fetchPage: fetchCn, gap: 0 });
+  const [one, two] = parsed.chapters;
+  assert.match(one.html, /第一页的第一段/);
+  assert.match(one.html, /第二页的第一段/);
+  assert.match(one.html, /第三页/);
+  // The last page's "下一页" goes to chapter 2, which is its own chapter.
+  assert.ok(!/第二章的内容/.test(one.html), 'chapter 2 ran into chapter 1');
+  assert.match(two.html, /第二章的内容/);
+  assert.ok(!/下一页|上一页|目录/.test(one.html), one.html);
+  // The heading each page repeats is said once.
+  assert.equal(one.html.split('第1章 风雨').length - 1, 1, one.html);
+});
+
+await t('what goes into Build is put in reading order again, unless turned round by hand', () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const add = app.slice(app.indexOf('async function addWebToBuild('), app.indexOf('function clearWeb('));
+  assert.match(add, /if \(!webState\.manualOrder\) chosen = web\.inReadingOrder\(chosen, \(\) => true\)\.links;/);
+  assert.match(app, /webState\.manualOrder = true;/);
+});
+
 console.log(`\n${pass} assertions passed`);
