@@ -122,6 +122,10 @@ async function show(name, { replace = false } = {}) {
   // Leaving the library ends selection: the bar refers to books you can no
   // longer see.
   if (name !== 'library') clearSelection();
+  /* Back to the shelf from a build with something in it: the shelf becomes
+   * the place to pick what goes next. Anywhere else, picking is over. */
+  if (name === 'library' && cameFrom === 'workshop' && !build.isEmpty()) startPicking();
+  else if (name !== 'library') endPicking();
   // The tab bar is app furniture; it has no business over a page of prose.
   document.body.dataset.view = name;
   viewChanged();
@@ -335,9 +339,10 @@ async function openBook(book, opts) {
 const selection = new Set();
 let selectMode = false;
 
-function selecting() { return selectMode; }
+function selecting() { return selectMode || !!buildPicks; }
 
 function onTileTap(book) {
+  if (buildPicks) { pickTile(book); return; }
   if (!selectMode) {
     // A bundle is one thing on the shelf and several things to open, so it
     // asks which rather than guessing.
@@ -353,10 +358,89 @@ function onTileTap(book) {
 }
 
 function onTileHold(book) {
+  // While picking for Build a press is a tap: no second mode on top of it.
+  if (buildPicks) { pickTile(book); return; }
   selectMode = true;
   selectTile(book);
   paintSelection();
   refreshShelf();
+}
+
+/* ── picking books for Build, on the shelf ────────────────────────────
+ *
+ * A build with a book in it, and the way back to the shelf to find what
+ * goes after it: there, every book tapped is the next part, numbered in its
+ * corner with the place it will have -- the books already in the build show
+ * theirs too, darker -- and Finish puts them in, in that order. Tapping one
+ * again takes it out, and the numbers after it close up.
+ */
+let buildPicks = null;   // { ids: [] } while books are being picked
+
+function startPicking() {
+  if (buildPicks) return;
+  buildPicks = { ids: [] };
+  paintPicking();
+}
+
+function endPicking() {
+  if (!buildPicks) return false;
+  buildPicks = null;
+  library.setBuildOrder(null);
+  paintPicking();
+  if (current === 'library') refreshShelf();
+  return true;
+}
+
+function pickOrder() {
+  const order = new Map();
+  const parts = build.contents();
+  parts.forEach((part, at) => { if (part.bookId) order.set(part.bookId, { place: at + 1, already: true }); });
+  if (buildPicks) buildPicks.ids.forEach((id, at) => order.set(id, { place: parts.length + at + 1, already: false }));
+  return order;
+}
+
+function paintPicking() {
+  const on = !!buildPicks;
+  document.body.classList.toggle('picking', on);
+  el('pick-head').hidden = !on;
+  el('library-head').hidden = on || selectMode;
+  el('tabbar').hidden = on || selectMode || current === 'reader';
+  if (!on) return;
+  const parts = build.contents().length;
+  const count = buildPicks.ids.length;
+  el('pick-count').textContent = count ? `${count} to add to Build` : 'Add to Build';
+  el('pick-note').textContent = `Tap in order · after part ${parts}`;
+  el('pick-finish').textContent = count ? `Finish · ${count}` : 'Finish';
+  library.setBuildOrder(pickOrder());
+}
+
+async function pickTile(book) {
+  if (build.hasBook(book.id)) {
+    const at = build.contents().findIndex((part) => part.bookId === book.id) + 1;
+    toast(`Already in the build, as part ${at}`);
+    return;
+  }
+  const at = buildPicks.ids.indexOf(book.id);
+  if (at === -1) buildPicks.ids.push(book.id);
+  else buildPicks.ids.splice(at, 1);
+  paintPicking();
+  await refreshShelf();
+}
+
+async function finishPicking() {
+  if (!buildPicks) return;
+  const ids = [...buildPicks.ids];
+  let added = 0;
+  for (const id of ids) {
+    const book = await store.get('books', id);
+    if (!book || build.hasBook(id)) continue;
+    build.addBook(book);
+    added += 1;
+  }
+  endPicking();
+  await show('workshop');
+  renderWorkshop();
+  if (added) toast(`${added} book${added === 1 ? '' : 's'} added to the build, in the order picked`);
 }
 
 /* A bundle is one tile and several books.
@@ -461,6 +545,8 @@ async function oneSelected(refusal, run) {
 
 function wireSelection() {
   el('select-cancel').onclick = () => clearSelection();
+  el('pick-cancel').onclick = () => endPicking();
+  el('pick-finish').onclick = () => finishPicking();
 
   el('select-all').onclick = async () => {
     /* Everything on the shelf as it stands, not everything you own.
@@ -1410,7 +1496,7 @@ async function buildOnto(book) {
   clearSelection();
   renderWorkshop();
   await show('workshop');
-  toast(`“${library.displayTitle(book)}” is the first part — add what goes after it`, 7000);
+  toast(`“${library.displayTitle(book)}” is the first part — go back to the shelf and tap what goes after it, in order`, 7000);
 }
 
 /** Take a joined book apart, and say what that actually did. */
@@ -6695,6 +6781,8 @@ window.Grimoire = {
     if (!el('remove-look').hidden) { closeRemoveLook(); return true; }
     if (!el('remove-confirm').hidden) { el('remove-confirm').hidden = true; return true; }
     if (closeCopyMenu()) return true;
+    // Picking for Build is a mode, and back leaves it -- to the build.
+    if (buildPicks) { endPicking(); show('workshop'); return true; }
     if (closeCoverPick()) return true;
     if (tags.closeTagPicker()) return true;
     if (!el('picture-sheet').hidden) { el('picture-sheet').hidden = true; return true; }

@@ -141,7 +141,8 @@ t('selection is a mode you leave deliberately', () => {
   // Deselecting the last book used to drop you out, which loses your place in
   // a long shelf halfway through picking.
   assert.match(app, /let selectMode = false/);
-  assert.match(app, /function selecting\(\) \{ return selectMode; \}/);
+  // (Picking books for Build is a mode of the same kind: the tab bar goes.)
+  assert.match(app, /function selecting\(\) \{ return selectMode \|\| !!buildPicks; \}/);
   const tap = app.slice(app.indexOf('function onTileTap'), app.indexOf('function onTileHold'));
   assert.ok(!/selection\.size === 0/.test(tap), 'tapping to zero still exits the mode');
 });
@@ -1216,6 +1217,27 @@ t('the strip offers no share and no text-to-speech', () => {
   const panes = [...strip.matchAll(/data-pane="(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(panes, ['text', 'layout', 'theme', 'behaviour', 'translation', 'data']);
   assert.ok(!/share|speak|sound|volume|tts/i.test(strip));
+});
+
+
+t('back on the shelf with a build under way, books are picked for it in order', () => {
+  // Arriving from Build with something in it starts picking; leaving ends it.
+  assert.match(app, /if \(name === 'library' && cameFrom === 'workshop' && !build\.isEmpty\(\)\) startPicking\(\);/);
+  assert.match(app, /else if \(name !== 'library'\) endPicking\(\);/);
+  // A tap, or a press, picks rather than opens.
+  assert.match(app, /function onTileTap\(book\) \{\n  if \(buildPicks\) \{ pickTile\(book\); return; \}/);
+  assert.match(app, /function onTileHold\(book\) \{\n  \/\/[^\n]*\n  if \(buildPicks\) \{ pickTile\(book\); return; \}/);
+  // Each numbered with the place it will have, after what is already in.
+  assert.match(app, /order\.set\(id, \{ place: parts\.length \+ at \+ 1, already: false \}\)/);
+  // Finish puts them in, in the order picked, and goes to Build.
+  const finish = app.slice(app.indexOf('async function finishPicking('), app.indexOf('/* A bundle is one tile and several books.'));
+  assert.match(finish, /build\.addBook\(book\);/);
+  assert.match(finish, /await show\('workshop'\);/);
+  const html = fs.readFileSync(new URL('../app/src/main/assets/www/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="pick-head"/);
+  assert.match(html, /id="pick-finish"/);
+  const lib = fs.readFileSync(new URL('../app/src/main/assets/www/js/library.js', import.meta.url), 'utf8');
+  assert.match(lib, /<span class="tile-order\$\{placed\.already \? ' already' : ''\}">\$\{placed\.place\}<\/span>/);
 });
 
 console.log(`\n${pass} assertions passed`);

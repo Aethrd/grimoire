@@ -2414,3 +2414,9 @@ body.in-book .import-progress .jobs-summary { display: block; }
   border: 1px solid var(--hairline); background: var(--surface); color: var(--text);
   font: 15px var(--font-ui); text-align: right; }
 .web-rate input:focus-visible { outline: none; border-color: var(--accent); }
+
+/* A book's place in the build, while books are being picked for it. */
+.tile-order { position: absolute; top: 6px; left: 6px; min-width: 26px; height: 26px; padding: 0 6px;
+  border-radius: 13px; display: grid; place-items: center; background: var(--accent); color: var(--on-accent);
+  font-family: var(--font-heading); font-weight: 800; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+.tile-order.already { background: rgba(0,0,0,.6); color: #fff; }

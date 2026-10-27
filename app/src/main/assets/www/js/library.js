@@ -826,8 +826,14 @@ export function bookTile(book, onOpen, onLongPress = null) {
 let heldAt = 0;
 const justHeld = () => Date.now() - heldAt < 800;
 
+/* Books being picked for Build from the shelf: each tile's place in the
+ * build, as a number in its corner. Set by the shell while picking. */
+let buildOrder = null;   // Map(book id -> { place, already })
+export function setBuildOrder(order) { buildOrder = order || null; }
+
 function tile(book, onOpen, onLongPress, selection, selecting) {
   const coverUrl = coverUrlFor(book);
+  const placed = buildOrder?.get(book.id);
   const node = document.createElement('button');
   node.className = selection?.has(book.id) ? 'tile selected' : 'tile';
   if (book.bundle) node.classList.add('bundled');
@@ -841,6 +847,7 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
         ? `<img src="${coverUrl}" alt="${escape(book.title)}">`
         : `<span class="tile-title">${escape(displayTitle(book))}</span>`}
       <span class="tile-badge">${escape(book.format || '?')}</span>
+      ${placed ? `<span class="tile-order${placed.already ? ' already' : ''}">${placed.place}</span>` : ''}
       <span class="tile-bar"><span style="width:${Math.round((book.percent || 0) * 100)}%"></span></span>
       ${selecting ? '<span class="tile-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7"/></svg></span>' : ''}
       ${book.bundle
