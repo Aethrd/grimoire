@@ -431,6 +431,10 @@
         <label class="web-rate"><span>Delay between pages</span>
           <input id="web-delay" type="number" inputmode="numeric" min="0" max="60000" step="50" value="250">
           <span>ms</span></label>
+        <!-- Give or take: each pause anywhere from the delay less this to the delay plus it. -->
+        <label class="web-rate"><span>Give or take <small class="muted" id="web-range"></small></span>
+          <input id="web-jitter" type="number" inputmode="numeric" min="0" max="60000" step="50" value="0">
+          <span>ms</span></label>
         <div class="chip-row web-tools">
           <button class="chip" id="web-likely" title="Tick the links that look like chapters, untick the rest">Just the chapters</button>
           <button class="chip" id="web-all">Tick shown</button>

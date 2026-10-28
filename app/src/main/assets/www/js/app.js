@@ -5454,6 +5454,7 @@ function keepLeftovers(failed, retried = []) {
       pictures: failure.web.pictures !== false,
       author: failure.web.author || '',
       gap: failure.web.gap,
+      jitter: failure.web.jitter,
       reason: failure.web.reason || failure.reason || '',
       at: Date.now(),
     };
@@ -5504,6 +5505,7 @@ function paintLeftovers(parts) {
         name: left.name, links: left.links, pictures: left.pictures,
         author: left.author, sources: left.sources, leftover: left.id,
         gap: Number.isFinite(left.gap) ? left.gap : webDelay(),
+        jitter: Number.isFinite(left.jitter) ? left.jitter : webJitter(),
       });
       el('build-title').value = left.name;
       buildTitleTouched = true;
@@ -5522,6 +5524,8 @@ function showLeftoverInWeb(left) {
   clearWeb();
   webState.leftover = left.id;
   if (Number.isFinite(left.gap)) el('web-delay').value = String(left.gap);
+  if (Number.isFinite(left.jitter)) el('web-jitter').value = String(left.jitter);
+  paintWebRange();
   el('web-address').value = left.sources.join('\n');
   webState.links = left.links.map((link) => ({
     url: link.url, text: link.text, chrome: false, kind: null, likely: true, picked: true,
@@ -6193,6 +6197,8 @@ async function findWebLinks() {
     } else {
       button.textContent = 'Finding…';
       const found = await web.findLinks(addresses, {
+        // The pages of a long list are asked for at the same pace as chapters.
+        listGap: webDelay(), listJitter: webJitter(),
         onProgress: (fraction, address, page) => {
           if (address) webNote(page > 1 ? `Reading page ${page} of the list…` : `Reading ${webWhere(address)}…`);
         },
@@ -6275,7 +6281,7 @@ async function addWebToBuild() {
     const cover = await web.fetchCover(webState.cover);
     build.addWeb({
       name, links: chosen, pictures: webState.pictures, cover,
-      author: webState.author, sources: webState.sources, gap: webDelay(),
+      author: webState.author, sources: webState.sources, gap: webDelay(), jitter: webJitter(),
       // Pages left over from an earlier build: this settles them.
       leftover: webState.leftover || null,
     });
@@ -6291,6 +6297,21 @@ async function addWebToBuild() {
 }
 
 /** The pause between pages, in milliseconds, as set on the website screen. */
+/** How much each pause may vary, either way, in milliseconds. */
+function webJitter() {
+  const value = Math.round(Number(el('web-jitter')?.value));
+  return Number.isFinite(value) ? Math.max(0, Math.min(60000, value)) : 0;
+}
+
+/** "300–700 ms", beside the variation, so what it does is plain. */
+function paintWebRange() {
+  const range = el('web-range');
+  if (!range) return;
+  const delay = webDelay();
+  const jitter = webJitter();
+  range.textContent = jitter ? `· ${Math.max(0, delay - jitter)}–${delay + jitter} ms` : '';
+}
+
 function webDelay() {
   const value = Math.round(Number(el('web-delay')?.value));
   return Number.isFinite(value) ? Math.max(0, Math.min(60000, value)) : 250;
@@ -6315,12 +6336,23 @@ function wireWeb() {
   // Remembered: a site that wants a slower pace wants it every time.
   store.settings().then((settings) => {
     if (Number.isFinite(settings.webDelay)) el('web-delay').value = String(settings.webDelay);
+    if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
+    paintWebRange();
   }).catch(() => {});
   el('web-delay').addEventListener('change', () => {
     const value = webDelay();
     el('web-delay').value = String(value);
     store.saveSettings({ webDelay: value });
+    paintWebRange();
   });
+  el('web-delay').addEventListener('input', paintWebRange);
+  el('web-jitter').addEventListener('change', () => {
+    const value = webJitter();
+    el('web-jitter').value = String(value);
+    store.saveSettings({ webJitter: value });
+    paintWebRange();
+  });
+  el('web-jitter').addEventListener('input', paintWebRange);
   el('web-clear').onclick = clearWeb;
   el('web-paste').onclick = async () => {
     try {

@@ -727,7 +727,9 @@ export function addressesIn(text) {
  *
  * Several contents pages -- page 1, page 2 of a long list -- read as one.
  */
-export async function findLinks(addresses, { onProgress, fetchPage = download, maxPages = 100, listGap = 250 } = {}) {
+export async function findLinks(addresses, {
+  onProgress, fetchPage = download, maxPages = 100, listGap = 250, listJitter = 0,
+} = {}) {
   const links = [];
   const seen = new Set();
   const failed = [];
@@ -765,7 +767,7 @@ export async function findLinks(addresses, { onProgress, fetchPage = download, m
         }
         next = found.list ? found.older : null;
         // Gently, as the chapters are: a site with a hundred pages of posts.
-        if (next && listGap) await pause(listGap);
+        if (next) await pause(spacing(listGap, listJitter));
       } catch (error) {
         // The first page failing is the address failing; a later one is the
         // end of what could be listed.
@@ -1212,7 +1214,7 @@ async function closeGaps(bookId, kept) {
  */
 export async function readPages(links, {
   title = '', author = '', cover = null, pictures = true, onImage, onProgress,
-  fetchPage = download, gap = 250, patience = {},
+  fetchPage = download, gap = 250, jitter = 0, patience = {},
 } = {}) {
   const wait = { ...PATIENCE, ...patience };
   const chapters = [];
@@ -1255,13 +1257,13 @@ export async function readPages(links, {
   };
 
   /* The rate is the reader's: `gap` milliseconds between one page being
-   * asked for and the next, across both of the requests that run at once.
-   * Nought is as fast as the two will go. */
+   * asked for and the next, give or take `jitter` (see spacing), across both
+   * of the requests that run at once. Nought is as fast as the two will go. */
   let nextAt = 0;
   const myTurn = async () => {
     const now = Date.now();
     const wait = Math.max(0, nextAt - now);
-    nextAt = Math.max(now, nextAt) + Math.max(0, gap || 0);
+    nextAt = Math.max(now, nextAt) + spacing(gap, jitter);
     if (wait) await pause(wait);
   };
 
@@ -1358,6 +1360,19 @@ export const PATIENCE = {
 /** A page that is not there, which no amount of asking will change. */
 export const gone = (error) => /\b(404|410)\b|does not exist|not a web address|only web addresses/i
   .test(String(error?.message || error || ''));
+
+/**
+ * The pause before the next page: the delay set, give or take the variation
+ * set, anywhere in between and different every time -- 500 give or take 200
+ * is anything from 300 to 700. Requests at a fixed beat are the easiest thing
+ * for a site to notice; a reader's pace is not a metronome. Never below
+ * nothing.
+ */
+export function spacing(gap = 0, jitter = 0, random = Math.random) {
+  const base = Math.max(0, Number(gap) || 0);
+  const spread = Math.max(0, Number(jitter) || 0);
+  return Math.max(0, Math.round(base + (random() * 2 - 1) * spread));
+}
 
 /** A site asking to be asked less often. */
 export const tooMany = (error) => /\b429\b|too many requests/i.test(String(error?.message || error || ''));

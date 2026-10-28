@@ -269,7 +269,7 @@ function leftOf(part, pages, reason = '') {
   return {
     web: {
       name: part.name, links, sources: part.web.sources || [], pictures: part.web.pictures !== false,
-      author: part.web.author || '', gap: part.web.gap, reason,
+      author: part.web.author || '', gap: part.web.gap, jitter: part.web.jitter, reason,
     },
   };
 }
@@ -285,14 +285,14 @@ function leftOf(part, pages, reason = '') {
  * @param cover  the site's picture of the book, already fetched, or null
  */
 export function addWeb({
-  name, links, pictures = true, cover = null, author = '', sources = [], leftover = null, gap = 250,
+  name, links, pictures = true, cover = null, author = '', sources = [], leftover = null, gap = 250, jitter = 0,
 }) {
   parts = [...parts, {
     id: `web-${Date.now()}`,
     // Pages left over from an earlier build, being tried again.
     leftover,
     name: name || 'From the web',
-    web: { links: links.map(({ url, text }) => ({ url, text })), pictures, author, sources, gap },
+    web: { links: links.map(({ url, text }) => ({ url, text })), pictures, author, sources, gap, jitter },
     coverBlob: cover,
     chapterCount: links.length,
   }];
@@ -331,7 +331,8 @@ export function describe(part) {
     let site = '';
     try { site = ` · ${new URL(part.web.sources[0] || part.web.links[0].url).host}`; } catch { /* no address to name */ }
     const count = part.web.links.length;
-    const rate = Number.isFinite(part.web.gap) ? ` · ${part.web.gap} ms apart` : '';
+    const spread = part.web.jitter > 0 ? ` ± ${part.web.jitter}` : '';
+    const rate = Number.isFinite(part.web.gap) ? ` · ${part.web.gap}${spread} ms apart` : '';
     return `From the web · ${count} page${count === 1 ? '' : 's'}, downloaded when built${site}${rate}`;
   }
   if (part.pictures) {
@@ -448,6 +449,7 @@ export async function build({ title, author, folder = null, cover: chosenCover =
           pictures: part.web.pictures,
           fetchPage: part.web.fetchPage,
           gap: part.web.gap,
+          jitter: part.web.jitter,
           patience: part.web.patience,
           onImage,
           onProgress: (fraction, done, total) => onProgress?.(

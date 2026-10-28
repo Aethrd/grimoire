@@ -941,4 +941,35 @@ await t('what goes into Build is put in reading order again, unless turned round
   assert.match(app, /webState\.manualOrder = true;/);
 });
 
+await t('the delay varies within the range set: 500 give or take 200 is 300 to 700', async () => {
+  assert.equal(web.spacing(500, 200, () => 0), 300);
+  assert.equal(web.spacing(500, 200, () => 0.5), 500);
+  assert.equal(web.spacing(500, 200, () => 0.999999), 700);
+  assert.equal(web.spacing(100, 300, () => 0), 0, 'a pause below nothing');
+  assert.equal(web.spacing(500, 0), 500);
+  // Spread across the whole range, not stuck at one end of it.
+  const seen = Array.from({ length: 400 }, () => web.spacing(500, 200));
+  assert.ok(seen.every((ms) => ms >= 300 && ms <= 700), `${Math.min(...seen)}–${Math.max(...seen)}`);
+  assert.ok(Math.min(...seen) < 350 && Math.max(...seen) > 650, `${Math.min(...seen)}–${Math.max(...seen)}`);
+  // And the pages are asked for that way: each gap within the range.
+  const times = [];
+  const timed = async (url) => { times.push(Date.now()); return fakeFetch(url); };
+  await web.readPages([1, 2, 3, 1, 2, 3].map((n, i) => ({ url: `${SITE}chapter-${n}`, text: `P${i}` })),
+    { fetchPage: timed, gap: 120, jitter: 60, pictures: false });
+  const gaps = times.slice(1).map((at, i) => at - times[i]);
+  assert.ok(gaps.every((ms) => ms >= 50 && ms <= 200), gaps.join(', '));
+  // Set beside the delay, remembered, carried by the part into Build.
+  const html = read('app/src/main/assets/www/index.html');
+  assert.match(html, /id="web-jitter" type="number"/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /store\.saveSettings\(\{ webJitter: value \}\)/);
+  assert.match(app, /gap: webDelay\(\), jitter: webJitter\(\)/);
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  build.clear();
+  build.addWeb({ name: 'Varied', links: [{ url: `${SITE}chapter-1`, text: 'One' }], gap: 500, jitter: 200 });
+  assert.equal(build.contents()[0].web.jitter, 200);
+  assert.match(build.describe(build.contents()[0]), /500 ± 200 ms apart/);
+  build.clear();
+});
+
 console.log(`\n${pass} assertions passed`);
