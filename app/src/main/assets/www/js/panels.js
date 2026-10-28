@@ -7,7 +7,10 @@
 import * as store from './store.js';
 import * as theme from './theme.js';
 import * as reader from './reader.js';
-import { setVaultUnlocked, vaultUnlocked, countWorks, workOf, onShelf, hiddenBy, hiddenFolderList } from './library.js';
+import {
+  setVaultUnlocked, vaultUnlocked, countWorks, workOf, onShelf, hiddenBy, hiddenFolderList,
+  collapseBundles, displayTitle, naturalOrder,
+} from './library.js';
 import { toast } from './screens.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
@@ -611,7 +614,7 @@ export async function openLanguage(host) {
 
 const DAY = 86400000;
 
-export async function openStats() {
+export async function openStats({ onOpen = null } = {}) {
   const settings = await store.settings();
   const events = await store.all('events');
   const books = await store.all('books');
@@ -807,6 +810,8 @@ export async function openStats() {
   }
   body.appendChild(milestones);
 
+  body.appendChild(folderLists(shelf, hiddenFolderList(settings), onOpen));
+
   const exportBtn = document.createElement('button');
   exportBtn.className = 'btn ghost block';
   exportBtn.textContent = 'Export the reading log as JSON';
@@ -816,6 +821,84 @@ export async function openStats() {
       JSON.stringify(log, null, 2));
   };
   body.appendChild(exportBtn);
+}
+
+/* ── what is in each folder ──────────────────────────────────────────
+ *
+ * Every book on the shelf by title, under the folder it is filed in --
+ * drawn from the library as it is each time the page is shown, so filing,
+ * renaming or deleting a book on the shelf is here the next time you look.
+ * A bundle is one entry: its English edition's title first, with the
+ * original beside it, since that is the pair it was bundled to keep.
+ * Folders hidden from the shelf are hidden here too; the vault is left out
+ * while it is locked, as everywhere else on this page.
+ */
+
+/** Whether a book is the English edition of its bundle. */
+const isEnglish = (book) => /^en\b/i.test(book.lang || '')
+  || (!book.lang && /^[\x20-\x7E\u2018-\u201D\u2013\u2014…]+$/.test(book.title || ''));
+
+function entryOf(item) {
+  const editions = item.bundle || [item];
+  const english = editions.find(isEnglish);
+  const first = english || editions[0];
+  const others = editions.filter((each) => each !== first)
+    .map((each) => displayTitle(each)).filter((title) => title && title !== displayTitle(first));
+  return { book: item, title: displayTitle(first) || 'Untitled', also: others };
+}
+
+function folderLists(shelf, hidden, onOpen) {
+  const section = document.createElement('section');
+  section.className = 'block folder-lists';
+  section.innerHTML = '<h2>In each folder</h2>';
+
+  const listed = shelf.filter((book) => !hiddenBy(book.folder || '', hidden));
+  const away = new Set(shelf.filter((book) => hiddenBy(book.folder || '', hidden))
+    .map((book) => hiddenBy(book.folder || '', hidden)));
+
+  const byFolder = new Map();
+  for (const item of collapseBundles(listed)) {
+    const folder = item.folder || '';
+    if (!byFolder.has(folder)) byFolder.set(folder, []);
+    byFolder.get(folder).push(entryOf(item));
+  }
+  if (!byFolder.size) {
+    section.insertAdjacentHTML('beforeend', '<p class="muted" style="font-size:12px;margin:0">No books on the shelf yet.</p>');
+    return section;
+  }
+
+  // Loose books first, then the folders by name, numbers in number order.
+  const folders = [...byFolder.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : naturalOrder(a, b)));
+  const total = [...byFolder.values()].reduce((n, list) => n + list.length, 0);
+  for (const folder of folders) {
+    const entries = byFolder.get(folder).sort((a, b) => naturalOrder(a.title, b.title));
+    const box = document.createElement('details');
+    box.className = 'folder-list';
+    // Open when the whole library is short enough to read at a glance.
+    box.open = total <= 60;
+    // The whole path: a folder inside another reads as where it is.
+    const name = folder ? folder.split('/').join(' / ') : 'Not in a folder';
+    box.innerHTML = `<summary><span>${escape(name)}</span>`
+      + `<small class="muted">${entries.length}</small></summary>`;
+    const list = document.createElement('ol');
+    for (const entry of entries) {
+      const row = document.createElement('li');
+      const title = document.createElement(onOpen ? 'button' : 'span');
+      title.className = 'folder-title';
+      title.innerHTML = `<b>${escape(entry.title)}</b>`
+        + (entry.also.length ? `<small>${escape(entry.also.join(' · '))}</small>` : '');
+      if (onOpen) title.onclick = () => onOpen(entry.book);
+      row.appendChild(title);
+      list.appendChild(row);
+    }
+    box.appendChild(list);
+    section.appendChild(box);
+  }
+  if (away.size) {
+    section.insertAdjacentHTML('beforeend', `<p class="muted" style="font-size:11px;margin:8px 0 0">`
+      + `${away.size} folder${away.size === 1 ? '' : 's'} hidden from the shelf ${away.size === 1 ? 'is' : 'are'} not listed.</p>`);
+  }
+  return section;
 }
 
 function computeStreak(byDay, settings) {

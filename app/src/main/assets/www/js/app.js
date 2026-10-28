@@ -160,7 +160,7 @@ async function enter(name) {
     case 'settings': return panels.openSettings(refreshShelf);
     case 'appearance': return panels.openAppearance();
     case 'language': return panels.openLanguage();
-    case 'stats': return panels.openStats();
+    case 'stats': return panels.openStats({ onOpen: openFromStats });
     case 'vault': return panels.openVault(refreshShelf);
     case 'reader': return;   // opened by picking a book, never by a tab
     default: return;
@@ -266,6 +266,16 @@ async function refreshShelf() {
     onNotice: (message) => toast(message, 6000),
     onClearFolder: () => openFolder(null),
   });
+  // The folder lists on the stats page follow the shelf, even while shown --
+  // an import or a build finishing behind them.
+  if (current === 'stats') panels.openStats({ onOpen: openFromStats });
+}
+
+/** A title tapped in the stats page's folder lists: a book opens, a
+ *  bundle asks which edition, as on the shelf. */
+function openFromStats(book) {
+  if (book.bundle) return openBundleSheet(book.bundle);
+  return openBook(book);
 }
 
 /**

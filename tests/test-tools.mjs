@@ -1541,6 +1541,21 @@ await t('a bundle of editions is one book in every count', async () => {
   assert.match(stats, /1Finished/, 'finishing one edition is not finishing one book');
   assert.match(stats, /Books touched2of 2 on the shelf/, 'reading both editions counted as two books');
   assert.match(stats, /First book finished.*Earned/s);
+  // What is in each folder: the bundle once, its English edition first and
+  // the original with it; not the bin, not a book only passing through.
+  const lists = [...document.querySelectorAll('#stats-body .folder-list')]
+    .map((d) => [d.querySelector('summary span').textContent, [...d.querySelectorAll('.folder-title')]
+      .map((t) => [t.querySelector('b').textContent, t.querySelector('small')?.textContent || ''])]);
+  assert.deepEqual(lists, [['Novels', [['Alone', ''], ['English', 'Raw']]]]);
+  // Filed elsewhere on the shelf, it is listed there the next time.
+  const moved = await store.get('books', alone);
+  moved.folder = 'Novels/Done';
+  await store.put('books', moved);
+  await panels.openStats();
+  assert.deepEqual([...document.querySelectorAll('#stats-body .folder-list summary span')].map((x) => x.textContent),
+    ['Novels', 'Novels / Done']);
+  moved.folder = 'Novels';
+  await store.put('books', moved);
 
   await panels.openFolders(() => {});
   assert.match(document.getElementById('folders-count').textContent, /1 folder · 2 books/);

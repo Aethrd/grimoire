@@ -2420,3 +2420,18 @@ body.in-book .import-progress .jobs-summary { display: block; }
   border-radius: 13px; display: grid; place-items: center; background: var(--accent); color: var(--on-accent);
   font-family: var(--font-heading); font-weight: 800; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,.35); }
 .tile-order.already { background: rgba(0,0,0,.6); color: #fff; }
+
+/* The stats page's list of what is in each folder. */
+.folder-list { border-top: 1px solid var(--hairline); }
+.folder-list summary { display: flex; align-items: baseline; gap: 8px; padding: 10px 0; cursor: pointer;
+  font-family: var(--font-heading); font-weight: 600; font-size: 14px; list-style: none; }
+.folder-list summary::-webkit-details-marker { display: none; }
+.folder-list summary::before { content: '›'; display: inline-block; width: 10px; color: var(--muted);
+  transition: transform var(--motion, .2s) var(--ease, ease); }
+.folder-list[open] summary::before { transform: rotate(90deg); }
+.folder-list summary span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.folder-list ol { list-style: none; margin: 0 0 10px; padding: 0 0 0 18px; }
+.folder-list li + li { border-top: 1px solid var(--hairline); }
+.folder-title { display: block; width: 100%; text-align: left; padding: 7px 0; }
+.folder-title b { display: block; font-size: 13px; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
+.folder-title small { display: block; font-size: 12px; color: var(--muted); line-height: 1.35; margin-top: 1px; }
