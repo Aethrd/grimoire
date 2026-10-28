@@ -3896,6 +3896,120 @@ function removeLine(row, at, pages) {
   return line;
 }
 
+/**
+ * Hold, then drag: every item the finger passes is set the way the first one
+ * went, and dragging back puts them as they were.
+ *
+ * For lists and grids alike. Items are told apart by their data-at, and the
+ * run is every index between the first item and the one under the finger --
+ * across a grid that is whole rows at a time, as a run of pages is. Near the
+ * top or bottom edge the view scrolls on by itself.
+ *
+ * @param host      the element holding the items (they may come and go)
+ * @param scroller  what scrolls
+ * @param item      selector for an item
+ * @param ignore    selector for parts of an item that are not for picking
+ * @param picked    (at) => whether it is picked
+ * @param set       (at, value) => pick or unpick it
+ * @param changed   () => after a run of changes
+ */
+function dragToPick({ host, scroller, item, ignore = null, picked, set, changed }) {
+  let timer = null;
+  let startX = 0;
+  let startY = 0;
+  let paint = null;     // { value, from, was: Map(at -> picked), x, y }
+  let endedAt = 0;
+  let creep = null;
+  const itemAt = (target) => {
+    const found = target?.closest?.(item);
+    return found && host.contains(found) ? found : null;
+  };
+  const atOf = (node) => Number(node.dataset.at);
+
+  const paintTo = (to) => {
+    const [low, high] = paint.from < to ? [paint.from, to] : [to, paint.from];
+    for (let at = low; at <= high; at += 1) {
+      if (!paint.was.has(at)) paint.was.set(at, picked(at));
+      if (picked(at) !== paint.value) set(at, paint.value);
+    }
+    // Dragged back over: those outside the run go back to how they were.
+    for (const [at, was] of paint.was) {
+      if ((at < low || at > high) && picked(at) !== was) set(at, was);
+    }
+    changed();
+  };
+  const under = () => {
+    const node = itemAt(document.elementFromPoint(paint.x, paint.y));
+    return node ? atOf(node) : null;
+  };
+  const creepOn = () => {
+    creep = null;
+    if (!paint) return;
+    const box = scroller.getBoundingClientRect();
+    const edge = 72;
+    let by = 0;
+    if (paint.y < box.top + edge) by = -Math.ceil((box.top + edge - paint.y) / 6);
+    else if (paint.y > box.bottom - edge) by = Math.ceil((paint.y - (box.bottom - edge)) / 6);
+    if (!by) return;
+    scroller.scrollTop += by;
+    const at = under();
+    if (at !== null) paintTo(at);
+    creep = requestAnimationFrame(creepOn);
+  };
+  const end = () => {
+    clearTimeout(timer);
+    timer = null;
+    if (creep) cancelAnimationFrame(creep);
+    creep = null;
+    if (!paint) return false;
+    paint = null;
+    host.classList.remove('painting');
+    endedAt = Date.now();
+    return true;
+  };
+
+  host.addEventListener('touchstart', (e) => {
+    const node = itemAt(e.target);
+    if (!node || e.touches.length !== 1 || (ignore && e.target.closest(ignore))) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      const from = atOf(node);
+      paint = { value: !picked(from), from, was: new Map(), x: startX, y: startY };
+      host.classList.add('painting');
+      paintTo(from);
+    }, 380);
+  }, { passive: true });
+
+  // Not passive: once a drag is picking, it must not also scroll.
+  host.addEventListener('touchmove', (e) => {
+    const touch = e.touches[0];
+    if (timer && (Math.abs(touch.clientX - startX) > 10 || Math.abs(touch.clientY - startY) > 10)) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (!paint) return;
+    if (e.cancelable) e.preventDefault();
+    paint.x = touch.clientX;
+    paint.y = touch.clientY;
+    const at = under();
+    if (at !== null) paintTo(at);
+    if (!creep) creep = requestAnimationFrame(creepOn);
+  }, { passive: false });
+
+  const lift = (e) => { if (end() && e.cancelable) e.preventDefault(); };
+  host.addEventListener('touchend', lift);
+  host.addEventListener('touchcancel', lift);
+  // The system's own long press -- a menu, a picture to save -- is this one's.
+  host.addEventListener('contextmenu', (e) => { if (itemAt(e.target)) e.preventDefault(); });
+  // And the tap a browser may still make of the lift is not a pick.
+  host.addEventListener('click', (e) => {
+    if (Date.now() - endedAt < 350 && itemAt(e.target)) { e.stopPropagation(); e.preventDefault(); }
+  }, true);
+}
+
 /* A pick changes one row and the footer, so that is all that is redrawn --
    not the list, which on a long book was the whole of the delay. */
 function toggleRemove(at) {
@@ -5088,6 +5202,21 @@ async function reopenRemove(bookId) {
 
 function wireRemove() {
   el('remove-none').onclick = () => { removePicked = new Set(); renderRemove(); };
+
+  // Hold a chapter or a page and drag to pick a run of them.
+  dragToPick({
+    host: el('remove-body'),
+    scroller: el('remove-body'),
+    item: '.remove-row, .remove-cell',
+    ignore: '.remove-look-btn',
+    picked: (at) => removePicked.has(at),
+    set: (at, value) => {
+      if (value) removePicked.add(at); else removePicked.delete(at);
+      const node = el('remove-body').querySelector(`[data-at="${at}"]`);
+      if (node) node.setAttribute('aria-pressed', String(value));
+    },
+    changed: () => removeFooter(),
+  });
 
   // The footer asks; the sheet is what actually sets it going.
   el('remove-go').onclick = () => askAboutRemoval();

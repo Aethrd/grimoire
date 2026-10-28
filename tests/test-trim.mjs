@@ -833,4 +833,18 @@ await t('paragraphs put back bring their words back to the count', async () => {
   assert.match(text, /Chapter 2, paragraph 6:/);
 });
 
+
+await t('chapters and pages are picked by holding and dragging across them', () => {
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  const wire = app.slice(app.indexOf('function wireRemove('), app.indexOf('function wireRemove(') + 1500);
+  assert.match(wire, /dragToPick\(\{\n    host: el\('remove-body'\)/);
+  assert.match(wire, /item: '\.remove-row, \.remove-cell'/);
+  assert.match(wire, /ignore: '\.remove-look-btn'/);
+  const drag = app.slice(app.indexOf('function dragToPick('), app.indexOf('function toggleRemove('));
+  // A run from where the drag began to where the finger is; dragged back,
+  // the rest go back to how they were.
+  assert.match(drag, /if \(\(at < low \|\| at > high\) && picked\(at\) !== was\) set\(at, was\);/);
+  assert.match(drag, /\}, \{ passive: false \}\);/);
+});
+
 console.log(`\n${pass} assertions passed`);

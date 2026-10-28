@@ -2435,3 +2435,7 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .folder-title { display: block; width: 100%; text-align: left; padding: 7px 0; }
 .folder-title b { display: block; font-size: 13px; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
 .folder-title small { display: block; font-size: 12px; color: var(--muted); line-height: 1.35; margin-top: 1px; }
+
+/* Held and dragged to pick a run of them: not a text selection, not a menu. */
+#remove-body .remove-row, #remove-body .remove-cell {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
