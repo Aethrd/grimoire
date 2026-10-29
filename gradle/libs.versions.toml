@@ -7,6 +7,7 @@ splashscreen = "1.2.0"   # 1.0.1 predates the Kotlin 1.8 stdlib merge
 webkit = "1.12.1"
 mlkitTranslate = "17.0.3"
 mlkitLanguageId = "17.0.6"
+mlkitTextRecognition = "16.0.0"
 kotlin = "1.9.24"          # floor for the stdlib constraint, not a plugin
 
 [libraries]
@@ -25,6 +26,14 @@ mlkit-translate = { module = "com.google.mlkit:translate", version.ref = "mlkitT
 # translated. The model is bundled (~900KB) and available immediately, unlike
 # the translation models which are fetched per language.
 mlkit-language-id = { module = "com.google.mlkit:language-id", version.ref = "mlkitLanguageId" }
+
+# Text recognition in pictures -- Latin, Chinese, Japanese and Korean script.
+# The models are bundled, so it works offline from the first use and never
+# needs Google Play services to fetch anything; each script adds a few MB.
+mlkit-text-latin = { module = "com.google.mlkit:text-recognition", version.ref = "mlkitTextRecognition" }
+mlkit-text-chinese = { module = "com.google.mlkit:text-recognition-chinese", version.ref = "mlkitTextRecognition" }
+mlkit-text-japanese = { module = "com.google.mlkit:text-recognition-japanese", version.ref = "mlkitTextRecognition" }
+mlkit-text-korean = { module = "com.google.mlkit:text-recognition-korean", version.ref = "mlkitTextRecognition" }
 
 
 

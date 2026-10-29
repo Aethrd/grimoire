@@ -224,6 +224,8 @@ public class MainActivity extends AppCompatActivity {
         // The downloader's, kept apart for the same reason: it reaches the
         // network, and only for an address the reader was given.
         webView.addJavascriptInterface(new WebBridge(this, webView), "GrimoireWeb");
+        // Reading text out of pictures, on the phone: nothing leaves it.
+        webView.addJavascriptInterface(new OcrBridge(this, webView), "GrimoireOcr");
         CookieManager.getInstance().setAcceptCookie(false);
 
         webView.setWebViewClient(new WebViewClient() {

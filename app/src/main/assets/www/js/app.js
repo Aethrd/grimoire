@@ -20,6 +20,7 @@ import * as blobs from './blobs.js';
 import * as redact from './redact.js';
 import * as frames from './frame.js';
 import * as web from './web.js';
+import * as ocr from './ocr.js';
 
 const el = (id) => document.getElementById(id);
 const { toast } = screens;
@@ -2414,9 +2415,11 @@ function paintReader() {
   // A new place in the book moves the copy icon's circles.
   const place = `${state.book.id}:${state.chapterIndex}:${reader.pageInBook()}`;
   if (place !== copyIconAt) {
-    if (copyIconAt) moveCopyIconKnobs();
+    if (copyIconAt) { moveCopyIconKnobs(); drawOcrPanels(); }
     copyIconAt = place;
   }
+  // Only where there are pictures to read.
+  el('ocr-btn').hidden = !(state.images && state.images.size);
   const thumb = el('scrub-thumb');
   const fraction = reader.scrollFraction();
   const ratio = Math.max(0.06, Math.min(1, reader.viewportRatio()));
@@ -5902,6 +5905,7 @@ function wireReader() {
   };
 
   wireCopy();
+  wireOcr();
 
   el('translate-chapter').onclick = async () => {
     const button = el('translate-chapter');
@@ -6172,6 +6176,301 @@ function wireCopy() {
     if (e.target.closest?.('#copy-menu, #copy-amount')) return;
     closeCopyMenu();
   }, true);
+}
+
+/* ── text out of pictures ─────────────────────────────────────────────────
+ *
+ * The button beside Copy reads the pictures on screen (ocr.js, and ML Kit
+ * underneath). Every picture on screen at once, in the order they stand; or
+ * one, picked; or one bubble of it, boxed with a drag. What is read lands in
+ * an editable box, to be put right where it misread and copied. Lettering the
+ * phone cannot read -- drawn, stretched, run down the page -- goes to Google
+ * Lens from the same sheet.
+ */
+
+const ocrState = {
+  token: 0,
+  book: null,
+  hrefs: [],
+  at: -1,             // which picture: -1 for every one on screen
+  box: null,          // { x, y, w, h } as fractions of the picture shown
+  choice: '',         // a script asked for, or '' for the likeliest
+  cache: new Map(),
+  urls: null,
+};
+
+/* The icon's page is a comic page, and its panels are drawn anew as you read. */
+function drawOcrPanels() {
+  const group = el('ocr-btn')?.querySelector('.ocr-panels');
+  if (!group) return;
+  const x0 = 8.2;
+  const y0 = 6.2;
+  const width = 7.6;
+  const height = 11.6;
+  const gap = 0.9;
+  const rows = 2 + Math.floor(Math.random() * 2);
+  const weights = Array.from({ length: rows }, () => 0.6 + Math.random());
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const free = height - gap * (rows - 1);
+  const rects = [];
+  let y = y0;
+  for (const weight of weights) {
+    const tall = (free * weight) / total;
+    if (Math.random() < 0.55) {
+      const cut = (width - gap) * (0.3 + Math.random() * 0.4);
+      rects.push([x0, y, cut, tall], [x0 + cut + gap, y, width - gap - cut, tall]);
+    } else {
+      rects.push([x0, y, width, tall]);
+    }
+    y += tall + gap;
+  }
+  group.innerHTML = rects.map(([x, top, w, h]) =>
+    `<rect x="${x.toFixed(2)}" y="${top.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" rx=".5"/>`).join('');
+}
+
+function ocrStatus(message, problem = false) {
+  const status = el('ocr-status');
+  status.textContent = message;
+  status.classList.toggle('problem', problem);
+}
+
+function closeOcr() {
+  if (el('ocr-sheet').hidden) return false;
+  ocrState.token++;
+  el('ocr-sheet').hidden = true;
+  el('ocr-btn').removeAttribute('aria-busy');
+  el('ocr-img').removeAttribute('src');
+  ocrState.urls?.release();
+  ocrState.urls = null;
+  return true;
+}
+
+function openOcr() {
+  const state = reader.state;
+  const book = state.book;
+  if (!book) return;
+  const hrefs = reader.picturesInView({ inOrder: true }).filter((href) => state.images.get(href));
+  if (!hrefs.length) return toast('No picture on this page', 3000);
+  if (!ocr.available()) return toast('Reading text from pictures needs the app', 4000);
+  if (ocrState.book !== book.id) { ocrState.choice = ''; ocrState.cache.clear(); }
+  ocrState.book = book.id;
+  ocrState.hrefs = hrefs;
+  ocrState.at = hrefs.length === 1 ? 0 : -1;
+  ocrState.box = null;
+  ocrState.urls?.release();
+  ocrState.urls = blobs.pool();
+  el('ocr-text').value = '';
+  el('ocr-lens').hidden = !ocr.lensAvailable();
+  paintOcrPictures();
+  paintOcrScripts();
+  el('ocr-sheet').hidden = false;
+  runOcr();
+}
+
+function paintOcrPictures() {
+  const list = el('ocr-pictures');
+  const { hrefs } = ocrState;
+  list.hidden = hrefs.length < 2;
+  list.innerHTML = '';
+  if (hrefs.length > 1) {
+    const chip = (label, at) => {
+      const button = document.createElement('button');
+      button.className = 'chip';
+      button.textContent = label;
+      button.setAttribute('aria-pressed', String(ocrState.at === at));
+      button.onclick = () => {
+        if (ocrState.at === at) return;
+        ocrState.at = at;
+        ocrState.box = null;
+        paintOcrPictures();
+        runOcr();
+      };
+      list.appendChild(button);
+    };
+    chip(`All ${hrefs.length}`, -1);
+    hrefs.forEach((href, i) => chip(`Picture ${i + 1}`, i));
+  }
+  // One picture to box a bubble on; for all of them at once, none.
+  const stage = el('ocr-stage');
+  stage.hidden = ocrState.at < 0;
+  el('ocr-box').hidden = true;
+  if (ocrState.at >= 0) {
+    el('ocr-img').src = ocrState.urls.url(reader.state.images.get(hrefs[ocrState.at])) || '';
+  } else {
+    el('ocr-img').removeAttribute('src');
+  }
+}
+
+function paintOcrScripts(found = '') {
+  const list = el('ocr-scripts');
+  list.innerHTML = '';
+  const chip = (label, script) => {
+    const button = document.createElement('button');
+    button.className = 'chip';
+    button.textContent = label;
+    button.setAttribute('aria-pressed', String(ocrState.choice === script));
+    button.onclick = () => {
+      if (ocrState.choice === script) return;
+      ocrState.choice = script;
+      paintOcrScripts();
+      runOcr();
+    };
+    list.appendChild(button);
+  };
+  const named = ocr.SCRIPTS.find(([script]) => script === found);
+  chip(!ocrState.choice && named ? `Auto · ${named[1]}` : 'Auto', '');
+  for (const [script, label] of ocr.SCRIPTS) chip(label, script);
+}
+
+/** The picture (or the boxed part of it) to read. */
+async function ocrBlobOf(href, box) {
+  const blob = reader.state.images.get(href);
+  if (!blob || !box) return blob;
+  return ocr.cropOf(blob, box);
+}
+
+async function runOcr() {
+  const token = ++ocrState.token;
+  const book = reader.state.book;
+  if (!book) return;
+  const scripts = ocrState.choice ? [ocrState.choice] : ocr.scriptsFor(book.lang);
+  const targets = ocrState.at < 0 ? ocrState.hrefs : [ocrState.hrefs[ocrState.at]];
+  const box = ocrState.at < 0 ? null : ocrState.box;
+  const boxKey = box ? [box.x, box.y, box.w, box.h].map((n) => n.toFixed(3)).join(',') : 'all';
+  el('ocr-copy').disabled = true;
+  el('ocr-btn').setAttribute('aria-busy', 'true');
+  const texts = [];
+  const found = new Map();
+  try {
+    for (let i = 0; i < targets.length; i++) {
+      const href = targets[i];
+      const key = `${book.id}|${href}|${boxKey}|${scripts.join(',')}`;
+      let read = ocrState.cache.get(key);
+      if (!read) {
+        ocrStatus(targets.length > 1 ? `Reading picture ${i + 1} of ${targets.length}…`
+          : box ? 'Reading the boxed part…' : 'Reading the picture…');
+        const blob = await ocrBlobOf(href, box);
+        if (token !== ocrState.token) return;
+        if (!blob) continue;
+        read = await ocr.readPicture(blob, scripts);
+        if (token !== ocrState.token) return;
+        ocrState.cache.set(key, read);
+      }
+      if (read.text) {
+        texts.push(read.text);
+        found.set(read.script, (found.get(read.script) || 0) + read.text.length);
+      }
+    }
+  } catch (error) {
+    if (token !== ocrState.token) return;
+    el('ocr-btn').removeAttribute('aria-busy');
+    ocrStatus(error.message || 'The text could not be read', true);
+    return;
+  }
+  if (token !== ocrState.token) return;
+  el('ocr-btn').removeAttribute('aria-busy');
+  const text = texts.join('\n\n');
+  el('ocr-text').value = text;
+  el('ocr-copy').disabled = !text;
+  const script = [...found.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+  paintOcrScripts(script);
+  if (!text) {
+    ocrStatus(ocr.lensAvailable()
+      ? 'No text found. Box one bubble, try another script, or try Google Lens.'
+      : 'No text found. Box one bubble, or try another script.');
+  } else {
+    const characters = text.replace(/\s/g, '').length;
+    ocrStatus(`${characters.toLocaleString()} character${characters === 1 ? '' : 's'}`
+      + (box ? ' · from the box' : targets.length > 1 ? ` · ${targets.length} pictures` : ''));
+  }
+}
+
+/* A box dragged across the picture: one bubble, read on its own. A tap
+ * without a drag takes the box away and reads the whole picture again. */
+function wireOcrBox() {
+  const stage = el('ocr-stage');
+  const box = el('ocr-box');
+  let start = null;
+  const at = (e) => {
+    const r = el('ocr-img').getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)),
+      y: Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)),
+      r,
+    };
+  };
+  const paint = (a, b) => {
+    const { r } = a;
+    const s = stage.getBoundingClientRect();
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    box.style.left = `${r.left - s.left + x * r.width}px`;
+    box.style.top = `${r.top - s.top + y * r.height}px`;
+    box.style.width = `${Math.abs(a.x - b.x) * r.width}px`;
+    box.style.height = `${Math.abs(a.y - b.y) * r.height}px`;
+    box.hidden = false;
+  };
+  stage.addEventListener('pointerdown', (e) => {
+    if (ocrState.at < 0) return;
+    start = at(e);
+    stage.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!start) return;
+    paint(start, at(e));
+  });
+  const finish = (e) => {
+    if (!start) return;
+    const end = at(e);
+    const a = start;
+    start = null;
+    const w = Math.abs(a.x - end.x);
+    const h = Math.abs(a.y - end.y);
+    if (w < 0.04 || h < 0.02) {
+      box.hidden = true;
+      if (ocrState.box) { ocrState.box = null; runOcr(); }
+      return;
+    }
+    ocrState.box = { x: Math.min(a.x, end.x), y: Math.min(a.y, end.y), w, h };
+    paint(a, end);
+    runOcr();
+  };
+  stage.addEventListener('pointerup', finish);
+  stage.addEventListener('pointercancel', () => { start = null; });
+}
+
+function wireOcr() {
+  drawOcrPanels();
+  el('ocr-btn').onclick = () => { closeCopyMenu(); openOcr(); };
+  el('ocr-close').onclick = closeOcr;
+  el('ocr-sheet').onclick = (e) => { if (e.target === el('ocr-sheet')) closeOcr(); };
+  wireOcrBox();
+  el('ocr-copy').onclick = async () => {
+    const text = el('ocr-text').value;
+    if (!text) return;
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else throw new Error('no clipboard');
+    } catch {
+      const area = el('ocr-text');
+      area.select();
+      document.execCommand('copy');
+      area.setSelectionRange(0, 0);
+    }
+    const characters = text.replace(/\s/g, '').length;
+    toast(`Text copied · ${characters.toLocaleString()} character${characters === 1 ? '' : 's'}`);
+  };
+  el('ocr-lens').onclick = async () => {
+    const href = ocrState.hrefs[Math.max(0, ocrState.at)];
+    try {
+      const blob = await ocrBlobOf(href, ocrState.at < 0 ? null : ocrState.box);
+      if (!blob) return toast('That picture has not loaded yet');
+      await ocr.toLens(blob);
+    } catch (error) {
+      toast(error.message || 'Google Lens could not be opened', 5000, { kind: 'failed' });
+    }
+  };
 }
 
 /* ── from the web ─────────────────────────────────────────────────────────
@@ -6938,6 +7237,8 @@ window.Grimoire = {
   settleFile,
   /** Called from Java when a page asked for has been downloaded. */
   settleWeb: web.settleWeb,
+  /** Called from Java when a picture has been read for its text. */
+  settleOcr: ocr.settleOcr,
 
   /** Return true to swallow the back gesture. */
   onBack() {
@@ -6956,6 +7257,7 @@ window.Grimoire = {
     if (buildPicks) { endPicking(); show('workshop'); return true; }
     if (closeCoverPick()) return true;
     if (tags.closeTagPicker()) return true;
+    if (!el('ocr-sheet').hidden) { closeOcr(); return true; }
     if (!el('picture-sheet').hidden) { el('picture-sheet').hidden = true; return true; }
     if (!el('folder-actions').hidden) { el('folder-actions').hidden = true; return true; }
     if (!el('export-sheet').hidden) { el('export-sheet').hidden = true; return true; }

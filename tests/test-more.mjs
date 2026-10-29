@@ -133,7 +133,7 @@ await t('the copy button: split, with a choice of page, half or chapter', () => 
   assert.match(icon, /<path d="M3 6h18M3 12h18M3 18h18"\/>/);
   assert.equal((icon.match(/<circle class="knob"/g) || []).length, 3);
   // ...whose circles move along their lines when the place in the book does.
-  assert.match(app, /if \(place !== copyIconAt\) \{\s*if \(copyIconAt\) moveCopyIconKnobs\(\);/);
+  assert.match(app, /if \(place !== copyIconAt\) \{\s*if \(copyIconAt\) \{? ?moveCopyIconKnobs\(\);/);
   // Remembered, and each choice copies what it says.
   assert.match(app, /await store\.saveSettings\(\{ copyAmount \}\)/);
   assert.match(app, /reader\.copyPage\(\)[\s\S]*reader\.copyHalf\(\)[\s\S]*reader\.copyChapter\(\)/);

@@ -700,6 +700,40 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
 .copy-amount .knob { fill: var(--accent); transition: transform var(--motion) var(--ease); }
 .copy-amount:active .knob { fill: var(--accent-600); }
 @media (prefers-reduced-motion: reduce) { .copy-amount .knob { transition: none; } }
+/* Text out of pictures: beside Copy, which gives up the room for it. */
+.copy-row .ocr-btn { flex: none; padding: 6px 8px; display: grid; place-items: center; }
+.ocr-btn svg { width: 50px; height: 24px; fill: none; stroke: currentColor;
+  stroke-linecap: round; stroke-linejoin: round; overflow: visible; }
+.ocr-btn .ocr-frame { stroke-width: 1.8; }
+.ocr-btn .ocr-page { stroke-width: 1.1; }
+.ocr-btn .ocr-panels rect { stroke-width: .8; opacity: .7; }
+.ocr-btn .ocr-arrow { stroke-width: 1.6; }
+.ocr-btn .ocr-txt { fill: currentColor; stroke: none; font-family: var(--font-heading);
+  font-weight: 700; font-size: 7.2px; letter-spacing: .02em; }
+/* Reading: the arrow stands forward, halfway to TXT, until it is done. */
+.ocr-btn .ocr-arrow { transition: transform var(--motion) var(--ease); }
+.copy-row .ocr-btn[aria-busy="true"] .ocr-arrow { transform: translateX(1.5px); opacity: .6; }
+.ocr-sheet { display: flex; flex-direction: column; max-height: 80%; }
+.ocr-pictures { flex: none; display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 8px; scrollbar-width: none; }
+.ocr-pictures::-webkit-scrollbar { display: none; }
+.ocr-pictures .chip { text-transform: none; letter-spacing: 0; font-size: 12px; }
+/* The picture, small enough to leave room for its text, with the box drawn
+   over it. touch-action none: a drag here draws, it does not scroll. */
+.ocr-stage { flex: none; position: relative; align-self: center; margin-bottom: 8px;
+  touch-action: none; -webkit-user-select: none; user-select: none; line-height: 0; }
+.ocr-stage img { display: block; max-width: 100%; max-height: 30vh; border-radius: var(--radius-sm); }
+.ocr-stage[hidden] { display: none; }
+.ocr-box { position: absolute; border: 2px solid var(--accent); border-radius: 4px;
+  background: rgba(255, 255, 255, .12); box-shadow: 0 0 0 9999px rgba(0, 0, 0, .35); pointer-events: none; }
+.ocr-stage { overflow: hidden; border-radius: var(--radius-sm); }
+.ocr-scripts { flex: none; display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 8px; scrollbar-width: none; }
+.ocr-scripts::-webkit-scrollbar { display: none; }
+.ocr-scripts .chip { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.ocr-status { flex: none; margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+.ocr-status.problem { color: #c0553f; }
+.ocr-text { flex: 1 1 auto; min-height: 140px; width: 100%; resize: none; padding: 10px 12px;
+  border: 1px solid var(--divider); border-radius: var(--radius-sm); background: var(--surface);
+  color: var(--text); font: inherit; font-size: 15px; line-height: 1.55; }
 .copy-menu { position: absolute; right: 12px; bottom: calc(100% + 6px); z-index: 30;
   width: min(300px, calc(100vw - 24px)); padding: 8px; border-radius: var(--radius-md);
   background: var(--surface); border: 1px solid var(--divider);

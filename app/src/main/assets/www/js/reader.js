@@ -1508,7 +1508,7 @@ export function flashImage(href) {
  * the chapters above and below are there too -- only what is actually inside
  * the viewport counts.
  */
-export function picturesInView() {
+export function picturesInView({ inOrder = false } = {}) {
   if (!viewport || !flow) return [];
   const box = viewport.getBoundingClientRect();
   const seen = new Map();
@@ -1520,6 +1520,9 @@ export function picturesInView() {
     const href = img.getAttribute('data-img');
     seen.set(href, Math.max(seen.get(href) || 0, w * h));
   }
+  // Found in the order they stand in the chapter, which is the order they
+  // are read in; otherwise the one taking most of the screen first.
+  if (inOrder) return [...seen.keys()];
   return [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([href]) => href);
 }
 
