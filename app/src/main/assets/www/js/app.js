@@ -6709,9 +6709,11 @@ function drawOverlay(href) {
     const layer = document.createElement('div');
     layer.className = 'pic-translation';
     layer.setAttribute('aria-hidden', 'true');
+    const areas = blocks.map((block, i) => (block.translation ? entry.areas?.[i] || block : null));
     blocks.forEach((block, i) => {
       if (!block.translation) return;
-      const area = entry.areas?.[i] || block;
+      const area = areas[i];
+      const room = roomFor(areas, i, read.width, read.height);
       const box = document.createElement('div');
       box.className = 'bubble-tr';
       // Placed by its middle, so a box that has to grow for its text grows
@@ -6723,6 +6725,9 @@ function drawOverlay(href) {
       // Kept, for a box that grows to fit to grow from.
       box.style.setProperty('--w', box.style.width);
       box.style.setProperty('--h', box.style.height);
+      // As far as it may grow: halfway to the next translation each way.
+      box.dataset.maxw = String(room.maxW / read.width);
+      box.dataset.maxh = String(room.maxH / read.height);
       // Set in ordinary lines however narrow the place: a bubble of columns
       // has its translation run down it a word or two to a line.
       const text = document.createElement('div');
@@ -6740,6 +6745,33 @@ function drawOverlay(href) {
   }
 }
 
+/* How far one translation may grow, centred where it is: halfway to the
+ * next translation along each side (so two neighbours can never grow into
+ * each other), and no further than the picture's edge. */
+function roomFor(areas, i, width, height) {
+  const a = areas[i];
+  let left = 0, right = width, top = 0, bottom = height;
+  areas.forEach((b, j) => {
+    if (!b || j === i) return;
+    const besideY = Math.min(a.y + a.h, b.y + b.h) > Math.max(a.y, b.y);
+    const besideX = Math.min(a.x + a.w, b.x + b.w) > Math.max(a.x, b.x);
+    if (besideY) {
+      if (b.x >= a.x + a.w) right = Math.min(right, (a.x + a.w + b.x) / 2);
+      else if (b.x + b.w <= a.x) left = Math.max(left, (b.x + b.w + a.x) / 2);
+    }
+    if (besideX) {
+      if (b.y >= a.y + a.h) bottom = Math.min(bottom, (a.y + a.h + b.y) / 2);
+      else if (b.y + b.h <= a.y) top = Math.max(top, (b.y + b.h + a.y) / 2);
+    }
+  });
+  const cx = a.x + a.w / 2;
+  const cy = a.y + a.h / 2;
+  return {
+    maxW: Math.max(a.w, 2 * Math.min(cx - left, right - cx)),
+    maxH: Math.max(a.h, 2 * Math.min(cy - top, bottom - cy)),
+  };
+}
+
 function placeLayer(img, layer) {
   const rect = drawnRect(img);
   if (!rect.width || !rect.height) return;
@@ -6747,21 +6779,47 @@ function placeLayer(img, layer) {
   layer.style.top = `${rect.top}px`;
   layer.style.width = `${rect.width}px`;
   layer.style.height = `${rect.height}px`;
-  for (const box of layer.children) fitText(box);
+  for (const box of layer.children) fitText(box, rect);
+  separate(layer);
+}
+
+/* Last of all, the words as drawn: any two that still touch -- neighbours
+ * on a slant, each grown its own way -- are made smaller until they do not. */
+function separate(layer) {
+  const boxes = [...layer.children];
+  const touch = (a, b) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+  for (let round = 0; round < 8; round++) {
+    const rects = boxes.map((box) => box.firstElementChild.getBoundingClientRect());
+    const crowded = new Set();
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        if (touch(rects[i], rects[j])) { crowded.add(boxes[i]); crowded.add(boxes[j]); }
+      }
+    }
+    if (!crowded.size) return;
+    let shrunk = false;
+    for (const box of crowded) {
+      const size = parseFloat(box.style.fontSize) || 10;
+      if (size <= 6) continue;
+      box.style.fontSize = `${Math.max(6, size * 0.88)}px`;
+      shrunk = true;
+    }
+    if (!shrunk) return;
+  }
 }
 
 /* The largest type that fits the place, with no word broken across lines;
- * no larger than a comfortable size. A word wider than a narrow place --
- * a bubble of columns -- widens it rather than being split: there is no
- * box to cover anything, only the highlight behind the words. If the text
- * is still too long at the smallest readable size, the place grows down. */
-function fitText(box) {
-  box.classList.remove('grown');
+ * no larger than a comfortable size. If it will not fit at a small but
+ * readable size, the place grows -- wider for a word wider than a narrow
+ * bubble of columns, then taller -- but only into the room it has (see
+ * roomFor), never over the next translation. */
+function fitText(box, picture) {
   box.style.width = box.style.getPropertyValue('--w') || box.style.width;
+  box.style.height = box.style.getPropertyValue('--h') || box.style.height;
+  box.style.overflow = '';
   const fits = () => box.scrollHeight <= box.clientHeight + 1 && box.scrollWidth <= box.clientWidth + 1;
-  const lineFits = () => box.scrollWidth <= box.clientWidth + 1;
-  let low = 10;
-  let high = Math.max(11, Math.min(24, box.clientHeight * 0.5));
+  let low = 8;
+  let high = Math.max(9, Math.min(24, box.clientHeight * 0.5));
   box.style.fontSize = `${high}px`;
   if (fits()) return;
   for (let i = 0; i < 7; i++) {
@@ -6772,9 +6830,19 @@ function fitText(box) {
   }
   box.style.fontSize = `${low}px`;
   if (fits()) return;
-  // The longest word, not the place, sets the width.
-  if (!lineFits()) box.style.width = `${box.scrollWidth + 2}px`;
-  if (!fits()) box.classList.add('grown');
+  const maxW = (Number(box.dataset.maxw) || 0) * picture.width;
+  const maxH = (Number(box.dataset.maxh) || 0) * picture.height;
+  if (box.scrollWidth > box.clientWidth + 1 && maxW > box.clientWidth) {
+    box.style.width = `${Math.min(box.scrollWidth + 2, maxW)}px`;
+  }
+  if (box.scrollHeight > box.clientHeight + 1 && maxH > box.clientHeight) {
+    box.style.height = `${Math.min(box.scrollHeight + 2, maxH)}px`;
+  }
+  if (fits()) return;
+  // No more room: smaller still, and what will not fit even so is shown
+  // rather than cut off.
+  box.style.fontSize = '7px';
+  if (!fits()) box.style.overflow = 'visible';
 }
 
 /* Laid out again whenever the picture's size changes: a new page size, a

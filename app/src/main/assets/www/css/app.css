@@ -768,8 +768,6 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
   -webkit-box-decoration-break: clone; box-decoration-break: clone;
   box-shadow: 0 0 .18em .1em rgba(255, 255, 255, .85);
 }
-/* Grown to hold all of its text: the length it runs grows, not the other way. */
-.pic-translation .bubble-tr.grown { height: auto !important; min-height: var(--h, 0); overflow: visible; }
 .ocr-text { flex: 1 1 auto; min-height: 140px; width: 100%; resize: none; padding: 10px 12px;
   border: 1px solid var(--divider); border-radius: var(--radius-sm); background: var(--surface);
   color: var(--text); font: inherit; font-size: 15px; line-height: 1.55; }
