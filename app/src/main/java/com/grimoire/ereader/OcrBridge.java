@@ -286,7 +286,7 @@ public class OcrBridge {
         for (Text.TextBlock block : text.getTextBlocks()) if (block.getBoundingBox() != null) blocks.add(block);
         boolean columns = "japanese".equals(script) || "chinese".equals(script);
         if (!columns) {
-            for (Text.TextBlock block : blocks) out.add(plain(block));
+            for (Text.TextBlock block : blocks) out.add(closer(recogniser, bitmap, block));
             return out;
         }
         for (List<Text.TextBlock> bubble : bubbles(blocks)) {
@@ -297,7 +297,7 @@ public class OcrBridge {
                 Log.w(TAG, "Could not lay the columns out", e);
             }
             if (found != null) out.add(found);
-            else for (Text.TextBlock block : bubble) out.add(plain(block));
+            else for (Text.TextBlock block : bubble) out.add(closer(recogniser, bitmap, block));
         }
         return out;
     }
@@ -310,24 +310,104 @@ public class OcrBridge {
         return found;
     }
 
-    /** Blocks standing side by side, upright, are one bubble's columns: the
-     *  recogniser often hands back each column of a bubble on its own. */
+    /** How tall a block's lines are (how wide, for columns): its characters' size. */
+    private static int thickness(Text.TextBlock block) {
+        List<Integer> sizes = new ArrayList<>();
+        for (Text.Line line : block.getLines()) {
+            Rect r = line.getBoundingBox();
+            if (r != null) sizes.add(Math.min(r.width(), r.height()));
+        }
+        if (sizes.isEmpty()) {
+            Rect r = block.getBoundingBox();
+            return Math.min(r.width(), r.height());
+        }
+        java.util.Collections.sort(sizes);
+        return sizes.get(sizes.size() / 2);
+    }
+
+    /**
+     * A block read again, closer: cut out, enlarged until its characters are
+     * a good size for the recogniser, and read. Small text on a whole page
+     * is read at whatever size the page is scaled to; cut out, it is read at
+     * full detail. The closer reading is kept when it finds about as much
+     * as the first, or more.
+     */
+    private static Found closer(TextRecognizer recogniser, Bitmap bitmap, Text.TextBlock block) {
+        Found first = plain(block);
+        try {
+            int line = thickness(block);
+            if (line <= 0 || line >= 40) return first;      // large enough already
+            float scale = Math.min(4f, 56f / line);
+            Rect box = block.getBoundingBox();
+            int pad = Math.max(2, Math.round(line * 0.6f));
+            Rect src = new Rect(Math.max(0, box.left - pad), Math.max(0, box.top - pad),
+                    Math.min(bitmap.getWidth(), box.right + pad), Math.min(bitmap.getHeight(), box.bottom + pad));
+            if (src.width() < 2 || src.height() < 2) return first;
+            if ((double) src.width() * scale * src.height() * scale > 6_000_000) {
+                scale = (float) Math.sqrt(6_000_000.0 / ((double) src.width() * src.height()));
+            }
+            if (scale <= 1.05f) return first;
+            int w = Math.max(1, Math.round(src.width() * scale));
+            int h = Math.max(1, Math.round(src.height() * scale));
+            Bitmap big = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            try {
+                Canvas canvas = new Canvas(big);
+                canvas.drawColor(Color.WHITE);
+                canvas.drawBitmap(bitmap, src, new RectF(0, 0, w, h), new Paint(Paint.FILTER_BITMAP_FLAG));
+                Text text = Tasks.await(recogniser.process(InputImage.fromBitmap(big, 0)));
+                List<Text.Line> lines = new ArrayList<>();
+                for (Text.TextBlock b : text.getTextBlocks()) lines.addAll(b.getLines());
+                java.util.Collections.sort(lines, (a, c) -> {
+                    Rect ra = a.getBoundingBox();
+                    Rect rc = c.getBoundingBox();
+                    if (ra == null || rc == null) return 0;
+                    return ra.top != rc.top ? Integer.compare(ra.top, rc.top) : Integer.compare(ra.left, rc.left);
+                });
+                Found found = new Found();
+                found.box = new Rect(box);
+                StringBuilder all = new StringBuilder();
+                for (Text.Line l : lines) {
+                    found.lines.add(l.getText());
+                    if (all.length() > 0) all.append('\n');
+                    all.append(l.getText());
+                }
+                found.text = all.toString();
+                if (letters(found.text) < letters(first.text) * 0.6f) return first;
+                return found;
+            } finally {
+                big.recycle();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not read the block again", e);
+            return first;
+        }
+    }
+
+    private static int letters(String text) {
+        if (text == null) return 0;
+        int n = 0;
+        for (int i = 0; i < text.length(); i++) if (!Character.isWhitespace(text.charAt(i))) n++;
+        return n;
+    }
+
+    /** Blocks close together are one bubble's: the recogniser often hands
+     *  back each column of a bubble on its own, or -- reading across the
+     *  columns -- each row of characters. */
     private static List<List<Text.TextBlock>> bubbles(List<Text.TextBlock> blocks) {
         int n = blocks.size();
         int[] parent = new int[n];
-        for (int i = 0; i < n; i++) parent[i] = i;
+        int[] size = new int[n];
+        for (int i = 0; i < n; i++) {
+            parent[i] = i;
+            size[i] = thickness(blocks.get(i));
+        }
         for (int i = 0; i < n; i++) {
             Rect a = blocks.get(i).getBoundingBox();
-            if (a.height() < a.width() * 1.3f) continue;
             for (int j = i + 1; j < n; j++) {
                 Rect b = blocks.get(j).getBoundingBox();
-                if (b.height() < b.width() * 1.3f) continue;
-                int gap = Math.max(a.left, b.left) - Math.min(a.right, b.right);
-                int overlap = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-                if (gap <= Math.min(a.width(), b.width()) * 0.6f
-                        && overlap >= Math.min(a.height(), b.height()) * 0.3f) {
-                    parent[find(parent, i)] = find(parent, j);
-                }
+                int reach = Math.round(Math.max(size[i], size[j]) * 0.6f);
+                Rect grown = new Rect(a.left - reach, a.top - reach, a.right + reach, a.bottom + reach);
+                if (Rect.intersects(grown, b)) parent[find(parent, i)] = find(parent, j);
             }
         }
         List<List<Text.TextBlock>> out = new ArrayList<>();
@@ -375,6 +455,8 @@ public class OcrBridge {
         if (sheet == null) return null;
 
         Bitmap page = Bitmap.createBitmap(Math.max(1, sheet.width), Math.max(1, sheet.height), Bitmap.Config.ARGB_8888);
+        // The characters are cut from the patch cleaned of the drawing.
+        Bitmap source = Bitmap.createBitmap(sheet.source, sheet.sourceWidth, sheet.sourceHeight, Bitmap.Config.ARGB_8888);
         try {
             Canvas canvas = new Canvas(page);
             canvas.drawColor(Color.WHITE);
@@ -390,10 +472,10 @@ public class OcrBridge {
                 if (p.turn) {
                     canvas.save();
                     canvas.rotate(-90, dst.centerX(), dst.centerY());
-                    canvas.drawBitmap(bitmap, src, dst, paint);
+                    canvas.drawBitmap(source, src, dst, paint);
                     canvas.restore();
                 } else {
-                    canvas.drawBitmap(bitmap, src, dst, paint);
+                    canvas.drawBitmap(source, src, dst, paint);
                 }
             }
             Text text = Tasks.await(recogniser.process(InputImage.fromBitmap(page, 0)));
@@ -408,6 +490,14 @@ public class OcrBridge {
             }
             List<String> columns = VerticalLayout.columnTexts(sheet, lines);
             if (columns.isEmpty()) return null;
+            // Lettering the cleaning took for the drawing (drawn across a
+            // door frame, say) is lost from the sheet; when much is lost,
+            // the first reading, muddled as it may be, has more of the text.
+            int before = 0;
+            for (Text.TextBlock block : bubble) before += letters(block.getText());
+            int after = 0;
+            for (String column : columns) after += letters(column);
+            if (after < before * 0.6f) return null;
             Found found = new Found();
             found.vertical = true;
             found.box = whole;
@@ -418,6 +508,7 @@ public class OcrBridge {
             return found;
         } finally {
             page.recycle();
+            source.recycle();
         }
     }
 

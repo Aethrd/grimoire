@@ -74,19 +74,40 @@ final class VerticalLayout {
             light = dark > lum.length * 0.6;
         }
 
+        /** With the threshold and polarity already known (a part of a
+         *  patch, or a patch cleaned). */
+        Gray(int[] lum, int w, int h, int threshold, boolean light) {
+            this.lum = lum;
+            this.w = w;
+            this.h = h;
+            this.threshold = threshold;
+            this.light = light;
+        }
+
         boolean ink(int x, int y) {
             int v = lum[y * w + x];
             return light ? v >= threshold : v < threshold;
         }
 
+        /** A box of this patch, as a patch of its own. */
+        Gray part(Box b) {
+            int[] out = new int[b.width() * b.height()];
+            for (int y = 0; y < b.height(); y++) System.arraycopy(lum, (b.top + y) * w + b.left, out, y * b.width(), b.width());
+            return new Gray(out, b.width(), b.height(), threshold, light);
+        }
+
         /** Brightness from packed ARGB pixels. */
         static Gray of(int[] argb, int w, int h) {
+            return new Gray(lumOf(argb), w, h);
+        }
+
+        static int[] lumOf(int[] argb) {
             int[] lum = new int[argb.length];
             for (int i = 0; i < argb.length; i++) {
                 int c = argb[i];
                 lum[i] = (((c >> 16) & 255) * 299 + ((c >> 8) & 255) * 587 + (c & 255) * 114) / 1000;
             }
-            return new Gray(lum, w, h);
+            return lum;
         }
     }
 
@@ -131,30 +152,80 @@ final class VerticalLayout {
         return t;
     }
 
-    /** The recogniser's lines, gathered into columns: whatever stands in the
-     *  same strip of the page belongs to the same column. */
-    static List<Box> columnsOf(List<Box> units) {
-        List<Box> cols = new ArrayList<>();
-        for (Box u : units) cols.add(u.copy());
-        boolean merged = true;
-        while (merged) {
-            merged = false;
-            search:
-            for (int i = 0; i < cols.size(); i++) {
-                for (int j = i + 1; j < cols.size(); j++) {
-                    Box a = cols.get(i);
-                    Box b = cols.get(j);
-                    int overlap = Math.min(a.right, b.right) - Math.max(a.left, b.left);
-                    if (overlap > 0.5f * Math.min(a.width(), b.width())) {
-                        a.union(b);
-                        cols.remove(j);
-                        merged = true;
-                        break search;
+    /**
+     * Which of a patch's ink is lettering.
+     *
+     * Narration is often set straight over the drawing -- hair, speed lines,
+     * a bubble's outline, screentone -- and that ink fills the gaps between
+     * columns. Lettering comes in pieces no bigger than a character; the
+     * drawing's lines run on far longer, and screentone is dots far smaller.
+     * So the ink is taken apart into its connected pieces and only those of
+     * a character's size are kept, with a pixel round each for the soft
+     * edge of the strokes.
+     *
+     * @param em about the size of a character, or 0 when not known
+     */
+    static boolean[] lettering(Gray g, float em) {
+        int n = g.w * g.h;
+        boolean[] keep = new boolean[n];
+        boolean[] seen = new boolean[n];
+        int[] stack = new int[n];
+        float big = em > 0 ? em * 2.5f : Float.MAX_VALUE;
+        float speck = em > 0 ? Math.max(1.5f, em * 0.12f) : 1.5f;
+        int[] members = new int[n];
+        for (int start = 0; start < n; start++) {
+            if (seen[start] || !g.ink(start % g.w, start / g.w)) continue;
+            int top = 0;
+            int count = 0;
+            stack[top++] = start;
+            seen[start] = true;
+            int l = g.w, r = -1, t = g.h, b = -1;
+            while (top > 0) {
+                int at = stack[--top];
+                members[count++] = at;
+                int x = at % g.w;
+                int y = at / g.w;
+                if (x < l) l = x;
+                if (x > r) r = x;
+                if (y < t) t = y;
+                if (y > b) b = y;
+                for (int dy = -1; dy <= 1; dy++) {
+                    int yy = y + dy;
+                    if (yy < 0 || yy >= g.h) continue;
+                    for (int dx = -1; dx <= 1; dx++) {
+                        int xx = x + dx;
+                        if (xx < 0 || xx >= g.w) continue;
+                        int next = yy * g.w + xx;
+                        if (seen[next] || !g.ink(xx, yy)) continue;
+                        seen[next] = true;
+                        stack[top++] = next;
                     }
                 }
             }
+            int bw = r - l + 1;
+            int bh = b - t + 1;
+            if (bw > big || bh > big) continue;              // the drawing
+            if (Math.max(bw, bh) < speck) continue;           // screentone
+            // A patch of solid black the size of a character is shadow, not
+            // strokes (ー is solid too, but thin).
+            // (Bold kanji -- 警, 最 -- are dense, but not this dense.)
+            if (em > 0 && count > bw * bh * 0.8f && Math.min(bw, bh) > em * 0.35f) continue;
+            // Cut by the patch's edge: the drawing runs on past it, and the
+            // patch was taken wide enough that the lettering does not.
+            if (l == 0 || t == 0 || r == g.w - 1 || b == g.h - 1) continue;
+            for (int i = 0; i < count; i++) keep[members[i]] = true;
         }
-        return cols;
+        boolean[] grown = new boolean[n];
+        for (int y = 0; y < g.h; y++) {
+            for (int x = 0; x < g.w; x++) {
+                if (!keep[y * g.w + x]) continue;
+                for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+                    int xx = x + dx, yy = y + dy;
+                    if (xx >= 0 && xx < g.w && yy >= 0 && yy < g.h) grown[yy * g.w + xx] = true;
+                }
+            }
+        }
+        return grown;
     }
 
     /** Mostly columns, standing taller than they are wide. */
@@ -191,69 +262,289 @@ final class VerticalLayout {
         return body.isEmpty() ? columns : body;
     }
 
-    /** Right to left, as the columns are read. */
+    /** In the order they are read: columns standing side by side (at about
+     *  the same height) right to left; one group of them above another, the
+     *  upper first. */
     static void inReadingOrder(List<Box> columns) {
-        Collections.sort(columns, (a, b) -> Float.compare(b.centreX(), a.centreX()));
+        List<Box> byTop = new ArrayList<>(columns);
+        Collections.sort(byTop, (a, b) -> Integer.compare(a.top, b.top));
+        List<List<Box>> rows = new ArrayList<>();
+        for (Box c : byTop) {
+            List<Box> home = null;
+            for (List<Box> row : rows) {
+                for (Box other : row) {
+                    int overlap = Math.min(other.bottom, c.bottom) - Math.max(other.top, c.top);
+                    if (overlap >= Math.min(other.height(), c.height()) / 3f) { home = row; break; }
+                }
+                if (home != null) break;
+            }
+            if (home == null) { home = new ArrayList<>(); rows.add(home); }
+            home.add(c);
+        }
+        columns.clear();
+        for (List<Box> row : rows) {
+            Collections.sort(row, (a, b) -> Float.compare(b.centreX(), a.centreX()));
+            columns.addAll(row);
+        }
     }
 
     /**
-     * A patch the recogniser took for one column, cut into the columns it
-     * really is, each trimmed to its ink. Two columns side by side often
-     * come back as one line; a column of い does not become two, because
-     * the pieces of a real column are cut into characters about as tall as
-     * they are wide, and the halves of い are not.
+     * The columns of text in a patch of the picture.
      *
-     * @return boxes relative to the patch
+     * Found by where the ink is dense, across: a column of characters inks
+     * most of the rows it stands in, the gap between two columns very few.
+     * The gaps are not always clean -- ruby, the small reading set beside a
+     * kanji, stands in them, and so does English set sideways beside a
+     * title -- but ruby is sparse and narrow, so it falls below the line
+     * that dense columns stand above, and anything left that is much
+     * narrower than the columns (ruby, a panel's edge) is dropped after.
+     * A column with a long empty stretch in it is two: one bubble above
+     * another.
+     *
+     * @return boxes relative to the patch, trimmed to their ink
      */
-    static List<Box> split(Gray g) {
-        List<Box> pieces = new ArrayList<>();
+    /** How much of its inked rows a column of characters inks, at least. */
+    static float FILLED = 0.26f;
+
+    static List<Box> columnsIn(Gray g) { return columnsIn(g, 0); }
+
+    /** @param em a character's size, if known, or 0 */
+    static List<Box> columnsIn(Gray g, float em) {
+        List<Box> out = new ArrayList<>();
         int[] colInk = new int[g.w];
         for (int y = 0; y < g.h; y++) for (int x = 0; x < g.w; x++) if (g.ink(x, y)) colInk[x]++;
-        int empty = Math.max(1, Math.round(g.h * 0.015f));
-        int x = 0;
+        List<Integer> inked = new ArrayList<>();
+        for (int v : colInk) if (v > 0) inked.add(v);
+        if (inked.isEmpty()) return out;
+        Collections.sort(inked);
+        float peak = inked.get((int) ((inked.size() - 1) * 0.9f));
+        float high = peak * 0.25f;
+        float low = Math.max(1f, peak * 0.06f);
+
+        List<int[]> runs = runsAbove(colInk, high, 0, g.w);
+        // A short column -- two characters beside columns of ten -- inks
+        // fewer rows, and falls under that line but for a sliver. Looked for
+        // again, more gently: a gentle run that holds no column of the usual
+        // width, and is that wide itself, is a column. Ruby is narrower.
+        if (!runs.isEmpty()) {
+            int widestRun = 0;
+            for (int[] run : runs) widestRun = Math.max(widestRun, run[1] - run[0]);
+            List<Integer> found = new ArrayList<>();
+            for (int[] run : runs) if (run[1] - run[0] >= widestRun * 0.5f) found.add(run[1] - run[0]);
+            Collections.sort(found);
+            int usual = found.get(found.size() / 2);
+            List<int[]> kept = new ArrayList<>();
+            for (int[] gentle : runsAbove(colInk, peak * 0.1f, 0, g.w)) {
+                List<int[]> inside = new ArrayList<>();
+                boolean real = false;
+                for (int[] run : runs) {
+                    if (run[0] >= gentle[0] && run[1] <= gentle[1]) {
+                        inside.add(run);
+                        if (run[1] - run[0] >= usual * 0.6f) real = true;
+                    }
+                }
+                if (real) kept.addAll(inside);
+                else if (gentle[1] - gentle[0] >= usual * 0.6f && gentle[1] - gentle[0] <= usual * 1.6f) kept.add(gentle);
+                else kept.addAll(inside);
+            }
+            runs = kept;
+        }
+        // A dip inside a column (a few characters with a gap down their
+        // middle) is narrow beside the column; the gap between columns is not.
+        List<int[]> merged = new ArrayList<>();
+        for (int[] run : runs) {
+            if (!merged.isEmpty()) {
+                int[] last = merged.get(merged.size() - 1);
+                int gap = run[0] - last[1];
+                int narrower = Math.min(run[1] - run[0], last[1] - last[0]);
+                int wider = Math.max(run[1] - run[0], last[1] - last[0]);
+                // Ruby beside a column is close too, but far sparser.
+                float denser = Math.max(meanInk(colInk, run), meanInk(colInk, last));
+                float sparser = Math.min(meanInk(colInk, run), meanInk(colInk, last));
+                // Only halves of a column: like in width and in ink. Ruby and
+                // English set sideways beside a title are narrower.
+                if (gap < Math.max(2, wider * 0.15f) && narrower > wider * 0.4f && sparser > denser * 0.5f) {
+                    last[1] = run[1];
+                    continue;
+                }
+            }
+            merged.add(run);
+        }
+        // Two columns set close can come out as one run twice the width:
+        // cut where the ink is thinnest, near where the line between them
+        // would be.
+        if (merged.size() > 0) {
+            List<Integer> found = new ArrayList<>();
+            for (int[] run : merged) found.add(run[1] - run[0]);
+            Collections.sort(found);
+            // The usual width: the middle one of several; of one or two, the
+            // narrower, or a character's size as the recogniser saw it.
+            int usual = found.size() > 2 ? found.get(found.size() / 2) : found.get(0);
+            if (found.size() <= 2 && em > 0) usual = Math.min(usual, Math.round(em));
+            List<int[]> cut = new ArrayList<>();
+            for (int[] run : merged) {
+                int w = run[1] - run[0];
+                if (usual <= 0 || w < usual * 1.6f) { cut.add(run); continue; }
+                int k = Math.max(2, Math.round(w / (float) usual));
+                int prev = run[0];
+                for (int i = 1; i < k; i++) {
+                    int target = run[0] + Math.round(i * w / (float) k);
+                    int reach = Math.max(1, Math.round(usual * 0.3f));
+                    int best = target;
+                    for (int xx = Math.max(prev + 1, target - reach); xx <= Math.min(run[1] - 1, target + reach); xx++) {
+                        if (colInk[xx] < colInk[best]) best = xx;
+                    }
+                    cut.add(new int[] { prev, best });
+                    prev = best + 1;
+                }
+                cut.add(new int[] { prev, run[1] });
+            }
+            merged = cut;
+        }
+        // Out to the column's edges, where the strokes are thinner.
+        for (int i = 0; i < merged.size(); i++) {
+            int[] run = merged.get(i);
+            int floor = i == 0 ? 0 : merged.get(i - 1)[1];
+            int ceiling = i == merged.size() - 1 ? g.w : merged.get(i + 1)[0];
+            // A little way only: the thin ends of strokes, not whatever
+            // stands beside the column.
+            int reach = Math.max(1, Math.round((run[1] - run[0]) * 0.2f));
+            int from = run[0];
+            int to = run[1];
+            while (run[0] - 1 >= floor && from - run[0] < reach && colInk[run[0] - 1] >= low) run[0]--;
+            while (run[1] < ceiling && run[1] - to < reach && colInk[run[1]] >= low) run[1]++;
+        }
+
+        List<Box> columns = new ArrayList<>();
+        for (int[] run : merged) {
+            int w = run[1] - run[0];
+            if (w < 3) continue;
+            // Down the column: cut where nothing is inked for longer than a
+            // character and a half.
+            int need = 1;
+            int y = 0;
+            int start = -1;
+            int lastInk = -1;
+            for (; y <= g.h; y++) {
+                boolean any = false;
+                if (y < g.h) {
+                    int n = 0;
+                    for (int xx = run[0]; xx < run[1] && n < need; xx++) if (g.ink(xx, y)) n++;
+                    any = n >= need;
+                }
+                if (any) {
+                    if (start < 0) start = y;
+                    else if (y - lastInk > w * 1.5f) {
+                        addColumn(g, columns, run, start, lastInk + 1);
+                        start = y;
+                    }
+                    lastInk = y;
+                }
+            }
+            if (start >= 0) addColumn(g, columns, run, start, lastInk + 1);
+        }
+        if (columns.isEmpty()) return out;
+        // The typical width, from the columns with the most ink: a stray
+        // mark or a strip of ruby has little.
+        List<int[]> weighed = new ArrayList<>();
+        int[] inkOf = new int[columns.size()];
+        int[] rowsOf = new int[columns.size()];
+        for (int i = 0; i < columns.size(); i++) {
+            Box c = columns.get(i);
+            int ink = 0;
+            int rows = 0;
+            for (int yy = c.top; yy < c.bottom; yy++) {
+                int before = ink;
+                for (int xx = c.left; xx < c.right; xx++) if (g.ink(xx, yy)) ink++;
+                if (ink > before) rows++;
+            }
+            inkOf[i] = ink;
+            rowsOf[i] = Math.max(1, rows);
+            weighed.add(new int[] { c.width(), ink });
+        }
+        Collections.sort(weighed, (p, q) -> Integer.compare(q[1], p[1]));
+        List<Integer> widths = new ArrayList<>();
+        for (int i = 0; i < Math.max(1, (weighed.size() + 1) / 2); i++) widths.add(weighed.get(i)[0]);
+        Collections.sort(widths);
+        int typical = widths.get(widths.size() / 2);
+        List<Float> fills = new ArrayList<>();
+        for (int i = 0; i < columns.size(); i++) fills.add(inkOf[i] / (float) (columns.get(i).width() * rowsOf[i]));
+        Collections.sort(fills);
+        float usualFill = fills.get(fills.size() / 2);
+        for (int i = 0; i < columns.size(); i++) {
+            Box c = columns.get(i);
+            // Narrow ones are ruby or a panel's edge; flat ones are a stray mark.
+            if (c.width() < typical * 0.5f) continue;
+            if (c.height() < typical * 0.5f) continue;
+            // Thin scraps of the drawing -- speed lines broken by the
+            // cleaning -- ink a little of each row they cross; characters
+            // ink a good part of theirs. (Counted over the inked rows only,
+            // so the space between characters does not count against them.)
+            // Against the other columns, as a thin typeface inks less than a
+            // bold one throughout.
+            float filled = inkOf[i] / (float) (c.width() * rowsOf[i]);
+            if (filled < FILLED && filled < usualFill * 0.65f) continue;
+            out.add(c);
+        }
+        return out;
+    }
+
+    private static List<int[]> runsAbove(int[] colInk, float line, int from, int to) {
         List<int[]> runs = new ArrayList<>();
-        while (x < g.w) {
-            if (colInk[x] > empty) {
+        int x = from;
+        while (x < to) {
+            if (colInk[x] >= line) {
                 int start = x;
-                while (x < g.w && colInk[x] > empty) x++;
+                while (x < to && colInk[x] >= line) x++;
                 runs.add(new int[] { start, x });
             } else x++;
         }
-        if (runs.isEmpty()) return pieces;
-        // Gaps narrower than a sliver are inside a character, not between columns.
-        int minGap = Math.max(2, Math.round(g.w * 0.03f));
-        List<int[]> merged = new ArrayList<>();
-        for (int[] run : runs) {
-            if (!merged.isEmpty() && run[0] - merged.get(merged.size() - 1)[1] < minGap) merged.get(merged.size() - 1)[1] = run[1];
-            else merged.add(run);
+        return runs;
+    }
+
+    /** A short stretch of a column that is small, or thinly inked. */
+    private static boolean scrap(Gray g, Box column, int[] piece) {
+        int w = column.width();
+        int h = piece[1] - piece[0];
+        if (h < w * 0.35f) return true;
+        if (h > w * 2f) return false;
+        int ink = 0;
+        int rows = 0;
+        for (int y = piece[0]; y < piece[1]; y++) {
+            int before = ink;
+            for (int x = column.left; x < column.right; x++) if (g.ink(x, y)) ink++;
+            if (ink > before) rows++;
         }
-        List<Box> candidate = new ArrayList<>();
-        for (int[] run : merged) {
-            if (run[1] - run[0] < Math.max(2, g.w * 0.08f)) continue;
-            Box b = trim(g, new Box(run[0], 0, run[1], g.h));
-            if (b != null) candidate.add(b);
+        return ink < w * Math.max(1, rows) * 0.15f;
+    }
+
+    private static float meanInk(int[] colInk, int[] run) {
+        long sum = 0;
+        for (int x = run[0]; x < run[1]; x++) sum += colInk[x];
+        return sum / (float) Math.max(1, run[1] - run[0]);
+    }
+
+    private static void addColumn(Gray g, List<Box> columns, int[] run, int top, int bottom) {
+        Box b = trim(g, new Box(run[0], top, run[1], bottom));
+        if (b == null) return;
+        // Scraps of the drawing just past either end -- standing apart from
+        // the characters, and thin -- are not part of the column. A full
+        // stop stands close to the character before it.
+        int w = b.width();
+        List<int[]> pieces = new ArrayList<>();
+        for (int[] stretch : rowRuns(g, b)) {
+            if (!pieces.isEmpty() && stretch[0] - pieces.get(pieces.size() - 1)[1] <= w * 0.6f) {
+                pieces.get(pieces.size() - 1)[1] = stretch[1];
+            } else pieces.add(new int[] { stretch[0], stretch[1] });
         }
-        if (candidate.size() <= 1) {
-            Box whole = trim(g, new Box(0, 0, g.w, g.h));
-            if (whole != null) pieces.add(whole);
-            return pieces;
+        while (pieces.size() > 1 && scrap(g, b, pieces.get(pieces.size() - 1))) pieces.remove(pieces.size() - 1);
+        while (pieces.size() > 1 && scrap(g, b, pieces.get(0))) pieces.remove(0);
+        if (!pieces.isEmpty()) {
+            b.top = pieces.get(0)[0];
+            b.bottom = pieces.get(pieces.size() - 1)[1];
         }
-        // Each piece must cut into characters roughly square.
-        for (Box b : candidate) {
-            List<int[]> runsDown = rowRuns(g, b);
-            if (runsDown.isEmpty()) continue;
-            List<Integer> heights = new ArrayList<>();
-            for (int[] r : runsDown) heights.add(r[1] - r[0]);
-            Collections.sort(heights);
-            float ratio = heights.get(heights.size() / 2) / (float) Math.max(1, b.width());
-            if (ratio > 1.7f && b.height() > b.width() * 3) {
-                // Long strokes, not characters: one column after all.
-                Box whole = trim(g, new Box(0, 0, g.w, g.h));
-                if (whole != null) pieces.add(whole);
-                return pieces;
-            }
-        }
-        return candidate;
+        Box tight = trim(g, b);
+        if (tight != null) columns.add(tight);
     }
 
     /** The box shrunk to the ink inside it, or null if there is none. */
@@ -532,6 +823,10 @@ final class VerticalLayout {
     static final class Sheet {
         int width, height;
         int columns;
+        /** The patch the characters are cut from, cleaned of the drawing:
+         *  packed ARGB, sourceWidth wide. Placements' boxes are within it. */
+        int[] source;
+        int sourceWidth, sourceHeight;
         final List<Placement> placed = new ArrayList<>();
         final List<Row> rows = new ArrayList<>();
     }
@@ -548,15 +843,56 @@ final class VerticalLayout {
      * @param units the recogniser's lines for the block, in picture pixels
      */
     static Sheet layout(Pixels picture, List<Box> units) {
-        List<Box> found = new ArrayList<>();
-        for (Box u : columnsOf(clamp(units, picture))) {
-            if (u.width() < 2 || u.height() < 2) continue;
-            Gray g = Gray.of(picture.argb(u), u.width(), u.height());
-            for (Box piece : split(g)) {
-                found.add(new Box(u.left + piece.left, u.top + piece.top, u.left + piece.right, u.top + piece.bottom));
+        // The recogniser's lines say where the text is, not how it runs: read
+        // across columns, they are short and wide. So the columns are found
+        // afresh, in the whole patch the lines cover, a little beyond it.
+        List<Box> clamped = clamp(units, picture);
+        if (clamped.isEmpty()) return null;
+        Box region = clamped.get(0).copy();
+        for (Box u : clamped) region.union(u);
+        List<Integer> thickness = new ArrayList<>();
+        for (Box u : clamped) thickness.add(Math.min(u.width(), u.height()));
+        Collections.sort(thickness);
+        int grow = Math.max(Math.max(2, Math.round(Math.max(region.width(), region.height()) * 0.03f)),
+                thickness.get(thickness.size() / 2) / 2);
+        region = new Box(Math.max(0, region.left - grow), Math.max(0, region.top - grow),
+                Math.min(picture.width(), region.right + grow), Math.min(picture.height(), region.bottom + grow));
+        if (region.width() < 4 || region.height() < 4) return null;
+        int[] argb = picture.argb(region);
+        Gray raw = Gray.of(argb, region.width(), region.height());
+        // A character's size, from the recogniser's lines: read down a
+        // column or across columns, a line is a character thick.
+        List<Integer> thick = new ArrayList<>();
+        for (Box u : clamped) thick.add(Math.min(u.width(), u.height()));
+        Collections.sort(thick);
+        float hint = thick.get(thick.size() / 2);
+        // Dark letters on a light ground, or light on dark: judged by which
+        // finds columns of characters. (Majority alone misleads: black
+        // lettering beside a black silhouette is in a mostly dark patch.)
+        int[] clean = null;
+        Gray patch = null;
+        List<Box> found = null;
+        long bestScore = 0;
+        for (boolean light : new boolean[] { raw.light, !raw.light }) {
+            Gray seen = new Gray(raw.lum, region.width(), region.height(), raw.threshold, light);
+            boolean[] keep = lettering(seen, hint);
+            int ground = light ? 0xFF000000 : 0xFFFFFFFF;
+            int[] tried = new int[argb.length];
+            for (int i = 0; i < argb.length; i++) tried[i] = keep[i] ? argb[i] : ground;
+            Gray cleaned = new Gray(Gray.lumOf(tried), region.width(), region.height(), raw.threshold, light);
+            List<Box> columns = columnsIn(cleaned, hint);
+            if (columns.isEmpty() || !looksVertical(columns)) continue;
+            long score = 0;
+            for (Box c : columns) score += c.height();
+            // The first guess wins unless the other is clearly better.
+            if (found == null || score > bestScore * 1.3f) {
+                clean = tried;
+                patch = cleaned;
+                found = columns;
+                bestScore = score;
             }
         }
-        if (found.isEmpty() || !looksVertical(found)) return null;
+        if (found == null) return null;      // within the patch from here on
         float em = emOf(found);
         if (em < 4) return null;
         List<Box> body = withoutRuby(found, em);
@@ -572,10 +908,13 @@ final class VerticalLayout {
 
         Sheet sheet = new Sheet();
         sheet.columns = body.size();
+        sheet.source = clean;
+        sheet.sourceWidth = region.width();
+        sheet.sourceHeight = region.height();
         int longest = 0;
         for (int c = 0; c < body.size(); c++) {
             Box col = body.get(c);
-            Gray g = Gray.of(picture.argb(col), col.width(), col.height());
+            Gray g = patch.part(col);
             List<Cell> cells = cells(g, em);
             for (int start = 0; start < cells.size(); start += PER_ROW) {
                 int end = Math.min(cells.size(), start + PER_ROW);
@@ -594,7 +933,7 @@ final class VerticalLayout {
                     int from = cell.turn ? col.left + cell.inkLeft : col.left;
                     int to = cell.turn ? col.left + cell.inkRight + 1 : col.right;
                     p.src = new Box(Math.max(0, from - pad), col.top + cell.top,
-                            Math.min(picture.width(), to + pad), col.top + cell.bottom);
+                            Math.min(region.width(), to + pad), col.top + cell.bottom);
                     p.w = p.src.width() * scale;
                     p.h = p.src.height() * scale;
                     float cx = margin + (k - start) * slot + slot / 2f;
@@ -667,7 +1006,38 @@ final class VerticalLayout {
      * are 「 and 」 turned a quarter, and are turned back. (コ has a bar at
      * both ends; フ's stroke leans, and never runs straight down one side.)
      */
-    static boolean cornerBracket(Gray g, Cell cell, float em) {
+    static boolean cornerBracket(Gray g, Cell whole, float em) {
+        // Judged on the square's largest run of ink: a dot of the ？ before
+        // a bracket sometimes falls into the bracket's square.
+        List<int[]> runs = rowRuns(g, new Box(whole.inkLeft, whole.top, whole.inkRight + 1, whole.bottom));
+        if (runs.isEmpty()) return false;
+        int[] body = runs.get(0);
+        for (int[] run : runs) if (run[1] - run[0] > body[1] - body[0]) body = run;
+        Cell cell = new Cell();
+        cell.top = body[0];
+        cell.bottom = body[1];
+        cell.inkLeft = g.w;
+        cell.inkRight = -1;
+        for (int y = cell.top; y < cell.bottom; y++) {
+            for (int x = whole.inkLeft; x <= whole.inkRight; x++) {
+                if (!g.ink(x, y)) continue;
+                cell.inkLeft = Math.min(cell.inkLeft, x);
+                cell.inkRight = Math.max(cell.inkRight, x);
+            }
+        }
+        if (cell.inkRight < 0) return false;
+        // The bracket must be most of the square: こ is two strokes, and its
+        // lower one alone would pass for 」.
+        int all = 0;
+        int mine = 0;
+        for (int y = whole.top; y < whole.bottom; y++) {
+            for (int x = whole.inkLeft; x <= whole.inkRight; x++) {
+                if (!g.ink(x, y)) continue;
+                all++;
+                if (y >= cell.top && y < cell.bottom) mine++;
+            }
+        }
+        if (mine < all * 0.8f) return false;
         int w = cell.inkWidth();
         int h = cell.height();
         if (w < 4 || h < 4) return false;
@@ -678,40 +1048,66 @@ final class VerticalLayout {
         int ink = 0;
         for (int y = cell.top; y < cell.bottom; y++)
             for (int x = cell.inkLeft; x <= cell.inkRight; x++) if (g.ink(x, y)) ink++;
-        if (ink > w * h * 0.5f) return false;
+        if (ink > w * h * 0.6f) return false;
         int band = Math.max(1, Math.round(h * 0.25f));
         int side = Math.max(1, Math.round(w * 0.25f));
         boolean barTop = barIn(g, cell, cell.top, cell.top + band, 0.75f);
         boolean barBottom = barIn(g, cell, cell.bottom - band, cell.bottom, 0.75f);
         boolean right = stemIn(g, cell, cell.inkRight + 1 - side, cell.inkRight + 1, 0.8f);
         boolean left = stemIn(g, cell, cell.inkLeft, cell.inkLeft + side, 0.8f);
+        // (The double ones, 『』, are drawn in outline: their inner strokes
+        // reach part of the way along the other sides, not all of it.)
         boolean opening = barTop && right && !barBottom && !left
-                && !barIn(g, cell, cell.bottom - band, cell.bottom, 0.5f)
-                && !stemIn(g, cell, cell.inkLeft, cell.inkLeft + side, 0.5f);
+                && !barIn(g, cell, cell.bottom - band, cell.bottom, 0.7f)
+                && !stemIn(g, cell, cell.inkLeft, cell.inkLeft + side, 0.7f);
         boolean closing = barBottom && left && !barTop && !right
-                && !barIn(g, cell, cell.top, cell.top + band, 0.5f)
-                && !stemIn(g, cell, cell.inkRight + 1 - side, cell.inkRight + 1, 0.5f);
+                && !barIn(g, cell, cell.top, cell.top + band, 0.7f)
+                && !stemIn(g, cell, cell.inkRight + 1 - side, cell.inkRight + 1, 0.7f);
+        // And the corner the bracket opens towards is empty: っ in a heavy
+        // face has a bar along its top and a stroke down its right, but
+        // curls back into that corner.
+        if (opening) opening = emptyIn(g, cell, cell.inkLeft, cell.inkLeft + Math.round(w * 0.5f),
+                cell.top + Math.round(h * 0.6f), cell.bottom);
+        if (closing) closing = emptyIn(g, cell, cell.inkRight + 1 - Math.round(w * 0.5f), cell.inkRight + 1,
+                cell.top, cell.top + Math.round(h * 0.4f));
         return opening || closing;
     }
 
-    /** A row within [from, to) inked across this much of the cell. */
+    private static boolean emptyIn(Gray g, Cell cell, int left, int right, int top, int bottom) {
+        int ink = 0;
+        int area = 0;
+        for (int y = Math.max(cell.top, top); y < Math.min(cell.bottom, bottom); y++) {
+            for (int x = Math.max(cell.inkLeft, left); x < Math.min(cell.inkRight + 1, right); x++) {
+                area++;
+                if (g.ink(x, y)) ink++;
+            }
+        }
+        return ink <= area * 0.08f;
+    }
+
+    /** A row within [from, to) inked unbroken across this much of the
+     *  cell: a ruled stroke, not a curve. */
     private static boolean barIn(Gray g, Cell cell, int from, int to, float share) {
         int need = Math.round(cell.inkWidth() * share);
         for (int y = Math.max(cell.top, from); y < Math.min(cell.bottom, to); y++) {
             int n = 0;
-            for (int x = cell.inkLeft; x <= cell.inkRight; x++) if (g.ink(x, y)) n++;
-            if (n >= need) return true;
+            for (int x = cell.inkLeft; x <= cell.inkRight; x++) {
+                n = g.ink(x, y) ? n + 1 : 0;
+                if (n >= need) return true;
+            }
         }
         return false;
     }
 
-    /** A column within [from, to) inked down this much of the cell. */
+    /** A column within [from, to) inked unbroken down this much of the cell. */
     private static boolean stemIn(Gray g, Cell cell, int from, int to, float share) {
         int need = Math.round(cell.height() * share);
         for (int x = Math.max(cell.inkLeft, from); x < Math.min(cell.inkRight + 1, to); x++) {
             int n = 0;
-            for (int y = cell.top; y < cell.bottom; y++) if (g.ink(x, y)) n++;
-            if (n >= need) return true;
+            for (int y = cell.top; y < cell.bottom; y++) {
+                n = g.ink(x, y) ? n + 1 : 0;
+                if (n >= need) return true;
+            }
         }
         return false;
     }
