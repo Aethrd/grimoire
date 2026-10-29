@@ -524,6 +524,8 @@ public class TranslateBridge {
 
     /* ── HTTP ─────────────────────────────────────────────────────────── */
 
+    /** Asked with GET, as DeepL documents it: an empty POST is a request
+     *  it may refuse, and then a good key reads as a bad one. */
     private String fetchUsage(String key) throws IOException, JSONException {
         return post(key, "/v2/usage", null);
     }
@@ -540,7 +542,7 @@ public class TranslateBridge {
             connection.setConnectTimeout(TIMEOUT_MS);
             connection.setReadTimeout(TIMEOUT_MS);
             connection.setRequestProperty("Authorization", "DeepL-Auth-Key " + key);
-            connection.setRequestProperty("Content-Type", "application/json");
+            if (body != null) connection.setRequestProperty("Content-Type", "application/json");
             connection.setRequestProperty("User-Agent", "Grimoire/" + BuildConfig.VERSION_NAME);
 
             if (body != null) {
@@ -549,9 +551,8 @@ public class TranslateBridge {
                     out.write(body.getBytes(StandardCharsets.UTF_8));
                 }
             } else {
-                connection.setFixedLengthStreamingMode(0);
-                connection.setDoOutput(true);
-                connection.getOutputStream().close();
+                // Nothing to send: a plain GET.
+                connection.setRequestMethod("GET");
             }
 
             int code = connection.getResponseCode();
@@ -560,7 +561,9 @@ public class TranslateBridge {
             // DeepL's errors are specific and worth passing through in plain
             // words rather than as a status number.
             switch (code) {
-                case 403: throw new IOException("DeepL rejected that key. Check it, and that the plan matches.");
+                case 401:
+                case 403: throw new IOException("DeepL rejected that key. Copy it again from Account → API Keys & Limits: "
+                        + "a DeepL API key, not a password, and a free one ends in :fx.");
                 case 429: throw new IOException("Too many requests. Wait a moment and try again.");
                 case 456: throw new IOException("This key has used its character quota for the period.");
                 case 400: throw new IOException("DeepL could not read that request: " + read(connection.getErrorStream()));

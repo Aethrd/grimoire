@@ -380,6 +380,16 @@ t('a swipe has to be long and flat to change tabs', () => {
   assert.match(swipe, /Math\.abs\(dy\) \* 3/);
 });
 
+t('a swipe along a text box or a sideways row is its own, not a change of tab', () => {
+  // Dragging along a long title in Build, to see the end of it, went to
+  // the next tab.
+  const swipe = app.slice(app.indexOf('function wireSwipeBetweenTabs'), app.indexOf('function wireChrome'));
+  assert.match(swipe, /if \(swipesItself\(e\.target\)\) \{ tracking = false; return; \}/);
+  const helper = app.slice(app.indexOf('function swipesItself'), app.indexOf('function wireSwipeBetweenTabs'));
+  assert.match(helper, /input, textarea, select/);
+  assert.match(helper, /overflowX/);
+});
+
 t('importing writes each book in whole transactions', () => {
   // A transaction per chapter meant hundreds per book.
   const library = read('app/src/main/assets/www/js/library.js');

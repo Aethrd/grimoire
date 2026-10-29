@@ -207,4 +207,15 @@ await t('the sheet translates, and lays the translations over the pictures', () 
   assert.match(bridge, /body\.put\("context", context\)/);
 });
 
+await t('settings offer a choice of translator, and a DeepL key box whatever is chosen', () => {
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  // The box was hidden whenever any translator was set up -- and on device
+  // always is -- so a key could never be entered.
+  assert.match(panels, /if \(!state\.deeplConfigured\) \{/);
+  assert.match(panels, /for \(const \[code, label\] of translate\.ENGINES\)/, 'a translator picker');
+  assert.match(panels, /await translate\.setKey\(input\.value\.trim\(\)\);\s*await translate\.setEngine\('deepl'\);/);
+  const bridge = read('app/src/main/java/com/grimoire/ereader/TranslateBridge.java');
+  assert.match(bridge, /connection\.setRequestMethod\("GET"\);/, 'usage asked as DeepL documents it');
+});
+
 console.log(`\n${pass} ocr tests passed`);

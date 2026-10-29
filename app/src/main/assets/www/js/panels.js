@@ -298,27 +298,62 @@ export async function openLanguage(host) {
     return;
   }
 
-  /* The key. Held natively and never handed back to this page: DeepL refuses
-     client-side calls precisely because a key in a page is readable by anyone
-     with the page. Only whether one is set, and a hint, cross the bridge. */
+  /* Which translator. On device is free and offline; DeepL is far better
+     and needs a key; LibreTranslate is a server of your choosing. The key
+     is held natively and never handed back to this page: DeepL refuses
+     client-side calls precisely because a key in a page is readable by
+     anyone with the page. Only whether one is set, and a hint, cross the
+     bridge. */
+  const engineCard = document.createElement('div');
+  engineCard.className = 'card';
+  engineCard.innerHTML = '<h2>Translator</h2>';
+  const engines = document.createElement('div');
+  engines.className = 'chip-row wrap';
+  for (const [code, label] of translate.ENGINES) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.style.textTransform = 'none';
+    chip.textContent = label;
+    chip.setAttribute('aria-pressed', String(state.engine === code));
+    chip.onclick = async () => {
+      if (state.engine === code) return;
+      try {
+        await translate.setEngine(code);
+      } catch (error) { toast(error.message, 5000); }
+      openLanguage(body);
+      refreshTheme();
+    };
+    engines.appendChild(chip);
+  }
+  engineCard.appendChild(engines);
+  const about = translate.ENGINES.find(([code]) => code === state.engine);
+  const engineNote = document.createElement('p');
+  engineNote.className = 'muted';
+  engineNote.style.cssText = 'font-size:12px;line-height:1.55;margin:10px 0 0';
+  engineNote.textContent = about ? about[2] : '';
+  engineCard.appendChild(engineNote);
+  body.appendChild(engineCard);
+
   const keyCard = document.createElement('div');
   keyCard.className = 'card';
   keyCard.innerHTML = `<h2>DeepL</h2>
     <p class="muted" style="font-size:12px;line-height:1.55;margin:0 0 12px">
-      ${state.configured
-        ? `Connected on the ${escape(state.plan)} plan, key ${escape(state.hint || '')}.`
-        : `Translation is off until you add an API key. A free key covers 500,000
-           characters a month — enough for a great many chapter titles.
-           Get one at deepl.com under Account → API keys.`}
-      <br><br>Until a key is set the app makes no network requests at all.</p>`;
+      ${state.deeplConfigured
+        ? `Connected on the ${escape(state.plan === 'free' ? 'free' : 'Pro')} API plan, key ${escape(state.hint || '')}.`
+          + (state.engine === 'deepl' ? '' : ' Choose DeepL above to use it.')
+        : `Paste a DeepL API key to use DeepL. A free API key covers 500,000
+           characters a month. It is made at deepl.com → Account → API Keys &amp; Limits,
+           on a DeepL API plan (a DeepL Translator account alone has none).`}
+      <br><br>DeepL is only asked anything while it is the chosen translator.</p>`;
 
-  if (!state.configured) {
+  if (!state.deeplConfigured) {
     const field = document.createElement('div');
     field.className = 'field';
     const input = document.createElement('input');
     input.type = 'password';
     input.placeholder = 'DeepL API key';
     input.autocapitalize = 'off';
+    input.autocomplete = 'off';
     input.spellcheck = false;
     const save = document.createElement('button');
     save.className = 'btn primary block';
@@ -330,21 +365,24 @@ export async function openLanguage(host) {
       save.textContent = 'Checking…';
       try {
         // Verified against DeepL before it is stored, so a typo fails here
-        // rather than on the first chapter you try to read.
-        await translate.setKey(input.value);
-        toast('Connected to DeepL');
+        // rather than on the first chapter you try to read. A key given is
+        // a key to be used: DeepL becomes the translator.
+        await translate.setKey(input.value.trim());
+        await translate.setEngine('deepl');
+        toast('Connected to DeepL', 3000, { kind: 'done' });
         openLanguage(body);
+        refreshTheme();
       } catch (error) {
         save.disabled = false;
         save.textContent = 'Connect';
-        toast(error.message, 5000);
+        toast(error.message, 6000);
       }
     };
     field.append(input, save);
     keyCard.appendChild(field);
   } else {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:8px';
+    const keys = document.createElement('div');
+    keys.style.cssText = 'display:flex;gap:8px';
     const check = document.createElement('button');
     check.className = 'btn ghost';
     check.style.flex = '1';
@@ -365,13 +403,51 @@ export async function openLanguage(host) {
     forget.textContent = 'Disconnect';
     forget.onclick = async () => {
       await translate.clearKey();
+      if (state.engine === 'deepl') await translate.setEngine('ondevice').catch(() => {});
       toast('Key removed. No further requests will be made.');
       openLanguage(body);
+      refreshTheme();
     };
-    row.append(check, forget);
-    keyCard.appendChild(row);
+    keys.append(check, forget);
+    keyCard.appendChild(keys);
   }
   body.appendChild(keyCard);
+
+  // LibreTranslate: the server's address, and its key if it has one.
+  if (state.engine === 'libre') {
+    const libre = document.createElement('div');
+    libre.className = 'card';
+    libre.innerHTML = `<h2>LibreTranslate</h2>
+      <p class="muted" style="font-size:12px;line-height:1.55;margin:0 0 12px">
+        ${state.libreUrl ? `Using ${escape(state.libreUrl)}.` : 'The address of the server to use.'}</p>`;
+    const address = document.createElement('input');
+    address.type = 'url';
+    address.placeholder = 'https://libretranslate.example';
+    address.value = state.libreUrl || '';
+    address.autocapitalize = 'off';
+    address.spellcheck = false;
+    const libreKey = document.createElement('input');
+    libreKey.type = 'password';
+    libreKey.placeholder = 'Key, if the server needs one';
+    libreKey.autocomplete = 'off';
+    libreKey.style.marginTop = '8px';
+    const use = document.createElement('button');
+    use.className = 'btn primary block';
+    use.style.marginTop = '10px';
+    use.textContent = 'Use this server';
+    use.onclick = async () => {
+      try {
+        await translate.setLibre(address.value, libreKey.value);
+        toast('Saved', 2500, { kind: 'done' });
+        openLanguage(body);
+      } catch (error) { toast(error.message, 5000); }
+    };
+    const field = document.createElement('div');
+    field.className = 'field';
+    field.append(address, libreKey, use);
+    libre.appendChild(field);
+    body.appendChild(libre);
+  }
 
   // Target language.
   const target = document.createElement('div');
@@ -408,7 +484,7 @@ export async function openLanguage(host) {
   ]) {
     scope.appendChild(row(title, sub, toggle(settings[key], async (on) => {
       await store.saveSettings({ [key]: on });
-      if (on && !translate.status().configured) toast('Add a DeepL key above to use this');
+      if (on && !translate.status().configured) toast('Set up the translator above to use this');
       refreshTheme();
     })));
   }

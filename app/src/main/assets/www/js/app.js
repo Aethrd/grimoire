@@ -7326,6 +7326,19 @@ function wireWeb() {
  * swipe there already means turn the page. */
 const TABS = ['library', 'folders', 'workshop', 'bin', 'sort', 'stats', 'settings'];
 
+/** Whether a sideways drag starting here is the element's own: text being
+ *  edited or scrolled through, or a row with more in it sideways. */
+function swipesItself(target) {
+  for (let node = target; node && node.nodeType === 1 && node.id !== 'screens'; node = node.parentElement) {
+    if (node.matches('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return true;
+    if (node.scrollWidth > node.clientWidth + 1) {
+      const overflow = getComputedStyle(node).overflowX;
+      if (overflow === 'auto' || overflow === 'scroll') return true;
+    }
+  }
+  return false;
+}
+
 function wireSwipeBetweenTabs() {
   let startX = 0, startY = 0, startAt = 0, tracking = false;
 
@@ -7335,6 +7348,10 @@ function wireSwipeBetweenTabs() {
     // event of the wrong shape and the whole gesture layer stops working for
     // the rest of the session.
     if (!TABS.includes(current) || e.touches?.length !== 1) { tracking = false; return; }
+    // A drag that belongs to what it starts on: along a long title in a
+    // text box (to see the rest of it), or along a row that scrolls
+    // sideways of its own accord.
+    if (swipesItself(e.target)) { tracking = false; return; }
     tracking = true;
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
