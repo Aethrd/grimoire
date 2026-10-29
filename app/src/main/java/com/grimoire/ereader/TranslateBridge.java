@@ -27,6 +27,8 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -42,6 +44,9 @@ import java.util.concurrent.Executors;
  *   libre     LibreTranslate. Free software you can self-host, so the text
  *             goes to a server you chose -- possibly your own. A key is
  *             optional and depends on the instance.
+ *   llm       A large language model -- Claude, ChatGPT, Gemini, or anything
+ *             that speaks OpenAI's chat format -- with your own key, billed
+ *             by its provider. Reads a page's parts together.
  *
  * All of it lives natively rather than in the reader. ML Kit is an Android
  * library and unreachable from a page; DeepL sends no CORS headers and says
@@ -64,6 +69,11 @@ public class TranslateBridge {
     static final String ENGINE_ONDEVICE = "ondevice";
     static final String ENGINE_DEEPL = "deepl";
     static final String ENGINE_LIBRE = "libre";
+    /** A large language model -- Claude, ChatGPT, Gemini, or another --
+     *  with the reader's own key (LlmTranslator). */
+    static final String ENGINE_LLM = "llm";
+    private static final String KEY_LLM_PROVIDER = "llm_provider";
+    private static final String KEY_LLM_BASE = "llm_base";
 
     /** Free keys carry this suffix and must use a different host. */
     private static final String FREE_SUFFIX = ":fx";
@@ -104,10 +114,24 @@ public class TranslateBridge {
                     : key.substring(0, 4) + "\u2026" + key.substring(key.length() - 3));
             out.put("libreUrl", libreUrl);
 
+            String provider = prefs.getString(KEY_LLM_PROVIDER, LlmTranslator.ANTHROPIC);
+            String llmKey = prefs.getString("llm_key_" + provider, null);
+            String llmBase = prefs.getString(KEY_LLM_BASE, "");
+            boolean llmReady = LlmTranslator.CUSTOM.equals(provider)
+                    ? !llmBase.isEmpty() && prefs.getBoolean("llm_ready_custom", false)
+                    : llmKey != null && !llmKey.isEmpty();
+            out.put("llmProvider", provider);
+            out.put("llmModel", prefs.getString("llm_model_" + provider, LlmTranslator.defaultModel(provider)));
+            out.put("llmBase", llmBase);
+            out.put("llmConfigured", llmReady);
+            out.put("llmHint", llmKey == null || llmKey.length() < 10 ? null
+                    : llmKey.substring(0, 6) + "\u2026" + llmKey.substring(llmKey.length() - 3));
+
             // On-device needs nothing configured, which is the point of it.
             out.put("configured", ENGINE_ONDEVICE.equals(engine)
                     || (ENGINE_DEEPL.equals(engine) && key != null && !key.isEmpty())
-                    || (ENGINE_LIBRE.equals(engine) && libreUrl != null && !libreUrl.isEmpty()));
+                    || (ENGINE_LIBRE.equals(engine) && libreUrl != null && !libreUrl.isEmpty())
+                    || (ENGINE_LLM.equals(engine) && llmReady));
             out.put("offline", ENGINE_ONDEVICE.equals(engine));
         } catch (JSONException ignored) {
         }
@@ -120,7 +144,8 @@ public class TranslateBridge {
 
     @JavascriptInterface
     public void setEngine(final String requestId, final String engine) {
-        if (!ENGINE_ONDEVICE.equals(engine) && !ENGINE_DEEPL.equals(engine) && !ENGINE_LIBRE.equals(engine)) {
+        if (!ENGINE_ONDEVICE.equals(engine) && !ENGINE_DEEPL.equals(engine) && !ENGINE_LIBRE.equals(engine)
+                && !ENGINE_LLM.equals(engine)) {
             fail(requestId, "Unknown translation engine");
             return;
         }
@@ -161,6 +186,62 @@ public class TranslateBridge {
                 fail(requestId, describe(e));
             }
         });
+    }
+
+    /**
+     * Set up a language model: which service, the key, the model, and for
+     * another service its address. Tried with a word of translation before
+     * it is kept, so a wrong key or model name is caught here; then it
+     * becomes the translator.
+     */
+    @JavascriptInterface
+    public void setLlm(final String requestId, final String provider, final String key,
+                       final String model, final String base) {
+        if (!LlmTranslator.known(provider)) { fail(requestId, "Unknown model service"); return; }
+        // No key given: the one already kept for that service, so that only
+        // the model can be changed.
+        String given = key == null ? "" : key.trim();
+        if (given.isEmpty()) given = prefs.getString("llm_key_" + provider, "");
+        final String cleanKey = given;
+        final String cleanBase = base == null ? "" : base.trim().replaceAll("/+$", "");
+        if (!LlmTranslator.CUSTOM.equals(provider) && cleanKey.isEmpty()) { fail(requestId, "No key given"); return; }
+        if (LlmTranslator.CUSTOM.equals(provider)
+                && !cleanBase.startsWith("https://") && !cleanBase.startsWith("http://")) {
+            fail(requestId, "The address must start with https:// (or http:// for one on your own network)");
+            return;
+        }
+        io.execute(() -> {
+            try {
+                LlmTranslator.Setup setup = new LlmTranslator.Setup(provider, cleanKey, model, cleanBase);
+                if (setup.model.isEmpty()) { fail(requestId, "Name the model to use"); return; }
+                List<String> probe = LlmTranslator.translate(setup,
+                        java.util.Collections.singletonList("こんにちは"), "EN-GB", "ja", null);
+                if (probe.isEmpty()) throw new IOException("The model gave no answer.");
+                SharedPreferences.Editor edit = prefs.edit()
+                        .putString(KEY_LLM_PROVIDER, provider)
+                        .putString("llm_model_" + provider, setup.model)
+                        .putString(KEY_ENGINE, ENGINE_LLM);
+                if (!cleanKey.isEmpty()) edit.putString("llm_key_" + provider, cleanKey);
+                else edit.remove("llm_key_" + provider);
+                if (LlmTranslator.CUSTOM.equals(provider)) {
+                    edit.putString(KEY_LLM_BASE, cleanBase).putBoolean("llm_ready_custom", true);
+                }
+                edit.apply();
+                succeed(requestId, status());
+            } catch (Exception e) {
+                fail(requestId, describe(e));
+            }
+        });
+    }
+
+    /** Forget a model service's key. */
+    @JavascriptInterface
+    public void clearLlm(final String requestId, final String provider) {
+        SharedPreferences.Editor edit = prefs.edit().remove("llm_key_" + provider);
+        if (LlmTranslator.CUSTOM.equals(provider)) edit.remove("llm_ready_custom");
+        if (ENGINE_LLM.equals(engine())) edit.putString(KEY_ENGINE, ENGINE_ONDEVICE);
+        edit.apply();
+        succeed(requestId, status());
     }
 
     @JavascriptInterface
@@ -238,6 +319,7 @@ public class TranslateBridge {
                 switch (engine()) {
                     case ENGINE_DEEPL: translateWithDeepL(requestId, texts, targetLang, chars, context, tagHandling); break;
                     case ENGINE_LIBRE: translateWithLibre(requestId, texts, targetLang, sourceLang, chars); break;
+                    case ENGINE_LLM: translateWithLlm(requestId, texts, targetLang, sourceLang, context, chars); break;
                     default: translateOnDevice(requestId, texts, targetLang, sourceLang, chars); break;
                 }
             } catch (Exception e) {
@@ -481,6 +563,30 @@ public class TranslateBridge {
         result.put("detected", detected);
         result.put("characters", chars);
         result.put("engine", ENGINE_DEEPL);
+        succeed(requestId, result.toString());
+    }
+
+    /* ── a language model ─────────────────────────────────────────────── */
+
+    private void translateWithLlm(String requestId, JSONArray texts, String targetLang, String sourceLang,
+                                  String context, int chars) throws Exception {
+        String provider = prefs.getString(KEY_LLM_PROVIDER, LlmTranslator.ANTHROPIC);
+        String key = prefs.getString("llm_key_" + provider, "");
+        LlmTranslator.Setup setup = new LlmTranslator.Setup(provider, key,
+                prefs.getString("llm_model_" + provider, ""), prefs.getString(KEY_LLM_BASE, ""));
+        if (!LlmTranslator.CUSTOM.equals(provider) && key.isEmpty()) {
+            fail(requestId, "No key is set for the model. Add one in Settings → Translation.");
+            return;
+        }
+        List<String> in = new ArrayList<>();
+        for (int i = 0; i < texts.length(); i++) in.add(texts.getString(i));
+        List<String> translated = LlmTranslator.translate(setup, in, targetLang, sourceLang, context);
+        JSONArray out = new JSONArray();
+        for (String t : translated) out.put(t);
+        JSONObject result = new JSONObject();
+        result.put("texts", out);
+        result.put("characters", chars);
+        result.put("engine", ENGINE_LLM);
         succeed(requestId, result.toString());
     }
 

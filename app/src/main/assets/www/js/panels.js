@@ -413,6 +413,103 @@ export async function openLanguage(host) {
   }
   body.appendChild(keyCard);
 
+  // A language model: which service, its key, the model, and for another
+  // service its address.
+  if (state.engine === 'llm') {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const chosen = state.llmProvider || 'anthropic';
+    const info = translate.LLM_PROVIDERS.find(([code]) => code === chosen) || translate.LLM_PROVIDERS[0];
+    card.innerHTML = `<h2>AI model</h2>
+      <p class="muted" style="font-size:12px;line-height:1.55;margin:0 0 10px">
+        ${state.llmConfigured
+          ? `Using ${escape(info[1])}, model ${escape(state.llmModel || info[2])}${state.llmHint ? `, key ${escape(state.llmHint)}` : ''}.`
+          : 'Choose the service, paste your API key, and connect. The key stays on this phone.'}
+        Each page’s text goes to the service you choose, and is billed to your account there.</p>`;
+    const providers = document.createElement('div');
+    providers.className = 'chip-row wrap';
+    let picked = chosen;
+    const fields = document.createElement('div');
+    fields.className = 'field';
+    const paint = () => {
+      const [code, , model, where] = translate.LLM_PROVIDERS.find(([c]) => c === picked);
+      for (const chip of providers.children) chip.setAttribute('aria-pressed', String(chip.dataset.code === code));
+      fields.innerHTML = '';
+      const hint = document.createElement('p');
+      hint.className = 'muted';
+      hint.style.cssText = 'font-size:12px;line-height:1.5;margin:6px 0';
+      hint.textContent = code === 'custom' ? where : `Key from ${where}.`;
+      const base = document.createElement('input');
+      base.type = 'url';
+      base.placeholder = 'https://openrouter.ai/api/v1';
+      base.value = code === 'custom' ? (state.llmBase || '') : '';
+      base.autocapitalize = 'off';
+      base.spellcheck = false;
+      const key = document.createElement('input');
+      key.type = 'password';
+      key.placeholder = code === 'custom' ? 'API key, if the service needs one' : 'API key';
+      key.autocomplete = 'off';
+      key.autocapitalize = 'off';
+      key.spellcheck = false;
+      key.style.marginTop = '8px';
+      const modelBox = document.createElement('input');
+      modelBox.type = 'text';
+      modelBox.placeholder = code === 'custom' ? 'Model name, e.g. deepseek-chat' : model;
+      modelBox.value = code === state.llmProvider && state.llmModel ? state.llmModel : model;
+      modelBox.autocapitalize = 'off';
+      modelBox.spellcheck = false;
+      modelBox.style.marginTop = '8px';
+      const connect = document.createElement('button');
+      connect.className = 'btn primary block';
+      connect.style.marginTop = '10px';
+      connect.textContent = 'Connect';
+      connect.onclick = async () => {
+        if (code !== 'custom' && !key.value.trim()
+          && !(state.llmConfigured && state.llmProvider === code)) return toast('Paste your key first');
+        connect.disabled = true;
+        connect.textContent = 'Checking…';
+        try {
+          await translate.setLlm(code, key.value.trim(), modelBox.value.trim(), base.value.trim());
+          toast('Connected', 3000, { kind: 'done' });
+          openLanguage(body);
+          refreshTheme();
+        } catch (error) {
+          connect.disabled = false;
+          connect.textContent = 'Connect';
+          toast(error.message, 7000);
+        }
+      };
+      fields.append(hint);
+      if (code === 'custom') fields.append(base);
+      fields.append(key, modelBox, connect);
+      if (state.llmConfigured && state.llmProvider === code) {
+        const forget = document.createElement('button');
+        forget.className = 'btn ghost block';
+        forget.style.marginTop = '8px';
+        forget.textContent = 'Disconnect';
+        forget.onclick = async () => {
+          await translate.clearLlm(code);
+          toast('Key removed. No further requests will be made.');
+          openLanguage(body);
+          refreshTheme();
+        };
+        fields.append(forget);
+      }
+    };
+    for (const [code, label] of translate.LLM_PROVIDERS) {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.style.textTransform = 'none';
+      chip.dataset.code = code;
+      chip.textContent = label;
+      chip.onclick = () => { picked = code; paint(); };
+      providers.appendChild(chip);
+    }
+    card.append(providers, fields);
+    paint();
+    body.appendChild(card);
+  }
+
   // LibreTranslate: the server's address, and its key if it has one.
   if (state.engine === 'libre') {
     const libre = document.createElement('div');

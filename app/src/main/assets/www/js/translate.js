@@ -83,6 +83,7 @@ export const ENGINES = [
   ['ondevice', 'On device', 'Free, no account, and offline once a language pack is installed.'],
   ['deepl', 'DeepL', 'Best quality. Needs an API key; free tier is 500,000 characters a month.'],
   ['libre', 'LibreTranslate', 'Free software you can self-host, so your text goes to a server you chose.'],
+  ['llm', 'AI model', 'Claude, ChatGPT, Gemini or another model, with your own API key, billed by its provider. It reads a page as a whole, so names and tone stay consistent.'],
 ];
 
 export const setEngine = (engine) => call('setEngine', [engine]).then(parse);
@@ -158,6 +159,19 @@ export function sourceFor(book) {
   return (book?.lang || '').split('-')[0].toLowerCase();
 }
 export const setKey = (key) => call('setKey', [key], 30000).then(parse);
+
+/** The language-model services, with the fast, inexpensive model of each
+ *  as the starting point (any other can be named), and where to get a key. */
+export const LLM_PROVIDERS = [
+  ['anthropic', 'Claude', 'claude-haiku-5-5', 'console.anthropic.com → API Keys'],
+  ['openai', 'ChatGPT', 'gpt-6-luna', 'platform.openai.com → API keys'],
+  ['gemini', 'Gemini', 'gemini-3.8-flash', 'aistudio.google.com → Get API key'],
+  ['custom', 'Other', '', 'Any service that speaks OpenAI’s chat format: OpenRouter, DeepSeek, or Ollama / LM Studio on your own computer'],
+];
+/** Tried with a word of translation before it is kept, then made the translator. */
+export const setLlm = (provider, key, model, base) =>
+  call('setLlm', [provider, key || '', model || '', base || ''], 60000).then(parse);
+export const clearLlm = (provider) => call('clearLlm', [provider]).then(parse);
 export const clearKey = () => call('clearKey').then(parse);
 export const usage = () => call('usage').then(parse);
 

@@ -271,4 +271,20 @@ await t('a translation covers the bubble it is in, or the text where there is no
   assert.ok(plain.w < 60 && plain.h < 60 && !plain.round, JSON.stringify(plain));
 });
 
+await t("AI models translate too: Claude, ChatGPT, Gemini, or another, with the reader's key", async () => {
+  const translate = await import(new URL('../app/src/main/assets/www/js/translate.js', import.meta.url).href);
+  assert.ok(translate.ENGINES.some(([code]) => code === 'llm'));
+  assert.deepEqual(translate.LLM_PROVIDERS.map(([code]) => code), ['anthropic', 'openai', 'gemini', 'custom']);
+  const bridge = read('app/src/main/java/com/grimoire/ereader/TranslateBridge.java');
+  assert.match(bridge, /public void setLlm\(/);
+  assert.match(bridge, /case ENGINE_LLM: translateWithLlm\(/);
+  const llm = read('app/src/main/java/com/grimoire/ereader/LlmTranslator.java');
+  assert.match(llm, /https:\/\/api\.anthropic\.com\/v1\/messages/);
+  assert.match(llm, /"anthropic-version", "2026-10-21"/);
+  assert.match(llm, /:generateContent/);
+  assert.match(llm, /\/chat\/completions/);
+  // A page goes as one array, and must come back as one of the same length.
+  assert.match(llm, /array\.length\(\) != expected/);
+});
+
 console.log(`\n${pass} ocr tests passed`);
