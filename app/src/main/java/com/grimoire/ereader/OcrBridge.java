@@ -289,10 +289,21 @@ public class OcrBridge {
             for (Text.TextBlock block : blocks) out.add(closer(recogniser, bitmap, block));
             return out;
         }
-        for (List<Text.TextBlock> bubble : bubbles(blocks)) {
+        List<List<Text.TextBlock>> groups = bubbles(blocks);
+        for (List<Text.TextBlock> bubble : groups) {
+            // Where the page's other text is, so that columns of theirs
+            // are not taken in by this one.
+            List<VerticalLayout.Box> others = new ArrayList<>();
+            for (List<Text.TextBlock> other : groups) {
+                if (other == bubble) continue;
+                for (Text.TextBlock block : other) {
+                    Rect r = block.getBoundingBox();
+                    others.add(new VerticalLayout.Box(r.left, r.top, r.right, r.bottom));
+                }
+            }
             Found found = null;
             try {
-                found = readColumns(recogniser, bitmap, bubble);
+                found = readColumns(recogniser, bitmap, bubble, others);
             } catch (Exception e) {
                 Log.w(TAG, "Could not lay the columns out", e);
             }
@@ -383,6 +394,18 @@ public class OcrBridge {
         }
     }
 
+    /** Kana, kanji and hangul: what a page of manga or manhwa is written in. */
+    private static int ownLetters(String text) {
+        if (text == null) return 0;
+        int n = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if ((c >= 0x3040 && c <= 0x30FF) || (c >= 0x3400 && c <= 0x4DBF)
+                    || (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0xAC00 && c <= 0xD7AF)) n++;
+        }
+        return n;
+    }
+
     private static int letters(String text) {
         if (text == null) return 0;
         int n = 0;
@@ -432,7 +455,8 @@ public class OcrBridge {
 
     /** A bubble's columns, cut into characters, set as lines, and read. */
     private static Found readColumns(TextRecognizer recogniser, final Bitmap bitmap,
-                                     List<Text.TextBlock> bubble) throws Exception {
+                                     List<Text.TextBlock> bubble,
+                                     List<VerticalLayout.Box> others) throws Exception {
         List<VerticalLayout.Box> units = new ArrayList<>();
         Rect whole = null;
         for (Text.TextBlock block : bubble) {
@@ -451,7 +475,7 @@ public class OcrBridge {
                 bitmap.getPixels(px, 0, b.width(), b.left, b.top, b.width(), b.height());
                 return px;
             }
-        }, units);
+        }, units, others);
         if (sheet == null) return null;
 
         Bitmap page = Bitmap.createBitmap(Math.max(1, sheet.width), Math.max(1, sheet.height), Bitmap.Config.ARGB_8888);
@@ -493,10 +517,12 @@ public class OcrBridge {
             // Lettering the cleaning took for the drawing (drawn across a
             // door frame, say) is lost from the sheet; when much is lost,
             // the first reading, muddled as it may be, has more of the text.
+            // Counted in the script's own characters only: a muddled first
+            // reading is full of stray Latin letters, and those are no text.
             int before = 0;
-            for (Text.TextBlock block : bubble) before += letters(block.getText());
+            for (Text.TextBlock block : bubble) before += ownLetters(block.getText());
             int after = 0;
-            for (String column : columns) after += letters(column);
+            for (String column : columns) after += ownLetters(column);
             if (after < before * 0.6f) return null;
             Found found = new Found();
             found.vertical = true;

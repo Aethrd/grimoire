@@ -162,13 +162,62 @@ export function orderedBlocks(blocks, script, { direction = '' } = {}) {
   const list = (blocks || []).filter((block) => String(block.text || '').trim());
   if (!list.length) return [];
   const glue = script === 'latin' || script === 'korean' ? ' ' : '';
+  const tidy = script === 'japanese' ? tidyJapanese : (text) => text;
   return inRows(list, direction || directionOf(list, script))
     .map((block) => ({
       ...block,
-      joined: (block.lines?.length ? block.lines : String(block.text).split('\n'))
-        .map((line) => String(line).trim()).filter(Boolean).join(glue),
+      joined: tidy((block.lines?.length ? block.lines : String(block.text).split('\n'))
+        .map((line) => String(line).trim()).filter(Boolean).join(glue)),
     }))
     .filter((block) => block.joined);
+}
+
+/**
+ * The recogniser's commonest slips in Japanese, put right from the
+ * characters around them.
+ *
+ * - っ read as つ: before て, た or と inside a word (だつた, 強いつて,
+ *   ちよつと), it is the small one nearly always -- って, った, っと. In a
+ *   katakana word the same for ツ before a consonant.
+ * - Kanji read as the katakana they look like: カ for 力, ロ for 口, エ for
+ *   工, ニ for 二, ハ for 八 -- when they stand beside kanji and not inside
+ *   a katakana word (身体能カ is 身体能力; ロボ stays).
+ */
+const KANA = '\u3041-\u3096\u30A1-\u30FA\u30FC';
+const KATAKANA = /[\u30A1-\u30FA\u30FC\u30FB]/;
+const KANJI = /[\u4E00-\u9FFF\u3400-\u4DBF]/;
+const LOOKALIKE = { 'カ': '力', 'ロ': '口', 'エ': '工', 'ニ': '二', 'ハ': '八' };
+
+export function tidyJapanese(text) {
+  let out = String(text || '')
+    .replace(new RegExp(`(?<=[${KANA}\\u4E00-\\u9FFF])つ(?=[てたと])`, 'g'), 'っ')
+    .replace(/(?<=[\u30A1-\u30FA])ツ(?=[カキクケコサシスセソタチテトパピプペポ])/g, 'ッ');
+  const chars = [...out];
+  for (let i = 0; i < chars.length; i++) {
+    const kanji = LOOKALIKE[chars[i]];
+    if (!kanji) continue;
+    const before = chars[i - 1] || '';
+    const after = chars[i + 1] || '';
+    if (KATAKANA.test(before) || KATAKANA.test(after)) continue;
+    if (KANJI.test(before) || KANJI.test(after)) chars[i] = kanji;
+  }
+  out = chars.join('');
+  return out;
+}
+
+/**
+ * Whether a block's text is text, and not the recogniser's muddle -- a
+ * block of Japanese read badly comes out as stray Latin letters and digits,
+ * and translated, that is nonsense laid over the picture. In Japanese,
+ * Chinese and Korean, at least half of what is not space or punctuation
+ * must be in the script.
+ */
+export function readable(text, script) {
+  const chars = [...String(text || '')].filter((c) => /[\p{L}\p{N}]/u.test(c));
+  if (!chars.length) return false;
+  if (script === 'latin') return true;
+  const own = chars.filter((c) => /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(c)).length;
+  return own >= chars.length * 0.5;
 }
 
 /** The language a script's text is in, as the translators name it. */
@@ -275,4 +324,86 @@ export async function cropOf(blob, box, { longest = 1600, margin = 0.06 } = {}) 
   } finally {
     bitmap.close?.();
   }
+}
+
+/**
+ * The speech bubble a block of text sits in: the light inside of it, found
+ * by spreading out from just around the text until the bubble's outline
+ * stops the spread. A translation laid over the whole bubble has room that
+ * one laid over the text alone does not -- English runs longer than the
+ * Japanese it comes from, and a bubble of columns is narrow where its text
+ * is but wide where it is drawn.
+ *
+ * Where the spread is not stopped on a side -- text on an open page, or
+ * narration over the drawing -- that side keeps to the text, with a margin.
+ *
+ * @param lum    brightness, row by row, of the picture at the size it was read
+ * @param block  { x, y, w, h }, at that size
+ * @returns { x, y, w, h, round } -- round when the bubble is an oval rather
+ *   than a box (it fills well under all of its bounding box)
+ */
+export function bubbleArea(lum, width, height, block, { light = 200 } = {}) {
+  const bx = Math.max(0, Math.floor(block.x));
+  const by = Math.max(0, Math.floor(block.y));
+  const br = Math.min(width, Math.ceil(block.x + block.w));
+  const bb = Math.min(height, Math.ceil(block.y + block.h));
+  // A character's size: given, or the block's narrow side shared between
+  // its lines (its columns, set vertically).
+  const lines = Math.max(1, block.lines?.length || 1);
+  const size = Math.max(4, block.size || Math.min(block.w, block.h) / lines);
+  const fallback = () => {
+    const pad = size * 0.3;
+    const x = Math.max(0, bx - pad);
+    const y = Math.max(0, by - pad);
+    return { x, y, w: Math.min(width, br + pad) - x, h: Math.min(height, bb + pad) - y, round: false };
+  };
+  if (br <= bx || bb <= by) return fallback();
+  // Looked for no further than this from the text.
+  // A bubble hugs its text: a little wider and taller than the text, never
+  // a panel's width of white beyond it.
+  const across = block.w * 0.25 + size * 1.5;
+  const down = block.h * 0.15 + size * 1.5;
+  const wl = Math.max(0, Math.floor(bx - across));
+  const wt = Math.max(0, Math.floor(by - down));
+  const wr = Math.min(width, Math.ceil(br + across));
+  const wb = Math.min(height, Math.ceil(bb + down));
+  const ww = wr - wl;
+  const seen = new Uint8Array(ww * (wb - wt));
+  const stack = [];
+  const push = (x, y) => {
+    if (x < wl || x >= wr || y < wt || y >= wb) return;
+    const i = (y - wt) * ww + (x - wl);
+    if (seen[i] || lum[y * width + x] < light) return;
+    seen[i] = 1;
+    stack.push(x, y);
+  };
+  // Seeds: the ring just outside the text.
+  const ring = 3;
+  for (let x = bx - ring; x < br + ring; x++) { push(x, by - ring); push(x, bb + ring - 1); }
+  for (let y = by - ring; y < bb + ring; y++) { push(bx - ring, y); push(br + ring - 1, y); }
+  let count = 0;
+  let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+  const limit = ww * (wb - wt);
+  while (stack.length) {
+    const y = stack.pop();
+    const x = stack.pop();
+    count++;
+    if (x < l) l = x;
+    if (x > r) r = x;
+    if (y < t) t = y;
+    if (y > b) b = y;
+    if (count > limit) break;
+    push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1);
+  }
+  const textArea = (br - bx) * (bb - by);
+  if (count < textArea * 0.15) return fallback();
+  // Run out of room on any side, it is not a bubble but open page, or the
+  // drawing's own white: the text keeps to itself, with a margin.
+  if (l <= wl || t <= wt || r >= wr - 1 || b >= wb - 1) return fallback();
+  const left = Math.min(bx, l + 1);
+  const top = Math.min(by, t + 1);
+  const right = Math.max(br, r);
+  const bottom = Math.max(bb, b);
+  const filled = count / Math.max(1, (r - l + 1) * (b - t + 1));
+  return { x: left, y: top, w: right - left, h: bottom - top, round: filled < 0.88 };
 }

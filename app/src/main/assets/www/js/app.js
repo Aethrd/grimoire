@@ -6200,7 +6200,7 @@ const ocrState = {
   reads: [],          // this run's readings, kept so a new direction needs no new reading
   cache: new Map(),
   urls: null,
-  translate: false,   // translations shown under the text, for this book
+  translate: false,   // translated once asked, until the sheet is closed
 };
 
 /* The icon's page is a comic page, and its panels are drawn anew as you read. */
@@ -6260,8 +6260,9 @@ async function openOcr() {
   ocrState.book = book.id;
   const saved = await store.settings();
   ocrState.direction = saved.ocrDirections?.[book.id] || '';
-  ocrState.translate = !!saved.ocrTranslate?.[book.id];
-  el('ocr-translate').setAttribute('aria-pressed', String(ocrState.translate));
+  // Asked for each time: a translation is a call against the quota, made
+  // only when the button is pressed (or the overlays are on).
+  ocrState.translate = false;
   el('ocr-overlay').setAttribute('aria-pressed', String(overlay.on && overlay.book === book.id));
   el('ocr-translation').hidden = true;
   el('ocr-translation').value = '';
@@ -6521,12 +6522,16 @@ function textHash(text) {
 /** A reading's bubbles in order, each with its translation. The others on
  *  the page go along as context, for names and tone. */
 async function translateRead(bookId, read, direction) {
-  const blocks = ocr.orderedBlocks(read.blocks, read.script, { direction });
+  // Muddle is not sent: translated, it is nonsense over the picture.
+  const blocks = ocr.orderedBlocks(read.blocks, read.script, { direction })
+    .filter((block) => ocr.readable(block.joined, read.script));
   if (!blocks.length) return [];
   const settings = await store.settings();
   const items = blocks.map((block) => ({ field: `ocr:${textHash(block.joined)}`, text: block.joined }));
-  const { results } = await translate.translateBatch(bookId, items, settings.translateTarget,
-    ocr.languageOf(read.script), { context: blocks.map((block) => block.joined).join('\n') });
+  // The whole page at once, so that each bubble is translated knowing the
+  // others; each part comes back to its own bubble.
+  const { results } = await translate.translatePage(bookId, items, settings.translateTarget,
+    ocr.languageOf(read.script));
   return blocks.map((block, i) => ({ ...block, translation: results.get(items[i].field) || '' }));
 }
 
@@ -6546,6 +6551,9 @@ async function setOverlay(bookId, on) {
   overlay.on = on;
   overlay.book = bookId;
   overlay.failed = false;
+  // Off is off: nothing more is asked of the translator. (A request already
+  // on its way is let finish, and cached; nothing new is sent.)
+  if (!on) overlay.queue = [];
   el('ocr-btn').setAttribute('aria-pressed', String(on));
   if (on) refreshOverlay();
   else clearOverlays();
@@ -6606,7 +6614,8 @@ async function pumpOverlay() {
         if (!read) continue;
         const direction = await directionFor(book, read);
         const blocks = await translateRead(book.id, read, direction);
-        overlay.done.set(href, { read, blocks });
+        const areas = await bubbleAreas(href, read, blocks);
+        overlay.done.set(href, { read, blocks, areas });
         if (overlay.on && overlay.book === book.id) drawOverlay(href);
       } catch (error) {
         // Said once, and the queue stopped: a missing key or a spent quota
@@ -6647,6 +6656,42 @@ function drawnRect(img) {
   return rect;
 }
 
+/* Where each translation goes: over the whole bubble its text is in, as
+ * found in the picture; or, where there is no bubble to find, over the
+ * text with a margin. Two that would overlap keep to their own text. */
+async function bubbleAreas(href, read, blocks) {
+  const plain = blocks.map((block) => ({ x: block.x, y: block.y, w: block.w, h: block.h, round: false }));
+  const blob = reader.state.images.get(href);
+  if (!blob || !read.width || !read.height || typeof createImageBitmap !== 'function') return plain;
+  let lum;
+  try {
+    const bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement('canvas');
+    canvas.width = read.width;
+    canvas.height = read.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, 0, 0, read.width, read.height);
+    bitmap.close?.();
+    const data = ctx.getImageData(0, 0, read.width, read.height).data;
+    lum = new Uint8Array(read.width * read.height);
+    for (let i = 0; i < lum.length; i++) {
+      lum[i] = (data[i * 4] * 299 + data[i * 4 + 1] * 587 + data[i * 4 + 2] * 114) / 1000;
+    }
+  } catch {
+    return plain;
+  }
+  const areas = blocks.map((block) => ocr.bubbleArea(lum, read.width, read.height, block));
+  const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  for (let i = 0; i < areas.length; i++) {
+    for (let j = i + 1; j < areas.length; j++) {
+      if (!overlaps(areas[i], areas[j])) continue;
+      areas[i] = plain[i];
+      areas[j] = plain[j];
+    }
+  }
+  return areas;
+}
+
 function drawOverlay(href) {
   const entry = overlay.done.get(href);
   if (!entry) return;
@@ -6664,24 +6709,31 @@ function drawOverlay(href) {
     const layer = document.createElement('div');
     layer.className = 'pic-translation';
     layer.setAttribute('aria-hidden', 'true');
-    for (const block of shown) {
-      // A tall, narrow bubble of columns is widened, so a line of English
-      // has room: about as wide as half its height, about its middle.
-      let { x, w } = block;
-      const minimum = Math.min(read.width, block.h * 0.55);
-      if (w < minimum) {
-        x = Math.max(0, Math.min(read.width - minimum, x + w / 2 - minimum / 2));
-        w = minimum;
-      }
+    blocks.forEach((block, i) => {
+      if (!block.translation) return;
+      const area = entry.areas?.[i] || block;
       const box = document.createElement('div');
       box.className = 'bubble-tr';
-      box.style.left = `${(x / read.width) * 100}%`;
-      box.style.top = `${(block.y / read.height) * 100}%`;
-      box.style.width = `${(w / read.width) * 100}%`;
-      box.style.height = `${(block.h / read.height) * 100}%`;
-      box.textContent = block.translation;
+      // Placed by its middle, so a box that has to grow for its text grows
+      // evenly both ways.
+      box.style.left = `${((area.x + area.w / 2) / read.width) * 100}%`;
+      box.style.top = `${((area.y + area.h / 2) / read.height) * 100}%`;
+      box.style.width = `${(area.w / read.width) * 100}%`;
+      box.style.height = `${(area.h / read.height) * 100}%`;
+      // Kept, for a box that grows to fit to grow from.
+      box.style.setProperty('--w', box.style.width);
+      box.style.setProperty('--h', box.style.height);
+      // Set in ordinary lines however narrow the place: a bubble of columns
+      // has its translation run down it a word or two to a line.
+      const text = document.createElement('div');
+      text.className = 'tr-text';
+      const line = document.createElement('span');
+      line.className = 'tr-line';
+      line.textContent = block.translation;
+      text.appendChild(line);
+      box.appendChild(text);
       layer.appendChild(box);
-    }
+    });
     holder.appendChild(layer);
     placeLayer(img, layer);
     watchPicture(img);
@@ -6698,14 +6750,18 @@ function placeLayer(img, layer) {
   for (const box of layer.children) fitText(box);
 }
 
-/* The largest type that fits the box with no word broken, found by
- * halving; no larger than a comfortable size for a bubble. Only a word too
- * long for the box even at the smallest size is let break. */
+/* The largest type that fits the place, with no word broken across lines;
+ * no larger than a comfortable size. A word wider than a narrow place --
+ * a bubble of columns -- widens it rather than being split: there is no
+ * box to cover anything, only the highlight behind the words. If the text
+ * is still too long at the smallest readable size, the place grows down. */
 function fitText(box) {
-  box.style.overflowWrap = '';
+  box.classList.remove('grown');
+  box.style.width = box.style.getPropertyValue('--w') || box.style.width;
   const fits = () => box.scrollHeight <= box.clientHeight + 1 && box.scrollWidth <= box.clientWidth + 1;
-  let low = 6;
-  let high = Math.max(7, Math.min(24, box.clientHeight * 0.8));
+  const lineFits = () => box.scrollWidth <= box.clientWidth + 1;
+  let low = 10;
+  let high = Math.max(11, Math.min(24, box.clientHeight * 0.5));
   box.style.fontSize = `${high}px`;
   if (fits()) return;
   for (let i = 0; i < 7; i++) {
@@ -6715,7 +6771,10 @@ function fitText(box) {
     else high = mid;
   }
   box.style.fontSize = `${low}px`;
-  if (!fits()) box.style.overflowWrap = 'anywhere';
+  if (fits()) return;
+  // The longest word, not the place, sets the width.
+  if (!lineFits()) box.style.width = `${box.scrollWidth + 2}px`;
+  if (!fits()) box.classList.add('grown');
 }
 
 /* Laid out again whenever the picture's size changes: a new page size, a
@@ -6809,14 +6868,11 @@ function wireOcr() {
     const characters = text.replace(/\s/g, '').length;
     toast(`Text copied · ${characters.toLocaleString()} character${characters === 1 ? '' : 's'}`);
   };
-  el('ocr-translate').onclick = async () => {
-    ocrState.translate = !ocrState.translate;
-    el('ocr-translate').setAttribute('aria-pressed', String(ocrState.translate));
-    if (ocrState.translate) showOcrTranslation();
-    else el('ocr-translation').hidden = true;
-    const book = ocrState.book;
-    const saved = (await store.settings()).ocrTranslate || {};
-    await store.saveSettings({ ocrTranslate: { ...saved, [book]: ocrState.translate } });
+  // Once, for what is in the sheet: the same text read again (another
+  // script, another picture) is translated again while the sheet is open.
+  el('ocr-translate').onclick = () => {
+    ocrState.translate = true;
+    showOcrTranslation();
   };
   el('ocr-overlay').onclick = async () => {
     const book = reader.state.book;

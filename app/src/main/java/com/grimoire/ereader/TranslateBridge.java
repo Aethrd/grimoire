@@ -206,6 +206,25 @@ public class TranslateBridge {
     public void translateWithContext(final String requestId, final String textsJson,
                                      final String targetLang, final String sourceLang,
                                      final String context) {
+        run(requestId, textsJson, targetLang, sourceLang, context, null);
+    }
+
+    /**
+     * A page translated whole, its parts marked with XML tags that DeepL
+     * keeps where they belong in the translation: every sentence is then
+     * translated knowing the others, and the parts can still be put back
+     * where they came from. The other engines do not read tags; they are
+     * asked as translateWithContext would ask them.
+     */
+    @JavascriptInterface
+    public void translateTagged(final String requestId, final String textsJson,
+                                final String targetLang, final String sourceLang) {
+        run(requestId, textsJson, targetLang, sourceLang, null, "xml");
+    }
+
+    private void run(final String requestId, final String textsJson,
+                     final String targetLang, final String sourceLang,
+                     final String context, final String tagHandling) {
         io.execute(() -> {
             try {
                 JSONArray texts = new JSONArray(textsJson);
@@ -217,7 +236,7 @@ public class TranslateBridge {
                 }
 
                 switch (engine()) {
-                    case ENGINE_DEEPL: translateWithDeepL(requestId, texts, targetLang, chars, context); break;
+                    case ENGINE_DEEPL: translateWithDeepL(requestId, texts, targetLang, chars, context, tagHandling); break;
                     case ENGINE_LIBRE: translateWithLibre(requestId, texts, targetLang, sourceLang, chars); break;
                     default: translateOnDevice(requestId, texts, targetLang, sourceLang, chars); break;
                 }
@@ -430,7 +449,7 @@ public class TranslateBridge {
     /* ── DeepL ────────────────────────────────────────────────────────── */
 
     private void translateWithDeepL(String requestId, JSONArray texts, String targetLang, int chars,
-                                    String context) throws Exception {
+                                    String context, String tagHandling) throws Exception {
         String key = prefs.getString(KEY_AUTH, null);
         if (key == null) {
             fail(requestId, "No DeepL key is set. Add one, or switch to on-device translation.");
@@ -444,6 +463,7 @@ public class TranslateBridge {
         // when the result is put back into a chapter.
         body.put("preserve_formatting", true);
         if (context != null && !context.trim().isEmpty()) body.put("context", context);
+        if (tagHandling != null) body.put("tag_handling", tagHandling);
 
         String response = post(key, "/v2/translate", body.toString());
         JSONArray translations = new JSONObject(response).getJSONArray("translations");

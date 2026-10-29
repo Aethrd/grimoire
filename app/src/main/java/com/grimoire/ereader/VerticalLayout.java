@@ -170,19 +170,74 @@ final class VerticalLayout {
         boolean[] keep = new boolean[n];
         boolean[] seen = new boolean[n];
         int[] stack = new int[n];
+        // Pieces are made of strong ink only: lettering is near black (near
+        // white, for light letters), and grey lines of the drawing that run
+        // through it -- seen through a bubble, or a screentone -- then do
+        // not join it to the drawing. Its soft edges are put back after.
+        // (Dark grey lettering on a pale ground counts: strong is judged
+        // against the page's own threshold.)
+        int strongDark = Math.min(g.threshold, Math.max(110, Math.round(g.threshold * 0.7f)));
+        int strongLight = Math.max(g.threshold, 185);
+        boolean[] ink = new boolean[n];
+        for (int i = 0; i < n; i++) ink[i] = g.light ? g.lum[i] >= strongLight : g.lum[i] <= strongDark;
         float big = em > 0 ? em * 2.5f : Float.MAX_VALUE;
-        float speck = em > 0 ? Math.max(1.5f, em * 0.12f) : 1.5f;
+        // Smaller than a dot of an ellipsis: grey screentone is not strong
+        // ink to begin with, so what is left this small is all specks.
+        float speck = em > 0 ? Math.max(1.5f, em * 0.07f) : 1.5f;
+        // ...but only where the drawing round about is grey. The pieces of
+        // all the ink, grey and strong, are found first: one far bigger than
+        // a character that is mostly strong ink is the drawing's own black
+        // (hatching, hair, a shadow), and what is strong in it is not
+        // lettering however it breaks apart.
+        int[] parent = new int[n];
+        java.util.Arrays.fill(parent, -1);
+        List<Boolean> blackDrawing = new ArrayList<>();
+        for (int start = 0; start < n; start++) {
+            if (parent[start] >= 0 || !g.ink(start % g.w, start / g.w)) continue;
+            int label = blackDrawing.size();
+            int top = 0, count = 0, strong = 0;
+            stack[top++] = start;
+            parent[start] = label;
+            int l = g.w, r = -1, t = g.h, b = -1;
+            while (top > 0) {
+                int at = stack[--top];
+                count++;
+                if (ink[at]) strong++;
+                int x = at % g.w, y = at / g.w;
+                if (x < l) l = x;
+                if (x > r) r = x;
+                if (y < t) t = y;
+                if (y > b) b = y;
+                for (int dy = -1; dy <= 1; dy++) {
+                    int yy = y + dy;
+                    if (yy < 0 || yy >= g.h) continue;
+                    for (int dx = -1; dx <= 1; dx++) {
+                        int xx = x + dx;
+                        if (xx < 0 || xx >= g.w) continue;
+                        int next = yy * g.w + xx;
+                        if (parent[next] >= 0 || !g.ink(xx, yy)) continue;
+                        parent[next] = label;
+                        stack[top++] = next;
+                    }
+                }
+            }
+            boolean huge = r - l + 1 > big || b - t + 1 > big;
+            blackDrawing.add(huge && strong > count * 0.6f);
+        }
         int[] members = new int[n];
         for (int start = 0; start < n; start++) {
-            if (seen[start] || !g.ink(start % g.w, start / g.w)) continue;
+            if (seen[start] || !ink[start]) continue;
             int top = 0;
             int count = 0;
             stack[top++] = start;
             seen[start] = true;
             int l = g.w, r = -1, t = g.h, b = -1;
+            int core = g.light ? 0 : 255;
             while (top > 0) {
                 int at = stack[--top];
                 members[count++] = at;
+                int v = g.lum[at];
+                core = g.light ? Math.max(core, v) : Math.min(core, v);
                 int x = at % g.w;
                 int y = at / g.w;
                 if (x < l) l = x;
@@ -196,7 +251,7 @@ final class VerticalLayout {
                         int xx = x + dx;
                         if (xx < 0 || xx >= g.w) continue;
                         int next = yy * g.w + xx;
-                        if (seen[next] || !g.ink(xx, yy)) continue;
+                        if (seen[next] || !ink[next]) continue;
                         seen[next] = true;
                         stack[top++] = next;
                     }
@@ -204,8 +259,20 @@ final class VerticalLayout {
             }
             int bw = r - l + 1;
             int bh = b - t + 1;
-            if (bw > big || bh > big) continue;              // the drawing
+            if (bw > big || bh > big) {                      // the drawing
+                // ...unless there are letters in it: black letters in a white
+                // halo on a black ground touch the ground, and come out as
+                // one piece with it.
+                if (em > 0 && !g.light) lettersIn(g, members, count, l, t, r, b, em, keep);
+                continue;
+            }
             if (Math.max(bw, bh) < speck) continue;           // screentone
+            if (parent[members[0]] >= 0 && blackDrawing.get(parent[members[0]])) continue;
+            // Lettering is inked solid: every stroke has a black core (a
+            // white one, for light letters). Shading and the specks at the
+            // edge of a gradient are grey all through.
+            if (g.light ? core < Math.max(185, 255 - (255 - g.threshold) * 0.55f)
+                        : core > Math.min(75, g.threshold * 0.55f)) continue;
             // A patch of solid black the size of a character is shadow, not
             // strokes (ー is solid too, but thin).
             // (Bold kanji -- 警, 最 -- are dense, but not this dense.)
@@ -226,6 +293,126 @@ final class VerticalLayout {
             }
         }
         return grown;
+    }
+
+    /**
+     * The letters inside one great piece of ink: what is left of it once its
+     * solid parts (and a rim round them) are taken away, kept where it is a
+     * character's size and stands mostly in light -- touching the solid
+     * only at its tips, as letters in a halo do. Scraps of the drawing left
+     * the same way lie along the solid, and are not kept.
+     */
+    private static void lettersIn(Gray g, int[] members, int count, int l, int t, int r, int b,
+                                  float em, boolean[] keep) {
+        int w = r - l + 1;
+        int h = b - t + 1;
+        boolean[] piece = new boolean[w * h];
+        for (int i = 0; i < count; i++) {
+            int at = members[i];
+            piece[(at / g.w - t) * w + (at % g.w - l)] = true;
+        }
+        int k = Math.max(1, Math.round(em * 0.15f));
+        boolean[] solid = boxAll(piece, w, h, k);
+        if (!any(solid)) return;
+        boolean[] near = boxAny(solid, w, h, k + 1);
+        boolean[] rest = new boolean[w * h];
+        for (int i = 0; i < rest.length; i++) rest[i] = piece[i] && !near[i];
+        boolean[] seen = new boolean[w * h];
+        int[] stack = new int[w * h];
+        int[] found = new int[w * h];
+        for (int start = 0; start < rest.length; start++) {
+            if (!rest[start] || seen[start]) continue;
+            int top = 0, n = 0;
+            stack[top++] = start;
+            seen[start] = true;
+            int pl = w, pr = -1, pt = h, pb = -1;
+            int core = 255;
+            while (top > 0) {
+                int at = stack[--top];
+                found[n++] = at;
+                int x = at % w, y = at / w;
+                pl = Math.min(pl, x); pr = Math.max(pr, x); pt = Math.min(pt, y); pb = Math.max(pb, y);
+                core = Math.min(core, g.lum[(y + t) * g.w + x + l]);
+                for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+                    int xx = x + dx, yy = y + dy;
+                    if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+                    int next = yy * w + xx;
+                    if (seen[next] || !rest[next]) continue;
+                    seen[next] = true;
+                    stack[top++] = next;
+                }
+            }
+            int pw = pr - pl + 1, ph = pb - pt + 1;
+            if (pw > em * 1.3f || ph > em * 1.3f) continue;
+            if (Math.max(pw, ph) < em * 0.15f) continue;
+            if (core > 75) continue;
+            // Strokes, not a patch: a letter inks well under half its box.
+            if (n > pw * ph * 0.65f) continue;
+            // How much of what lies round it is the solid's rim.
+            int ring = 0, rim = 0;
+            for (int y = Math.max(0, pt - 2); y <= Math.min(h - 1, pb + 2); y++) {
+                for (int x = Math.max(0, pl - 2); x <= Math.min(w - 1, pr + 2); x++) {
+                    int i = y * w + x;
+                    if (rest[i]) continue;
+                    ring++;
+                    if (near[i]) rim++;
+                }
+            }
+            if (rim > ring * 0.2f) continue;
+            for (int i = 0; i < n; i++) {
+                int x = found[i] % w, y = found[i] / w;
+                keep[(y + t) * g.w + x + l] = true;
+            }
+        }
+    }
+
+    private static boolean any(boolean[] mask) {
+        for (boolean v : mask) if (v) return true;
+        return false;
+    }
+
+    /** Where every pixel of the (2r+1)-square round a point is set. */
+    static boolean[] boxAll(boolean[] mask, int w, int h, int r) {
+        int[] sum = integral(mask, w, h);
+        boolean[] out = new boolean[w * h];
+        int area = (2 * r + 1) * (2 * r + 1);
+        for (int y = r; y < h - r; y++) {
+            for (int x = r; x < w - r; x++) {
+                if (boxSum(sum, w, x - r, y - r, x + r + 1, y + r + 1) == area) out[y * w + x] = true;
+            }
+        }
+        return out;
+    }
+
+    /** Where any pixel of the (2r+1)-square round a point is set. */
+    static boolean[] boxAny(boolean[] mask, int w, int h, int r) {
+        int[] sum = integral(mask, w, h);
+        boolean[] out = new boolean[w * h];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int l = Math.max(0, x - r), t = Math.max(0, y - r);
+                int rr = Math.min(w, x + r + 1), b = Math.min(h, y + r + 1);
+                if (boxSum(sum, w, l, t, rr, b) > 0) out[y * w + x] = true;
+            }
+        }
+        return out;
+    }
+
+    private static int[] integral(boolean[] mask, int w, int h) {
+        int[] sum = new int[(w + 1) * (h + 1)];
+        for (int y = 0; y < h; y++) {
+            int row = 0;
+            for (int x = 0; x < w; x++) {
+                if (mask[y * w + x]) row++;
+                sum[(y + 1) * (w + 1) + x + 1] = sum[y * (w + 1) + x + 1] + row;
+            }
+        }
+        return sum;
+    }
+
+    private static int boxSum(int[] sum, int w, int l, int t, int r, int b) {
+        int stride = w + 1;
+        return sum[b * stride + r] - sum[t * stride + r] - sum[b * stride + l] + sum[t * stride + l];
     }
 
     /** Mostly columns, standing taller than they are wide. */
@@ -644,8 +831,10 @@ final class VerticalLayout {
                 off += Math.abs(pitch - h) / pitch;
                 full++;
             }
-            // Lightly against stretching, so that typeset text keeps its square.
-            double score = full == 0 ? Double.MAX_VALUE : off / full + (stretch - 1f) * 0.15;
+            // Firmly against stretching: typeset kana are often a little
+            // shorter than square, and two of them stretched together fit a
+            // taller square well -- which reads っ and た as one character.
+            double score = full == 0 ? Double.MAX_VALUE : off / full + (stretch - 1f) * 0.6;
             if (score < fit) {
                 fit = score;
                 groups = tried;
@@ -699,7 +888,10 @@ final class VerticalLayout {
         float bestPitch = 0;
         int bestPhase = 0;
         float step = Math.max(0.5f, width * 0.01f);
-        for (float pitch = width * 0.95f; pitch <= width * 1.3f; pitch += step) {
+        // Kana are set closer than a full square more often than not, and a
+        // column is as wide as its widest character: from three quarters of
+        // the width up.
+        for (float pitch = width * 0.75f; pitch <= width * 1.3f; pitch += step) {
             if (g.h < pitch * 1.5f) return null;      // a single character: nothing to cut
             int reach = Math.max(1, Math.round(pitch * 0.04f));
             for (int phase = -Math.round(pitch) + 1; phase <= 0; phase++) {
@@ -843,6 +1035,15 @@ final class VerticalLayout {
      * @param units the recogniser's lines for the block, in picture pixels
      */
     static Sheet layout(Pixels picture, List<Box> units) {
+        return layout(picture, units, Collections.<Box>emptyList());
+    }
+
+    /**
+     * @param others where the recogniser found the page's other text: a
+     *   column found beyond this block's own lines that stands in one of
+     *   them is theirs, not this block's, and is left to them
+     */
+    static Sheet layout(Pixels picture, List<Box> units, List<Box> others) {
         // The recogniser's lines say where the text is, not how it runs: read
         // across columns, they are short and wide. So the columns are found
         // afresh, in the whole patch the lines cover, a little beyond it.
@@ -850,13 +1051,20 @@ final class VerticalLayout {
         if (clamped.isEmpty()) return null;
         Box region = clamped.get(0).copy();
         for (Box u : clamped) region.union(u);
+        final Box own = region.copy();
         List<Integer> thickness = new ArrayList<>();
         for (Box u : clamped) thickness.add(Math.min(u.width(), u.height()));
         Collections.sort(thickness);
-        int grow = Math.max(Math.max(2, Math.round(Math.max(region.width(), region.height()) * 0.03f)),
-                thickness.get(thickness.size() / 2) / 2);
-        region = new Box(Math.max(0, region.left - grow), Math.max(0, region.top - grow),
-                Math.min(picture.width(), region.right + grow), Math.min(picture.height(), region.bottom + grow));
+        // Wide enough to take in a column the recogniser missed altogether
+        // beside the ones it found -- a short first column, say, or one
+        // with ruby -- and the ends of columns it cut short. What is not
+        // lettering is cleaned out below.
+        int least = Math.max(2, Math.round(Math.max(region.width(), region.height()) * 0.03f));
+        int character = thickness.get(thickness.size() / 2);
+        int growAcross = Math.max(least, Math.round(character * 1.6f));
+        int growDown = Math.max(least, character);
+        region = new Box(Math.max(0, region.left - growAcross), Math.max(0, region.top - growDown),
+                Math.min(picture.width(), region.right + growAcross), Math.min(picture.height(), region.bottom + growDown));
         if (region.width() < 4 || region.height() < 4) return null;
         int[] argb = picture.argb(region);
         Gray raw = Gray.of(argb, region.width(), region.height());
@@ -877,8 +1085,35 @@ final class VerticalLayout {
             Gray seen = new Gray(raw.lum, region.width(), region.height(), raw.threshold, light);
             boolean[] keep = lettering(seen, hint);
             int ground = light ? 0xFF000000 : 0xFFFFFFFF;
+            // Within the lettering, only the solid ink and a pixel of soft
+            // edge round it: shading that touches a stroke is grey, and
+            // would be read as a mark of its own.
+            int w = region.width();
+            int h = region.height();
+            boolean[] solid = new boolean[argb.length];
+            for (int i = 0; i < argb.length; i++) {
+                int v = raw.lum[i];
+                solid[i] = light ? v >= 230 : v <= 60;
+            }
             int[] tried = new int[argb.length];
-            for (int i = 0; i < argb.length; i++) tried[i] = keep[i] ? argb[i] : ground;
+            for (int i = 0; i < argb.length; i++) {
+                boolean use = false;
+                if (keep[i]) {
+                    int v = raw.lum[i];
+                    use = light ? v >= 195 : v <= 110;
+                    if (!use) {
+                        int x = i % w;
+                        int y = i / w;
+                        for (int dy = -1; dy <= 1 && !use; dy++) {
+                            for (int dx = -1; dx <= 1 && !use; dx++) {
+                                int xx = x + dx, yy = y + dy;
+                                if (xx >= 0 && xx < w && yy >= 0 && yy < h && solid[yy * w + xx]) use = true;
+                            }
+                        }
+                    }
+                }
+                tried[i] = use ? argb[i] : ground;
+            }
             Gray cleaned = new Gray(Gray.lumOf(tried), region.width(), region.height(), raw.threshold, light);
             List<Box> columns = columnsIn(cleaned, hint);
             if (columns.isEmpty() || !looksVertical(columns)) continue;
@@ -893,6 +1128,28 @@ final class VerticalLayout {
             }
         }
         if (found == null) return null;      // within the patch from here on
+        // Columns reached only by looking beyond this block's lines, that
+        // stand in another block's text, are that block's.
+        if (!others.isEmpty()) {
+            List<Box> mine = new ArrayList<>();
+            for (Box c : found) {
+                Box at = new Box(region.left + c.left, region.top + c.top, region.left + c.right, region.top + c.bottom);
+                float cx = (at.left + at.right) / 2f;
+                float cy = (at.top + at.bottom) / 2f;
+                boolean inside = cx >= own.left && cx <= own.right && cy >= own.top && cy <= own.bottom;
+                boolean theirs = false;
+                if (!inside) {
+                    for (Box o : others) {
+                        int w = Math.min(at.right, o.right) - Math.max(at.left, o.left);
+                        int h = Math.min(at.bottom, o.bottom) - Math.max(at.top, o.top);
+                        if (w > 0 && h > 0 && (long) w * h > (long) at.width() * at.height() * 0.3) { theirs = true; break; }
+                    }
+                }
+                if (!theirs) mine.add(c);
+            }
+            found = mine;
+            if (found.isEmpty() || !looksVertical(found)) return null;
+        }
         float em = emOf(found);
         if (em < 4) return null;
         List<Box> body = withoutRuby(found, em);

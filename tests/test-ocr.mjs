@@ -194,6 +194,29 @@ await t('translation takes the other bubbles as context, where the bridge can', 
   assert.deepEqual(calls[2], ['plain'], 'an older build is asked plainly');
 });
 
+await t('a page is translated whole by DeepL, each part back in its place', async () => {
+  const translate = await import(new URL('../app/src/main/assets/www/js/translate.js', import.meta.url).href);
+  let sent = null;
+  window.GrimoireTranslate = globalThis.window.GrimoireTranslate = {
+    status: () => '{"configured":true,"engine":"deepl"}',
+    translateTagged(id, json, lang, source) {
+      sent = { page: JSON.parse(json)[0], source };
+      // DeepL keeps the tags, translating across them.
+      setTimeout(() => translate.settle(id, true, { texts: ['<s i="0">Heh &amp; you call this research?</s>\n<s i="1">I put up with it</s>'] }), 1);
+    },
+    translateWithContext(id, json) { setTimeout(() => translate.settle(id, true, { texts: JSON.parse(json).map((t) => `EN:${t}`) }), 1); },
+  };
+  const items = [{ field: 'ocr:p1', text: 'ふんっ何が研究だよ' }, { field: 'ocr:p2', text: '受け入れたのは<' }];
+  const out = await translate.translatePage('b2', items, 'EN-GB', 'ja');
+  assert.match(sent.page, /^<s i="0">ふんっ何が研究だよ<\/s>\n<s i="1">受け入れたのは&lt;<\/s>$/);
+  assert.equal(out.results.get('ocr:p1'), 'Heh & you call this research?');
+  assert.equal(out.results.get('ocr:p2'), 'I put up with it');
+  // Tags lost on the way back: part by part instead.
+  window.GrimoireTranslate.translateTagged = (id) => setTimeout(() => translate.settle(id, true, { texts: ['Heh, research.'] }), 1);
+  const again = await translate.translatePage('b2', [{ field: 'ocr:p3', text: 'はい' }, { field: 'ocr:p4', text: 'いいえ' }], 'EN-GB', 'ja');
+  assert.equal(again.results.get('ocr:p3'), 'EN:はい');
+});
+
 await t('the sheet translates, and lays the translations over the pictures', () => {
   const doc = window.document;
   for (const id of ['ocr-translate', 'ocr-overlay', 'ocr-translation']) assert.ok(doc.getElementById(id), id);
@@ -216,6 +239,36 @@ await t('settings offer a choice of translator, and a DeepL key box whatever is 
   assert.match(panels, /await translate\.setKey\(input\.value\.trim\(\)\);\s*await translate\.setEngine\('deepl'\);/);
   const bridge = read('app/src/main/java/com/grimoire/ereader/TranslateBridge.java');
   assert.match(bridge, /connection\.setRequestMethod\("GET"\);/, 'usage asked as DeepL documents it');
+});
+
+await t('the common look-alike slips in Japanese are put right, and only those', () => {
+  assert.equal(ocr.tidyJapanese('今回もお手柄だつたね'), '今回もお手柄だったね');
+  assert.equal(ocr.tidyJapanese('誰より強いつてだけ'), '誰より強いってだけ');
+  assert.equal(ocr.tidyJapanese('身体能カの高さ'), '身体能力の高さ');
+  assert.equal(ocr.tidyJapanese('勝敗はついてるんだよ'), '勝敗はついてるんだよ', 'つい stays');
+  assert.equal(ocr.tidyJapanese('ロボのカード'), 'ロボのカード', 'katakana words stay');
+});
+
+await t('muddle is not translated', () => {
+  assert.equal(ocr.readable("to J17'./Ba.Oi", 'japanese'), false);
+  assert.equal(ocr.readable('SCAF入りを果たした', 'japanese'), true);
+  assert.equal(ocr.readable('Hello there', 'latin'), true);
+});
+
+await t('a translation covers the bubble it is in, or the text where there is none', () => {
+  const W = 200, H = 200;
+  const oval = new Uint8Array(W * H).fill(120);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const d = ((x - 100) / 45) ** 2 + ((y - 100) / 40) ** 2;
+    if (d < 1) oval[y * W + x] = 255;
+    if (d >= 0.9 && d < 1.1) oval[y * W + x] = 0;
+  }
+  const area = ocr.bubbleArea(oval, W, H, { x: 80, y: 80, w: 40, h: 40, size: 20 });
+  assert.ok(area.w > 70 && area.h > 60 && area.round, JSON.stringify(area));
+  // White all round, no outline: not a bubble -- the text, with a margin.
+  const open = new Uint8Array(W * H).fill(255);
+  const plain = ocr.bubbleArea(open, W, H, { x: 80, y: 80, w: 40, h: 40, size: 20 });
+  assert.ok(plain.w < 60 && plain.h < 60 && !plain.round, JSON.stringify(plain));
 });
 
 console.log(`\n${pass} ocr tests passed`);
