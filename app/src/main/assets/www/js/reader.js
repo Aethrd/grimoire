@@ -1527,6 +1527,28 @@ export function picturesInView({ inOrder = false } = {}) {
 }
 
 /**
+ * The pictures that come after the ones on screen, in the order they stand:
+ * the next pages of a comic, to be read before they are reached.
+ */
+export function picturesAhead(count = 2) {
+  if (!flow) return [];
+  const all = [];
+  for (const img of flow.querySelectorAll('img[data-img]')) {
+    const href = img.getAttribute('data-img');
+    if (!all.includes(href)) all.push(href);
+  }
+  const here = picturesInView({ inOrder: true });
+  const last = here.length ? Math.max(...here.map((href) => all.indexOf(href))) : -1;
+  return all.slice(last + 1, last + 1 + count);
+}
+
+/** Every place a picture stands in the open chapters, to draw over it. */
+export function pictureElements(href) {
+  if (!flow) return [];
+  return [...flow.querySelectorAll('img[data-img]')].filter((img) => img.getAttribute('data-img') === href);
+}
+
+/**
  * A picture in the open book has changed -- blacked out, or put back.
  *
  * Swapped in where it already stands rather than by reloading the chapter:

@@ -212,7 +212,7 @@ export async function cacheSize() {
  * Only the misses are sent. Fields are named by the caller so the cache can
  * be keyed per item: "chapter:3", "body:3", and so on.
  */
-export async function translateBatch(bookId, items, lang, sourceLang = '') {
+export async function translateBatch(bookId, items, lang, sourceLang = '', { context = '' } = {}) {
   const results = new Map();
   const misses = [];
 
@@ -226,10 +226,15 @@ export async function translateBatch(bookId, items, lang, sourceLang = '') {
 
   // ML Kit needs to be told the source language; it does not sniff. The
   // book's own declared language is the answer nearly every time.
-  const response = await call('translate', [
+  // Context -- the bubbles around the one being translated, say -- goes
+  // to DeepL to steer names and tone, and is not translated or charged.
+  // Builds without it are asked plainly.
+  const withContext = context && typeof window.GrimoireTranslate?.translateWithContext === 'function';
+  const response = await call(withContext ? 'translateWithContext' : 'translate', [
     JSON.stringify(misses.map((m) => m.text)),
     lang,
     sourceLang || '',
+    ...(withContext ? [String(context).slice(0, 2000)] : []),
   ], 120000);
   const payload = parse(response);
   if (!payload?.texts) {

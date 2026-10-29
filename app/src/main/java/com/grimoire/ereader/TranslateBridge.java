@@ -193,6 +193,19 @@ public class TranslateBridge {
     @JavascriptInterface
     public void translate(final String requestId, final String textsJson,
                           final String targetLang, final String sourceLang) {
+        translateWithContext(requestId, textsJson, targetLang, sourceLang, null);
+    }
+
+    /**
+     * As translate, with text that surrounds the batch -- the other bubbles
+     * on a page -- for DeepL to read for names and tone. It is not
+     * translated and not charged. The other engines take no context and
+     * translate as before.
+     */
+    @JavascriptInterface
+    public void translateWithContext(final String requestId, final String textsJson,
+                                     final String targetLang, final String sourceLang,
+                                     final String context) {
         io.execute(() -> {
             try {
                 JSONArray texts = new JSONArray(textsJson);
@@ -204,7 +217,7 @@ public class TranslateBridge {
                 }
 
                 switch (engine()) {
-                    case ENGINE_DEEPL: translateWithDeepL(requestId, texts, targetLang, chars); break;
+                    case ENGINE_DEEPL: translateWithDeepL(requestId, texts, targetLang, chars, context); break;
                     case ENGINE_LIBRE: translateWithLibre(requestId, texts, targetLang, sourceLang, chars); break;
                     default: translateOnDevice(requestId, texts, targetLang, sourceLang, chars); break;
                 }
@@ -416,8 +429,8 @@ public class TranslateBridge {
 
     /* ── DeepL ────────────────────────────────────────────────────────── */
 
-    private void translateWithDeepL(String requestId, JSONArray texts, String targetLang, int chars)
-            throws Exception {
+    private void translateWithDeepL(String requestId, JSONArray texts, String targetLang, int chars,
+                                    String context) throws Exception {
         String key = prefs.getString(KEY_AUTH, null);
         if (key == null) {
             fail(requestId, "No DeepL key is set. Add one, or switch to on-device translation.");
@@ -430,6 +443,7 @@ public class TranslateBridge {
         // Keeps paragraph structure rather than reflowing it, which matters
         // when the result is put back into a chapter.
         body.put("preserve_formatting", true);
+        if (context != null && !context.trim().isEmpty()) body.put("context", context);
 
         String response = post(key, "/v2/translate", body.toString());
         JSONArray translations = new JSONObject(response).getJSONArray("translations");

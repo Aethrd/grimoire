@@ -657,6 +657,13 @@
     <div class="ocr-scripts" id="ocr-scripts" role="group" aria-label="Read as"></div>
     <p class="ocr-status" id="ocr-status" aria-live="polite"></p>
     <textarea class="ocr-text" id="ocr-text" rows="9" spellcheck="false" autocomplete="off"></textarea>
+    <!-- Translated, with the translator chosen in Settings; and laid over
+         the bubbles themselves, the next pages read ahead of time. -->
+    <div class="ocr-translate-row" role="group" aria-label="Translation">
+      <button class="chip" id="ocr-translate" aria-pressed="false">Translate</button>
+      <button class="chip" id="ocr-overlay" aria-pressed="false">Show on the pictures</button>
+    </div>
+    <textarea class="ocr-translation" id="ocr-translation" rows="5" readonly hidden></textarea>
     <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
       <button class="btn ghost" id="ocr-close">Close</button>
       <button class="btn ghost" id="ocr-lens" title="Hand the picture, or the boxed part, to Google Lens" hidden>Google Lens</button>

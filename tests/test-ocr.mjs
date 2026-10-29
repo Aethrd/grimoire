@@ -79,6 +79,18 @@ await t('vertical Japanese is read right to left; other pages top to bottom', ()
   assert.equal(ocr.readingText([{ text: '对不起\n真的', x: 0, y: 0, w: 90, h: 40, lines: ['对不起', '真的'] }], 'chinese'), '对不起真的');
 });
 
+await t('bubbles come in reading order, each joined whole, to be translated as one', () => {
+  const blocks = [
+    { text: 'a', vertical: true, x: 10, y: 0, w: 60, h: 200, lines: ['ちょっと', '待って'] },
+    { text: 'b', vertical: true, x: 200, y: 0, w: 60, h: 200, lines: ['申し訳', 'ありません'] },
+  ];
+  const ordered = ocr.orderedBlocks(blocks, 'japanese');
+  assert.deepEqual(ordered.map((block) => block.joined), ['申し訳ありません', 'ちょっと待って']);
+  assert.equal(ordered[0].x, 200, 'with its place on the picture, for the overlay');
+  assert.equal(ocr.languageOf('japanese'), 'ja');
+  assert.equal(ocr.languageOf('latin'), '');
+});
+
 await t('a picture is handed across in pieces and read through the bridge', async () => {
   assert.equal(ocr.available(), false);
   const got = new Map();
@@ -160,6 +172,39 @@ await t('the native side: registered, with the four recognisers bundled', () => 
   const layout = read('app/src/main/java/com/grimoire/ereader/VerticalLayout.java');
   assert.doesNotMatch(layout, /^import android/m, 'plain Java, testable off the phone');
   assert.match(bridge, /window\.Grimoire\.settleOcr/);
+});
+
+await t('translation takes the other bubbles as context, where the bridge can', async () => {
+  const translate = await import(new URL('../app/src/main/assets/www/js/translate.js', import.meta.url).href);
+  const calls = [];
+  const settleLater = (id, texts) => setTimeout(() => translate.settle(id, true, { texts: texts.map((t) => `EN:${t}`) }), 1);
+  window.GrimoireTranslate = globalThis.window.GrimoireTranslate = {
+    status: () => '{"configured":true}',
+    translate(id, json) { calls.push(['plain']); settleLater(id, JSON.parse(json)); },
+    translateWithContext(id, json, lang, source, context) { calls.push(['context', source, context]); settleLater(id, JSON.parse(json)); },
+  };
+  const out = await translate.translateBatch('b1', [{ field: 'ocr:x1', text: '申し訳ありません' }], 'EN-GB', 'ja',
+    { context: '申し訳ありません\nちょっと待って' });
+  assert.equal(out.results.get('ocr:x1'), 'EN:申し訳ありません');
+  assert.deepEqual(calls[0], ['context', 'ja', '申し訳ありません\nちょっと待って']);
+  await translate.translateBatch('b1', [{ field: 'ocr:x2', text: 'はい' }], 'EN-GB', 'ja');
+  assert.deepEqual(calls[1], ['plain'], 'no context, the plain call');
+  delete window.GrimoireTranslate.translateWithContext;
+  await translate.translateBatch('b1', [{ field: 'ocr:x3', text: 'いいえ' }], 'EN-GB', 'ja', { context: 'x' });
+  assert.deepEqual(calls[2], ['plain'], 'an older build is asked plainly');
+});
+
+await t('the sheet translates, and lays the translations over the pictures', () => {
+  const doc = window.document;
+  for (const id of ['ocr-translate', 'ocr-overlay', 'ocr-translation']) assert.ok(doc.getElementById(id), id);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /reader\.picturesAhead\(2\)/, 'the next two pictures, read ahead');
+  assert.match(app, /pointer-events|drawOverlay/);
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\.pic-translation \{ position: absolute; pointer-events: none;/, 'taps go through to the page');
+  const bridge = read('app/src/main/java/com/grimoire/ereader/TranslateBridge.java');
+  assert.match(bridge, /public void translateWithContext\(/);
+  assert.match(bridge, /body\.put\("context", context\)/);
 });
 
 console.log(`\n${pass} ocr tests passed`);

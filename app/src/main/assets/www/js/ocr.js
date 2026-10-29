@@ -150,15 +150,30 @@ export function pickBest(results, order = Object.keys(results || {})) {
  * English and Korean, with nothing in Chinese and Japanese.
  */
 export function readingText(blocks, script, { direction = '' } = {}) {
+  return orderedBlocks(blocks, script, { direction }).map((block) => block.joined).join('\n\n');
+}
+
+/**
+ * The blocks in reading order, each with its text joined as the script
+ * joins it (`joined`): one bubble, one piece of text, to be translated as
+ * a whole and laid back over the bubble it came from.
+ */
+export function orderedBlocks(blocks, script, { direction = '' } = {}) {
   const list = (blocks || []).filter((block) => String(block.text || '').trim());
-  if (!list.length) return '';
-  const ordered = inRows(list, direction || directionOf(list, script));
+  if (!list.length) return [];
   const glue = script === 'latin' || script === 'korean' ? ' ' : '';
-  return ordered
-    .map((block) => (block.lines?.length ? block.lines : String(block.text).split('\n'))
-      .map((line) => String(line).trim()).filter(Boolean).join(glue))
-    .filter(Boolean)
-    .join('\n\n');
+  return inRows(list, direction || directionOf(list, script))
+    .map((block) => ({
+      ...block,
+      joined: (block.lines?.length ? block.lines : String(block.text).split('\n'))
+        .map((line) => String(line).trim()).filter(Boolean).join(glue),
+    }))
+    .filter((block) => block.joined);
+}
+
+/** The language a script's text is in, as the translators name it. */
+export function languageOf(script) {
+  return { korean: 'ko', japanese: 'ja', chinese: 'zh' }[script] || '';
 }
 
 /**
@@ -209,9 +224,18 @@ function inRows(list, direction) {
 export async function readPicture(blob, scripts) {
   const read = await recognise(blob, scripts);
   const best = pickBest(read.results, scripts);
-  if (!best) return { script: scripts[0], text: '', blocks: [], raw: '' };
+  if (!best) return { script: scripts[0], text: '', blocks: [], raw: '', width: read.width, height: read.height };
   const raw = String(best.text || '').trim();
-  return { script: best.script, blocks: best.blocks || [], raw, text: readingText(best.blocks, best.script) || raw };
+  return {
+    script: best.script,
+    blocks: best.blocks || [],
+    raw,
+    text: readingText(best.blocks, best.script) || raw,
+    // The size the boxes are measured against: the picture as it was read,
+    // which for a very large one is a scaled-down copy.
+    width: read.width,
+    height: read.height,
+  };
 }
 
 /**

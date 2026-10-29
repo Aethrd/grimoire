@@ -2417,6 +2417,7 @@ function paintReader() {
   if (place !== copyIconAt) {
     if (copyIconAt) { moveCopyIconKnobs(); drawOcrPanels(); }
     copyIconAt = place;
+    syncOverlay();
   }
   // Only where there are pictures to read.
   el('ocr-btn').hidden = !(state.images && state.images.size);
@@ -6199,6 +6200,7 @@ const ocrState = {
   reads: [],          // this run's readings, kept so a new direction needs no new reading
   cache: new Map(),
   urls: null,
+  translate: false,   // translations shown under the text, for this book
 };
 
 /* The icon's page is a comic page, and its panels are drawn anew as you read. */
@@ -6256,7 +6258,13 @@ async function openOcr() {
   if (!ocr.available()) return toast('Reading text from pictures needs the app', 4000);
   if (ocrState.book !== book.id) { ocrState.choice = ''; ocrState.cache.clear(); }
   ocrState.book = book.id;
-  ocrState.direction = (await store.settings()).ocrDirections?.[book.id] || '';
+  const saved = await store.settings();
+  ocrState.direction = saved.ocrDirections?.[book.id] || '';
+  ocrState.translate = !!saved.ocrTranslate?.[book.id];
+  el('ocr-translate').setAttribute('aria-pressed', String(ocrState.translate));
+  el('ocr-overlay').setAttribute('aria-pressed', String(overlay.on && overlay.book === book.id));
+  el('ocr-translation').hidden = true;
+  el('ocr-translation').value = '';
   ocrState.reads = [];
   ocrState.hrefs = hrefs;
   ocrState.at = hrefs.length === 1 ? 0 : -1;
@@ -6366,7 +6374,39 @@ function paintOcrText() {
   el('ocr-text').value = text;
   el('ocr-copy').disabled = !text;
   paintOcrScripts([...found.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '');
+  if (ocrState.translate) showOcrTranslation();
   return text;
+}
+
+/** The readings translated, bubble by bubble, under the text. */
+async function showOcrTranslation() {
+  const box = el('ocr-translation');
+  const token = ocrState.token;
+  const book = reader.state.book;
+  if (!book || !ocrState.reads.length) { box.hidden = true; return; }
+  if (!translate.status().configured) {
+    box.hidden = false;
+    box.classList.add('problem');
+    box.value = 'Choose a translator in Settings → Translation first.';
+    return;
+  }
+  box.hidden = false;
+  box.classList.remove('problem');
+  box.value = 'Translating…';
+  try {
+    const direction = ocrDirection();
+    const parts = [];
+    for (const read of ocrState.reads) {
+      const blocks = await translateRead(book.id, read, direction);
+      parts.push(blocks.map((block) => block.translation).filter(Boolean).join('\n\n'));
+    }
+    if (token !== ocrState.token) return;
+    box.value = parts.filter(Boolean).join('\n\n') || 'Nothing to translate.';
+  } catch (error) {
+    if (token !== ocrState.token) return;
+    box.classList.add('problem');
+    box.value = error.message || 'The translation failed.';
+  }
 }
 
 /** The picture (or the boxed part of it) to read. */
@@ -6391,16 +6431,23 @@ async function runOcr() {
     for (let i = 0; i < targets.length; i++) {
       const href = targets[i];
       const key = `${book.id}|${href}|${boxKey}|${scripts.join(',')}`;
-      let read = ocrState.cache.get(key);
+      let read = box ? ocrState.cache.get(key) : pictureReads.get(readKey(book.id, href, scripts));
       if (!read) {
         ocrStatus(targets.length > 1 ? `Reading picture ${i + 1} of ${targets.length}…`
           : box ? 'Reading the boxed part…' : 'Reading the picture…');
-        const blob = await ocrBlobOf(href, box);
-        if (token !== ocrState.token) return;
-        if (!blob) continue;
-        read = await ocr.readPicture(blob, scripts);
-        if (token !== ocrState.token) return;
-        ocrState.cache.set(key, read);
+        if (box) {
+          const blob = await ocrBlobOf(href, box);
+          if (token !== ocrState.token) return;
+          if (!blob) continue;
+          read = await ocr.readPicture(blob, scripts);
+          if (token !== ocrState.token) return;
+          ocrState.cache.set(key, read);
+        } else {
+          // Whole pictures are shared with the overlays, and kept.
+          read = await readWhole(book.id, href, scripts);
+          if (token !== ocrState.token) return;
+          if (!read) continue;
+        }
       }
       reads.push(read);
     }
@@ -6414,6 +6461,8 @@ async function runOcr() {
   el('ocr-btn').removeAttribute('aria-busy');
   ocrState.reads = reads;
   const text = paintOcrText();
+  // The next pages, read while this one is: tapping on is then instant.
+  warmAhead();
   if (!text) {
     ocrStatus(ocr.lensAvailable()
       ? 'No text found. Box one bubble, try another script, or try Google Lens.'
@@ -6423,6 +6472,265 @@ async function runOcr() {
     ocrStatus(`${characters.toLocaleString()} character${characters === 1 ? '' : 's'}`
       + (box ? ' · from the box' : targets.length > 1 ? ` · ${targets.length} pictures` : ''));
   }
+}
+
+/* ── translations over the pictures ────────────────────────────────────
+ *
+ * Each picture on screen read and translated, bubble by bubble, and each
+ * translation laid over the bubble it came from. The next two pictures are
+ * read and translated before they are reached, one at a time, so turning
+ * the page finds them done. Readings are kept with the book, and the
+ * translator keeps its own cache, so nothing is read or paid for twice.
+ */
+
+/* Readings of whole pictures: shared by the sheet and the overlays. */
+const pictureReads = new Map();
+const readKey = (bookId, href, scripts) => {
+  const size = reader.state.images.get(href)?.size || 0;
+  // The size changes when a picture is blacked out: read again then.
+  return `${bookId}:ocrpic:${href}:${size}:${scripts.join(',')}`;
+};
+
+async function readWhole(bookId, href, scripts) {
+  const key = readKey(bookId, href, scripts);
+  if (pictureReads.has(key)) return pictureReads.get(key);
+  try {
+    const kept = await store.get('translations', key);
+    if (kept?.value) {
+      const read = JSON.parse(kept.value);
+      pictureReads.set(key, read);
+      return read;
+    }
+  } catch { /* read it afresh */ }
+  const blob = reader.state.images.get(href);
+  if (!blob) return null;
+  const read = await ocr.readPicture(blob, scripts);
+  pictureReads.set(key, read);
+  store.put('translations', {
+    key, bookId, field: `ocrpic:${href}`, lang: 'ocr', value: JSON.stringify(read), at: Date.now(),
+  }).catch(() => {});
+  return read;
+}
+
+function textHash(text) {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0;
+  return `${(h >>> 0).toString(36)}${text.length}`;
+}
+
+/** A reading's bubbles in order, each with its translation. The others on
+ *  the page go along as context, for names and tone. */
+async function translateRead(bookId, read, direction) {
+  const blocks = ocr.orderedBlocks(read.blocks, read.script, { direction });
+  if (!blocks.length) return [];
+  const settings = await store.settings();
+  const items = blocks.map((block) => ({ field: `ocr:${textHash(block.joined)}`, text: block.joined }));
+  const { results } = await translate.translateBatch(bookId, items, settings.translateTarget,
+    ocr.languageOf(read.script), { context: blocks.map((block) => block.joined).join('\n') });
+  return blocks.map((block, i) => ({ ...block, translation: results.get(items[i].field) || '' }));
+}
+
+const overlay = {
+  on: false,
+  book: null,
+  queue: [],          // hrefs to read (and translate) next
+  busy: false,
+  done: new Map(),    // href -> { read, blocks }
+  failed: false,
+  watcher: null,
+};
+
+async function setOverlay(bookId, on) {
+  const saved = (await store.settings()).ocrOverlay || {};
+  await store.saveSettings({ ocrOverlay: { ...saved, [bookId]: on } });
+  overlay.on = on;
+  overlay.book = bookId;
+  overlay.failed = false;
+  el('ocr-btn').setAttribute('aria-pressed', String(on));
+  if (on) refreshOverlay();
+  else clearOverlays();
+}
+
+/* A new place in the book: the overlays for what is on screen, and the
+ * pictures ahead put in the queue. A new book: its own setting. */
+async function syncOverlay() {
+  const book = reader.state.book;
+  if (!book) return;
+  if (overlay.book !== book.id) {
+    overlay.book = book.id;
+    overlay.queue = [];
+    overlay.done.clear();
+    overlay.failed = false;
+    overlay.on = !!(await store.settings()).ocrOverlay?.[book.id];
+    el('ocr-btn').setAttribute('aria-pressed', String(overlay.on));
+  }
+  if (overlay.on) refreshOverlay();
+}
+
+function refreshOverlay() {
+  if (!overlay.on || !ocr.available()) return;
+  const here = reader.picturesInView({ inOrder: true });
+  for (const href of here) if (overlay.done.has(href)) drawOverlay(href);
+  // On screen first, then the two ahead.
+  const wanted = [...here, ...reader.picturesAhead(2)].filter((href) => !overlay.done.has(href));
+  overlay.queue = [...new Set([...wanted, ...overlay.queue.filter((href) => !wanted.includes(href))])].slice(0, 6);
+  pumpOverlay();
+}
+
+/* Without the overlays: the next pictures read anyway (reading is free and
+ * offline), so that the sheet opens on them at once. */
+function warmAhead() {
+  const book = reader.state.book;
+  if (!book || overlay.on) return;
+  const scripts = ocrState.choice ? [ocrState.choice] : ocr.scriptsFor(book.lang);
+  const ahead = reader.picturesAhead(2);
+  (async () => {
+    for (const href of ahead) {
+      try { await readWhole(book.id, href, scripts); } catch { return; }
+    }
+  })();
+}
+
+async function pumpOverlay() {
+  if (overlay.busy) return;
+  overlay.busy = true;
+  try {
+    while (overlay.on && overlay.queue.length && !overlay.failed) {
+      const book = reader.state.book;
+      if (!book || book.id !== overlay.book) break;
+      const href = overlay.queue.shift();
+      if (overlay.done.has(href)) continue;
+      const scripts = ocrState.book === book.id && ocrState.choice ? [ocrState.choice] : ocr.scriptsFor(book.lang);
+      try {
+        const read = await readWhole(book.id, href, scripts);
+        if (!read) continue;
+        const direction = await directionFor(book, read);
+        const blocks = await translateRead(book.id, read, direction);
+        overlay.done.set(href, { read, blocks });
+        if (overlay.on && overlay.book === book.id) drawOverlay(href);
+      } catch (error) {
+        // Said once, and the queue stopped: a missing key or a spent quota
+        // fails the same way for every picture after.
+        overlay.failed = true;
+        toast(error.message || 'The pictures could not be translated', 6000, { kind: 'failed' });
+      }
+    }
+  } finally {
+    overlay.busy = false;
+  }
+}
+
+async function directionFor(book, read) {
+  const set = (await store.settings()).ocrDirections?.[book.id];
+  return set || ocr.directionOf(read.blocks, read.script, book.lang || '');
+}
+
+function clearOverlays() {
+  for (const layer of document.querySelectorAll('.pic-translation')) layer.remove();
+  for (const box of document.querySelectorAll('.pic.translated')) box.classList.remove('translated');
+}
+
+/* The picture as drawn: its box less any letterboxing from object-fit. */
+function drawnRect(img) {
+  const w = img.clientWidth;
+  const h = img.clientHeight;
+  const nw = img.naturalWidth || w;
+  const nh = img.naturalHeight || h;
+  let rect = { left: img.offsetLeft, top: img.offsetTop, width: w, height: h };
+  const fit = getComputedStyle(img).objectFit;
+  if ((fit === 'contain' || fit === 'scale-down' || fit === 'cover') && nw && nh && w && h) {
+    const scale = fit === 'cover' ? Math.max(w / nw, h / nh) : Math.min(w / nw, h / nh);
+    const cw = nw * scale;
+    const ch = nh * scale;
+    rect = { left: img.offsetLeft + (w - cw) / 2, top: img.offsetTop + (h - ch) / 2, width: cw, height: ch };
+  }
+  return rect;
+}
+
+function drawOverlay(href) {
+  const entry = overlay.done.get(href);
+  if (!entry) return;
+  const { read, blocks } = entry;
+  if (!read.width || !read.height) return;
+  for (const img of reader.pictureElements(href)) {
+    const holder = img.parentElement;
+    if (!holder?.classList.contains('pic')) continue;
+    holder.querySelector(':scope > .pic-translation')?.remove();
+    // An ornament or an icon in the text has no bubbles to speak of.
+    if (img.classList.contains('small') || holder.classList.contains('small')) continue;
+    const shown = blocks.filter((block) => block.translation);
+    if (!shown.length) continue;
+    holder.classList.add('translated');
+    const layer = document.createElement('div');
+    layer.className = 'pic-translation';
+    layer.setAttribute('aria-hidden', 'true');
+    for (const block of shown) {
+      // A tall, narrow bubble of columns is widened, so a line of English
+      // has room: about as wide as half its height, about its middle.
+      let { x, w } = block;
+      const minimum = Math.min(read.width, block.h * 0.55);
+      if (w < minimum) {
+        x = Math.max(0, Math.min(read.width - minimum, x + w / 2 - minimum / 2));
+        w = minimum;
+      }
+      const box = document.createElement('div');
+      box.className = 'bubble-tr';
+      box.style.left = `${(x / read.width) * 100}%`;
+      box.style.top = `${(block.y / read.height) * 100}%`;
+      box.style.width = `${(w / read.width) * 100}%`;
+      box.style.height = `${(block.h / read.height) * 100}%`;
+      box.textContent = block.translation;
+      layer.appendChild(box);
+    }
+    holder.appendChild(layer);
+    placeLayer(img, layer);
+    watchPicture(img);
+  }
+}
+
+function placeLayer(img, layer) {
+  const rect = drawnRect(img);
+  if (!rect.width || !rect.height) return;
+  layer.style.left = `${rect.left}px`;
+  layer.style.top = `${rect.top}px`;
+  layer.style.width = `${rect.width}px`;
+  layer.style.height = `${rect.height}px`;
+  for (const box of layer.children) fitText(box);
+}
+
+/* The largest type that fits the box with no word broken, found by
+ * halving; no larger than a comfortable size for a bubble. Only a word too
+ * long for the box even at the smallest size is let break. */
+function fitText(box) {
+  box.style.overflowWrap = '';
+  const fits = () => box.scrollHeight <= box.clientHeight + 1 && box.scrollWidth <= box.clientWidth + 1;
+  let low = 6;
+  let high = Math.max(7, Math.min(24, box.clientHeight * 0.8));
+  box.style.fontSize = `${high}px`;
+  if (fits()) return;
+  for (let i = 0; i < 7; i++) {
+    const mid = (low + high) / 2;
+    box.style.fontSize = `${mid}px`;
+    if (fits()) low = mid;
+    else high = mid;
+  }
+  box.style.fontSize = `${low}px`;
+  if (!fits()) box.style.overflowWrap = 'anywhere';
+}
+
+/* Laid out again whenever the picture's size changes: a new page size, a
+ * new fitting, the bars coming and going. */
+function watchPicture(img) {
+  if (typeof ResizeObserver !== 'function') return;
+  if (!overlay.watcher) {
+    overlay.watcher = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const layer = entry.target.parentElement?.querySelector(':scope > .pic-translation');
+        if (layer) placeLayer(entry.target, layer);
+      }
+    });
+  }
+  overlay.watcher.observe(img);
 }
 
 /* A box dragged across the picture: one bubble, read on its own. A tap
@@ -6500,6 +6808,27 @@ function wireOcr() {
     }
     const characters = text.replace(/\s/g, '').length;
     toast(`Text copied · ${characters.toLocaleString()} character${characters === 1 ? '' : 's'}`);
+  };
+  el('ocr-translate').onclick = async () => {
+    ocrState.translate = !ocrState.translate;
+    el('ocr-translate').setAttribute('aria-pressed', String(ocrState.translate));
+    if (ocrState.translate) showOcrTranslation();
+    else el('ocr-translation').hidden = true;
+    const book = ocrState.book;
+    const saved = (await store.settings()).ocrTranslate || {};
+    await store.saveSettings({ ocrTranslate: { ...saved, [book]: ocrState.translate } });
+  };
+  el('ocr-overlay').onclick = async () => {
+    const book = reader.state.book;
+    if (!book) return;
+    const on = !(overlay.on && overlay.book === book.id);
+    if (on && !translate.status().configured) {
+      return toast('Choose a translator in Settings → Translation first', 5000);
+    }
+    await setOverlay(book.id, on);
+    el('ocr-overlay').setAttribute('aria-pressed', String(on));
+    // On: the sheet steps aside so the pictures can be seen.
+    if (on) closeOcr();
   };
   el('ocr-lens').onclick = async () => {
     const href = ocrState.hrefs[Math.max(0, ocrState.at)];

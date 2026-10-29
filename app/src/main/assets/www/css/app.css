@@ -735,6 +735,31 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
 .ocr-scripts .ocr-direction { border-style: dashed; white-space: nowrap; }
 .ocr-status { flex: none; margin: 0 0 8px; font-size: 13px; color: var(--muted); }
 .ocr-status.problem { color: #c0553f; }
+.ocr-translate-row { flex: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0 0; }
+.ocr-translate-row .chip { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.ocr-translation { flex: none; margin-top: 8px; padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px dashed var(--divider); font-size: 15px; line-height: 1.5;
+  color: var(--text); font-family: inherit; width: 100%; resize: none; min-height: 90px; max-height: 30vh; }
+.ocr-translation.problem { color: #c0553f; }
+/* The button shows the translations are on the pictures. */
+.copy-row .ocr-btn[aria-pressed="true"] { color: var(--accent-ink, var(--accent)); border-color: var(--accent); }
+
+/* ── translations over the pictures ────────────────────────────────────
+   A layer exactly over the picture as drawn, with a box over each bubble
+   holding its translation, the text sized to fill it. Not to be touched:
+   taps and holds go through to the page as before. */
+.page-flow .pic.translated { position: relative; }
+.pic-translation { position: absolute; pointer-events: none; z-index: 2; }
+.pic-translation .bubble-tr {
+  position: absolute; display: flex; align-items: center; justify-content: center;
+  text-align: center; overflow: hidden; box-sizing: border-box;
+  padding: 2px 3px; border-radius: 6px;
+  background: rgba(255, 255, 255, .95); color: #111;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .12);
+  font-family: var(--font-heading); font-weight: 600; line-height: 1.12;
+  overflow-wrap: normal; word-break: normal; hyphens: manual;
+  text-indent: 0; letter-spacing: 0;
+}
 .ocr-text { flex: 1 1 auto; min-height: 140px; width: 100%; resize: none; padding: 10px 12px;
   border: 1px solid var(--divider); border-radius: var(--radius-sm); background: var(--surface);
   color: var(--text); font: inherit; font-size: 15px; line-height: 1.55; }
