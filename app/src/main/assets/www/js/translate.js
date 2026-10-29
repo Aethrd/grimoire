@@ -201,9 +201,13 @@ async function remember(bookId, field, lang, value) {
   });
 }
 
+/* Answer keys for the accuracy check (lang 'key') are kept in the same
+ * place, but are the reader's own typing, not a cache: never cleared here. */
+const isKey = (row) => row.lang === 'key';
+
 /** Forget everything translated for one book, or for the whole library. */
 export async function clearCache(bookId = null) {
-  const rows = await store.all('translations');
+  const rows = (await store.all('translations')).filter((row) => !isKey(row));
   for (const row of rows) {
     if (bookId === null || row.bookId === bookId) await store.del('translations', row.key);
   }
@@ -211,7 +215,7 @@ export async function clearCache(bookId = null) {
 }
 
 export async function cacheSize() {
-  const rows = await store.all('translations');
+  const rows = (await store.all('translations')).filter((row) => !isKey(row));
   return {
     entries: rows.length,
     characters: rows.reduce((n, r) => n + (r.value?.length || 0), 0),

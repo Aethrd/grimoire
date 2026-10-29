@@ -741,6 +741,25 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
   background: var(--surface); border: 1px dashed var(--divider); font-size: 15px; line-height: 1.5;
   color: var(--text); font-family: inherit; width: 100%; resize: none; min-height: 90px; max-height: 30vh; }
 .ocr-translation.problem { color: #c0553f; }
+/* Unsure readings, outlined where they are on the picture. */
+.ocr-marks { position: absolute; inset: 0; pointer-events: none; }
+.ocr-unsure { position: absolute; border: 1.5px dashed #e0a030; border-radius: 3px; }
+.ocr-accuracy { flex: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--divider); }
+.ocr-accuracy[hidden] { display: none; }
+.ocr-key-note { margin: 0 0 6px; font-size: 12px; line-height: 1.45; color: var(--muted); }
+.ocr-key { width: 100%; min-height: 90px; max-height: 30vh; resize: none; padding: 10px 12px;
+  border-radius: var(--radius-sm); border: 1px solid var(--divider); background: var(--surface);
+  color: var(--text); font: inherit; font-size: 15px; line-height: 1.5; }
+.ocr-key-result { margin: 8px 0 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface);
+  font-size: 12px; line-height: 1.45; color: var(--text); overflow-x: auto; }
+.ocr-key-result.problem { color: #c0553f; }
+.ocr-key-result p { margin: 0 0 6px; }
+.ocr-key-result .ocr-key-notes { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
+.ocr-key-result table { border-collapse: collapse; width: 100%; font-size: 11px; font-variant-numeric: tabular-nums; }
+.ocr-key-result th, .ocr-key-result td { padding: 3px 2px; text-align: right; white-space: nowrap; }
+.ocr-key-result th:first-child, .ocr-key-result td:first-child { text-align: left; white-space: normal; }
+.ocr-key-result thead th { font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--divider); }
+.ocr-key-result tbody tr:last-child td { font-weight: 600; }
 /* The button shows the translations are on the pictures. */
 .copy-row .ocr-btn[aria-pressed="true"] { color: var(--accent-ink, var(--accent)); border-color: var(--accent); }
 

@@ -85,8 +85,25 @@ export async function toLens(blob) {
   if (problem) throw new Error(problem);
 }
 
-export async function recognise(blob, scripts, { timeout = 120000 } = {}) {
+/**
+ * The steps of the reading, each of which can be turned off to measure what
+ * it is worth (the accuracy check does). All on in use.
+ *
+ * - columns:    vertical text cut into characters, set as lines, read again
+ * - closer:     small text cut out, enlarged, read again
+ * - tiles:      a large page searched again in quarters, for small text missed
+ * - compare:    columns not read surely, read again from the pixels as drawn
+ * - straighten: a page on the slant read again straightened
+ */
+export const ALL_STEPS = Object.freeze({ columns: true, closer: true, tiles: true, compare: true, straighten: true });
+/** The reading as it was before the steps above were added to it. */
+export const EARLIER_STEPS = Object.freeze({ columns: true, closer: true, tiles: false, compare: false, straighten: false });
+/** The recogniser alone, nothing done before or after. */
+export const NO_STEPS = Object.freeze({ columns: false, closer: false, tiles: false, compare: false, straighten: false });
+
+export async function recognise(blob, scripts, { timeout = 180000, steps = null } = {}) {
   if (!available()) throw new Error('Reading text from pictures needs the app.');
+  if (!blob || !blob.size) throw new Error('That picture is empty.');
   const id = await handOver(blob);
   const payload = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -95,14 +112,27 @@ export async function recognise(blob, scripts, { timeout = 120000 } = {}) {
     }, timeout);
     pending.set(id, { resolve, reject, timer });
     try {
-      window.GrimoireOcr.recognise(id, scripts.join(','));
+      if (steps && typeof window.GrimoireOcr.recogniseWith === 'function') {
+        window.GrimoireOcr.recogniseWith(id, scripts.join(','), JSON.stringify(steps));
+      } else {
+        window.GrimoireOcr.recognise(id, scripts.join(','));
+      }
     } catch (error) {
       pending.delete(id);
       clearTimeout(timer);
       reject(error);
     }
   });
-  return typeof payload === 'string' ? JSON.parse(payload) : payload;
+  let read;
+  try {
+    read = typeof payload === 'string' ? JSON.parse(payload) : payload;
+  } catch {
+    throw new Error('The reading came back garbled.');
+  }
+  if (!read || typeof read !== 'object' || !read.results || typeof read.results !== 'object') {
+    throw new Error('The reading came back empty.');
+  }
+  return read;
 }
 
 /* How much of a reading is in the script it was read for. A recogniser
@@ -149,26 +179,43 @@ export function pickBest(results, order = Object.keys(results || {})) {
  * A block's own lines are joined as the script joins them: with spaces in
  * English and Korean, with nothing in Chinese and Japanese.
  */
-export function readingText(blocks, script, { direction = '' } = {}) {
-  return orderedBlocks(blocks, script, { direction }).map((block) => block.joined).join('\n\n');
+export function readingText(blocks, script, { direction = '', corrected = true } = {}) {
+  return orderedBlocks(blocks, script, { direction, corrected })
+    .map((block) => block.joined).join('\n\n');
 }
+
+/** How sure the recogniser must be of a block for it not to be marked as
+ *  unsure. Its certainty is a guide, not a probability of being right. */
+export const UNSURE = 0.6;
 
 /**
  * The blocks in reading order, each with its text joined as the script
  * joins it (`joined`): one bubble, one piece of text, to be translated as
  * a whole and laid back over the bubble it came from.
  */
-export function orderedBlocks(blocks, script, { direction = '' } = {}) {
+export function orderedBlocks(blocks, script, { direction = '', corrected = true } = {}) {
   const list = (blocks || []).filter((block) => String(block.text || '').trim());
   if (!list.length) return [];
   const glue = script === 'latin' || script === 'korean' ? ' ' : '';
-  const tidy = script === 'japanese' ? tidyJapanese : (text) => text;
+  const join = (lines) => lines.map((line) => String(line).trim()).filter(Boolean).join(glue);
   return inRows(list, direction || directionOf(list, script))
-    .map((block) => ({
-      ...block,
-      joined: tidy((block.lines?.length ? block.lines : String(block.text).split('\n'))
-        .map((line) => String(line).trim()).filter(Boolean).join(glue)),
-    }))
+    .map((block) => {
+      const lines = block.lines?.length ? block.lines : String(block.text).split('\n');
+      // As the recogniser read it, word for word: kept beside any
+      // correction, so that every change can be seen and undone.
+      const asRead = join(block.raw?.length ? block.raw : lines);
+      const before = join(lines);
+      const fixed = script === 'japanese' ? correctJapanese(before) : { text: before, changes: [] };
+      const sure = typeof block.confidence === 'number' ? block.confidence : null;
+      return {
+        ...block,
+        raw: asRead,
+        corrected: fixed.text,
+        corrections: fixed.changes,
+        joined: corrected ? fixed.text : asRead,
+        unsure: sure !== null && sure < UNSURE,
+      };
+    })
     .filter((block) => block.joined);
 }
 
@@ -189,20 +236,41 @@ const KANJI = /[\u4E00-\u9FFF\u3400-\u4DBF]/;
 const LOOKALIKE = { 'カ': '力', 'ロ': '口', 'エ': '工', 'ニ': '二', 'ハ': '八' };
 
 export function tidyJapanese(text) {
-  let out = String(text || '')
-    .replace(new RegExp(`(?<=[${KANA}\\u4E00-\\u9FFF])つ(?=[てたと])`, 'g'), 'っ')
-    .replace(/(?<=[\u30A1-\u30FA])ツ(?=[カキクケコサシスセソタチテトパピプペポ])/g, 'ッ');
-  const chars = [...out];
+  return correctJapanese(text).text;
+}
+
+const KANA_OR_KANJI = new RegExp(`[${KANA}\\u4E00-\\u9FFF]`);
+const KATAKANA_LETTER = /[\u30A1-\u30FA]/;
+
+/**
+ * As tidyJapanese, saying what it changed: each change as { at, from, to },
+ * at its place in the text (counted in characters). Only one character is
+ * ever swapped for one other, so the text stays the length it was read and
+ * nothing is added, dropped or reworded.
+ */
+export function correctJapanese(text) {
+  const read = [...String(text || '')];
+  const chars = [...read];
+  const changes = [];
+  const swap = (i, to) => {
+    changes.push({ at: i, from: chars[i], to });
+    chars[i] = to;
+  };
+  // The small っ, judged on the text as read.
+  for (let i = 1; i < read.length - 1; i++) {
+    if (read[i] === 'つ' && KANA_OR_KANJI.test(read[i - 1]) && 'てたと'.includes(read[i + 1])) swap(i, 'っ');
+    else if (read[i] === 'ツ' && KATAKANA_LETTER.test(read[i - 1])
+      && 'カキクケコサシスセソタチテトパピプペポ'.includes(read[i + 1])) swap(i, 'ッ');
+  }
   for (let i = 0; i < chars.length; i++) {
     const kanji = LOOKALIKE[chars[i]];
     if (!kanji) continue;
     const before = chars[i - 1] || '';
     const after = chars[i + 1] || '';
     if (KATAKANA.test(before) || KATAKANA.test(after)) continue;
-    if (KANJI.test(before) || KANJI.test(after)) chars[i] = kanji;
+    if (KANJI.test(before) || KANJI.test(after)) swap(i, kanji);
   }
-  out = chars.join('');
-  return out;
+  return { text: chars.join(''), changes };
 }
 
 /**
@@ -264,26 +332,95 @@ function inRows(list, direction) {
 }
 
 /**
+ * The blocks, less any read twice over: the same text found again in the
+ * same place -- where two slices of a tall strip overlap, or a quarter of the
+ * page is searched again. The same words in two places are both kept: a
+ * repeated cry in two bubbles is two cries.
+ *
+ * @returns { blocks, dropped }
+ */
+export function withoutDuplicates(blocks) {
+  const squash = (text) => String(text || '').replace(/\s+/g, '');
+  const kept = [];
+  let dropped = 0;
+  for (const block of blocks || []) {
+    const text = squash(block.text);
+    const twin = text && kept.find((other) => {
+      const theirs = squash(other.text);
+      if (!theirs || !(theirs.includes(text) || text.includes(theirs))) return false;
+      const w = Math.min(other.x + other.w, block.x + block.w) - Math.max(other.x, block.x);
+      const h = Math.min(other.y + other.h, block.y + block.h) - Math.max(other.y, block.y);
+      if (w <= 0 || h <= 0) return false;
+      const smaller = Math.min(other.w * other.h, block.w * block.h) || 1;
+      return w * h >= smaller * 0.5;
+    });
+    if (!twin) { kept.push(block); continue; }
+    dropped++;
+    // Of the two, the one with more of the text stays.
+    if (text.length > squash(twin.text).length) kept[kept.indexOf(twin)] = block;
+  }
+  return { blocks: kept, dropped };
+}
+
+/**
+ * What to be wary of in a reading: said beside the text, never written into
+ * it. Each warning is { kind, count?, script? }:
+ *
+ * - failed:     a script could not be read at all (the others were kept)
+ * - empty:      no text found
+ * - unsure:     blocks the recogniser was not sure of
+ * - muddled:    blocks mostly not in the script (left out of translation)
+ * - duplicates: blocks found twice in one place, and dropped
+ * - corrected:  characters put right after reading (see orderedBlocks)
+ */
+export function checkReading(read) {
+  const warnings = [];
+  for (const [script, why] of Object.entries(read?.failed || {})) warnings.push({ kind: 'failed', script, why });
+  const blocks = read?.blocks || [];
+  if (!blocks.length) warnings.push({ kind: 'empty' });
+  const ordered = orderedBlocks(blocks, read?.script || 'latin');
+  const unsure = ordered.filter((block) => block.unsure).length;
+  if (unsure) warnings.push({ kind: 'unsure', count: unsure });
+  const muddled = ordered.filter((block) => !readable(block.raw, read?.script)).length;
+  if (muddled) warnings.push({ kind: 'muddled', count: muddled });
+  if (read?.duplicates) warnings.push({ kind: 'duplicates', count: read.duplicates });
+  const corrected = ordered.reduce((n, block) => n + block.corrections.length, 0);
+  if (corrected) warnings.push({ kind: 'corrected', count: corrected });
+  return warnings;
+}
+
+/**
  * Read a picture and say what it says.
  *
  * @param scripts  the scripts to try; the likeliest reading is kept
- * @returns { script, text, blocks, raw }: the text in the order the page
- *   itself suggests; blocks, to be put in another order if the reader says
+ * @param steps    which steps of the reading to take (ALL_STEPS unless said)
+ * @returns { script, text, blocks, raw, failed, duplicates, ms }: the text
+ *   in the order the page itself suggests; blocks, to be put in another
+ *   order if the reader says; raw, the recogniser's own text, untouched
  */
-export async function readPicture(blob, scripts) {
-  const read = await recognise(blob, scripts);
+export async function readPicture(blob, scripts, { steps = null } = {}) {
+  const started = Date.now();
+  const read = await recognise(blob, scripts, { steps });
   const best = pickBest(read.results, scripts);
-  if (!best) return { script: scripts[0], text: '', blocks: [], raw: '', width: read.width, height: read.height };
+  const ms = Date.now() - started;
+  const failed = read.failed || undefined;
+  if (!best) {
+    return { script: scripts[0], text: '', blocks: [], raw: '', width: read.width, height: read.height, failed, ms };
+  }
   const raw = String(best.text || '').trim();
+  const { blocks, dropped } = withoutDuplicates(best.blocks || []);
   return {
     script: best.script,
-    blocks: best.blocks || [],
+    blocks,
     raw,
-    text: readingText(best.blocks, best.script) || raw,
+    text: readingText(blocks, best.script) || raw,
     // The size the boxes are measured against: the picture as it was read,
     // which for a very large one is a scaled-down copy.
     width: read.width,
     height: read.height,
+    failed,
+    duplicates: dropped || undefined,
+    ms,
   };
 }
 

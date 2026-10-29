@@ -413,6 +413,11 @@ EPUB never executes.
   ways the app used to end up a blank page
 - **motion** — reading-mode defaults, and the motion contract: nothing loops,
   no transition over 250ms, reduced motion honoured, text never animates
+- **ocr** and **ocr-accuracy** — which scripts are asked for and which reading
+  is believed, reading order, the text as read kept apart from the corrected
+  text, repeats dropped only where the same text is found in the same place,
+  one script failing without losing the others, and the accuracy measures
+  themselves (CER, WER, missed, doubled and out-of-order bubbles)
 - **freedom** — asserts no paywall, no ads, no sign-in, that `INTERNET` is the
   only permission, that the reader itself cannot reach the network, and that
   translation is inert without a key
@@ -421,6 +426,31 @@ That last one exists because those are easy things to reintroduce by accident:
 one dependency, one stray import, one merged manifest entry. The release
 workflow makes the same check against the built APK, so a permission arriving
 through manifest merging fails the build rather than reaching a user.
+
+### How right the text from pictures is
+
+ML Kit only runs on the phone, so accuracy is measured there. In the text
+sheet, pick one picture and tap **Check accuracy**. Type, or put right, the
+picture's text exactly as printed (one bubble to a paragraph, in reading
+order). That answer key is kept with the book. **Check this picture** reads
+the picture four ways and scores each one:
+
+- the recogniser alone;
+- the reading as it was before the latest steps;
+- now, as read;
+- now, corrected.
+
+**Check every picture with a key** totals the scores over all of the book's
+keyed pictures. **Copy report** gives the table as text.
+
+To score readings off the phone, save them as text files (Copy text) next to
+their keys and run:
+
+    node tools/ocr-eval.mjs key.txt reading.txt [reading2.txt …]
+    node tools/ocr-eval.mjs keys/ readings-now/ readings-before/
+
+No number means anything without a checked key. A key made by accepting the
+reading unchanged scores that reading perfect.
 
 `tools/audit_assets.py` fails on anything that would actually load off-origin —
 a `<script src>`, a `fetch()`, a CSS `@import`. A URL in a vendored library's

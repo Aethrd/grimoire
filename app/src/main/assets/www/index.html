@@ -652,6 +652,9 @@
     <div class="ocr-pictures" id="ocr-pictures" role="group" aria-label="Which picture" hidden></div>
     <div class="ocr-stage" id="ocr-stage">
       <img id="ocr-img" alt="" draggable="false">
+      <!-- Where the recogniser was unsure of what it read: outlined on the
+           picture, never marked in the text itself. -->
+      <div class="ocr-marks" id="ocr-marks" aria-hidden="true"></div>
       <div class="ocr-box" id="ocr-box" hidden></div>
     </div>
     <div class="ocr-scripts" id="ocr-scripts" role="group" aria-label="Read as"></div>
@@ -662,8 +665,25 @@
     <div class="ocr-translate-row" role="group" aria-label="Translation">
       <button class="chip" id="ocr-translate">Translate</button>
       <button class="chip" id="ocr-overlay" aria-pressed="false">Show on the pictures</button>
+      <!-- The recogniser's own reading, before the commonest slips are put
+           right (つ for っ, カ for 力): to see, and undo, every correction. -->
+      <button class="chip" id="ocr-asread" aria-pressed="false" title="Show the text exactly as the recogniser read it, before corrections">As read</button>
+      <button class="chip" id="ocr-check" aria-expanded="false" title="Measure how much of this picture is read right">Check accuracy</button>
     </div>
     <textarea class="ocr-translation" id="ocr-translation" rows="5" readonly hidden></textarea>
+    <!-- The accuracy check: the picture's text as it really is, typed or put
+         right by the reader, and the reading scored against it -- now, as it
+         was before, and the recogniser alone. -->
+    <div class="ocr-accuracy" id="ocr-accuracy" hidden>
+      <p class="ocr-key-note">The answer key: this picture's text exactly as printed, one bubble to a paragraph, in the order it is read. Put right every mistake &mdash; the check is only as good as the key. Kept with the book.</p>
+      <textarea class="ocr-key" id="ocr-key" rows="6" spellcheck="false" autocomplete="off" aria-label="Answer key"></textarea>
+      <div class="ocr-translate-row" role="group" aria-label="Accuracy">
+        <button class="chip" id="ocr-key-run">Check this picture</button>
+        <button class="chip" id="ocr-key-all">Check every picture with a key</button>
+        <button class="chip" id="ocr-key-copy" disabled>Copy report</button>
+      </div>
+      <div class="ocr-key-result" id="ocr-key-result" aria-live="polite" hidden></div>
+    </div>
     <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
       <button class="btn ghost" id="ocr-close">Close</button>
       <button class="btn ghost" id="ocr-lens" title="Hand the picture, or the boxed part, to Google Lens" hidden>Google Lens</button>

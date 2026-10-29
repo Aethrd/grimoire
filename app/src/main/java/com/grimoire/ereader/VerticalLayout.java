@@ -1018,6 +1018,9 @@ final class VerticalLayout {
         /** The patch the characters are cut from, cleaned of the drawing:
          *  packed ARGB, sourceWidth wide. Placements' boxes are within it. */
         int[] source;
+        /** The same patch as drawn, nothing cleaned out: read too, as a
+         *  check on the cleaning. */
+        int[] original;
         int sourceWidth, sourceHeight;
         final List<Placement> placed = new ArrayList<>();
         final List<Row> rows = new ArrayList<>();
@@ -1166,6 +1169,7 @@ final class VerticalLayout {
         Sheet sheet = new Sheet();
         sheet.columns = body.size();
         sheet.source = clean;
+        sheet.original = argb;
         sheet.sourceWidth = region.width();
         sheet.sourceHeight = region.height();
         int longest = 0;
@@ -1229,6 +1233,16 @@ final class VerticalLayout {
     /** What the recogniser read off the sheet, back into the columns it came
      *  from, in the order they are read. */
     static List<String> columnTexts(Sheet sheet, List<Read> lines) {
+        return columnTexts(sheet, lines, true);
+    }
+
+    /** As columnTexts, exactly as read: vertical punctuation left as it
+     *  came, for the record of what the recogniser itself said. */
+    static List<String> columnTextsRaw(Sheet sheet, List<Read> lines) {
+        return columnTexts(sheet, lines, false);
+    }
+
+    private static List<String> columnTexts(Sheet sheet, List<Read> lines, boolean tidied) {
         List<List<Read>> perRow = new ArrayList<>();
         for (int i = 0; i < sheet.rows.size(); i++) perRow.add(new ArrayList<>());
         for (Read line : lines) {
@@ -1250,7 +1264,7 @@ final class VerticalLayout {
             Collections.sort(row, (a, b) -> Integer.compare(a.box.left, b.box.left));
             StringBuilder text = new StringBuilder();
             for (Read r : row) text.append(r.text);
-            columns[sheet.rows.get(i).column] += tidy(text.toString());
+            columns[sheet.rows.get(i).column] += tidied ? tidy(text.toString()) : text.toString();
         }
         List<String> out = new ArrayList<>();
         for (String c : columns) if (!c.isEmpty()) out.add(c);

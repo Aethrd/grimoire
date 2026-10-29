@@ -21,6 +21,7 @@ import * as redact from './redact.js';
 import * as frames from './frame.js';
 import * as web from './web.js';
 import * as ocr from './ocr.js';
+import * as ocrEval from './ocr-eval.js';
 
 const el = (id) => document.getElementById(id);
 const { toast } = screens;
@@ -6201,6 +6202,9 @@ const ocrState = {
   cache: new Map(),
   urls: null,
   translate: false,   // translated once asked, until the sheet is closed
+  asRead: false,      // the text exactly as the recogniser read it, uncorrected
+  report: '',         // the last accuracy check, as text to copy
+  lastCheck: null,    // ...and as shown: { summary, totals }
 };
 
 /* The icon's page is a comic page, and its panels are drawn anew as you read. */
@@ -6274,6 +6278,8 @@ async function openOcr() {
   ocrState.urls = blobs.pool();
   el('ocr-text').value = '';
   el('ocr-lens').hidden = !ocr.lensAvailable();
+  el('ocr-asread').setAttribute('aria-pressed', String(ocrState.asRead));
+  showAccuracy(false);
   paintOcrPictures();
   paintOcrScripts();
   el('ocr-sheet').hidden = false;
@@ -6307,6 +6313,10 @@ function paintOcrPictures() {
   const stage = el('ocr-stage');
   stage.hidden = ocrState.at < 0;
   el('ocr-box').hidden = true;
+  el('ocr-marks').innerHTML = '';
+  // The check scores one whole picture against its key.
+  el('ocr-check').hidden = ocrState.at < 0;
+  if (ocrState.at < 0) showAccuracy(false);
   if (ocrState.at >= 0) {
     el('ocr-img').src = ocrState.urls.url(reader.state.images.get(hrefs[ocrState.at])) || '';
   } else {
@@ -6365,18 +6375,59 @@ function paintOcrText() {
   const direction = ocrDirection();
   const found = new Map();
   const texts = [];
+  const corrected = !ocrState.asRead;
   for (const read of ocrState.reads) {
-    const text = ocr.readingText(read.blocks, read.script, { direction }) || read.raw || read.text || '';
+    const text = ocr.readingText(read.blocks, read.script, { direction, corrected }) || read.raw || read.text || '';
     if (!text) continue;
     texts.push(text);
     found.set(read.script, (found.get(read.script) || 0) + text.length);
   }
   const text = texts.join('\n\n');
   el('ocr-text').value = text;
+  paintOcrMarks();
   el('ocr-copy').disabled = !text;
   paintOcrScripts([...found.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '');
   if (ocrState.translate) showOcrTranslation();
   return text;
+}
+
+/** Where the recogniser was unsure, outlined on the picture shown. */
+function paintOcrMarks() {
+  const marks = el('ocr-marks');
+  marks.innerHTML = '';
+  const read = ocrState.reads[0];
+  if (ocrState.at < 0 || ocrState.box || !read?.width || !read?.height) return;
+  for (const block of ocr.orderedBlocks(read.blocks, read.script)) {
+    if (!block.unsure) continue;
+    const mark = document.createElement('div');
+    mark.className = 'ocr-unsure';
+    mark.style.left = `${(block.x / read.width) * 100}%`;
+    mark.style.top = `${(block.y / read.height) * 100}%`;
+    mark.style.width = `${(block.w / read.width) * 100}%`;
+    mark.style.height = `${(block.h / read.height) * 100}%`;
+    marks.appendChild(mark);
+  }
+}
+
+/** What to be wary of in the readings, in a few words for the status line. */
+function ocrWarnings(reads) {
+  const counts = { unsure: 0, corrected: 0, duplicates: 0 };
+  const failed = new Set();
+  for (const read of reads) {
+    for (const warning of ocr.checkReading(read)) {
+      if (warning.kind === 'failed') failed.add(warning.script);
+      else if (warning.kind in counts) counts[warning.kind] += warning.count || 0;
+    }
+  }
+  const out = [];
+  if (counts.unsure) out.push(`${counts.unsure} unsure`);
+  if (counts.corrected) out.push(`${counts.corrected} corrected`);
+  if (counts.duplicates) out.push(`${counts.duplicates} repeat${counts.duplicates === 1 ? '' : 's'} dropped`);
+  if (failed.size) {
+    const names = [...failed].map((script) => ocr.SCRIPTS.find(([s]) => s === script)?.[1] || script);
+    out.push(`${names.join(', ')} could not be read`);
+  }
+  return out;
 }
 
 /** The readings translated, bubble by bubble, under the text. */
@@ -6470,9 +6521,193 @@ async function runOcr() {
       : 'No text found. Box one bubble, or try another script.');
   } else {
     const characters = text.replace(/\s/g, '').length;
+    const wary = ocrWarnings(reads);
     ocrStatus(`${characters.toLocaleString()} character${characters === 1 ? '' : 's'}`
-      + (box ? ' · from the box' : targets.length > 1 ? ` · ${targets.length} pictures` : ''));
+      + (box ? ' · from the box' : targets.length > 1 ? ` · ${targets.length} pictures` : '')
+      + (wary.length ? ` · ${wary.join(' · ')}` : ''));
   }
+}
+
+/* ── the accuracy check ────────────────────────────────────────────────
+ *
+ * A picture's text as it really is -- the answer key, typed or put right
+ * by the reader -- and the picture read against it in four ways: by the
+ * recogniser alone; as the app read before the latest steps were added;
+ * and now, both as read and corrected. Each is scored in characters and
+ * words wrong, bubbles left out, read twice or out of order, and time.
+ * Nothing is claimed without a key: the numbers are only as good as it.
+ */
+
+const keyOf = (bookId, href) => `${bookId}:ocrkey:${href}`;
+
+async function savedKey(bookId, href) {
+  try {
+    return (await store.get('translations', keyOf(bookId, href)))?.value || '';
+  } catch {
+    return '';
+  }
+}
+
+async function saveKey(bookId, href, text) {
+  const value = String(text || '').trim();
+  if (!value) return store.del('translations', keyOf(bookId, href)).catch(() => {});
+  return store.put('translations', {
+    key: keyOf(bookId, href), bookId, field: `ocrkey:${href}`, lang: 'key', value, at: Date.now(),
+  });
+}
+
+/** The ways a picture is read for the check, each with how its text is
+ *  made: the steps the recogniser takes, and whether corrections apply. */
+const CHECKS = [
+  { label: 'Recogniser alone', steps: ocr.NO_STEPS, corrected: false },
+  { label: 'Before this update', steps: ocr.EARLIER_STEPS, corrected: true },
+  { label: 'Now, as read', steps: ocr.ALL_STEPS, corrected: false, same: 'now' },
+  { label: 'Now, corrected', steps: ocr.ALL_STEPS, corrected: true, same: 'now' },
+];
+
+async function showAccuracy(open) {
+  const panel = el('ocr-accuracy');
+  panel.hidden = !open;
+  el('ocr-check').setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  const book = reader.state.book;
+  const href = ocrState.hrefs[ocrState.at];
+  if (!book || !href) return;
+  // A key already typed for the picture; else the reading, to be put right.
+  el('ocr-key').value = (await savedKey(book.id, href)) || el('ocr-text').value;
+  const result = el('ocr-key-result');
+  result.hidden = !ocrState.lastCheck;
+  result.classList.remove('problem');
+  if (ocrState.lastCheck) paintAccuracy(result, ocrState.lastCheck.summary, ocrState.lastCheck.totals);
+}
+
+/** One picture read every way, and scored against its key. */
+async function checkPicture(book, href, key, scripts, direction, token) {
+  const blob = reader.state.images.get(href);
+  if (!blob) throw new Error('That picture has not loaded yet.');
+  const rows = [];
+  const once = new Map();
+  for (const check of CHECKS) {
+    let read = check.same ? once.get(check.same) : null;
+    if (!read) {
+      read = await ocr.readPicture(blob, scripts, { steps: check.steps });
+      if (token !== ocrState.token) return null;
+      if (check.same) once.set(check.same, read);
+    }
+    const text = ocr.readingText(read.blocks, read.script, { direction, corrected: check.corrected });
+    rows.push({ label: check.label, score: { ...ocrEval.score(key, text), ms: read.ms || 0 } });
+  }
+  return rows;
+}
+
+async function runAccuracy(all) {
+  const book = reader.state.book;
+  if (!book) return;
+  const token = ++ocrState.token;
+  const result = el('ocr-key-result');
+  result.hidden = false;
+  result.classList.remove('problem');
+  result.textContent = 'Getting ready…';
+  el('ocr-key-copy').disabled = true;
+  const scripts = ocrState.choice ? [ocrState.choice] : ocr.scriptsFor(book.lang);
+  const direction = ocrDirection();
+  const href = ocrState.hrefs[ocrState.at];
+  if (href) await saveKey(book.id, href, el('ocr-key').value);
+  // The pictures to check: this one, or every one of the book with a key.
+  let jobs;
+  if (all) {
+    const rows = await store.byIndex('translations', 'bookId', book.id).catch(() => []);
+    jobs = rows.filter((row) => row.lang === 'key' && row.value)
+      .map((row) => ({ href: row.field.slice('ocrkey:'.length), key: row.value }))
+      .filter((job) => reader.state.images.get(job.href));
+  } else {
+    const key = el('ocr-key').value.trim();
+    jobs = key && href ? [{ href, key }] : [];
+  }
+  if (!jobs.length) {
+    result.classList.add('problem');
+    result.textContent = all
+      ? 'No picture of this book that is loaded has an answer key yet.'
+      : 'Type or put right the answer key first.';
+    return;
+  }
+  el('ocr-key-run').disabled = true;
+  el('ocr-key-all').disabled = true;
+  el('ocr-key-copy').disabled = true;
+  const per = CHECKS.map(() => []);
+  try {
+    for (let i = 0; i < jobs.length; i++) {
+      result.textContent = `Reading picture ${i + 1} of ${jobs.length}, ${CHECKS.length - 1} ways…`;
+      const rows = await checkPicture(book, jobs[i].href, jobs[i].key, scripts, direction, token);
+      if (!rows) return;
+      rows.forEach((row, k) => per[k].push(row.score));
+    }
+  } catch (error) {
+    if (token !== ocrState.token) return;
+    result.classList.add('problem');
+    result.textContent = error.message || 'The check could not be run.';
+    return;
+  } finally {
+    el('ocr-key-run').disabled = false;
+    el('ocr-key-all').disabled = false;
+  }
+  const totals = CHECKS.map((check, k) => ({ label: check.label, score: ocrEval.total(per[k]) }));
+  const now = totals[totals.length - 1].score;
+  const summary = `${jobs.length} picture${jobs.length === 1 ? '' : 's'} · ${now.characters} characters`
+    + ` in ${now.units} bubbles · ${direction === 'rtl' ? 'right to left' : 'left to right'}`;
+  paintAccuracy(result, summary, totals);
+  ocrState.lastCheck = { summary, totals };
+  ocrState.report = [
+    `Accuracy check · ${jobs.length} picture${jobs.length === 1 ? '' : 's'} · ${now.characters} characters`
+      + ` in ${now.units} bubbles · read as ${scripts.join(', ')} · ${direction === 'rtl' ? 'right to left' : 'left to right'}`,
+    '',
+    ocrEval.report(totals),
+    '',
+    'CER: characters wrong per character of the key. WER: the same in words (— where the text has no spaces).',
+    'Omitted: bubbles not found. Duplicated: found twice. Out of order: found, not where read. Extra: text not in the key.',
+    'Before this update: without the quarter search, the second reading of columns, or straightening.',
+    'Lower is better throughout. Only as good as the answer key.',
+  ].join('\n');
+  el('ocr-key-copy').disabled = false;
+}
+
+/** The scores as a small table, with what each column means. */
+function paintAccuracy(result, summary, totals) {
+  result.innerHTML = '';
+  const head = document.createElement('p');
+  head.textContent = summary;
+  const table = document.createElement('table');
+  const columns = [
+    ['Reading', (s, label) => label],
+    ['CER', (s) => ocrEval.percent(s.cer)],
+    ['WER', (s) => ocrEval.percent(s.wer)],
+    ['Missed', (s) => `${s.omitted}/${s.units}`],
+    ['Twice', (s) => String(s.duplicated)],
+    ['Order', (s) => String(s.outOfOrder)],
+    ['Extra', (s) => String(s.extra)],
+    ['Time', (s) => (s.ms ? `${(s.ms / 1000).toFixed(1)}s` : '—')],
+  ];
+  const row = (cells, tag) => {
+    const tr = document.createElement('tr');
+    for (const cell of cells) {
+      const td = document.createElement(tag);
+      td.textContent = cell;
+      tr.appendChild(td);
+    }
+    return tr;
+  };
+  const thead = document.createElement('thead');
+  thead.appendChild(row(columns.map(([name]) => name), 'th'));
+  const tbody = document.createElement('tbody');
+  for (const { label, score } of totals) tbody.appendChild(row(columns.map(([, cell]) => cell(score, label)), 'td'));
+  table.append(thead, tbody);
+  const notes = document.createElement('p');
+  notes.className = 'ocr-key-notes';
+  notes.textContent = 'CER: characters wrong per character of the key; WER: words wrong (— where words have no spaces). '
+    + 'Missed: bubbles not found. Twice: found twice. Order: found, but out of reading order. Extra: text not in the key. '
+    + 'Lower is better. Before this update: without the quarter search, the second reading of columns, or straightening. '
+    + 'Only as good as the answer key.';
+  result.append(head, table, notes);
 }
 
 /* ── translations over the pictures ────────────────────────────────────
@@ -6489,7 +6724,8 @@ const pictureReads = new Map();
 const readKey = (bookId, href, scripts) => {
   const size = reader.state.images.get(href)?.size || 0;
   // The size changes when a picture is blacked out: read again then.
-  return `${bookId}:ocrpic:${href}:${size}:${scripts.join(',')}`;
+  // The version: readings made before the reading changed are made again.
+  return `${bookId}:ocrpic2:${href}:${size}:${scripts.join(',')}`;
 };
 
 async function readWhole(bookId, href, scripts) {
@@ -6941,6 +7177,28 @@ function wireOcr() {
   el('ocr-translate').onclick = () => {
     ocrState.translate = true;
     showOcrTranslation();
+  };
+  el('ocr-asread').onclick = () => {
+    ocrState.asRead = !ocrState.asRead;
+    el('ocr-asread').setAttribute('aria-pressed', String(ocrState.asRead));
+    paintOcrText();
+  };
+  el('ocr-check').onclick = () => showAccuracy(el('ocr-accuracy').hidden);
+  el('ocr-key').addEventListener('change', () => {
+    const book = reader.state.book;
+    const href = ocrState.hrefs[ocrState.at];
+    if (book && href) saveKey(book.id, href, el('ocr-key').value).catch(() => {});
+  });
+  el('ocr-key-run').onclick = () => runAccuracy(false);
+  el('ocr-key-all').onclick = () => runAccuracy(true);
+  el('ocr-key-copy').onclick = async () => {
+    if (!ocrState.report) return;
+    try {
+      await navigator.clipboard.writeText(ocrState.report);
+      toast('Report copied');
+    } catch {
+      toast('The report could not be copied', 3000);
+    }
   };
   el('ocr-overlay').onclick = async () => {
     const book = reader.state.book;
