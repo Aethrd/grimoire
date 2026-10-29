@@ -58,6 +58,23 @@ await t('vertical Japanese is read right to left; other pages top to bottom', ()
     { text: 'first line', x: 0, y: 0, w: 200, h: 40, lines: ['first', 'line'] },
   ];
   assert.equal(ocr.readingText(rows, 'latin'), 'first line\n\nsecond');
+  // Korean (and horizontal Chinese) bubbles side by side read left to right,
+  // even when the right one sits higher; Korean keeps its spaces.
+  const manhwa = [
+    { text: 'b', x: 300, y: 0, w: 200, h: 80, lines: ['정말', '미안해'] },
+    { text: 'a', x: 0, y: 30, w: 200, h: 80, lines: ['잠깐만'] },
+    { text: 'c', x: 100, y: 400, w: 200, h: 80, lines: ['괜찮아'] },
+  ];
+  assert.equal(ocr.readingText(manhwa, 'korean'), '잠깐만\n\n정말 미안해\n\n괜찮아');
+  const manhua = manhwa.map((block) => ({ ...block, lines: block.lines.map(() => '对不起') }));
+  assert.equal(ocr.readingText(manhua, 'chinese'), '对不起\n\n对不起对不起\n\n对不起');
+  // A manga translated into English: lines of text, panels right to left,
+  // as set for the book.
+  assert.equal(ocr.readingText(manhwa, 'latin', { direction: 'rtl' }), '정말 미안해\n\n잠깐만\n\n괜찮아');
+  assert.equal(ocr.directionOf(manhwa, 'latin'), 'ltr');
+  assert.equal(ocr.directionOf(manhwa, 'japanese', 'ja'), 'rtl', 'a Japanese book runs right to left, lines or columns');
+  assert.equal(ocr.directionOf(bubbles, 'chinese', 'zh'), 'rtl', 'Chinese in columns runs right to left');
+  assert.equal(ocr.directionOf(manhua, 'chinese', 'zh'), 'ltr', 'Chinese in lines runs left to right');
   // Chinese lines join with nothing between them.
   assert.equal(ocr.readingText([{ text: '对不起\n真的', x: 0, y: 0, w: 90, h: 40, lines: ['对不起', '真的'] }], 'chinese'), '对不起真的');
 });
@@ -84,7 +101,9 @@ await t('a picture is handed across in pieces and read through the bridge', asyn
   assert.equal(ocr.available(), true);
   const blob = new window.Blob([new Uint8Array(700 * 1024).fill(7)], { type: 'image/png' });
   const out = await ocr.readPicture(blob, ['korean', 'latin']);
-  assert.deepEqual(out, { script: 'korean', text: '미안해' });
+  assert.equal(out.script, 'korean');
+  assert.equal(out.text, '미안해');
+  assert.equal(out.blocks.length, 1, 'the blocks come back, to be put in another order');
   assert.equal(asked.scripts, 'korean,latin');
   assert.ok(Buffer.from(asked.data, 'base64').length === 700 * 1024, 'every piece arrived');
 });

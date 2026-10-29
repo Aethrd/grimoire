@@ -149,13 +149,10 @@ export function pickBest(results, order = Object.keys(results || {})) {
  * A block's own lines are joined as the script joins them: with spaces in
  * English and Korean, with nothing in Chinese and Japanese.
  */
-export function readingText(blocks, script) {
+export function readingText(blocks, script, { direction = '' } = {}) {
   const list = (blocks || []).filter((block) => String(block.text || '').trim());
   if (!list.length) return '';
-  const cjk = script === 'japanese' || script === 'chinese';
-  const columns = list.some((block) => block.vertical)
-    || (cjk && list.filter((block) => block.h > block.w * 1.3).length > list.length / 2);
-  const ordered = columns ? rightToLeft(list) : [...list].sort((a, b) => (a.y - b.y) || (a.x - b.x));
+  const ordered = inRows(list, direction || directionOf(list, script));
   const glue = script === 'latin' || script === 'korean' ? ' ' : '';
   return ordered
     .map((block) => (block.lines?.length ? block.lines : String(block.text).split('\n'))
@@ -164,9 +161,30 @@ export function readingText(blocks, script) {
     .join('\n\n');
 }
 
-/* Rows of blocks -- blocks side by side, standing at the same height on the
- * page -- top to bottom; each row right to left. */
-function rightToLeft(list) {
+/**
+ * Which way a page's panels run, as far as the text on it says: right to
+ * left where it is set in columns, left to right where it runs in lines.
+ * A manga translated into English or Korean keeps its right-to-left panels
+ * with its text in lines, which the text cannot tell -- the sheet has a
+ * chip for that, remembered for the book.
+ */
+export function directionOf(blocks, script, lang = '') {
+  if (String(lang).toLowerCase().startsWith('ja')) return 'rtl';
+  const list = (blocks || []).filter((block) => String(block.text || '').trim());
+  const cjk = script === 'japanese' || script === 'chinese';
+  const columns = list.some((block) => block.vertical)
+    || (cjk && list.length > 0 && list.filter((block) => block.h > block.w * 1.3).length > list.length / 2);
+  return columns ? 'rtl' : 'ltr';
+}
+
+/* Rows of blocks -- blocks side by side, standing at about the same height
+ * on the page -- top to bottom; each row across in the page's direction.
+ * Right to left where the text is set in columns (manga, and Chinese set
+ * the traditional way); left to right where it runs in lines (Korean
+ * manhwa and webtoons, mainland manhua, English). Rows rather than a plain
+ * sort by height, so two bubbles side by side are read across even when
+ * one sits a little lower. */
+function inRows(list, direction) {
   const rows = [];
   for (const block of [...list].sort((a, b) => a.y - b.y)) {
     const row = rows.find((r) => r.some((other) => {
@@ -176,20 +194,24 @@ function rightToLeft(list) {
     if (row) row.push(block);
     else rows.push([block]);
   }
-  return rows.flatMap((row) => row.sort((a, b) => (b.x + b.w) - (a.x + a.w)));
+  return rows.flatMap((row) => row.sort(direction === 'rtl'
+    ? (a, b) => (b.x + b.w) - (a.x + a.w)
+    : (a, b) => a.x - b.x));
 }
 
 /**
  * Read a picture and say what it says.
  *
  * @param scripts  the scripts to try; the likeliest reading is kept
- * @returns { script, text }
+ * @returns { script, text, blocks, raw }: the text in the order the page
+ *   itself suggests; blocks, to be put in another order if the reader says
  */
 export async function readPicture(blob, scripts) {
   const read = await recognise(blob, scripts);
   const best = pickBest(read.results, scripts);
-  if (!best) return { script: scripts[0], text: '' };
-  return { script: best.script, text: readingText(best.blocks, best.script) || String(best.text || '').trim() };
+  if (!best) return { script: scripts[0], text: '', blocks: [], raw: '' };
+  const raw = String(best.text || '').trim();
+  return { script: best.script, blocks: best.blocks || [], raw, text: readingText(best.blocks, best.script) || raw };
 }
 
 /**

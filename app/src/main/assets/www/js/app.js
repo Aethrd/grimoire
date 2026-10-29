@@ -6195,6 +6195,8 @@ const ocrState = {
   at: -1,             // which picture: -1 for every one on screen
   box: null,          // { x, y, w, h } as fractions of the picture shown
   choice: '',         // a script asked for, or '' for the likeliest
+  direction: '',      // 'rtl' or 'ltr' as set for the book, or '' to go by the page
+  reads: [],          // this run's readings, kept so a new direction needs no new reading
   cache: new Map(),
   urls: null,
 };
@@ -6245,7 +6247,7 @@ function closeOcr() {
   return true;
 }
 
-function openOcr() {
+async function openOcr() {
   const state = reader.state;
   const book = state.book;
   if (!book) return;
@@ -6254,6 +6256,8 @@ function openOcr() {
   if (!ocr.available()) return toast('Reading text from pictures needs the app', 4000);
   if (ocrState.book !== book.id) { ocrState.choice = ''; ocrState.cache.clear(); }
   ocrState.book = book.id;
+  ocrState.direction = (await store.settings()).ocrDirections?.[book.id] || '';
+  ocrState.reads = [];
   ocrState.hrefs = hrefs;
   ocrState.at = hrefs.length === 1 ? 0 : -1;
   ocrState.box = null;
@@ -6320,6 +6324,49 @@ function paintOcrScripts(found = '') {
   const named = ocr.SCRIPTS.find(([script]) => script === found);
   chip(!ocrState.choice && named ? `Auto · ${named[1]}` : 'Auto', '');
   for (const [script, label] of ocr.SCRIPTS) chip(label, script);
+  // Which way the panels run. Tapping turns it round and keeps it for the
+  // book; the text is put in the new order at once, without reading again.
+  const way = ocrDirection();
+  const turn = document.createElement('button');
+  turn.className = 'chip ocr-direction';
+  turn.id = 'ocr-direction';
+  turn.textContent = way === 'rtl' ? '← Right to left' : 'Left to right →';
+  turn.title = 'Which way the panels and bubbles are read';
+  turn.onclick = async () => {
+    ocrState.direction = ocrDirection() === 'rtl' ? 'ltr' : 'rtl';
+    paintOcrText();
+    const book = ocrState.book;
+    const saved = (await store.settings()).ocrDirections || {};
+    await store.saveSettings({ ocrDirections: { ...saved, [book]: ocrState.direction } });
+  };
+  list.appendChild(turn);
+}
+
+/** The way the panels run: as set for the book, else as the page suggests. */
+function ocrDirection() {
+  if (ocrState.direction) return ocrState.direction;
+  const lang = reader.state.book?.lang || '';
+  const ways = ocrState.reads.map((read) => ocr.directionOf(read.blocks, read.script, lang));
+  if (ways.length) return ways.filter((way) => way === 'rtl').length > ways.length / 2 ? 'rtl' : 'ltr';
+  return ocr.directionOf([], '', lang);
+}
+
+/** The readings, as text, in the order the panels run. */
+function paintOcrText() {
+  const direction = ocrDirection();
+  const found = new Map();
+  const texts = [];
+  for (const read of ocrState.reads) {
+    const text = ocr.readingText(read.blocks, read.script, { direction }) || read.raw || read.text || '';
+    if (!text) continue;
+    texts.push(text);
+    found.set(read.script, (found.get(read.script) || 0) + text.length);
+  }
+  const text = texts.join('\n\n');
+  el('ocr-text').value = text;
+  el('ocr-copy').disabled = !text;
+  paintOcrScripts([...found.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '');
+  return text;
 }
 
 /** The picture (or the boxed part of it) to read. */
@@ -6339,8 +6386,7 @@ async function runOcr() {
   const boxKey = box ? [box.x, box.y, box.w, box.h].map((n) => n.toFixed(3)).join(',') : 'all';
   el('ocr-copy').disabled = true;
   el('ocr-btn').setAttribute('aria-busy', 'true');
-  const texts = [];
-  const found = new Map();
+  const reads = [];
   try {
     for (let i = 0; i < targets.length; i++) {
       const href = targets[i];
@@ -6356,10 +6402,7 @@ async function runOcr() {
         if (token !== ocrState.token) return;
         ocrState.cache.set(key, read);
       }
-      if (read.text) {
-        texts.push(read.text);
-        found.set(read.script, (found.get(read.script) || 0) + read.text.length);
-      }
+      reads.push(read);
     }
   } catch (error) {
     if (token !== ocrState.token) return;
@@ -6369,11 +6412,8 @@ async function runOcr() {
   }
   if (token !== ocrState.token) return;
   el('ocr-btn').removeAttribute('aria-busy');
-  const text = texts.join('\n\n');
-  el('ocr-text').value = text;
-  el('ocr-copy').disabled = !text;
-  const script = [...found.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
-  paintOcrScripts(script);
+  ocrState.reads = reads;
+  const text = paintOcrText();
   if (!text) {
     ocrStatus(ocr.lensAvailable()
       ? 'No text found. Box one bubble, try another script, or try Google Lens.'
