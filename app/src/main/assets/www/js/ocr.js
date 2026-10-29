@@ -32,13 +32,14 @@ export const SCRIPTS = [
 
 /** Which scripts to read a book's pictures in, from its language. Not
  *  knowing, all of them, and the reading that looks most like its own
- *  script wins. Latin rides along with the others: a page of Korean has
- *  sound effects and signs in English often enough. */
+ *  script wins. A Korean, Japanese or Chinese book is read in its own
+ *  script only: an English reading alongside would sometimes win on a
+ *  misread page, and turn あ into A. English is a chip away. */
 export function scriptsFor(lang) {
   const code = String(lang || '').toLowerCase();
-  if (code.startsWith('ko')) return ['korean', 'latin'];
-  if (code.startsWith('ja')) return ['japanese', 'latin'];
-  if (code.startsWith('zh')) return ['chinese', 'latin'];
+  if (code.startsWith('ko')) return ['korean'];
+  if (code.startsWith('ja')) return ['japanese'];
+  if (code.startsWith('zh')) return ['chinese'];
   if (code.startsWith('en')) return ['latin'];
   return SCRIPTS.map(([script]) => script);
 }
@@ -140,29 +141,42 @@ export function pickBest(results, order = Object.keys(results || {})) {
 /**
  * The blocks in the order they are read, as text.
  *
- * Top to bottom for most pages; a Japanese page whose blocks run in
- * vertical columns is read right to left along each band of the page. A
- * block's own lines are joined as the script joins them: with spaces in
- * English, with nothing in Chinese and Japanese.
+ * Top to bottom, left to right, for most pages. A page set in columns --
+ * manga, and Chinese set the old way -- is read as such a page is: the rows
+ * of panels top to bottom, and along each row, right to left. A block read
+ * from columns comes with its columns already in order, right to left.
+ *
+ * A block's own lines are joined as the script joins them: with spaces in
+ * English and Korean, with nothing in Chinese and Japanese.
  */
 export function readingText(blocks, script) {
   const list = (blocks || []).filter((block) => String(block.text || '').trim());
   if (!list.length) return '';
-  const vertical = script === 'japanese'
-    && list.filter((block) => block.h > block.w * 1.3).length > list.length / 2;
-  const ordered = [...list];
-  if (vertical) {
-    const band = Math.max(1, Math.max(...list.map((block) => block.h)) * 0.6);
-    ordered.sort((a, b) => (Math.floor(a.y / band) - Math.floor(b.y / band)) || ((b.x + b.w) - (a.x + a.w)));
-  } else {
-    ordered.sort((a, b) => (a.y - b.y) || (a.x - b.x));
-  }
+  const cjk = script === 'japanese' || script === 'chinese';
+  const columns = list.some((block) => block.vertical)
+    || (cjk && list.filter((block) => block.h > block.w * 1.3).length > list.length / 2);
+  const ordered = columns ? rightToLeft(list) : [...list].sort((a, b) => (a.y - b.y) || (a.x - b.x));
   const glue = script === 'latin' || script === 'korean' ? ' ' : '';
   return ordered
     .map((block) => (block.lines?.length ? block.lines : String(block.text).split('\n'))
       .map((line) => String(line).trim()).filter(Boolean).join(glue))
     .filter(Boolean)
     .join('\n\n');
+}
+
+/* Rows of blocks -- blocks side by side, standing at the same height on the
+ * page -- top to bottom; each row right to left. */
+function rightToLeft(list) {
+  const rows = [];
+  for (const block of [...list].sort((a, b) => a.y - b.y)) {
+    const row = rows.find((r) => r.some((other) => {
+      const overlap = Math.min(other.y + other.h, block.y + block.h) - Math.max(other.y, block.y);
+      return overlap >= Math.min(other.h, block.h) / 3;
+    }));
+    if (row) row.push(block);
+    else rows.push([block]);
+  }
+  return rows.flatMap((row) => row.sort((a, b) => (b.x + b.w) - (a.x + a.w)));
 }
 
 /**

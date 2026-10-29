@@ -14,9 +14,10 @@ let pass = 0;
 const t = async (name, fn) => { await fn(); console.log(`  ok  ${name}`); pass++; };
 
 await t('scripts follow the book language, all four when it is not known', () => {
-  assert.deepEqual(ocr.scriptsFor('ko'), ['korean', 'latin']);
-  assert.deepEqual(ocr.scriptsFor('ja-JP'), ['japanese', 'latin']);
-  assert.deepEqual(ocr.scriptsFor('zh-Hant'), ['chinese', 'latin']);
+  // Their own script only: an English reading must not win on a misread page.
+  assert.deepEqual(ocr.scriptsFor('ko'), ['korean']);
+  assert.deepEqual(ocr.scriptsFor('ja-JP'), ['japanese']);
+  assert.deepEqual(ocr.scriptsFor('zh-Hant'), ['chinese']);
   assert.deepEqual(ocr.scriptsFor('en'), ['latin']);
   assert.deepEqual(ocr.scriptsFor(''), ['korean', 'chinese', 'japanese', 'latin']);
 });
@@ -44,6 +45,14 @@ await t('vertical Japanese is read right to left; other pages top to bottom', ()
     { text: 'せん', x: 10, y: 300, w: 20, h: 80, lines: ['せん'] },
   ];
   assert.equal(ocr.readingText(columns, 'japanese'), '申し訳\n\nありま\n\nせん');
+  // Blocks the phone read as columns come with their columns in order, and
+  // the bubbles of a row of panels are read right to left.
+  const bubbles = [
+    { text: 'left', vertical: true, x: 10, y: 20, w: 80, h: 300, lines: ['ちょっと', '待って'] },
+    { text: 'right', vertical: true, x: 200, y: 0, w: 80, h: 260, lines: ['申し訳', 'ありません'] },
+    { text: 'below', vertical: true, x: 150, y: 500, w: 60, h: 200, lines: ['はい'] },
+  ];
+  assert.equal(ocr.readingText(bubbles, 'japanese'), '申し訳ありません\n\nちょっと待って\n\nはい');
   const rows = [
     { text: 'second', x: 0, y: 50, w: 200, h: 20, lines: ['second'] },
     { text: 'first line', x: 0, y: 0, w: 200, h: 40, lines: ['first', 'line'] },
@@ -126,6 +135,11 @@ await t('the native side: registered, with the four recognisers bundled', () => 
   for (const lib of ['latin', 'chinese', 'japanese', 'korean']) assert.match(gradle, new RegExp(`libs\\.mlkit\\.text\\.${lib}`));
   const bridge = read('app/src/main/java/com/grimoire/ereader/OcrBridge.java');
   assert.match(bridge, /com\.google\.ar\.lens/);
+  // Columns are laid out as lines and read again.
+  assert.match(bridge, /VerticalLayout\.layout\(/);
+  assert.match(bridge, /out\.put\("vertical", true\)/);
+  const layout = read('app/src/main/java/com/grimoire/ereader/VerticalLayout.java');
+  assert.doesNotMatch(layout, /^import android/m, 'plain Java, testable off the phone');
   assert.match(bridge, /window\.Grimoire\.settleOcr/);
 });
 
