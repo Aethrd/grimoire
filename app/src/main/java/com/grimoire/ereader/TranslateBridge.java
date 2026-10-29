@@ -317,7 +317,7 @@ public class TranslateBridge {
                 }
 
                 switch (engine()) {
-                    case ENGINE_DEEPL: translateWithDeepL(requestId, texts, targetLang, chars, context, tagHandling); break;
+                    case ENGINE_DEEPL: translateWithDeepL(requestId, texts, targetLang, sourceLang, chars, context, tagHandling); break;
                     case ENGINE_LIBRE: translateWithLibre(requestId, texts, targetLang, sourceLang, chars); break;
                     case ENGINE_LLM: translateWithLlm(requestId, texts, targetLang, sourceLang, context, chars); break;
                     default: translateOnDevice(requestId, texts, targetLang, sourceLang, chars); break;
@@ -530,8 +530,14 @@ public class TranslateBridge {
 
     /* ── DeepL ────────────────────────────────────────────────────────── */
 
-    private void translateWithDeepL(String requestId, JSONArray texts, String targetLang, int chars,
-                                    String context, String tagHandling) throws Exception {
+    /** The source languages DeepL accepts by name: anything else is left
+     *  for it to recognise. */
+    private static final java.util.Set<String> DEEPL_SOURCES = new java.util.HashSet<>(java.util.Arrays.asList(
+            "AR", "BG", "CS", "DA", "DE", "EL", "EN", "ES", "ET", "FI", "FR", "HU", "ID", "IT", "JA", "KO",
+            "LT", "LV", "NB", "NL", "PL", "PT", "RO", "RU", "SK", "SL", "SV", "TR", "UK", "ZH"));
+
+    private void translateWithDeepL(String requestId, JSONArray texts, String targetLang, String sourceLang,
+                                    int chars, String context, String tagHandling) throws Exception {
         String key = prefs.getString(KEY_AUTH, null);
         if (key == null) {
             fail(requestId, "No DeepL key is set. Add one, or switch to on-device translation.");
@@ -546,6 +552,14 @@ public class TranslateBridge {
         body.put("preserve_formatting", true);
         if (context != null && !context.trim().isEmpty()) body.put("context", context);
         if (tagHandling != null) body.put("tag_handling", tagHandling);
+        // The model DeepL's own website translates with. Left unasked, the
+        // API answers with the one made for speed, which is the difference
+        // between pasting a page into deepl.com and having it translated here.
+        body.put("model_type", "quality_optimized");
+        // The language, where it is known: a short bubble, misread a little,
+        // is easily taken for another.
+        String from = sourceLang == null ? "" : base(sourceLang).toUpperCase(java.util.Locale.ROOT);
+        if (DEEPL_SOURCES.contains(from)) body.put("source_lang", from);
 
         String response = post(key, "/v2/translate", body.toString());
         JSONArray translations = new JSONObject(response).getJSONArray("translations");

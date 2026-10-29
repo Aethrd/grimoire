@@ -178,7 +178,7 @@ export const usage = () => call('usage').then(parse);
 /* ── languages ────────────────────────────────────────────────────────── */
 
 export const TARGETS = [
-  ['EN-GB', 'English (UK)'], ['EN-US', 'English (US)'], ['DE', 'Deutsch'],
+  ['EN-US', 'English (US)'], ['EN-GB', 'English (UK)'], ['DE', 'Deutsch'],
   ['FR', 'Français'], ['ES', 'Español'], ['IT', 'Italiano'],
   ['NL', 'Nederlands'], ['PL', 'Polski'], ['PT-BR', 'Português (BR)'],
   ['RU', 'Русский'], ['JA', '日本語'], ['ZH', '中文'], ['KO', '한국어'],
@@ -269,55 +269,18 @@ export async function translateBatch(bookId, items, lang, sourceLang = '', { con
 /**
  * The parts of one page -- the bubbles of a picture -- translated together.
  *
- * DeepL is sent the page as one text, each part marked with a tag it keeps
- * in place, so that every sentence is translated knowing the ones around
- * it (a sentence that runs from one bubble into the next comes out as one
- * sentence) and each part still comes back to its own place. Other engines,
- * and any answer whose tags do not all come back, are asked part by part
- * with the page as context.
+ * Each part is sent as its own text, so that each translation comes back to
+ * its own place, with the whole page as context: DeepL reads it for names,
+ * tone and what a line answers (and does not charge for it), and a language
+ * model is sent the page as one list. Marking the parts with tags in one
+ * text was tried, and DeepL translates each tagged part as a sentence on its
+ * own -- the context it was meant to keep, lost.
  *
  * @param items [{ field, text }], in reading order
  */
 export async function translatePage(bookId, items, lang, sourceLang = '') {
-  const results = new Map();
-  let all = true;
-  for (const item of items) {
-    const hit = await cached(bookId, item.field, lang);
-    if (hit !== null) results.set(item.field, hit);
-    else all = false;
-  }
-  if (all) return { results, translated: 0, characters: 0 };
-
   const context = items.map((item) => item.text).join('\n');
-  const deepl = status().engine === 'deepl';
-  if (deepl && typeof window.GrimoireTranslate?.translateTagged === 'function') {
-    const escapeXml = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const page = items.map((item, i) => `<s i="${i}">${escapeXml(item.text)}</s>`).join('\n');
-    try {
-      const payload = parse(await call('translateTagged', [JSON.stringify([page]), lang, sourceLang || ''], 120000));
-      const back = String(payload?.texts?.[0] ?? '');
-      const parts = new Map();
-      for (const match of back.matchAll(/<s i="(\d+)">([\s\S]*?)<\/s>/g)) {
-        parts.set(Number(match[1]), match[2]
-          .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
-          .replace(/&apos;/g, "'").replace(/&amp;/g, '&').trim());
-      }
-      if (items.every((item, i) => parts.has(i))) {
-        for (let i = 0; i < items.length; i++) {
-          results.set(items[i].field, parts.get(i));
-          await remember(bookId, items[i].field, lang, parts.get(i));
-        }
-        return { results, translated: items.length, characters: payload?.characters || 0 };
-      }
-    } catch (error) {
-      // A refusal (no key, no quota) says so; anything else is asked again
-      // part by part below.
-      if (/key|quota|requests/i.test(error.message || '')) throw error;
-    }
-  }
-  const rest = await translateBatch(bookId, items, lang, sourceLang, { context });
-  for (const [field, value] of rest.results) results.set(field, value);
-  return { results, translated: rest.translated, characters: rest.characters };
+  return translateBatch(bookId, items, lang, sourceLang, { context });
 }
 
 /** Chapter names for the index and the reader header. */

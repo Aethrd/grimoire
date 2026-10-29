@@ -278,7 +278,7 @@ export const DEFAULT_SETTINGS = {
   readingMode: 'paged',
   endlessScroll: true,
 
-  translateTarget: 'EN-GB',
+  translateTarget: 'EN-US',
   streakPages: 10,
   streakMinutes: 10,
   heatRamp: 'ink',

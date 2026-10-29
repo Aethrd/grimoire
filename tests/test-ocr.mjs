@@ -194,27 +194,26 @@ await t('translation takes the other bubbles as context, where the bridge can', 
   assert.deepEqual(calls[2], ['plain'], 'an older build is asked plainly');
 });
 
-await t('a page is translated whole by DeepL, each part back in its place', async () => {
+await t('a page is translated part by part, the whole page as context', async () => {
   const translate = await import(new URL('../app/src/main/assets/www/js/translate.js', import.meta.url).href);
   let sent = null;
   window.GrimoireTranslate = globalThis.window.GrimoireTranslate = {
     status: () => '{"configured":true,"engine":"deepl"}',
-    translateTagged(id, json, lang, source) {
-      sent = { page: JSON.parse(json)[0], source };
-      // DeepL keeps the tags, translating across them.
-      setTimeout(() => translate.settle(id, true, { texts: ['<s i="0">Heh &amp; you call this research?</s>\n<s i="1">I put up with it</s>'] }), 1);
+    translateWithContext(id, json, lang, source, context) {
+      sent = { texts: JSON.parse(json), source, context };
+      setTimeout(() => translate.settle(id, true, { texts: JSON.parse(json).map((t) => `EN:${t}`) }), 1);
     },
-    translateWithContext(id, json) { setTimeout(() => translate.settle(id, true, { texts: JSON.parse(json).map((t) => `EN:${t}`) }), 1); },
   };
-  const items = [{ field: 'ocr:p1', text: 'ふんっ何が研究だよ' }, { field: 'ocr:p2', text: '受け入れたのは<' }];
+  const items = [{ field: 'ocr:p1', text: 'ふんっ何が研究だよ' }, { field: 'ocr:p2', text: '受け入れたのは' }];
   const out = await translate.translatePage('b2', items, 'EN-GB', 'ja');
-  assert.match(sent.page, /^<s i="0">ふんっ何が研究だよ<\/s>\n<s i="1">受け入れたのは&lt;<\/s>$/);
-  assert.equal(out.results.get('ocr:p1'), 'Heh & you call this research?');
-  assert.equal(out.results.get('ocr:p2'), 'I put up with it');
-  // Tags lost on the way back: part by part instead.
-  window.GrimoireTranslate.translateTagged = (id) => setTimeout(() => translate.settle(id, true, { texts: ['Heh, research.'] }), 1);
-  const again = await translate.translatePage('b2', [{ field: 'ocr:p3', text: 'はい' }, { field: 'ocr:p4', text: 'いいえ' }], 'EN-GB', 'ja');
-  assert.equal(again.results.get('ocr:p3'), 'EN:はい');
+  assert.deepEqual(sent.texts, ['ふんっ何が研究だよ', '受け入れたのは']);
+  assert.equal(sent.source, 'ja');
+  assert.equal(sent.context, 'ふんっ何が研究だよ\n受け入れたのは');
+  assert.equal(out.results.get('ocr:p2'), 'EN:受け入れたのは');
+  // The model the website uses, and the language when it is known.
+  const bridge = read('app/src/main/java/com/grimoire/ereader/TranslateBridge.java');
+  assert.match(bridge, /body\.put\("model_type", "quality_optimized"\);/);
+  assert.match(bridge, /if \(DEEPL_SOURCES\.contains\(from\)\) body\.put\("source_lang", from\);/);
 });
 
 await t('the sheet translates, and lays the translations over the pictures', () => {
@@ -285,6 +284,10 @@ await t("AI models translate too: Claude, ChatGPT, Gemini, or another, with the 
   assert.match(llm, /\/chat\/completions/);
   // A page goes as one array, and must come back as one of the same length.
   assert.match(llm, /array\.length\(\) != expected/);
+});
+
+await t('translation is into American English unless another is chosen', () => {
+  assert.match(read('app/src/main/assets/www/js/store.js'), /translateTarget: 'EN-US'/);
 });
 
 console.log(`\n${pass} ocr tests passed`);
