@@ -121,6 +121,11 @@ judgement calls it makes for you:
   everything under one directory of that name and filing the whole library
   under *My Books* helps nobody. It is **not** stripped when doing so would
   leave every book unfiled — then that directory was the filing, not a wrapper.
+- Archives inside archives (`.zip` or `.rar`) are opened on import, three deep
+  counting the one picked. An inner archive holding several books becomes a
+  folder named after it; one holding a single book is just that book. A
+  fourth level is not opened, and the import says where it was. Build still
+  reads one level only.
 
 Folders can also be set by hand. Long-press a book to enter selection: the
 library header becomes a selection header, every cover gains a tick, and a
@@ -234,6 +239,15 @@ its offsets intact. A mark on text that was removed — or in a chapter whose
 offsets have shifted because pages came out of the middle of it — is carried
 out **with** the removal and comes back with it, because a mark left pointing
 somewhere plausible and wrong is worse than one that is temporarily absent.
+
+### Books left unread
+
+A book being read that has not been read for five days goes On hold by
+itself, so Reading holds what you are actually reading. The book read last is
+never put on hold, and neither are its other editions. Reading a held book again
+puts it back in Reading, like any status set by hand. The number of days can
+be changed, or the feature turned off, in Settings → Behaviour. A finished book read again counts as
+Reading until it reaches the end again, and it is still counted as finished in the stats.
 
 ### Deleting, in two steps
 

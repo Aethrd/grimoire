@@ -82,8 +82,9 @@ export const FORMATS = {
 /** Formats with a working parser today. The rest are refused with a reason. */
 export const SUPPORTED = new Set(['EPUB', 'PDF', 'CBZ', 'TXT', 'MD', 'HTML', 'FB2', 'MHT', 'MOBI', 'AZW3']);
 
-/** Book formats that can live inside an archive. ZIP is not one of them:
- *  nested archives are refused rather than recursed into. */
+/** Book formats that can live inside an archive. ZIP and RAR are not books:
+ *  an archive inside an archive is opened by the importer as an archive of
+ *  its own, three deep at most, and refused by Build. */
 export const ARCHIVE_CONTENTS =
   new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT', 'MD', 'HTML', 'FB2', 'MHT', 'MOBI', 'AZW3']);
 
@@ -1135,14 +1136,21 @@ export function stripCommonRoot(paths) {
   return stripCommonRoot(stripped);
 }
 
+/** Archives inside an archive, by name: opened by the importer (see
+ *  importFiles), up to three deep. Comic archives (.cbz, .cbr) are books. */
+export const isPackedArchive = (name) => /\.(zip|rar)$/i.test(String(name || ''));
+
 /**
  * Open a zip and return the books inside, each tagged with its folder.
  *
  * Directory structure is the point: a zip organised into folders is someone's
  * existing filing, and rebuilding it by hand after import is exactly the
  * tedium this avoids.
+ *
+ * @param nested  hand back the archives inside it too, as `archives`, to be
+ *   opened in turn (the importer does; Build reads one level only)
  */
-export async function expandArchive(file, onProgress) {
+export async function expandArchive(file, onProgress, { nested = false } = {}) {
   const zip = await openArchive(file);
 
   /* A book called a zip is a book.
@@ -1179,15 +1187,17 @@ export async function expandArchive(file, onProgress) {
 
   const books = entries.filter((e) =>
     ARCHIVE_CONTENTS.has(formatOf(e.name)) && !isIncidental(e.name));
-  if (!books.length) {
-    const nested = entries.some((e) => /\.zip$/i.test(e.name));
-    throw new Error(nested
+  const packed = nested ? entries.filter((e) => isPackedArchive(e.name)) : [];
+  if (!books.length && !packed.length) {
+    const archives = entries.some((e) => isPackedArchive(e.name));
+    throw new Error(archives
       ? 'That archive contains only more archives. Extract it once and import what is inside.'
       : 'No books found in that archive.');
   }
 
-  // Folders come from the paths as they already are, minus any wrapper.
-  const folders = stripCommonRoot(books.map((e) => e.name));
+  // Folders come from the paths as they already are, minus any wrapper --
+  // the archives inside judged with the books, so both lose the same one.
+  const folders = stripCommonRoot([...books, ...packed].map((e) => e.name));
 
   // Deliberately NOT extracted here. Unpacking forty EPUBs up front holds all
   // of them in memory at once -- a few hundred megabytes for an ordinary
@@ -1220,12 +1230,14 @@ export async function expandArchive(file, onProgress) {
    * books out of the folders they were filed in. Joining is what Build is
    * for, where the parts are shown and the joining is asked for. */
   const out = books.map((entry, i) => entryOf(entry, folders[i]));
+  const archives = packed.map((entry, i) => entryOf(entry, folders[books.length + i]));
 
   const count = out.length;
-  onProgress?.(1, `${count} book${count === 1 ? '' : 's'} found`);
+  onProgress?.(1, `${count} book${count === 1 ? '' : 's'} found`
+    + (archives.length ? `, ${archives.length} archive${archives.length === 1 ? '' : 's'} inside` : ''));
   // Read from the front because its index was damaged; see recover() in
   // zipreader.js. Said, so a damaged file is not mistaken for a whole one.
-  return { comic: false, books: out, recovered: !!zip.recovered };
+  return { comic: false, books: out, archives, recovered: !!zip.recovered };
 }
 
 /* ── entry point ──────────────────────────────────────────────────────── */

@@ -1269,6 +1269,77 @@ await t('importing a .cbr makes a comic; a .rar of books makes its books, folder
   for (const b of [comic, ...made]) await store.deleteBook(b.id);
 });
 
+await t('archives inside archives are opened on import, three deep, folders kept', async () => {
+  const PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const JSZip = (await import('jszip')).default;
+  const zipped = async (entries) => {
+    const zip = new JSZip();
+    for (const [name, body] of Object.entries(entries)) zip.file(name, body);
+    return zip.generateAsync({ type: 'uint8array' });
+  };
+  const story = (title) => `${title.toUpperCase()}\n\nCHAPTER ONE\n\nText of ${title}.\n`;
+  const before = new Set((await store.all('books')).map((b) => b.id));
+  const fresh = async () => (await store.all('books')).filter((b) => !before.has(b.id));
+
+  // Outer zip (1) › Volumes.zip (2) › Extras.zip (3) › Too Deep.zip (4).
+  const tooDeep = await zipped({ 'Lost.txt': story('Lost') });
+  const extras = await zipped({ 'Extra One.txt': story('Extra One'), 'Too Deep.zip': tooDeep });
+  const volumes = await zipped({
+    'Volume 1.txt': story('Volume 1'),
+    'Volume 2.txt': story('Volume 2'),
+    'Extras.zip': extras,
+  });
+  const single = await zipped({ 'Lonely.txt': story('Lonely') });
+  const comic = await zipped({ 'p1.png': PNG, 'p2.png': PNG, 'p3.png': PNG });
+  const rarBooks = fs.readFileSync(new URL('./fixtures/books.rar', import.meta.url));
+  const outer = new File([await zipped({
+    'Top.txt': story('Top'),
+    'Series/Volumes.zip': volumes,
+    'Single.zip': single,
+    'Comics/Picture Book.zip': comic,
+    'Packed.rar': rarBooks,
+  })], 'Nested Library.zip');
+
+  const out = await library.importFiles([outer], {});
+  const made = await fresh();
+  const folderOf = (title) => made.find((b) => b.title === title)?.folder;
+  // Top, Volume 1, Volume 2, Extra One, Lonely, the comic, and the RAR's two.
+  assert.equal(out.added, 8, `came in as ${out.added}: ${JSON.stringify(out.failed)}`);
+  assert.equal(folderOf('Top'), '');
+  assert.equal(folderOf('Volume 1'), 'Series/Volumes', 'an inner archive of several books is a folder');
+  assert.equal(folderOf('Extra One'), 'Series/Volumes/Extras', 'three deep');
+  assert.equal(folderOf('Lonely'), '', 'an inner archive of one book is just that book');
+  assert.equal(made.find((b) => b.format === 'CBZ' && b.imageCount === 3 && b.folder === 'Comics')?.title, 'Picture Book',
+    'a zip of pictures inside is a comic');
+  assert.equal(folderOf('The Salt Almanac'), 'Packed/Volume 1', 'a RAR inside a zip is opened, its folders kept');
+  assert.ok(made.some((b) => b.folder === 'Packed/Comics' && b.format === 'CBZ'), 'and the .cbr inside that RAR');
+  // Four deep is not opened, and says so -- naming where it was.
+  assert.equal(out.failed.length, 1, JSON.stringify(out.failed));
+  assert.match(out.failed[0].name, /Nested Library\.zip \/ Series\/Volumes\.zip \/ Extras\.zip \/ Too Deep\.zip/);
+  assert.match(out.failed[0].reason, /3 deep at most/);
+  assert.ok(!made.some((b) => b.title === 'Lost'));
+
+  // The same archive again adds nothing: every book, however deep, is known.
+  const again = await library.importFiles([outer], {});
+  assert.equal(again.added, 0, `a second import added ${again.added}`);
+  for (const b of made) await store.deleteBook(b.id);
+});
+
+await t('Build still reads one level: an archive of archives is not opened there', async () => {
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  const JSZip = (await import('jszip')).default;
+  const zip = new JSZip();
+  zip.file('inner.zip', 'x');
+  const file = new File([await zip.generateAsync({ type: 'uint8array' })], 'outer.zip');
+  await assert.rejects(parse.expandArchive(file), /Extract it once/);
+  const opened = await parse.expandArchive(file, null, { nested: true });
+  assert.deepEqual(opened.archives.map((a) => a.name), ['inner.zip']);
+  assert.match(fs.readFileSync(new URL('../app/src/main/assets/www/js/build.js', import.meta.url), 'utf8'),
+    /expandArchive\(file, \(fraction, name\) =>\s*onProgress\?\.\(`Opening \$\{name\}`, fraction\)\);/, 'Build does not ask for nested archives');
+});
+
 await t('named wrong either way: a ZIP called .cbr, a RAR called .cbz, a RAR with no name', async () => {
   const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
   const before = new Set((await store.all('books')).map((b) => b.id));

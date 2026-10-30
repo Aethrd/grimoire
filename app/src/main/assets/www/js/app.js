@@ -203,10 +203,16 @@ function back() {
   current = target;
   document.body.dataset.view = target;
   viewChanged();
-  if (previous === 'reader') reader.pauseSession();   // back() is sync; the
-  // stats screen re-reads on every open, so a late arrival still shows up.
+  /* Out of a book, the screen arrived at is drawn once what was read has
+   * been written: the last position, the book finished, the status the
+   * reading gives it. Drawn straight away, the shelf showed the book as it
+   * was when opened -- a book just finished still said Reading, one picked
+   * up again still said On hold -- until something else redrew it. (back()
+   * itself stays synchronous: Android asks whether back was handled.) */
+  const written = previous === 'reader' ? reader.pauseSession().catch(() => {}) : null;
   el('tabbar').hidden = target === 'reader';
-  enter(target);
+  if (written) written.then(() => { if (current === target) enter(target); });
+  else enter(target);
   // Back into a book that was changed while it was away.
   if (target === 'reader') reloadReader();
   return true;
@@ -259,6 +265,19 @@ async function openFolder(folder) {
   // filter from the shelf itself would otherwise change nothing on screen.
   if (current === 'library') await refreshShelf();
   else show('library', { replace: true });
+}
+
+/** Said once, briefly, when books have just been put on hold. */
+function heldNote(count, days) {
+  if (!count) return;
+  toast(`${count} book${count === 1 ? '' : 's'} not read for ${days} day${days === 1 ? '' : 's'} put on hold`, 5000);
+}
+
+async function putQuietOnHold() {
+  const count = await library.holdQuietBooks().catch(() => 0);
+  if (!count) return;
+  if (current === 'library') await refreshShelf();
+  heldNote(count, (await store.settings()).autoHoldDays ?? 5);
 }
 
 async function refreshShelf() {
@@ -1947,6 +1966,9 @@ async function hiddenNote(books, said) {
 function setStatusOn(book, status) {
   if (status === null) delete book.status;
   else book.status = status;
+  // Set by hand now, whatever put it there before.
+  delete book.heldAt;
+  delete book.heldAutomatically;
   if (status === 'finished') { book.finishedAt = book.finishedAt || Date.now(); book.percent = 1; }
   if (status === 'reading' || status === 'unread') book.finishedAt = null;
   if (status === 'unread') book.percent = 0;
@@ -8121,6 +8143,8 @@ async function boot() {
   }
   // Anything a crash left half-written is cleared before the shelf is drawn.
   await library.sweepUnfinishedImports();
+  // Books left unread for days go On hold before the shelf shows them.
+  const held = await library.holdQuietBooks().catch(() => 0);
   // Locked only if a passphrase exists to unlock it with.
   await library.initVaultGate();
   reader.setChrome('full');
@@ -8163,6 +8187,7 @@ async function boot() {
 
 
   await refreshShelf();
+  heldNote(held, settings.autoHoldDays ?? 5);
 
 
   // Re-flow when the window changes shape: rotation, keyboard, the insets
@@ -8182,6 +8207,8 @@ async function boot() {
   // The vault re-locks whenever the app leaves the foreground, and the
   // position is flushed so being killed costs at most one page.
   document.addEventListener('visibilitychange', () => {
+    // Back after days away: what went quiet meanwhile goes On hold.
+    if (document.visibilityState === 'visible') { putQuietOnHold(); return; }
     if (document.visibilityState !== 'hidden') return;
     reader.pauseSession();
     if (library.vaultUnlocked) { library.setVaultUnlocked(false); refreshShelf(); }

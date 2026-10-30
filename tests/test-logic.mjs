@@ -206,6 +206,125 @@ t('opening a book is not reading it', () => {
   assert.equal(lib.statusOf({ lastOpenedAt: 5, lastReadAt: 6 }), 'reading');
 });
 
+t('a finished book read again is Reading until it reaches the end again', () => {
+  // Finished on day 10; opened and read on day 20, now part way through.
+  assert.equal(lib.statusOf({ finishedAt: 10, lastReadAt: 20, percent: 0.3 }), 'reading');
+  // Back at the end: finished again, and still finished on the day it first was.
+  assert.equal(lib.statusOf({ finishedAt: 10, lastReadAt: 20, percent: 1 }), 'finished');
+  // Finished, and nothing read since: finished, wherever it was left.
+  assert.equal(lib.statusOf({ finishedAt: 20, lastReadAt: 10, percent: 0.3 }), 'finished');
+  assert.equal(lib.statusOf({ finishedAt: 20, lastReadAt: 20, percent: 0.3 }), 'finished');
+  // Set by hand, it says what it was set to.
+  assert.equal(lib.statusOf({ finishedAt: 10, lastReadAt: 20, percent: 0.3, status: 'finished' }), 'finished');
+});
+
+await t2('the reading and the position, written together, both land', async () => {
+  /* The first page turned notes the reading (markRead) while leaving the
+   * book writes the position (flushPosition). Each reads the record and
+   * writes it back; run side by side, one wrote over the other. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const id = await store.add('books', { title: 'Race', fingerprint: 'race:1', addedAt: 1, status: 'onHold', finishedAt: null });
+  for (let round = 0; round < 5; round++) {
+    store.queuePosition({ bookId: id, chapterIndex: 0, page: round, percent: 0.2 + round / 10, updatedAt: Date.now() });
+    await Promise.all([store.markRead(id), store.flushPosition()]);
+    const book = await store.get('books', id);
+    assert.equal(book.status, undefined, `round ${round}: the status the reading cleared came back`);
+    assert.ok(book.lastReadAt, `round ${round}: the reading was lost`);
+    assert.equal(book.percent, 0.2 + round / 10, `round ${round}: the position was lost`);
+    await store.put('books', { ...book, status: 'onHold' });
+  }
+  await store.deleteBook(id);
+});
+
+await t2('out of a book, the shelf is drawn once what was read is written', async () => {
+  const fs = await import('node:fs');
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  const back = app.slice(app.indexOf('function back() {'), app.indexOf('/* ── library'));
+  assert.match(back, /const written = previous === 'reader' \? reader\.pauseSession\(\)/);
+  assert.match(back, /written\.then\(\(\) => \{ if \(current === target\) enter\(target\); \}\)/);
+  assert.doesNotMatch(back, /reader\.pauseSession\(\);\s/, 'not left to land after the shelf is drawn');
+});
+
+console.log('books left unread');
+
+{
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = 100 * DAY;
+  const titles = (books) => books.map((b) => b.title).sort();
+
+  t('a book being read and left for five days goes on hold; the one read last never does', () => {
+    const books = [
+      { id: 1, title: 'Today', lastReadAt: now - 1000 },
+      { id: 2, title: 'Six days', lastReadAt: now - 6 * DAY },
+      { id: 3, title: 'Four days', lastReadAt: now - 4 * DAY },
+      { id: 4, title: 'Exactly five', lastReadAt: now - 5 * DAY },
+    ];
+    assert.deepEqual(titles(lib.goneQuiet(books, { days: 5, now })), ['Exactly five', 'Six days']);
+    // Read last, however long ago: it is the one being read.
+    const alone = [{ id: 1, title: 'Months ago', lastReadAt: now - 90 * DAY },
+      { id: 2, title: 'Older', lastReadAt: now - 95 * DAY }];
+    assert.deepEqual(titles(lib.goneQuiet(alone, { days: 5, now })), ['Older']);
+  });
+
+  t('only Reading goes on hold: unread, finished, dropped and held stay as they are', () => {
+    const old = now - 30 * DAY;
+    const books = [
+      { id: 1, title: 'Last', lastReadAt: now },
+      { id: 2, title: 'Unread', addedAt: old },
+      { id: 3, title: 'Finished', lastReadAt: old, finishedAt: old },
+      { id: 4, title: 'Dropped', lastReadAt: old, status: 'dropped' },
+      { id: 5, title: 'Held', lastReadAt: old, status: 'onHold' },
+      { id: 6, title: 'Set to Reading', lastReadAt: old, status: 'reading' },
+      { id: 7, title: 'Opened, never read', lastOpenedAt: old },
+      { id: 8, title: 'Inferred', lastReadAt: old },
+    ];
+    assert.deepEqual(titles(lib.goneQuiet(books, { days: 5, now })), ['Inferred', 'Set to Reading']);
+  });
+
+  t('opening a book counts as picking it up; the bin and other editions of the last book are spared', () => {
+    const old = now - 30 * DAY;
+    const books = [
+      { id: 1, title: 'Last', lastReadAt: now - DAY, bundleId: 1 },
+      { id: 2, title: 'Its raw', lastReadAt: old, bundleId: 1 },
+      { id: 3, title: 'Opened yesterday', lastReadAt: old, lastOpenedAt: now - DAY * 2 },
+      { id: 4, title: 'Binned', lastReadAt: old, binnedAt: now },
+      { id: 5, title: 'Passing through', lastReadAt: old, transient: true },
+      { id: 6, title: 'Quiet', lastReadAt: old },
+    ];
+    assert.deepEqual(titles(lib.goneQuiet(books, { days: 5, now })), ['Quiet']);
+  });
+
+  t('nothing is held when it is turned off', () => {
+    const books = [{ id: 1, title: 'A', lastReadAt: now }, { id: 2, title: 'B', lastReadAt: 1 }];
+    assert.deepEqual(lib.goneQuiet(books, { days: 0, now }), []);
+    assert.equal(lib.goneQuiet(books, { days: 5, now }).length, 1);
+  });
+
+  await t2('held books are saved On hold, and reading one makes it Reading again', async () => {
+    const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+    for (const b of await store.all('books')) await store.deleteBook(b.id);
+    const real = Date.now();
+    const last = await store.add('books', { title: 'Last', fingerprint: 'q:1', addedAt: 1, lastReadAt: real });
+    const quiet = await store.add('books', { title: 'Quiet', fingerprint: 'q:2', addedAt: 1, lastReadAt: real - 6 * DAY });
+    await store.saveSettings({ autoHoldDays: 5 });
+    assert.equal(await lib.holdQuietBooks(), 1);
+    const held = await store.get('books', quiet);
+    assert.equal(lib.statusOf(held), 'onHold');
+    assert.equal(held.heldAutomatically, true);
+    assert.equal(lib.statusOf(await store.get('books', last)), 'reading');
+    assert.equal(await lib.holdQuietBooks(), 0, 'held once, not again');
+    await store.markRead(quiet);
+    const again = await store.get('books', quiet);
+    assert.equal(lib.statusOf(again), 'reading');
+    assert.equal(again.heldAutomatically, undefined);
+    await store.saveSettings({ autoHoldDays: 0 });
+    await store.put('books', { ...again, lastReadAt: real - 60 * DAY, lastOpenedAt: 0 });
+    assert.equal(await lib.holdQuietBooks(), 0, 'off is off');
+    await store.saveSettings({ autoHoldDays: 5 });
+    for (const id of [last, quiet]) await store.deleteBook(id);
+  });
+}
+
 console.log('reading elsewhere');
 
 await (async () => {

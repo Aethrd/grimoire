@@ -194,6 +194,9 @@ export const DEFAULT_SETTINGS = {
   // folder is still listed under Folders; opening it there shows them.
   hiddenFolders: [],
   sort: { keys: [['lastRead', 'desc'], ['author', 'asc']], group: [] },
+  // A book being read and not read for this many days goes On hold by
+  // itself, the one read last excepted (library.holdQuietBooks). 0 for never.
+  autoHoldDays: 5,
   turnBySwipe: true,
   turnBySideTap: true,
   tapZone: 0.18,                  // adjustable 12–40% in Settings, Behaviour
@@ -402,12 +405,27 @@ export function queuePosition(position) {
   writeTimer = setTimeout(flushPosition, 2000);
 }
 
+/* The book's record is read, changed and written back by both of these.
+ * Run side by side -- the first page turned, and the book left straight
+ * after -- one wrote over the other: the status the reading set came back,
+ * or the position was lost. So they take turns. */
+let bookWrites = Promise.resolve();
+function inTurn(work) {
+  const run = bookWrites.then(work, work);
+  bookWrites = run.catch(() => {});
+  return run;
+}
+
 export async function flushPosition() {
   clearTimeout(writeTimer);
-  if (!pending) return;
+  if (!pending) return inTurn(() => {});   // still waits for a reading being noted
   const row = pending;
   pending = null;
   await put('positions', row);
+  return inTurn(() => positionOnBook(row));
+}
+
+async function positionOnBook(row) {
   const book = await get('books', row.bookId);
   if (book) {
     /* Opened, not read. Saving a position happens the moment a book is
@@ -432,7 +450,11 @@ export function dayKey(ts = Date.now()) {
 }
 
 /** Someone has actually read some of this, not merely opened it. */
-export async function markRead(bookId) {
+export function markRead(bookId) {
+  return inTurn(() => noteRead(bookId));
+}
+
+async function noteRead(bookId) {
   const book = await get('books', bookId);
   if (!book) return;
   book.lastReadAt = Date.now();
@@ -445,6 +467,8 @@ export async function markRead(bookId) {
    * the status stands until the book is next read, and the reading takes
    * over from there. */
   delete book.status;
+  delete book.heldAt;
+  delete book.heldAutomatically;
   await put('books', book);
 }
 

@@ -1051,7 +1051,7 @@ t('opening records a different thing from reading', () => {
   const store = read('app/src/main/assets/www/js/store.js');
   // The position save marks the book opened, not read.
   assert.match(store, /book\.lastOpenedAt = Date\.now\(\)/);
-  assert.match(store, /export async function markRead/);
+  assert.match(store, /export function markRead\(bookId\) \{\s*return inTurn\(/);
   // Only real progress marks it read, and only once a session.
   const reader = read('app/src/main/assets/www/js/reader.js');
   assert.match(reader, /function noteReading/);

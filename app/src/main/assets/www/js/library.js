@@ -215,9 +215,62 @@ export function collapseBundles(books, levels = []) {
 /** The state a book is actually in: what was set, or what can be inferred. */
 export function statusOf(book) {
   if (book.status && STATUS_LABELS[book.status]) return book.status;
-  if (book.finishedAt) return 'finished';
+  // Finished, unless it is being read again: read since it was finished,
+  // and no longer at the end. (When it was finished is kept either way, for
+  // the stats: a book read twice was still finished once.)
+  if (book.finishedAt && !rereading(book)) return 'finished';
   if (book.lastReadAt) return 'reading';
   return 'unread';
+}
+
+/** A finished book read again since, and not at its end. */
+const rereading = (book) => !!(book.lastReadAt && book.lastReadAt > book.finishedAt
+  && typeof book.percent === 'number' && book.percent < 0.999);
+
+/* ── put aside ────────────────────────────────────────────────────────────
+ *
+ * A book being read and then left goes On hold by itself once it has not
+ * been read for a few days (five, unless changed in Behaviour), so Reading
+ * holds what is actually being read. The book read last never does: it is
+ * the one being read, however long ago that was. Like any status set, it
+ * lasts until the book is next read (store.markRead), and then it is
+ * Reading again.
+ */
+
+const DAY = 24 * 60 * 60 * 1000;
+/** When a book was last read, or opened -- opening it is picking it up. */
+const touchedAt = (book) => Math.max(book.lastReadAt || 0, book.lastOpenedAt || 0);
+
+/**
+ * The books to put on hold: on the shelf, Reading, and not read for `days`
+ * days -- except the book read last, and any edition bundled with it.
+ */
+export function goneQuiet(books, { days, now = Date.now() } = {}) {
+  if (!(days > 0)) return [];
+  const shelf = books.filter(onShelf);
+  const byId = new Map(books.map((b) => [b.id, b]));
+  let last = null;
+  for (const book of shelf) if (touchedAt(book) && (!last || touchedAt(book) > touchedAt(last))) last = book;
+  const spared = last ? workOf(last, byId) : null;
+  return shelf.filter((book) => statusOf(book) === 'reading'
+    && touchedAt(book) > 0
+    && now - touchedAt(book) >= days * DAY
+    && workOf(book, byId) !== spared);
+}
+
+/** Put the books gone quiet on hold. @returns how many were */
+export async function holdQuietBooks({ now = Date.now() } = {}) {
+  const settings = await store.settings();
+  const days = settings.autoHoldDays ?? 5;
+  const quiet = goneQuiet(await store.all('books'), { days, now });
+  for (const book of quiet) {
+    book.status = 'onHold';
+    // Said, so the shelf can tell put-aside from put-on-hold-by-hand.
+    book.heldAt = now;
+    book.heldAutomatically = true;
+    await store.put('books', book);
+  }
+  return quiet.length;
 }
 
 /** Whether the state was set by hand rather than inferred -- which it stays
@@ -308,6 +361,12 @@ export function filedUnder(into, folder) {
   return inner ? `${outer}/${inner}` : outer;
 }
 
+/** How deep archives inside archives are opened on import, counting the one
+ *  picked: a zip in a zip in a zip, and no further. */
+export const MAX_NESTING = 3;
+/** And how many inner archives, all told, one import will open. */
+const MAX_INNER_ARCHIVES = 200;
+
 export async function importFiles(files, { onProgress, onDone, transient = false, rescue = null, into = '' } = {}) {
   /* Timed, in phases.
    *
@@ -353,7 +412,26 @@ export async function importFiles(files, { onProgress, onDone, transient = false
   const pictures = [];
   const IS_PICTURE = /\.(jpe?g|png|gif|webp|avif|bmp)$/i;
 
-  for (const picked of files) {
+  /* Archives inside archives are opened as well: each one found goes on the
+   * end of this list, to be opened in its turn like a file that was picked,
+   * its books filed under the folder it sat in. Three deep at most, counting
+   * the archive picked, and so many in all -- a zip of zips of zips is
+   * somebody's filing; a zip that goes on unpacking forever is an attack. */
+  const work = [...files].map((file) => ({ file, depth: 1, folder: '', trail: '', label: file.name }));
+  let inner = 0;
+  for (let w = 0; w < work.length; w++) {
+    const job = work[w];
+    let picked = job.file;
+    if (!picked) {
+      // An archive from inside another, unpacked only now its turn has come.
+      try {
+        onProgress?.(`Unpacking ${job.label}`, 0);
+        picked = new File([await job.read()], job.name);
+      } catch (error) {
+        results.failed.push({ name: job.label, reason: error.message || 'Could not be unpacked' });
+        continue;
+      }
+    }
     /* Named for what it is, where the name does not say.
      *
      * Only a file with no extension is looked at -- plenty of downloaders
@@ -415,9 +493,10 @@ export async function importFiles(files, { onProgress, onDone, transient = false
           const source = original;
           onProgress?.(`Unpacking ${source.name}`, 0);
           original = await withRescue(source, (readable) => rarToZip(readable,
-            (fraction, inner) => onProgress?.(`Unpacking ${inner || source.name}`, fraction)), rescue);
+            (fraction, within) => onProgress?.(`Unpacking ${within || source.name}`, fraction)),
+          job.depth > 1 ? null : rescue);
         } catch (error) {
-          results.failed.push({ name: original.name, reason: error.message || 'Could not be unpacked' });
+          results.failed.push({ name: job.label, reason: error.message || 'Could not be unpacked' });
           continue;
         }
       } else if (kind === 'RAR' || kind === 'CBR') {
@@ -436,14 +515,15 @@ export async function importFiles(files, { onProgress, onDone, transient = false
       onProgress?.(`Opening ${file.name}`, 0);
       const archive = await withRescue(file, async (readable) => {
         const opened = await expandArchive(readable, (fraction, name) =>
-          onProgress?.(`Unpacking ${name}`, fraction));
+          onProgress?.(`Unpacking ${name}`, fraction), { nested: true });
         file = readable;
         return opened;
-      }, rescue);
+      }, job.depth > 1 ? null : rescue);
 
       // An EPUB that arrived named ".zip": one book, read as the EPUB it is.
       if (archive.epub) {
-        queue.push({ file, name: file.name, folder: '', as: asEpubName(file.name) });
+        queue.push({ file, name: file.name, folder: job.folder, as: asEpubName(file.name) });
+        if (job.folder) results.folders.add(job.folder);
         continue;
       }
 
@@ -466,12 +546,13 @@ export async function importFiles(files, { onProgress, onDone, transient = false
           queue.push({
             file,
             name: many ? comic.title : file.name,
-            folder: '',
+            folder: job.folder,
             as: `${file.name.replace(/\.zip$/i, '')}.cbz`,
             prefix: comic?.prefix ?? null,
             fingerprint: many ? `${file.name}:${file.size}:${comic.prefix}` : undefined,
           });
         }
+        if (job.folder) results.folders.add(job.folder);
         continue;
       }
 
@@ -479,22 +560,53 @@ export async function importFiles(files, { onProgress, onDone, transient = false
         if (!results.recovered) results.recovered = [];
         results.recovered.push({ name: file.name, books: archive.books.length });
       }
+      const packed = archive.archives || [];
+      /* An archive from inside another, holding several things, is a folder
+       * of its own, named for it -- "Volumes.zip" holding a zip per volume
+       * files them under "Volumes". Holding one book, it is just that book. */
+      const base = job.depth > 1 && archive.books.length + packed.length > 1
+        ? filedUnder(job.folder, file.name.replace(/\.(zip|rar)$/i, ''))
+        : job.folder;
       for (const book of archive.books) {
+        const folder = filedUnder(base, book.folder);
         queue.push({
           // read() rather than a File: the entry is extracted when its turn
           // comes and released straight after, so a big archive never has more
           // than one book unpacked at a time.
           read: book.read,
           name: book.name,
-          folder: book.folder,
+          folder,
           // The entry's own size, so re-importing the same archive is a no-op
-          // rather than a second copy of everything.
-          fingerprint: `${book.name}:${book.size}`,
+          // rather than a second copy of everything. Inside an inner archive,
+          // its path too: two volumes' "chapter 1.epub" are two books.
+          fingerprint: job.trail ? `${job.trail}/${book.path}:${book.size}` : `${book.name}:${book.size}`,
         });
-        if (book.folder) results.folders.add(book.folder);
+        if (folder) results.folders.add(folder);
+      }
+      for (const packedArchive of packed) {
+        const label = `${job.label} / ${packedArchive.path}`;
+        if (job.depth >= MAX_NESTING) {
+          results.failed.push({
+            name: label,
+            reason: `Archives are opened ${MAX_NESTING} deep at most. Unpack this one and import it on its own.`,
+          });
+          continue;
+        }
+        if (++inner > MAX_INNER_ARCHIVES) {
+          results.failed.push({ name: label, reason: `More than ${MAX_INNER_ARCHIVES} archives inside archives; this one was left.` });
+          continue;
+        }
+        work.push({
+          read: packedArchive.read,
+          name: packedArchive.name,
+          label,
+          depth: job.depth + 1,
+          folder: filedUnder(base, packedArchive.folder),
+          trail: `${job.trail || job.label}/${packedArchive.path}`,
+        });
       }
     } catch (error) {
-      results.failed.push({ name: file.name, reason: error.message || 'Could not be opened' });
+      results.failed.push({ name: job.depth > 1 ? job.label : file.name, reason: error.message || 'Could not be opened' });
     }
   }
 
@@ -933,7 +1045,7 @@ export const displayTitle = (book) => titles.get(book.id) || book.title;
  *  book's own. Used to mark it, so the two are never mistaken. */
 export const isTranslatedTitle = (book) => titles.has(book.id);
 
-const EMPTY_NOTE = 'EPUB, MOBI, AZW3, PDF, CBZ, CBR, TXT, HTML, Markdown and FB2. Drop in a .zip or .rar and it is unpacked, with the folders inside kept as folders here.';
+const EMPTY_NOTE = 'EPUB, MOBI, AZW3, PDF, CBZ, CBR, TXT, HTML, Markdown and FB2. Drop in a .zip or .rar and it is unpacked (archives inside it too, three deep), with the folders inside kept as folders here.';
 
 /** The books the shelf drew last, bundles opened out: what "select all"
  *  selects, so it never reaches a book that is not on screen. */

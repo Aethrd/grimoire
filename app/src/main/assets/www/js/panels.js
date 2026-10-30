@@ -1588,6 +1588,28 @@ async function renderBehaviourPane(body) {
   guides.appendChild(focus);
   body.appendChild(guides);
 
+  /* Books left unread go On hold by themselves. */
+  const aside = document.createElement('section');
+  aside.className = 'block';
+  aside.innerHTML = `<h2>Books left unread</h2>
+    <p class="muted" style="font-size:12px;line-height:1.55">
+      A book you were reading and have not read for a while goes On hold, so
+      Reading shows what you are actually reading. Never the book you read
+      last. Read one again and it is back in Reading.</p>`;
+  const holdDays = settings.autoHoldDays ?? 5;
+  aside.appendChild(row('Put on hold when left unread', null,
+    toggle(holdDays > 0, async (on) => {
+      await store.saveSettings({ autoHoldDays: on ? (settings.lastAutoHoldDays || 5) : 0 });
+      renderSettings();
+    })));
+  if (holdDays > 0) {
+    aside.appendChild(slider('Days without reading', holdDays, 1, 30, 1, '', async (value) => {
+      await store.saveSettings({ autoHoldDays: value, lastAutoHoldDays: value });
+      renderSettings();
+    }));
+  }
+  body.appendChild(aside);
+
   const ends = document.createElement('section');
   ends.className = 'block';
   ends.innerHTML = `<h2>At the end of a chapter</h2>
