@@ -87,12 +87,151 @@ export function poly(points, colour = 'black') {
   return {
     type: 'poly',
     colour,
-    points: points.map(([x, y]) => [round(x), round(y)]),
+    points: outline(points).map(([x, y]) => [round(x), round(y)]),
   };
+}
+
+/**
+ * The outline the points make: the order they are joined in.
+ *
+ * In the order they were placed, when that outline does not cross itself --
+ * so a shape traced round its edge keeps every dent and notch it was given.
+ * When it does cross -- four points round a small panel placed top left, top
+ * right, bottom left, bottom right make a bow tie, two triangles point to
+ * point covering neither corner between them -- it is worked out again: the
+ * points are taken in the order placed, each joined on at the end if the
+ * outline stays uncrossed, or else into the edge it adds least to that keeps
+ * it uncrossed. If even that crosses, the points are joined in order round
+ * their middle, which never does. Worked out afresh each time a point is
+ * added or taken away, so the shape is always the best fit for all of them.
+ */
+export function outline(points) {
+  const list = (points || []).map((p) => [...p]);
+  if (list.length < 4 || !crosses(list)) return list;
+  let built = list.slice(0, 3);
+  for (const p of list.slice(3)) {
+    const appended = [...built, p];
+    if (!crosses(appended)) { built = appended; continue; }
+    let best = null;
+    for (let i = 0; i < built.length; i += 1) {
+      const a = built[i];
+      const b = built[(i + 1) % built.length];
+      const cost = Math.hypot(a[0] - p[0], a[1] - p[1]) + Math.hypot(b[0] - p[0], b[1] - p[1])
+        - Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const candidate = [...built.slice(0, i + 1), p, ...built.slice(i + 1)];
+      const clean = !crosses(candidate);
+      if (!best || (clean && !best.clean) || (clean === best.clean && cost < best.cost)) {
+        best = { candidate, cost, clean };
+      }
+    }
+    built = best.candidate;
+  }
+  return crosses(built) ? roundTheMiddle(list) : built;
+}
+
+/** The points in order of their angle round their middle: never crossed. */
+function roundTheMiddle(points) {
+  const cx = points.reduce((n, [x]) => n + x, 0) / points.length;
+  const cy = points.reduce((n, [, y]) => n + y, 0) / points.length;
+  return [...points].sort((a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx));
+}
+
+/** Whether an outline crosses itself anywhere. */
+export function crosses(points) {
+  const n = points.length;
+  if (n < 4) return false;
+  for (let i = 0; i < n; i += 1) {
+    const a = points[i];
+    const b = points[(i + 1) % n];
+    for (let j = i + 1; j < n; j += 1) {
+      // Neighbouring edges share a corner; that is not a crossing.
+      if (j === i || (j + 1) % n === i || (i + 1) % n === j) continue;
+      if (segmentsCross(a, b, points[j], points[(j + 1) % n])) return true;
+    }
+  }
+  return false;
+}
+
+/** Whether two segments cross at a point inside both (not merely touch). */
+function segmentsCross([ax, ay], [bx, by], [cx, cy], [dx, dy]) {
+  const side = (px, py, qx, qy, rx, ry) => (qx - px) * (ry - py) - (qy - py) * (rx - px);
+  const d1 = side(cx, cy, dx, dy, ax, ay);
+  const d2 = side(cx, cy, dx, dy, bx, by);
+  const d3 = side(ax, ay, bx, by, cx, cy);
+  const d4 = side(ax, ay, bx, by, dx, dy);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
 }
 
 /** A shape drawn with corners: what this version draws, and the panels before it. */
 export const isPolygon = (shape) => shape?.type === 'poly' || shape?.type === 'quad';
+
+/* ── text ─────────────────────────────────────────────────────────────
+ *
+ * Words lettered onto the picture: a translation into a bubble that has been
+ * whited out, a name, a note. Centred on the point it was placed at, line
+ * under line as typed, in the picture's own pixels -- so a size of 9 is
+ * nine pixels of a page perhaps 1,400 tall, small enough for the narrowest
+ * bubble. Painted into the picture with the shapes, in the order made.
+ */
+
+/** The smallest and largest text, in the picture's own pixels. */
+export const TEXT_MIN = 4;
+export const TEXT_MAX = 200;
+/** The face the text is lettered in: the same for the editor and the picture. */
+export const TEXT_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif';
+const TEXT_WEIGHT = 600;
+const LINE = 1.15;
+
+export const isText = (shape) => shape?.type === 'text';
+
+/** The font for a size, as a canvas takes it. */
+export const fontFor = (size) => `${TEXT_WEIGHT} ${size}px ${TEXT_FONT}`;
+
+export const linesOf = (shape) => String(shape?.text || '').split('\n');
+
+/**
+ * A piece of text, centred on (x, y).
+ *
+ * @param measure  (line, font) => its width; a canvas's measureText where
+ *                 there is one. Kept on the shape, so it can be found by a
+ *                 tap without measuring again.
+ */
+export function text(x, y, words, size, colour = 'black', measure = estimate) {
+  const shape = {
+    type: 'text', colour, x: round(x), y: round(y),
+    text: String(words || ''),
+    size: Math.max(TEXT_MIN, Math.min(TEXT_MAX, Math.round(size * 2) / 2)),
+  };
+  return measured(shape, measure);
+}
+
+/** The shape with its width and height worked out for what it now says. */
+export function measured(shape, measure = estimate) {
+  const font = fontFor(shape.size);
+  const lines = linesOf(shape);
+  const w = Math.max(shape.size * 0.5, ...lines.map((line) => measure(line, font)));
+  return { ...shape, w: round(w), h: round(lines.length * shape.size * LINE) };
+}
+
+/** A width with no canvas to measure by: about half the size a letter. */
+function estimate(line, font) {
+  const size = parseFloat(String(font).split(' ')[1]) || 12;
+  return [...line].reduce((n, c) => n + (/[\u1100-\u9fff\uac00-\ud7af]/.test(c) ? 1 : 0.56), 0) * size;
+}
+
+/** Where a piece of text sits, as a box. */
+export function textBox(shape) {
+  const w = shape.w || 0;
+  const h = shape.h || shape.size * LINE;
+  return { x: shape.x - w / 2, y: shape.y - h / 2, w, h };
+}
+
+/** Each line's middle, top to bottom, as [x, y]. */
+function lineCentres(shape) {
+  const lines = linesOf(shape);
+  const step = shape.size * LINE;
+  return lines.map((line, i) => [line, shape.x, shape.y + (i - (lines.length - 1) / 2) * step]);
+}
 
 /** The area a panel covers, for telling a panel from four taps in one spot. */
 export function area(points) {
@@ -107,6 +246,7 @@ export function area(points) {
 
 /** A shape too small to have been meant. */
 export function isTiny(shape) {
+  if (isText(shape)) return !String(shape.text || '').trim();
   if (isPolygon(shape)) return (shape.points?.length || 0) < 3 || area(shape.points) < 16;
   if (shape.type === 'brush') return !shape.points?.length;
   return shape.w < 3 || shape.h < 3;
@@ -175,6 +315,10 @@ export function handleAt(shape, { x, y }, reach) {
 export function moveHandle(shape, handle, from, to, width, height) {
   const clampX = (n) => round(Math.max(0, Math.min(width, n)));
   const clampY = (n) => round(Math.max(0, Math.min(height, n)));
+  // Text moves whole, its middle kept on the picture.
+  if (isText(shape)) {
+    return { ...shape, x: clampX(shape.x + to.x - from.x), y: clampY(shape.y + to.y - from.y) };
+  }
   const points = shape.points.map((p) => [...p]);
   if (handle.kind === 'corner') {
     points[handle.at] = [clampX(to.x), clampY(to.y)];
@@ -211,7 +355,12 @@ export function paintShapes(ctx, shapes) {
     ctx.fillStyle = colour;
     ctx.strokeStyle = colour;
 
-    if (shape.type === 'poly' && shape.points?.length >= 3) {
+    if (isText(shape)) {
+      ctx.font = fontFor(shape.size);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const [line, x, y] of lineCentres(shape)) if (line) ctx.fillText(line, x, y);
+    } else if (shape.type === 'poly' && shape.points?.length >= 3) {
       ctx.beginPath();
       const [[x0, y0], ...rest] = shape.points;
       ctx.moveTo(x0, y0);
@@ -250,6 +399,12 @@ export function paintShapes(ctx, shapes) {
 /** The same shapes as SVG, for drawing them over the picture while editing. */
 export function svgFor(shape) {
   const fill = COLOURS[shape.colour] || COLOURS.black;
+  if (isText(shape)) {
+    const lines = lineCentres(shape).map(([line, x, y]) =>
+      `<text x="${x}" y="${y}">${escapeXml(line)}</text>`).join('');
+    return `<g class="lettering" fill="${fill}" font-size="${shape.size}" font-weight="${TEXT_WEIGHT}" `
+      + `font-family='${TEXT_FONT}' text-anchor="middle" dominant-baseline="central">${lines}</g>`;
+  }
   if (isPolygon(shape)) {
     return `<polygon points="${shape.points.map(([x, y]) => `${x},${y}`).join(' ')}" fill="${fill}"/>`;
   }
@@ -285,6 +440,10 @@ export function shapeAt(shapes, point, slack = 0) {
 }
 
 function covers(shape, { x, y }, slack) {
+  if (isText(shape)) {
+    const box = textBox(shape);
+    return x >= box.x - slack && x <= box.x + box.w + slack && y >= box.y - slack && y <= box.y + box.h + slack;
+  }
   if (isPolygon(shape)) {
     if (inside(shape.points, x, y)) return true;
     const { points } = shape;
@@ -331,6 +490,9 @@ function toSegment(x, y, [ax, ay], [bx, by]) {
   const t = length ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / length)) : 0;
   return Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
 }
+
+const escapeXml = (s) => String(s).replace(/[&<>"]/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 /** Whether two lists of shapes say the same thing, so an unchanged edit is not saved. */
 export function sameShapes(a, b) {

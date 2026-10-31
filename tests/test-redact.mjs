@@ -401,6 +401,32 @@ await t('a book built onto another takes its pictures as they are now', async ()
   assert.ok(typeof build.readShelfBook === 'function' || /readShelfBook/.test(source));
 });
 
+await t('the outline never crosses itself, and a shape traced in order keeps its order', () => {
+  // Four dots round a small panel, placed top left, top right, bottom left,
+  // bottom right: joined as placed, a bow tie. Joined to fit, the panel.
+  const bowTie = [[100, 100], [101, 100], [100, 101], [101, 101]];
+  assert.ok(redact.crosses(bowTie));
+  assert.deepEqual(redact.outline(bowTie), [[100, 100], [101, 100], [101, 101], [100, 101]]);
+  assert.deepEqual(redact.poly(bowTie).points, [[100, 100], [101, 100], [101, 101], [100, 101]]);
+  // Traced round the edge, dents and notches are kept exactly as placed.
+  for (const traced of [
+    [[0, 0], [100, 0], [100, 30], [30, 30], [30, 100], [0, 100]],
+    [[0, 0], [30, 0], [30, 70], [70, 70], [70, 0], [100, 0], [100, 100], [0, 100]],
+    [[50, 0], [60, 35], [100, 40], [70, 60], [80, 100], [50, 75], [20, 100], [30, 60], [0, 40], [40, 35]],
+  ]) {
+    assert.deepEqual(redact.outline(traced), traced);
+  }
+  // Placed any old how, it still comes out uncrossed.
+  for (let seed = 1; seed < 40; seed++) {
+    let x = seed * 9301 % 233280;
+    const next = () => { x = (x * 9301 + 49297) % 233280; return Math.round((x / 233280) * 200); };
+    const points = Array.from({ length: 4 + (seed % 7) }, () => [next(), next()]);
+    const shape = redact.outline(points);
+    assert.equal(shape.length, points.length, 'a point was lost');
+    assert.ok(!redact.crosses(shape), `crossed: ${JSON.stringify(points)}`);
+  }
+});
+
 /* ── the editor ──────────────────────────────────────────────────────── */
 
 console.log('\nthe editor');
@@ -505,11 +531,31 @@ await t('from the reel: tap out a triangle and a hexagon, fit them, save, and th
   assert.match(el('redact-caption').textContent, /1 shape/);
   assert.equal(el('redact-delete').disabled, false);
 
-  // A six-sided one, closed by tapping its first point again.
+  // A six-sided one. A point lands wherever the finger lets go, however
+  // near another: pressed right beside the first point, it is a seventh
+  // point, not the shape closing or the first point moving.
   for (const [x, y] of [[120, 160], [170, 165], [190, 200], [175, 260], [130, 270], [110, 220]]) press(svg, x, y);
   assert.match(el('redact-shape-count').textContent, /6 points/);
   press(svg, 121, 161);
-  assert.equal(panels().length, 2, 'tapping the first point did not close the shape');
+  assert.match(el('redact-shape-count').textContent, /7 points/, 'a point close to another was not placed');
+  assert.equal(panels().length, 1);
+  // Undo takes it back, Redo puts it back, Undo again.
+  tap(el('redact-undo'));
+  assert.match(el('redact-shape-count').textContent, /6 points/);
+  tap(el('redact-redo'));
+  assert.match(el('redact-shape-count').textContent, /7 points/, 'Redo did not put the point back');
+  tap(el('redact-undo'));
+  tap(el('redact-confirm'));
+  assert.equal(panels().length, 2, 'Black out shape did not fill it');
+
+  // A corner dragged off the picture and let go there stays on its edge,
+  // and the editor goes on working; Undo puts it back.
+  svg.dispatchEvent(pointer('pointerdown', 40, 120));
+  document.body.dispatchEvent(pointer('pointermove', -60, 140));
+  document.body.dispatchEvent(pointer('pointerup', -60, 140));
+  assert.match(panels()[0].getAttribute('points'), /^20,40 300,60 0,280$/, 'the corner did not hold at the edge');
+  tap(el('redact-undo'));
+  assert.match(panels()[0].getAttribute('points'), /^20,40 300,60 80,240$/);
 
   // The triangle's last point, out a little; then its first edge, down.
   drag(svg, [40, 120], [50, 130]);
@@ -622,6 +668,127 @@ await t('nothing drawn, nothing saved', async () => {
   const after = await store.get('images', [id, 'p3.jpg']);
   assert.ok(!redact.isEdited(after), 'an empty edit was saved');
   assert.equal(await text(after.blob), await text(before.blob));
+});
+
+await t('a point lands where the finger lifts, and every step undoes and redoes', async () => {
+  const reader = await import(www('reader.js'));
+  tap(document.querySelectorAll('#reel-grid img')[2]);
+  tap(document.querySelector('.viewer [data-redact]'));
+  await settle(100);
+  const svg = el('redact-svg');
+  svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 600, right: 400, bottom: 600 });
+  // The loupe is placed against the frame the picture is drawn in.
+  el('redact-frame').getBoundingClientRect = svg.getBoundingClientRect;
+  el('redact-stage').getBoundingClientRect = svg.getBoundingClientRect;
+  const placed = () => [...svg.querySelectorAll('circle.placed')].map((c) => [Number(c.getAttribute('cx')), Number(c.getAttribute('cy'))]);
+
+  // Pressed at one place, slid while the loupe shows where it is, let go
+  // at another: the point is where it was let go.
+  svg.dispatchEvent(pointer('pointerdown', 100, 100));
+  assert.equal(el('redact-loupe').hidden, false, 'no loupe to aim with');
+  assert.ok(svg.querySelector('.aim'), 'nothing shows where the point will land');
+  assert.deepEqual(placed(), [], 'the point was placed on pressing, not on letting go');
+  svg.dispatchEvent(pointer('pointermove', 104, 103));
+  svg.dispatchEvent(pointer('pointermove', 110, 105));
+  svg.dispatchEvent(pointer('pointerup', 110, 105));
+  assert.deepEqual(placed(), [[110, 105]]);
+  assert.equal(el('redact-loupe').hidden, true);
+  // And one a pixel away is another point, not the first moved.
+  press(svg, 111, 105);
+  assert.deepEqual(placed(), [[110, 105], [111, 105]]);
+  // Carried off the picture -- past its corner, to see along its edge -- the
+  // point holds at the edge, and letting go out there still lets go.
+  svg.dispatchEvent(pointer('pointerdown', 300, 300));
+  document.body.dispatchEvent(pointer('pointermove', -80, 650));
+  document.body.dispatchEvent(pointer('pointermove', -120, 900));
+  assert.equal(el('redact-loupe').hidden, false, 'the loupe went when the finger left the picture');
+  document.body.dispatchEvent(pointer('pointerup', -120, 900));
+  assert.deepEqual(placed().at(-1), [0, 600], 'the point left the picture');
+  press(svg, 50, 50);
+  assert.equal(placed().length, 4, 'after a finger let go off the picture, nothing more could be marked');
+  tap(el('redact-undo'));
+  tap(el('redact-undo'));
+  // A cancelled touch places nothing.
+  svg.dispatchEvent(pointer('pointerdown', 200, 200));
+  svg.dispatchEvent(pointer('pointercancel', 200, 200));
+  assert.equal(placed().length, 2);
+
+  tap(el('redact-undo'));
+  assert.deepEqual(placed(), [[110, 105]]);
+  tap(el('redact-redo'));
+  assert.deepEqual(placed(), [[110, 105], [111, 105]]);
+  // Cancel shape is a step too.
+  tap(el('redact-shape-cancel'));
+  assert.equal(placed().length, 0);
+  tap(el('redact-undo'));
+  assert.equal(placed().length, 2, 'Cancel shape could not be undone');
+  tap(el('redact-shape-cancel'));
+  assert.equal(el('redact-redo').disabled, true, 'something undone is still offered after a new step');
+  void reader;
+});
+
+await t('text is typed onto the picture, as small as a bubble needs, moved, undone and saved', async () => {
+  const reader = await import(www('reader.js'));
+  const id = reader.state.book.id;
+  const svg = el('redact-svg');
+  const letters = () => [...svg.querySelectorAll('.lettering text')].map((n) => n.textContent);
+  assert.match(html, /data-tool="text"[^>]*>Text</);
+
+  tap(el('redact-tool').querySelector('[data-tool="text"]'));
+  assert.match(el('redact-hint').textContent, /Tap where the text goes/);
+  press(svg, 200, 300);
+  assert.equal(el('redact-text').hidden, false, 'nothing to type into');
+  const input = el('redact-text-input');
+  input.value = 'HELLO\nYOU';
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.deepEqual(letters(), ['HELLO', 'YOU'], 'the text is not on the picture as typed, line for line');
+  // Down to the smallest there is, for the narrowest bubble.
+  for (let i = 0; i < 80; i++) tap(el('redact-text-smaller'));
+  assert.equal(el('redact-text-size-n').textContent, '4px');
+  assert.equal(svg.querySelector('.lettering').getAttribute('font-size'), '4');
+  tap(el('redact-text-larger'));
+  assert.equal(el('redact-text-size-n').textContent, '4.5px', 'small text does not step finely');
+  tap(el('redact-text-smaller'));
+  tap(el('redact-text-done'));
+  assert.equal(el('redact-text').hidden, true);
+  assert.deepEqual(letters(), ['HELLO', 'YOU']);
+
+  // Tapped again, it opens to be changed; dragged, it moves.
+  press(svg, 200, 300);
+  assert.equal(el('redact-text').hidden, false, 'tapping the text did not open it');
+  assert.equal(input.value, 'HELLO\nYOU');
+  drag(svg, [200, 300], [220, 310]);
+  tap(el('redact-text-done'));
+  const moved = svg.querySelector('.lettering text');
+  assert.equal(moved.getAttribute('x'), '220', 'the text did not move with the finger');
+
+  // Undo: the move, then the text. Redo: both back.
+  tap(el('redact-undo'));
+  assert.equal(svg.querySelector('.lettering text').getAttribute('x'), '200');
+  tap(el('redact-undo'));
+  assert.deepEqual(letters(), [], 'the text could not be undone');
+  tap(el('redact-redo'));
+  tap(el('redact-redo'));
+  assert.equal(svg.querySelector('.lettering text').getAttribute('x'), '220');
+
+  // Text that says nothing is not kept.
+  press(svg, 50, 50);
+  tap(el('redact-text-done'));
+  assert.equal(svg.querySelectorAll('.lettering').length, 1, 'an empty piece of text was kept');
+
+  painted = [];
+  tap(el('redact-save'));
+  await settle(300);
+  assert.equal(el('redact').hidden, true);
+  const image = await store.get('images', [id, 'p3.jpg']);
+  const [lettered] = image.edits.filter((shape) => shape.type === 'text');
+  assert.equal(lettered.text, 'HELLO\nYOU');
+  assert.equal(lettered.size, 4);
+  assert.deepEqual([lettered.x, lettered.y], [220, 310]);
+  const calls = painted.flat();
+  const written = calls.filter((c) => c[0] === 'fillText').map((c) => c[1]);
+  assert.deepEqual(written, ['HELLO', 'YOU'], 'the text was not painted into the picture');
+  assert.ok(calls.some((c) => c[0] === 'font=' && /^600 4px /.test(c[1])), 'painted at another size');
 });
 
 await t('a page looked at in Take out can be blacked out instead of taken out', async () => {
@@ -891,7 +1058,7 @@ await t('a held page can be taken out from the page, and reading carries on ther
   assert.match(el('toast').textContent, /taken out/);
 });
 
-await t('the toolbar\'s Take out opens at the page on screen, picked, and comes back to the book', async () => {
+await t('the toolbar\'s Take out opens at the page on screen, nothing picked, and comes back to the book', async () => {
   const reader = await import(www('reader.js'));
   const id = reader.state.book.id;
   assert.ok(el('remove-here'), 'the reader has no Take out');
@@ -899,9 +1066,17 @@ await t('the toolbar\'s Take out opens at the page on screen, picked, and comes 
   tap(el('remove-here'));
   await settle(400);
   assert.equal(document.body.dataset.view, 'remove');
-  const picked = [...el('remove-body').querySelectorAll('.remove-cell[aria-pressed="true"]')];
-  assert.equal(picked.length, 1, 'the page on screen was not picked');
+  // The page you are on is where you are, not what you want gone.
+  assert.equal(el('remove-body').querySelectorAll('.remove-cell[aria-pressed="true"]').length, 0,
+    'a page was picked before anything was tapped');
   const look = await trim.inspect(id);
+  const at = look.pages.findIndex((page) => page.picture === 'p3.jpg');
+  const cell = el('remove-body').querySelector(`.remove-cell[data-at="${at}"]`);
+  assert.ok(cell, 'the page on screen is not shown');
+  tap(cell);
+  await settle(50);
+  const picked = [...el('remove-body').querySelectorAll('.remove-cell[aria-pressed="true"]')];
+  assert.equal(picked.length, 1);
   assert.equal(look.pages[Number(picked[0].dataset.at)].picture, 'p3.jpg');
 
   tap(el('remove-go'));

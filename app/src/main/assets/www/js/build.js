@@ -370,7 +370,7 @@ export async function build({ title, author, folder = null, cover: chosenCover =
    */
   if (!parts.length) throw new Error('Add something to build from.');
 
-  const name = title || commonName(parts.map((p) => p.name)) || 'Built book';
+  const name = title || suggestedName(parts);
 
   /* Filed where it was asked for -- the folder the shelf is open at -- or,
    * when it was not, where the book it was built onto is filed. A volume
@@ -657,6 +657,19 @@ const stripExtension = (name) => String(name).replace(/\.[a-z0-9]{2,5}$/i, '');
  * "Witch City Vol. 1" and "Witch City Vol. 2" should suggest "Witch City"
  * rather than the first part's whole filename.
  */
+/**
+ * What a build is called until it is named: what the parts' names share --
+ * "Reincarnated" for "Reincarnated vol 1" and "Reincarnated vol 2" -- or,
+ * when they share nothing, the first part's own name. Never a placeholder:
+ * "Built book" told nobody which book it was.
+ */
+export function suggestedName(list) {
+  if (!list?.length) return '';
+  return commonName(list.map((p) => p.name))
+    || stripExtension(list[0].name || '').trim()
+    || 'Built book';
+}
+
 export function commonName(names) {
   if (!names.length) return null;
   const words = names.map((n) => stripExtension(n).split(/\s+/));

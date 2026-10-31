@@ -2330,6 +2330,32 @@ body.in-book .import-progress .jobs-summary { display: block; }
   display: inline-block; flex: none;
 }
 .redact-zoom { min-width: 52px; text-align: center; }
+.redact-history .btn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.redact-history svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; }
+/* Text being typed: laid over the tools, never pushing the picture up. */
+.redact-text {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  display: grid; gap: 8px;
+  padding: 10px 12px calc(var(--safe-bottom) + 10px);
+  background: #141414; border-top: 1px solid rgba(255, 255, 255, .18);
+}
+.redact-text[hidden] { display: none; }
+.redact-text textarea {
+  width: 100%; box-sizing: border-box; resize: none;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, .28); background: #000; color: #fff;
+  font: 600 16px/1.3 system-ui, sans-serif;
+}
+.redact-text input[type="range"] { flex: 1; min-width: 0; }
+.redact-size-label { font-size: 12px; color: #aaa; }
+.redact-size-n { min-width: 44px; text-align: right; font-size: 12px; color: #ccc; font-variant-numeric: tabular-nums; }
+.redact-size-step { font-size: 20px; line-height: 1; }
+.redact-text .btn { flex: 1; }
+/* Where the next point lands: the middle of the loupe, and this. */
+#redact-svg .aim { fill: none; stroke: #fff; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+#redact-svg .aim-dot { fill: var(--accent); stroke: #fff; stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+#redact-svg .lettering text { user-select: none; -webkit-user-select: none; }
 .redact-more { flex-wrap: wrap; }
 .redact-more .btn { flex: 1; text-align: center; white-space: nowrap; }
 

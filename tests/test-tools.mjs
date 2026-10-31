@@ -1454,13 +1454,45 @@ await t('Build shows the first book\'s cover, and offers every picture in every 
 
   const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
   assert.match(app, /shown = await build\.firstCover\(\);/);
-  assert.match(app, /const pictures = await build\.picturesOf\(part\);/);
+  assert.match(app, /pictures: \(\) => build\.picturesOf\(part\)/);
   assert.match(app, /buildCoverFrom = 'book';/);
   assert.match(app, /if \(closeCoverPick\(\)\) return true;/);
   const html = fs.readFileSync(new URL('../app/src/main/assets/www/index.html', import.meta.url), 'utf8');
   for (const id of ['build-cover-clear', 'build-cover-from-books', 'build-cover-pick', 'cover-pick-sheet']) {
     assert.ok(html.includes(`id="${id}"`), id);
   }
+});
+
+await t('a book or bundle takes its cover from any of its pictures, in Details', async () => {
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  const details = app.slice(app.indexOf('async function openDetails'), app.indexOf('async function folderPicker'));
+  assert.match(details, /id="details-cover-from">From its pictures…</);
+  // The book's own pictures, and every edition's for a bundle.
+  assert.match(details, /const withPictures = \[book, \.\.\.editionBooks\];/);
+  assert.match(details, /pictures: \(\) => picturesOfBook\(b\.id\)/);
+  // Chosen, it is the new cover on Save, as a picture of your own is.
+  assert.match(details, /onPick: \(cover\) => \{\s*newCover = cover;/);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  void library;
+});
+
+await t('a build is named for its first book when its parts share no name', async () => {
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  assert.equal(build.suggestedName([{ name: 'Reincarnated vol 1.epub' }, { name: 'Reincarnated vol 2.epub' }]), 'Reincarnated');
+  assert.equal(build.suggestedName([{ name: 'The Long Road.epub' }, { name: 'Side Stories.epub' }]), 'The Long Road',
+    'parts that share nothing were called "Built book"');
+  assert.equal(build.suggestedName([{ name: '[Group] Title v01.cbz' }, { name: 'Title v02.cbz' }]), '[Group] Title v01');
+  assert.equal(build.suggestedName([{ name: 'Only One.mobi' }]), 'Only One');
+  assert.equal(build.suggestedName([]), '');
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /const suggested = build\.suggestedName\(parts\);/);
+  assert.doesNotMatch(app, /'Built book'/);
+  build.clear();
+  const fixture = fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url));
+  await build.add([new File([fixture], 'Almanac One.epub'), new File([fixture], 'Different Thing.epub')]);
+  const { book } = await build.build({});
+  assert.equal((await store.get('books', book.id)).title, 'Almanac One');
+  build.clear();
 });
 
 await t('opened at a folder, imports and builds are filed in it', async () => {

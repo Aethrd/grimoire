@@ -240,6 +240,23 @@ offsets have shifted because pages came out of the middle of it — is carried
 out **with** the removal and comes back with it, because a mark left pointing
 somewhere plausible and wrong is worse than one that is temporarily absent.
 
+### Blacking out, and lettering
+
+In the black-out editor:
+- Each point is placed where your finger lifts. While you press and slide,
+  the loupe and a cross show exactly where the point will land, so points can
+  sit as close together as you need.
+- A finger carried past the edge of the picture keeps the point on the edge.
+- The outline is worked out again each time a point is added. A shape traced
+  round its edge keeps its order. Points placed out of order are joined so
+  that the outline never crosses itself, so four dots in a small square fill
+  the square, not a bow tie.
+- Undo and Redo go step by step through everything: points, shapes, moves,
+  colours, deletions and text.
+- The Text tool letters words onto the picture, centred where you tap, in
+  black or white. The size goes down to 4 pixels of the picture, small enough
+  for the narrowest manga bubble.
+
 ### Books left unread
 
 A book being read that has not been read for five days goes On hold by

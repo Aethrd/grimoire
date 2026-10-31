@@ -806,6 +806,7 @@ async function openDetails(tapped, { editions = [] } = {}) {
         ${coverUrl ? `<img src="${coverUrl}" alt="">` : ''}
       </span>
       <span class="col">
+        <button class="btn ghost" id="details-cover-from">From its pictures…</button>
         <button class="btn ghost" id="details-cover-pick">Replace cover</button>
         <button class="btn ghost" id="details-cover-clear">Remove cover</button>
       </span>
@@ -958,6 +959,20 @@ async function openDetails(tapped, { editions = [] } = {}) {
     };
     picker.click();
   };
+  /* Any picture in the book -- or, for a bundle, in any of its editions --
+   * as its cover: the first page of a comic is often a credit page, and the
+   * real cover is the third. */
+  const editionBooks = (await Promise.all(editions.map((id) => store.get('books', id)))).filter(Boolean);
+  const withPictures = [book, ...editionBooks];
+  body.querySelector('#details-cover-from').onclick = () => openCoverPick({
+    title: editions.length ? 'Cover from the editions' : 'Cover from the book',
+    none: editions.length ? 'None of these editions has pictures in it.' : 'This book has no pictures in it.',
+    sources: withPictures.map((b) => ({ name: library.displayTitle(b), pictures: () => picturesOfBook(b.id) })),
+    onPick: (cover) => {
+      newCover = cover;
+      body.querySelector('#details-cover').innerHTML = `<img src="${urls.url(newCover)}" alt="">`;
+    },
+  });
   body.querySelector('#details-cover-clear').onclick = () => {
     newCover = null;
     body.querySelector('#details-cover').innerHTML = '';
@@ -4220,8 +4235,10 @@ async function openRedact(bookId, href) {
     bookId, href, image, width, height, url,
     shapes: edits,
     saved: JSON.parse(JSON.stringify(edits)),
-    past: [], future: [],
+    past: [], future: [],   // { shapes, pending } as they were, for Undo and Redo
     tool: 'panel', colour: 'black', zoom: 1,
+    textSize: 0,      // the size the next piece of text is lettered at
+    editing: null,    // the text being typed: { before }
     pending: [],      // corners pressed so far for the next panel
     chosen: -1,       // the panel being adjusted
     drag: null,
@@ -4248,6 +4265,7 @@ async function openRedact(bookId, href) {
   el('redact-save').disabled = false;
   el('redact-restore').hidden = !redact.isEdited(image);
   el('redact').hidden = false;
+  el('redact-text').hidden = true;
   setRedactTool('panel');
   setRedactColour('black');
   el('redact-zoom').textContent = '1×';
@@ -4257,6 +4275,7 @@ async function openRedact(bookId, href) {
 
 function closeRedact() {
   redacting = null;
+  el('redact-text').hidden = true;
   el('redact').hidden = true;
   el('redact-leave').hidden = true;
   el('redact-loupe').hidden = true;
@@ -4266,6 +4285,7 @@ function closeRedact() {
 }
 
 function redactChanged() {
+  if (redacting) finishText();
   return !!redacting && (redacting.pending.length > 0
     || !redact.sameShapes(redacting.shapes, redacting.saved));
 }
@@ -4329,7 +4349,12 @@ function paintRedact() {
   });
 
   const chosen = r.shapes[r.chosen];
-  if (redact.isPolygon(chosen)) {
+  if (redact.isText(chosen)) {
+    // A box round it, a little clear of the letters.
+    const box = redact.textBox(chosen);
+    const pad = 4 * scale;
+    parts.push(`<rect class="outline" x="${box.x - pad}" y="${box.y - pad}" width="${box.w + pad * 2}" height="${box.h + pad * 2}"/>`);
+  } else if (redact.isPolygon(chosen)) {
     const pts = chosen.points.map(([x, y]) => `${x},${y}`).join(' ');
     parts.push(`<polygon class="outline" points="${pts}"/>`);
     for (const [x, y] of redact.edgeMiddles(chosen.points)) {
@@ -4345,25 +4370,41 @@ function paintRedact() {
   }
 
   const n = r.pending.length;
-  if (n) {
-    const pts = r.pending.map(([x, y]) => `${x},${y}`).join(' ');
+  if (n && !(r.drag?.kind === 'aim' && !r.drag.text)) {
+    // The outline as it will be filled: joined so that it never crosses.
+    const pts = redact.outline(r.pending).map(([x, y]) => `${x},${y}`).join(' ');
     if (n >= 3) parts.push(`<polygon class="preview" points="${pts}"/>`);
-    if (n > 1) parts.push(`<polyline class="pending" points="${pts}"/>`);
-    if (n >= 3) {
-      const [fx, fy] = r.pending[0];
-      const [lx, ly] = r.pending[n - 1];
-      parts.push(`<line class="closing" x1="${lx}" y1="${ly}" x2="${fx}" y2="${fy}"/>`);
-    }
-    r.pending.forEach(([x, y], at) => {
-      parts.push(`<circle class="${at === 0 && n >= 3 ? 'placed first' : 'placed'}" cx="${x}" cy="${y}" r="${(at === 0 && n >= 3 ? 10 : 8) * scale}"/>`);
+    if (n > 1) parts.push(`<polygon class="pending" points="${pts}"/>`);
+  }
+  if (n) {
+    // Small, however close together: each is where a finger was let go.
+    r.pending.forEach(([x, y]) => {
+      parts.push(`<circle class="placed" cx="${x}" cy="${y}" r="${5 * scale}"/>`);
     });
+  }
+
+  // Where the point being aimed will land when the finger is let go.
+  const aim = r.drag?.kind === 'aim' ? r.drag.aim : null;
+  if (aim) {
+    const [ax, ay] = aim;
+    // The outline as it will be with this point in it.
+    if (n && !r.drag.text) {
+      const next = redact.outline([...r.pending, aim]);
+      const pts = next.map(([x, y]) => `${x},${y}`).join(' ');
+      if (next.length >= 3) parts.push(`<polygon class="preview" points="${pts}"/>`);
+      parts.push(`<polygon class="closing" points="${pts}"/>`);
+    }
+    const arm = 14 * scale;
+    parts.push(`<path class="aim" d="M${ax - arm} ${ay}H${ax - arm / 3}M${ax + arm / 3} ${ay}H${ax + arm}`
+      + `M${ax} ${ay - arm}V${ay - arm / 3}M${ax} ${ay + arm / 3}V${ay + arm}"/>`);
+    parts.push(`<circle class="aim-dot" cx="${ax}" cy="${ay}" r="${3 * scale}"/>`);
   }
 
   svg.innerHTML = parts.join('');
   svg.classList.toggle('editing', r.chosen >= 0);
 
-  el('redact-undo').disabled = !r.past.length && !n;
-  el('redact-redo').disabled = !r.future.length || n > 0;
+  el('redact-undo').disabled = !r.past.length && !r.editing;
+  el('redact-redo').disabled = !r.future.length;
   el('redact-clear').disabled = !r.shapes.length && !n;
   el('redact-delete').disabled = r.chosen < 0;
 
@@ -4374,22 +4415,30 @@ function paintRedact() {
   el('redact-shape-count').textContent = `${n} point${n === 1 ? '' : 's'}`;
   el('redact-confirm').disabled = n < 3;
 
-  const count = r.shapes.length;
-  el('redact-caption').textContent = count
-    ? `Black out · ${count} shape${count === 1 ? '' : 's'}`
-    : 'Black out';
+  const words = r.shapes.filter((shape) => redact.isText(shape)).length;
+  const count = r.shapes.length - words;
+  const said = [
+    count ? `${count} shape${count === 1 ? '' : 's'}` : '',
+    words ? `${words} text${words === 1 ? '' : 's'}` : '',
+  ].filter(Boolean);
+  el('redact-caption').textContent = said.length ? `Black out · ${said.join(' · ')}` : 'Black out';
 
   let note;
   if (r.warn) note = r.warn;
   else if (r.tool === 'move') note = 'Drag to look around the picture.';
+  else if (aim) note = 'Let go to place the point at the middle of the circle.';
+  else if (r.editing) note = 'Type the text. Drag it to move it; Done when it is right.';
+  else if (r.tool === 'text') note = 'Tap where the text goes — it is centred there. Tap text to change it.';
   else if (n && n < 3) {
-    note = 'Keep tapping round what you want covered. Hold and slide to place a point exactly.';
+    note = 'Keep placing points round what you want covered. Each lands where your finger lifts — slide to aim.';
   } else if (n) {
-    note = 'Add more points, or tap Black out shape — or the first point — to fill it in.';
+    note = 'Add more points, or tap Black out shape to fill it in.';
+  } else if (redact.isText(chosen)) {
+    note = 'Drag the text to move it.';
   } else if (r.chosen >= 0) {
     note = 'Drag a point, or the dot in the middle of an edge, to adjust. Drag inside to move it.';
   } else {
-    note = 'Tap points round what you want covered — as many as the shape needs.';
+    note = 'Place points round what you want covered — as many as the shape needs. Each lands where your finger lifts.';
   }
   const notes = [note];
   if (r.zoom > 1 && r.tool !== 'move') notes.push('Use Move to look around.');
@@ -4408,31 +4457,159 @@ function confirmShape() {
   const r = redacting;
   if (!r || r.pending.length < 3) return false;
   const shape = redact.poly(r.pending, r.colour);
-  r.pending = [];
   if (redact.isTiny(shape)) {
-    r.warn = 'Those points are almost on top of each other — tap round the outline of what to cover.';
+    // The points stay: Undo takes back the last, or more can be added.
+    r.warn = 'Those points cover almost nothing — place them round the outline of what to cover.';
     paintRedact();
     return false;
   }
   r.warn = '';
-  changeRedact([...r.shapes, shape], r.shapes.length);
+  remember(r);
+  r.pending = [];
+  r.shapes = [...r.shapes, shape];
+  r.chosen = r.shapes.length - 1;
+  r.picked = false;
+  paintRedact();
   return true;
+}
+
+/* Undo and Redo go step by step through everything: a point placed, a shape
+ * filled, adjusted, recoloured or deleted, text typed. Each step keeps the
+ * shapes and the points of the shape being drawn as they were before it. */
+const redactState = (r) => ({ shapes: r.shapes, pending: r.pending.map((p) => [...p]) });
+
+/** The state before a step, kept for Undo; anything undone is now out of reach. */
+function remember(r, before = redactState(r)) {
+  r.past.push(before);
+  if (r.past.length > 300) r.past.shift();
+  r.future = [];
+}
+
+function backTo(r, state) {
+  r.shapes = state.shapes;
+  r.pending = state.pending.map((p) => [...p]);
+  r.chosen = -1;
+  r.picked = false;
+  r.warn = '';
+}
+
+function undoRedact() {
+  const r = redacting;
+  if (!r || r.drag) return;
+  finishText();
+  if (!r.past.length) return;
+  r.future.push(redactState(r));
+  backTo(r, r.past.pop());
+  paintRedact();
+}
+
+function redoRedact() {
+  const r = redacting;
+  if (!r || r.drag) return;
+  finishText();
+  if (!r.future.length) return;
+  r.past.push(redactState(r));
+  backTo(r, r.future.pop());
+  paintRedact();
 }
 
 /** A change that Undo can take back. */
 function changeRedact(next, chosen = -1, picked = false) {
   const r = redacting;
   r.picked = picked;
-  r.past.push(r.shapes);
-  if (r.past.length > 200) r.past.shift();
-  r.future = [];
+  remember(r);
   r.shapes = next;
   r.chosen = chosen;
   paintRedact();
 }
 
+/* ── text on the picture ───────────────────────────────────────────── */
+
+let measureCtx = null;
+/** A line's width in a font, measured as the canvas will letter it. */
+function measureLine(line, font) {
+  if (!measureCtx) measureCtx = document.createElement('canvas').getContext?.('2d') || null;
+  const guess = () => [...line].length * (parseFloat(font.split(' ')[1]) || 12) * 0.56;
+  if (!measureCtx) return guess();
+  measureCtx.font = font;
+  const width = measureCtx.measureText?.(line)?.width;
+  return Number.isFinite(width) ? width : guess();
+}
+
+/** A size to start at: about what a bubble in a page this size is lettered at. */
+const startingTextSize = (r) => r.textSize
+  || Math.max(redact.TEXT_MIN, Math.min(48, Math.round(Math.min(r.width, r.height) / 45)));
+
+/** Open the text at `at` for typing; the step it makes is kept for Undo when done. */
+function editText(at, { focus = false } = {}) {
+  const r = redacting;
+  const shape = r.shapes[at];
+  if (!redact.isText(shape)) return;
+  r.chosen = at;
+  r.picked = true;
+  if (!r.editing) r.editing = { before: redactState(r) };
+  const input = el('redact-text-input');
+  input.value = shape.text;
+  paintTextSize(shape.size);
+  el('redact-text').hidden = false;
+  if (focus) setTimeout(() => input.focus(), 0);
+  paintRedact();
+}
+
+/** New text, centred where the finger was let go. */
+function placeText(x, y) {
+  const r = redacting;
+  const before = redactState(r);
+  const size = startingTextSize(r);
+  r.shapes = [...r.shapes, redact.text(x, y, '', size, r.colour, measureLine)];
+  r.editing = { before };
+  editText(r.shapes.length - 1, { focus: true });
+}
+
+/** The text being typed, changed, and drawn again. */
+function retext(change) {
+  const r = redacting;
+  const shape = r?.shapes[r.chosen];
+  if (!r?.editing || !redact.isText(shape)) return;
+  const next = redact.measured({ ...shape, ...change }, measureLine);
+  r.shapes = r.shapes.map((s, at) => (at === r.chosen ? next : s));
+  paintRedact();
+}
+
+function paintTextSize(size) {
+  el('redact-text-size').value = String(size);
+  el('redact-text-size-n').textContent = `${size}px`;
+}
+
+function setTextSize(size) {
+  const r = redacting;
+  if (!r) return;
+  const next = Math.max(redact.TEXT_MIN, Math.min(redact.TEXT_MAX, Math.round(size * 2) / 2));
+  r.textSize = next;
+  paintTextSize(next);
+  retext({ size: next });
+}
+
+/**
+ * Close the text being typed: kept as one step for Undo if it changed
+ * anything, taken away if it says nothing.
+ */
+function finishText() {
+  const r = redacting;
+  if (!r?.editing) return;
+  const { before } = r.editing;
+  r.editing = null;
+  el('redact-text').hidden = true;
+  el('redact-text-input').blur();
+  r.shapes = r.shapes.filter((shape) => !(redact.isText(shape) && redact.isTiny(shape)));
+  if (r.chosen >= r.shapes.length || !redact.isText(r.shapes[r.chosen])) r.chosen = -1;
+  if (!redact.sameShapes(r.shapes, before.shapes)) remember(r, before);
+  paintRedact();
+}
+
 function setRedactTool(tool) {
   if (!redacting) return;
+  finishText();
   redacting.tool = tool;
   redacting.drag = null;
   redacting.warn = '';
@@ -4456,6 +4633,8 @@ function setRedactColour(colour) {
   // finished is chosen too, so its points can be adjusted, and choosing white
   // for the next one turned that one white as well.
   const chosen = r.picked ? r.shapes[r.chosen] : null;
+  // Text being typed takes the colour as part of the typing.
+  if (r.editing && redact.isText(chosen)) { retext({ colour }); return; }
   if (chosen && chosen.colour !== colour) {
     changeRedact(r.shapes.map((shape, at) => (at === r.chosen ? { ...shape, colour } : shape)), r.chosen, true);
   }
@@ -4482,8 +4661,9 @@ function showLoupe(event) {
   if (!frame.width) { loupe.hidden = true; return; }
   const size = 120;
   const zoom = 2.5;
-  const fx = event.clientX - frame.left;
-  const fy = event.clientY - frame.top;
+  // Off the picture, the loupe shows its edge, where the point is held.
+  const fx = Math.max(0, Math.min(frame.width, event.clientX - frame.left));
+  const fy = Math.max(0, Math.min(frame.height, event.clientY - frame.top));
   loupe.style.backgroundImage = `url("${r.url}")`;
   loupe.style.backgroundSize = `${frame.width * zoom}px ${frame.height * zoom}px`;
   loupe.style.backgroundPosition = `${size / 2 - fx * zoom}px ${size / 2 - fy * zoom}px`;
@@ -4493,13 +4673,26 @@ function showLoupe(event) {
   loupe.hidden = false;
 }
 
+/**
+ * A finger on the picture.
+ *
+ * A point for a shape is placed where the finger is let go, not where it
+ * landed: pressed, it shows the loupe and a cross where the point will go,
+ * and sliding moves both, so it can be aimed exactly -- right beside the
+ * last point if that is where it belongs. Nothing already placed is taken
+ * hold of while a shape is being drawn; Undo takes back a point.
+ */
 function redactDown(event) {
   const r = redacting;
   if (!r || r.busy || r.tool === 'move') return;
   // One finger at a time. A second landing mid-drag is a palm or a pinch.
   if (r.drag) return;
   event.preventDefault();
-  try { event.target.setPointerCapture?.(event.pointerId); } catch { /* not every target can */ }
+  /* Held by the picture's layer itself, not by what was under the finger:
+   * a corner's handle is drawn again on every move, and the capture went
+   * with the old one -- so a finger carried off the picture was lost, the
+   * drag never ended, and nothing more could be marked. */
+  try { el('redact-svg').setPointerCapture?.(event.pointerId); } catch { /* not every WebView can */ }
 
   const point = redactPoint(event);
   const reach = REDACT_REACH * redactScale();
@@ -4508,8 +4701,8 @@ function redactDown(event) {
 
   const begin = (drag) => {
     r.drag = { pointer: event.pointerId, from: point, ...drag };
-    if (drag.kind !== 'pending') {
-      r.drag.before = r.shapes;
+    if (drag.kind !== 'aim') {
+      r.drag.before = redactState(r);
       r.drag.base = r.shapes[r.chosen];
       r.shapes = r.shapes.slice();
     }
@@ -4517,56 +4710,60 @@ function redactDown(event) {
     paintRedact();
   };
 
-  // Partway through a shape: each press is the next point, unless it is on
-  // one already pressed, which is then slid instead -- and the first one,
-  // tapped without sliding, closes the shape.
-  if (r.pending.length) {
-    const near = r.pending.findIndex(([x, y]) => Math.hypot(point.x - x, point.y - y) <= reach);
-    if (near >= 0) return begin({ kind: 'pending', at: near, start: [...r.pending[near]] });
-    r.pending.push(here);
-    return begin({ kind: 'pending', at: r.pending.length - 1, placing: true });
+  // Text being typed: pressing it moves it; anywhere else closes it first.
+  if (r.editing) {
+    const on = redact.shapeAt(r.shapes, point, reach / 2);
+    if (on === r.chosen) return begin({ kind: 'whole', keepTyping: true });
+    finishText();
   }
+
+  // Partway through a shape: every press aims the next point.
+  if (r.pending.length && r.tool === 'panel') return begin({ kind: 'aim', aim: here });
 
   // A corner or edge of the chosen panel.
   const handle = redact.handleAt(r.shapes[r.chosen], point, reach);
   if (handle) return begin(handle);
 
-  // A corner of any other panel chooses that panel and takes hold of it.
-  for (let at = r.shapes.length - 1; at >= 0; at -= 1) {
-    const corner = redact.handleAt(r.shapes[at], point, reach);
-    if (corner?.kind === 'corner') {
-      r.chosen = at;
-      r.picked = true;
-      return begin(corner);
+  // A corner of any other panel chooses that panel and takes hold of it --
+  // drawing shapes only: placing text beside a panel should not move it.
+  if (r.tool === 'panel') {
+    for (let at = r.shapes.length - 1; at >= 0; at -= 1) {
+      const corner = redact.handleAt(r.shapes[at], point, reach);
+      if (corner?.kind === 'corner') {
+        r.chosen = at;
+        r.picked = true;
+        return begin(corner);
+      }
     }
   }
 
-  // Inside a panel: choose it, and dragging moves it.
-  const inside = redact.shapeAt(r.shapes, point);
-  if (inside >= 0) {
+  // Inside a shape or on text: choose it, and dragging moves it.
+  const inside = redact.shapeAt(r.shapes, point, redact.isText(r.shapes[r.chosen]) ? reach / 2 : 0);
+  if (inside >= 0 && (r.tool === 'panel' || redact.isText(r.shapes[inside]))) {
     r.chosen = inside;
     r.picked = true;
-    if (redact.isPolygon(r.shapes[inside])) return begin({ kind: 'whole' });
+    const shape = r.shapes[inside];
+    if (redact.isPolygon(shape) || redact.isText(shape)) return begin({ kind: 'whole', openText: redact.isText(shape) });
     paintRedact();
     return undefined;
   }
 
-  // Anywhere else is the first point of a new shape.
+  // Anywhere else: aim the first point of a new shape, or where text goes.
   r.chosen = -1;
   r.picked = false;
-  r.pending = [here];
-  return begin({ kind: 'pending', at: 0, placing: true });
+  return begin({ kind: 'aim', aim: here, text: r.tool === 'text' });
 }
 
 function redactMove(event) {
   const r = redacting;
   const drag = r?.drag;
   if (!drag || drag.pointer !== event.pointerId) return;
-  event.preventDefault();
+  if (event.cancelable) event.preventDefault();
   const point = redactPoint(event);
-  if (drag.kind === 'pending') {
-    r.pending[drag.at] = [point.x, point.y];
+  if (drag.kind === 'aim') {
+    drag.aim = [point.x, point.y];
   } else {
+    drag.moved = true;
     r.shapes[r.chosen] = redact.moveHandle(drag.base, drag, drag.from, point, r.width, r.height);
   }
   if (drag.kind !== 'whole') showLoupe(event);
@@ -4581,29 +4778,27 @@ function redactUp(event) {
   r.drag = null;
   el('redact-loupe').hidden = true;
 
-  if (drag.kind === 'pending') {
-    if (cancelled && drag.placing) r.pending.splice(drag.at, 1);
-    // The first point tapped again, not slid: the shape is finished.
-    const [sx, sy] = drag.start || [];
-    const still = drag.start && Math.hypot(r.pending[0][0] - sx, r.pending[0][1] - sy) < REDACT_REACH * redactScale() / 3;
-    if (!cancelled && drag.at === 0 && still && r.pending.length >= 3) {
-      r.pending[0] = drag.start;
-      confirmShape();
-      return;
-    }
+  if (drag.kind === 'aim') {
+    if (cancelled) { paintRedact(); return; }
+    const [x, y] = drag.aim;
+    if (drag.text) { placeText(x, y); return; }
+    // The point lands where the finger let go -- however near the last --
+    // and joins the outline where it fits, so it never crosses itself.
+    remember(r);
+    r.pending.push([Math.round(x * 10) / 10, Math.round(y * 10) / 10]);
     paintRedact();
     return;
   }
 
   // An adjustment is one step for Undo, however many moves it took -- and
-  // none at all if nothing moved.
-  if (cancelled || redact.sameShapes(r.shapes, drag.before)) {
-    r.shapes = drag.before;
-  } else {
-    r.past.push(drag.before);
-    if (r.past.length > 200) r.past.shift();
-    r.future = [];
-  }
+  // none at all if nothing moved. Text being typed keeps its moves with its
+  // typing, as one step.
+  const unmoved = cancelled || redact.sameShapes(r.shapes, drag.before.shapes);
+  if (unmoved) r.shapes = drag.before.shapes;
+  else if (!drag.keepTyping) remember(r, drag.before);
+  // Text tapped, not dragged, opens to be typed into.
+  if (drag.openText && unmoved && !cancelled) { editText(r.chosen, { focus: true }); return; }
+  if (drag.openText && !unmoved) { paintRedact(); return; }
   paintRedact();
 }
 
@@ -4740,9 +4935,8 @@ async function removePageHere(href) {
 }
 
 /**
- * The toolbar's Take out: the whole screen of pages, opened where the book
- * is, with the page on screen already picked -- and back into the book when
- * it is done.
+ * The toolbar's Take out: the whole screen of pages, opened at the page on
+ * screen with nothing picked -- and back into the book when it is done.
  */
 async function removeHere() {
   const book = reader.state.book;
@@ -4758,10 +4952,12 @@ async function removeHere() {
   if (look.canPages && here.length) {
     const pages = look.pages.filter((p) => here.includes(p.picture));
     const ats = pages.map((p) => p.at);
+    // Opened at the page on screen, with nothing picked: the page you were
+    // on is where you are, not what you want gone. (Holding a finger on a
+    // page and choosing Take out is how one page is taken.)
     return openRemove(book, 'pages', {
       from: 'reader',
       focus: ats.length ? Math.min(...ats) : null,
-      pick: here.length === 1 ? ats : null,
     });
   }
   // Prose: the chapters, opened at this one.
@@ -4852,6 +5048,7 @@ async function showRedacted(bookId, href, blob) {
 async function saveRedact() {
   const r = redacting;
   if (!r || r.busy) return;
+  finishText();
   // A shape with enough points to be one is what was meant; fewer is not
   // a shape yet, and saying so beats guessing at it.
   if (r.pending.length >= 3) confirmShape();
@@ -4907,9 +5104,13 @@ async function restoreRedact() {
 function wireRedact() {
   const svg = el('redact-svg');
   svg.addEventListener('pointerdown', redactDown);
-  svg.addEventListener('pointermove', redactMove);
-  svg.addEventListener('pointerup', redactUp);
-  svg.addEventListener('pointercancel', redactUp);
+  /* Followed wherever the finger goes, off the picture too: a point dragged
+   * to the picture's edge is held there while the finger carries on past it
+   * to see what it is lining up with. Listened for on the window, so a
+   * finger let go off the picture still lets go. */
+  window.addEventListener('pointermove', redactMove);
+  window.addEventListener('pointerup', redactUp);
+  window.addEventListener('pointercancel', redactUp);
 
   el('redact-tool').onclick = (event) => {
     const button = event.target.closest('[data-tool]');
@@ -4925,45 +5126,52 @@ function wireRedact() {
     el('redact-zoom').textContent = `${redacting.zoom}×`;
     layoutRedact();
   };
-  el('redact-undo').onclick = () => {
-    const r = redacting;
-    if (!r || r.drag) return;
-    r.warn = '';
-    // A corner pressed by mistake goes first, before any finished panel.
-    if (r.pending.length) { r.pending.pop(); paintRedact(); return; }
-    if (!r.past.length) return;
-    r.future.push(r.shapes);
-    r.shapes = r.past.pop();
-    r.chosen = -1;
-    paintRedact();
-  };
-  el('redact-redo').onclick = () => {
-    const r = redacting;
-    if (!r || r.drag || r.pending.length || !r.future.length) return;
-    r.past.push(r.shapes);
-    r.shapes = r.future.pop();
-    r.chosen = -1;
-    paintRedact();
-  };
+  el('redact-undo').onclick = () => undoRedact();
+  el('redact-redo').onclick = () => redoRedact();
   el('redact-delete').onclick = () => {
     const r = redacting;
-    if (!r || r.drag || r.chosen < 0) return;
+    if (!r || r.drag) return;
+    finishText();
+    if (r.chosen < 0) return;
     changeRedact(r.shapes.filter((_, at) => at !== r.chosen));
   };
   el('redact-clear').onclick = () => {
     const r = redacting;
     if (!r || r.drag) return;
-    r.pending = [];
+    finishText();
     r.warn = '';
-    if (r.shapes.length) changeRedact([]);
-    else paintRedact();
+    if (!r.shapes.length && !r.pending.length) { paintRedact(); return; }
+    remember(r);
+    r.pending = [];
+    r.shapes = [];
+    r.chosen = -1;
+    paintRedact();
   };
   el('redact-confirm').onclick = () => confirmShape();
   el('redact-shape-cancel').onclick = () => {
-    if (!redacting) return;
-    redacting.pending = [];
-    redacting.warn = '';
+    const r = redacting;
+    if (!r || !r.pending.length) return;
+    remember(r);
+    r.pending = [];
+    r.warn = '';
     paintRedact();
+  };
+  el('redact-text-input').addEventListener('input', () => retext({ text: el('redact-text-input').value }));
+  el('redact-text-size').addEventListener('input', () => setTextSize(parseFloat(el('redact-text-size').value)));
+  // A step at a time, and finer the smaller it is: half a pixel under ten.
+  const step = (dir) => {
+    const now = parseFloat(el('redact-text-size').value) || 12;
+    setTextSize(now + dir * (now < 10 ? 0.5 : now < 30 ? 1 : 2));
+  };
+  el('redact-text-smaller').onclick = () => step(-1);
+  el('redact-text-larger').onclick = () => step(1);
+  el('redact-text-done').onclick = () => finishText();
+  el('redact-text-delete').onclick = () => {
+    const r = redacting;
+    if (!r?.editing) return;
+    r.shapes = r.shapes.filter((_, at) => at !== r.chosen);
+    r.chosen = -1;
+    finishText();
   };
   el('redact-restore').onclick = () => restoreRedact();
   el('redact-cancel').onclick = () => leaveRedact();
@@ -5408,20 +5616,27 @@ async function paintBuildCover() {
  * pages and drawing them all at once is a wall and a lot of memory. */
 const PICK_BATCH = 16;
 
-async function openCoverPick() {
+/**
+ * Any picture from a list of sources, chosen as a cover.
+ *
+ * @param sources  [{ name, pictures: () => [{ name, load() }] }] -- the parts
+ *                 of a build, or a book and its other editions
+ * @param onPick   (blob, label) once one is chosen and made a cover of
+ */
+async function openCoverPick({ sources, onPick, title = 'Cover from the books', none } = {}) {
   const sheet = el('cover-pick-sheet');
   const list = el('cover-pick-list');
   coverPickUrls.release();
   list.innerHTML = '';
+  sheet.querySelector('.eyebrow').textContent = title;
   sheet.hidden = false;
-  const parts = build.contents();
   let any = false;
-  for (const part of parts) {
+  for (const source of sources) {
     const section = document.createElement('section');
     section.className = 'cover-pick-part';
-    section.innerHTML = `<h3>${escapeText(shortenMiddle(part.name))}</h3><p class="muted" style="font-size:12px;margin:0">Looking…</p>`;
+    section.innerHTML = `<h3>${escapeText(shortenMiddle(source.name))}</h3><p class="muted" style="font-size:12px;margin:0">Looking…</p>`;
     list.appendChild(section);
-    const pictures = await build.picturesOf(part);
+    const pictures = await source.pictures().catch(() => []);
     if (sheet.hidden) return;              // closed while looking
     const note = section.querySelector('p');
     if (!pictures.length) { note.textContent = 'No pictures in this one.'; continue; }
@@ -5455,11 +5670,9 @@ async function openCoverPick() {
         button.onclick = async () => {
           try {
             // Decoded and re-encoded, as a picture of your own is.
-            buildCover = await blobs.normaliseCover(new File([blob], picture.name || 'cover', { type: blob.type }));
-            buildCoverFrom = 'book';
-            buildCoverWhat = `Picture ${number} of “${shortenMiddle(part.name)}”`;
+            const cover = await blobs.normaliseCover(new File([blob], picture.name || 'cover', { type: blob.type }));
             closeCoverPick();
-            await paintBuildCover();
+            await onPick(cover, `Picture ${number} of “${shortenMiddle(source.name)}”`);
           } catch (error) {
             toast(error.message, 6000);
           }
@@ -5471,8 +5684,30 @@ async function openCoverPick() {
     await showMore();
   }
   if (!any && !sheet.hidden) {
-    list.insertAdjacentHTML('beforeend', '<p class="muted" style="padding:8px 0">None of these books has pictures in it that can be read before building. Choose a picture of your own instead.</p>');
+    list.insertAdjacentHTML('beforeend', `<p class="muted" style="padding:8px 0">${escapeText(none
+      || 'None of these books has pictures in it that can be read before building. Choose a picture of your own instead.')}</p>`);
   }
+}
+
+/** The cover for a build, from any picture in its parts. */
+function openBuildCoverPick() {
+  return openCoverPick({
+    sources: build.contents().map((part) => ({ name: part.name, pictures: () => build.picturesOf(part) })),
+    onPick: async (cover, label) => {
+      buildCover = cover;
+      buildCoverFrom = 'book';
+      buildCoverWhat = label;
+      await paintBuildCover();
+    },
+  });
+}
+
+/** A book's pictures, in reading order, for choosing one as its cover. */
+async function picturesOfBook(bookId) {
+  return (await library.livePictures(bookId))
+    .filter((image) => image.blob)
+    .sort((a, b) => (a.chapterIndex || 0) - (b.chapterIndex || 0) || (a.order || 0) - (b.order || 0))
+    .map((image) => ({ name: image.href, load: async () => image.blob }));
 }
 
 function closeCoverPick() {
@@ -5508,7 +5743,7 @@ function wireBuildCover() {
     buildCoverFrom = 'first';
     await paintBuildCover();
   };
-  el('build-cover-from-books').onclick = () => openCoverPick();
+  el('build-cover-from-books').onclick = () => openBuildCoverPick();
   el('cover-pick-cancel').onclick = () => closeCoverPick();
   el('cover-pick-sheet').onclick = (e) => { if (e.target === el('cover-pick-sheet')) closeCoverPick(); };
 }
@@ -5530,9 +5765,7 @@ function renderWorkshop() {
    *
    * Adding three more volumes should improve the suggestion; it should not
    * throw away a name someone has already chosen. */
-  const suggested = parts.length
-    ? build.commonName(parts.map((p) => p.name)) || 'Built book'
-    : '';
+  const suggested = build.suggestedName(parts);
   if (!buildTitleTouched) el('build-title').value = suggested;
   el('build-eyebrow').textContent = parts.length
     ? (el('build-title').value || suggested) : 'Join files into one';
@@ -8036,6 +8269,7 @@ window.Grimoire = {
     // Above everything else, so it is the first thing back leaves.
     if (!el('redact').hidden) {
       if (!el('redact-leave').hidden) el('redact-leave').hidden = true;
+      else if (!el('redact-text').hidden) finishText();
       else leaveRedact();
       return true;
     }

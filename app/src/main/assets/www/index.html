@@ -859,14 +859,19 @@
     <div class="redact-row">
       <div class="seg redact-mode" id="redact-tool">
         <button data-tool="panel" aria-pressed="true">Draw shapes</button>
+        <button data-tool="text">Text</button>
         <button data-tool="move">Move</button>
       </div>
       <button class="btn ghost redact-zoom" id="redact-zoom" title="Zoom">1×</button>
-      <button class="icon-btn" id="redact-undo" title="Undo">
-        <svg viewBox="0 0 24 24"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 0 1 0 10h-3"/></svg>
+    </div>
+    <!-- Every step, both ways: a point placed, a shape filled, moved,
+         recoloured, deleted, a piece of text typed. -->
+    <div class="redact-row redact-history">
+      <button class="btn ghost" id="redact-undo" title="Undo the last step">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 0 1 0 10h-3"/></svg>Undo
       </button>
-      <button class="icon-btn" id="redact-redo" title="Redo">
-        <svg viewBox="0 0 24 24"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 0 0 0 10h3"/></svg>
+      <button class="btn ghost" id="redact-redo" title="Redo the step undone">
+        Redo<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 0 0 0 10h3"/></svg>
       </button>
     </div>
     <div class="seg redact-colour" id="redact-colour">
@@ -877,6 +882,22 @@
       <button class="btn ghost" id="redact-delete" disabled>Delete shape</button>
       <button class="btn ghost" id="redact-clear">Clear all</button>
       <button class="btn ghost" id="redact-restore" hidden>Restore original</button>
+    </div>
+  </div>
+  <!-- Text being typed onto the picture: over the tools while it is open,
+       so the picture does not move under it. -->
+  <div class="redact-text" id="redact-text" hidden>
+    <textarea id="redact-text-input" rows="2" placeholder="Type the text — a new line where it breaks" spellcheck="false" autocomplete="off" aria-label="Text"></textarea>
+    <div class="redact-row">
+      <span class="redact-size-label">Size</span>
+      <button class="icon-btn redact-size-step" id="redact-text-smaller" title="Smaller" aria-label="Smaller">−</button>
+      <input type="range" id="redact-text-size" min="4" max="200" step="0.5" aria-label="Text size">
+      <button class="icon-btn redact-size-step" id="redact-text-larger" title="Larger" aria-label="Larger">+</button>
+      <span class="redact-size-n" id="redact-text-size-n"></span>
+    </div>
+    <div class="redact-row">
+      <button class="btn ghost" id="redact-text-delete">Delete text</button>
+      <button class="btn primary" id="redact-text-done">Done</button>
     </div>
   </div>
   <!-- What is under the finger, larger, while a corner is being placed: the
