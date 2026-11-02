@@ -757,6 +757,24 @@ function pageAtAnchor(anchor, chapterIndex = state.chapterIndex) {
 
 /* ── loading ──────────────────────────────────────────────────────────── */
 
+/**
+ * The last book's pages taken off the screen, before another is opened.
+ *
+ * The reader is shown first and the book read into it after -- a page laid
+ * out where it cannot be seen measures nothing -- so for that moment it
+ * showed whatever was left in it: the last book's page, flashing up before
+ * the new one replaced it.
+ */
+export function blank() {
+  clearTimeout(arrivingTimer);
+  arrivingTimer = null;
+  arriving = 0;
+  releaseAllSections();
+  flow?.replaceChildren();
+  if (flow) withoutMotion(() => { flow.style.transform = 'translateX(0)'; });
+  if (viewport) viewport.scrollTop = 0;
+}
+
 export async function open(bookId, opts = {}) {
   const book = await store.get('books', bookId);
   if (!book) throw new Error('That book is no longer in the library');
@@ -868,7 +886,7 @@ async function loadChapterNames() {
   try {
     const { results } = await translate.translateChapterNames(
       state.book.id, state.chapters, settings.translateTarget,
-      translate.sourceFor(state.book));
+      translate.sourceFor(state.book, state.chapters.slice(0, 12).map((c) => c.title || '').join(' ')));
     for (const chapter of state.chapters) {
       const value = results.get(`chapter:${chapter.index}`);
       if (value && value !== chapter.title) state.names.set(chapter.index, value);
@@ -886,6 +904,12 @@ async function loadChapterNames() {
  * and this re-renders from a translated copy held only for as long as it is on
  * screen. Toggling back is exact, not a re-translation.
  */
+/** A little of a chapter's text, for telling what language it is in. */
+function textSample(chapter) {
+  const html = String(chapter?.html || '');
+  return html.slice(0, 6000).replace(/<[^>]*>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').slice(0, 600);
+}
+
 export async function toggleTranslation() {
   const chapter = state.chapters.find((c) => c.index === state.chapterIndex);
   if (!chapter) return { shown: false };
@@ -899,7 +923,7 @@ export async function toggleTranslation() {
   const settings = await store.settings();
   const { html, characters } = await translate.translateChapterBody(
     state.book.id, chapter, settings.translateTarget,
-    translate.sourceFor(state.book));
+    translate.sourceFor(state.book, `${chapter.title || ''} ${textSample(chapter)}`));
 
   state.translated = state.chapterIndex;
   const anchor = state.anchor;

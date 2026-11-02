@@ -511,10 +511,14 @@ await t('from the reel: tap out a triangle and a hexagon, fit them, save, and th
   assert.equal(svg.querySelectorAll('circle.placed').length, 1);
   assert.equal(el('redact-shape').classList.contains('idle'), false, 'nothing says a shape is being drawn');
   assert.equal(el('redact-confirm').disabled, true, 'one point can be filled in');
-  // A second finger landing while a point is held is not another point.
+  // A second finger landing while a point is aimed moves the picture: the
+  // point is let go of, and nothing is placed by either finger.
   svg.dispatchEvent(pointer('pointerdown', 150, 30));
   svg.dispatchEvent(pointer('pointerdown', 150, 150, 2));
   svg.dispatchEvent(pointer('pointerup', 150, 30));
+  svg.dispatchEvent(pointer('pointerup', 150, 150, 2));
+  assert.equal(svg.querySelectorAll('circle.placed').length, 1, 'two fingers placed a point');
+  press(svg, 150, 30);
   assert.equal(svg.querySelectorAll('circle.placed').length, 2);
   assert.equal(el('redact-confirm').disabled, true, 'two points can be filled in');
   press(svg, 40, 120);
@@ -713,6 +717,29 @@ await t('a point lands where the finger lifts, and every step undoes and redoes'
   svg.dispatchEvent(pointer('pointercancel', 200, 200));
   assert.equal(placed().length, 2);
 
+  // Zoomed in, two fingers move the picture in any tool -- and a corner the
+  // first finger had hold of is let go as it was.
+  const stage = el('redact-stage');
+  let scrolled = { left: 0, top: 0 };
+  Object.defineProperty(stage, 'scrollLeft', { configurable: true, get: () => scrolled.left, set: (v) => { scrolled.left = v; } });
+  Object.defineProperty(stage, 'scrollTop', { configurable: true, get: () => scrolled.top, set: (v) => { scrolled.top = v; } });
+  scrolled = { left: 300, top: 400 };
+  const before = placed();
+  svg.dispatchEvent(pointer('pointerdown', 200, 200, 5));
+  svg.dispatchEvent(pointer('pointermove', 205, 204, 5));
+  svg.dispatchEvent(pointer('pointerdown', 260, 200, 6));
+  assert.equal(el('redact-loupe').hidden, true, 'the first finger was still aiming');
+  document.body.dispatchEvent(pointer('pointermove', 180, 160, 5));
+  document.body.dispatchEvent(pointer('pointermove', 240, 160, 6));
+  // The middle went from (232.5, 202) to (210, 160): the picture follows it.
+  assert.deepEqual(scrolled, { left: 322.5, top: 442 }, 'the picture did not follow the fingers');
+  document.body.dispatchEvent(pointer('pointerup', 240, 160, 6));
+  document.body.dispatchEvent(pointer('pointermove', 100, 100, 5));
+  document.body.dispatchEvent(pointer('pointerup', 100, 100, 5));
+  assert.deepEqual(placed(), before, 'moving the picture placed a point');
+  assert.deepEqual(scrolled, { left: 322.5, top: 442 }, 'the finger left behind moved the picture');
+  delete stage.scrollLeft;
+  delete stage.scrollTop;
   tap(el('redact-undo'));
   assert.deepEqual(placed(), [[110, 105]]);
   tap(el('redact-redo'));

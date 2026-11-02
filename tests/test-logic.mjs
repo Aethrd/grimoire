@@ -325,6 +325,117 @@ console.log('books left unread');
   });
 }
 
+console.log('a bundle is read as one book');
+
+t('reading one edition is reading the bundle: its status, progress and dates follow', () => {
+  const raw = { id: 1, title: 'Raw', bundleId: 1, lang: 'ko' };               // leads, never opened
+  const english = { id: 2, title: 'English', bundleId: 1, lastReadAt: 500, lastOpenedAt: 520, percent: 0.4 };
+  const [entry] = lib.collapseBundles([raw, english]);
+  assert.equal(entry.bundle.length, 2);
+  assert.equal(lib.statusOf(entry), 'reading', 'the bundle stayed Unread when an edition was being read');
+  assert.equal(entry.percent, 0.4);
+  assert.equal(entry.lastReadAt, 500);
+  assert.equal(entry.readEdition, 2, 'Continue would open an edition not being read');
+  // Set On hold on the bundle, then the English read later: Reading.
+  const held = [{ ...raw, status: 'onHold', lastOpenedAt: 100 }, { ...english, status: undefined, lastReadAt: 900 }];
+  assert.equal(lib.statusOf(lib.collapseBundles(held)[0]), 'reading');
+  // Finished in one edition, last read there: the bundle is finished.
+  const done = [raw, { ...english, finishedAt: 600, lastReadAt: 590, percent: 1 }];
+  assert.equal(lib.statusOf(lib.collapseBundles(done)[0]), 'finished');
+});
+
+t('grouped by status, a bundle is one entry under the edition read last', () => {
+  const raw = { id: 1, title: 'Raw', bundleId: 1 };
+  const english = { id: 2, title: 'English', bundleId: 1, lastReadAt: 500 };
+  const entries = lib.collapseBundles([raw, english], ['status']);
+  assert.equal(entries.length, 1, 'the bundle came apart: one edition Reading, one Unread');
+  const groups = lib.groupBooks(entries, ['status']);
+  assert.deepEqual(groups.map((g) => [g.label, g.count]), [['Reading', 1]]);
+  // Grouped by something the editions really differ in, they part -- and
+  // each still shows the bundle's status.
+  const byLang = lib.collapseBundles([{ ...raw, lang: 'ko' }, { ...english, lang: 'en' }], ['language']);
+  assert.equal(byLang.length, 2);
+  assert.deepEqual(byLang.map((b) => lib.statusOf(b)), ['reading', 'reading']);
+});
+
+await t2('reading one edition clears a status set on the whole bundle', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const a = await store.add('books', { title: 'Lead', fingerprint: 'b:1', addedAt: 1, status: 'onHold' });
+  const b = await store.add('books', { title: 'Other', fingerprint: 'b:2', addedAt: 1, status: 'onHold', heldAt: 5, heldAutomatically: true });
+  const lone = await store.add('books', { title: 'Elsewhere', fingerprint: 'b:3', addedAt: 1, status: 'onHold' });
+  for (const id of [a, b]) await store.put('books', { ...(await store.get('books', id)), bundleId: a });
+  await store.markRead(b);
+  for (const id of [a, b]) {
+    const book = await store.get('books', id);
+    assert.equal(book.status, undefined, `edition ${id} kept On hold after the bundle was read`);
+    assert.equal(book.heldAutomatically, undefined);
+  }
+  assert.equal((await store.get('books', lone)).status, 'onHold', 'a book outside the bundle changed');
+  const lead = await store.get('books', a);
+  assert.equal(lead.lastReadAt, undefined, 'the edition not read was marked read');
+  for (const id of [a, b, lone]) await store.deleteBook(id);
+});
+
+t('a bundle read lately in any edition is not put on hold', () => {
+  const DAY = 864e5;
+  const now = 100 * DAY;
+  const books = [
+    { id: 9, title: 'Read last', lastReadAt: now },
+    { id: 1, title: 'Raw', bundleId: 1, lastReadAt: now - 20 * DAY },
+    { id: 2, title: 'English', bundleId: 1, lastReadAt: now - DAY },
+    { id: 3, title: 'Left', lastReadAt: now - 20 * DAY },
+  ];
+  assert.deepEqual(lib.goneQuiet(books, { days: 5, now }).map((b) => b.title), ['Left']);
+});
+
+console.log('the language of a title');
+
+await t2('the language is told from the characters when the book does not say, or says wrong', async () => {
+  const translate = await import(new URL('../app/src/main/assets/www/js/translate.js', import.meta.url).href);
+  const from = (title, lang = '', extra = {}) => translate.sourceFor({ title, lang, ...extra });
+  assert.equal(from('전지적 독자 시점'), 'ko');
+  assert.equal(from('나 혼자만 레벨업', 'en'), 'ko', 'a scraped "en" on a Korean title');
+  assert.equal(from('転生したらスライムだった件'), 'ja');
+  assert.equal(from('Re:ゼロから始める異世界生活'), 'ja');
+  assert.equal(from('魔道祖师'), 'zh');
+  assert.equal(from('魔道祖師', 'ja'), 'ja', 'kanji alone, in a book that says Japanese');
+  assert.equal(from('進撃の巨人'), 'ja', 'one kana among kanji');
+  assert.equal(from('鬼滅', '', { author: '吾峠呼世晴', series: 'きめつ' }), 'ja', 'the series says what the title cannot');
+  assert.equal(from('Война и мир'), 'ru');
+  assert.equal(from('Тіні забутих предків'), 'uk');
+  assert.equal(from('Solo Leveling'), '', 'Latin is left to the translator to tell');
+  assert.equal(from('Solo Leveling', 'ko'), '', 'Latin letters are not Korean, whatever the book says');
+  assert.equal(from('Middlemarch', 'en'), 'en');
+  assert.equal(from('Le Petit Prince', 'fr'), 'fr');
+  assert.equal(translate.languageOfText('The Beginning After The End 1화'), '', 'one word of Hangul in an English title');
+});
+
+await t2('a title left untranslated when its language was wrong is asked again, once', async () => {
+  const translate = await import(new URL('../app/src/main/assets/www/js/translate.js', import.meta.url).href);
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  // Cached as it went: the Korean title sent as English came back Korean.
+  await store.put('translations', { key: '77:title:EN-US', bookId: 77, field: 'title', lang: 'EN-US', value: '나 혼자만 레벨업', at: 1 });
+  await store.put('translations', { key: '77:name:EN-US', bookId: 77, field: 'name', lang: 'EN-US', value: 'Solo', at: 1 });
+  const sent = [];
+  window.GrimoireTranslate = globalThis.window.GrimoireTranslate = {
+    status: () => JSON.stringify({ configured: true, engine: 'ondevice' }),
+    translate(id, json, lang, source) {
+      sent.push({ texts: JSON.parse(json), source });
+      setTimeout(() => translate.settle(id, true, { texts: JSON.parse(json).map(() => 'Solo Leveling') }), 1);
+    },
+  };
+  const items = [{ field: 'title', text: '나 혼자만 레벨업' }, { field: 'name', text: 'Solo' }];
+  const first = await translate.translateBatch(77, items, 'EN-US', 'ko');
+  assert.equal(first.results.get('title'), 'Solo Leveling');
+  assert.deepEqual(sent.map((s) => s.texts), [['나 혼자만 레벨업']], 'a good cached one was sent again');
+  assert.equal(sent[0].source, 'ko');
+  const again = await translate.translateBatch(77, items, 'EN-US', 'ko');
+  assert.equal(again.translated, 0, 'the fixed title was asked for again');
+  delete window.GrimoireTranslate;
+  await store.del('translations', '77:title:EN-US');
+  await store.del('translations', '77:name:EN-US');
+});
+
 console.log('reading elsewhere');
 
 await (async () => {

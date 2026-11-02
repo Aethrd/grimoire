@@ -155,8 +155,70 @@ export const languageName = (tag) => LANGUAGE_NAMES[tag] || tag.toUpperCase();
  * foreign translated, not answering a question about which language a scraped
  * EPUB happens to be in.
  */
-export function sourceFor(book) {
-  return (book?.lang || '').split('-')[0].toLowerCase();
+export function sourceFor(book, text = '') {
+  const declared = (book?.lang || '').split('-')[0].toLowerCase();
+  // What the words themselves are written in: the title, unless told what
+  // to look at, with the author and series beside it for a second opinion.
+  const sample = [text || book?.title, book?.author, book?.series].filter(Boolean).join(' ');
+  const seen = languageOfText(sample);
+  if (!seen) {
+    // Latin letters in a book that says it is Korean, Japanese, Russian...:
+    // the words are not in that language, whatever the book says ("Solo
+    // Leveling" on a Korean edition). Left to the translator to tell.
+    if (NOT_LATIN.has(declared) && /[A-Za-z]/.test(text || book?.title || '')) return '';
+    return declared;
+  }
+  if (!declared || declared === 'und') return seen;
+  return sameWriting(declared, seen) ? declared : seen;
+}
+
+/* Written in the same characters, so the characters cannot tell them apart:
+ * a Japanese title all in kanji looks Chinese, a Ukrainian one Russian. The
+ * book's own word is taken over the characters' then. */
+const SAME_WRITING = [
+  ['zh', 'ja', 'ko'],
+  ['ru', 'uk', 'be', 'bg', 'sr', 'mk', 'kk', 'mn'],
+  ['ar', 'fa', 'ur'],
+  ['hi', 'mr', 'ne'],
+];
+const NOT_LATIN = new Set(['zh', 'ja', 'ko', 'ru', 'uk', 'be', 'bg', 'sr', 'mk', 'kk', 'mn', 'el', 'ar', 'fa', 'ur', 'he', 'th', 'hi', 'mr', 'ne']);
+const sameWriting = (a, b) => a === b || SAME_WRITING.some((group) => group.includes(a) && group.includes(b));
+
+const SCRIPTS = [
+  ['ko', /[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]/gu],
+  ['ja', /[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9f]/gu],
+  ['zh', /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/gu],
+  ['ru', /[\u0400-\u04ff]/gu],
+  ['el', /[\u0370-\u03ff]/gu],
+  ['ar', /[\u0600-\u06ff]/gu],
+  ['he', /[\u0590-\u05ff]/gu],
+  ['th', /[\u0e00-\u0e7f]/gu],
+  ['hi', /[\u0900-\u097f]/gu],
+];
+
+/**
+ * The language a piece of text is in, as far as its characters say: Hangul
+ * is Korean; kana -- even one, among kanji -- is Japanese; Han characters
+ * alone are Chinese; Cyrillic is Russian (Ukrainian with its own letters);
+ * and so on. '' for Latin letters and anything else the characters cannot
+ * settle: the translator works those out from the words.
+ */
+export function languageOfText(text) {
+  const words = String(text || '');
+  const counts = new Map();
+  for (const [code, pattern] of SCRIPTS) {
+    const n = (words.match(pattern) || []).length;
+    if (n) counts.set(code, n);
+  }
+  if (!counts.size) return '';
+  const latin = (words.match(/[A-Za-z\u00c0-\u024f]/g) || []).length;
+  // Kana is never anything but Japanese, however much kanji is round it.
+  if (counts.has('ja') && (counts.get('ja') >= (counts.get('ko') || 0))) return 'ja';
+  const [best, most] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  // Mostly Latin, with a word of something else in it: not settled here.
+  if (latin > most * 2) return '';
+  if (best === 'ru' && /[іїєґІЇЄҐ]/.test(words)) return 'uk';
+  return best;
 }
 export const setKey = (key) => call('setKey', [key], 30000).then(parse);
 
@@ -230,13 +292,25 @@ export async function cacheSize() {
  * Only the misses are sent. Fields are named by the caller so the cache can
  * be keyed per item: "chapter:3", "body:3", and so on.
  */
+const askedAgain = new Set();
+
 export async function translateBatch(bookId, items, lang, sourceLang = '', { context = '' } = {}) {
   const results = new Map();
   const misses = [];
 
+  const into = String(lang || '').split('-')[0].toLowerCase();
   for (const item of items) {
     const hit = await cached(bookId, item.field, lang);
-    if (hit !== null) results.set(item.field, hit);
+    // Kept untranslated -- a Korean title sent as English, from a book that
+    // said it was, came back as it went -- is asked again, now the language
+    // is told from the characters. Not when it is already in the language
+    // wanted: that one is right as it is.
+    // Once a session: one that comes back unchanged again is let be.
+    const again = `${bookId}:${item.field}:${lang}`;
+    const stuck = hit !== null && hit === item.text && !!languageOfText(item.text)
+      && languageOfText(item.text) !== into && !askedAgain.has(again);
+    if (stuck) askedAgain.add(again);
+    if (hit !== null && !stuck) results.set(item.field, hit);
     else if (item.text && item.text.trim()) misses.push(item);
   }
 

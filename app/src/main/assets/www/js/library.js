@@ -196,20 +196,51 @@ export function collapseBundles(books, levels = []) {
        Group by language and an English edition and its raw belong under two
        headings, not one -- so the bundle comes apart for as long as that
        grouping is on, rather than filing both under whichever one leads. */
+    // Status is the bundle's, not each edition's (see readAsOne): it never
+    // pulls one apart.
     const splits = levels.some((level) => {
+      if (level === 'status') return false;
       const first = groupLabel(leader, level);
       return group.some((member) => groupLabel(member, level) !== first);
     });
-    if (splits) { out.push(leader, ...group.filter((b) => b.id !== id)); continue; }
+    if (splits) {
+      const reading = readAsOne([leader, ...group.filter((b) => b.id !== id)]);
+      out.push(...[leader, ...group.filter((b) => b.id !== id)].map((b) => ({ ...b, ...reading })));
+      continue;
+    }
     // Ordered so the leader is first, then by title: the sheet reads the same
     // way every time.
     const rest = group.filter((b) => b.id !== id)
       .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
     out.push(Object.assign(Object.create(Object.getPrototypeOf(leader)), leader,
-      { bundle: [leader, ...rest] }));
+      readAsOne([leader, ...rest]), { bundle: [leader, ...rest] }));
   }
 
   return out;
+}
+
+/**
+ * A bundle's reading, as one book's: the editions are one book, and reading
+ * the translation is reading it, whichever edition leads the bundle. So the
+ * bundle stands where the edition read last stands -- its status, how far
+ * through, finished or not -- and was last read and opened when any of them
+ * was. Nothing is written: each edition keeps its own record.
+ */
+export function readAsOne(editions) {
+  const touched = (b) => Math.max(b.lastReadAt || 0, b.lastOpenedAt || 0);
+  let latest = editions[0];
+  for (const b of editions) if (touched(b) > touched(latest)) latest = b;
+  const most = (key) => editions.reduce((n, b) => Math.max(n, b[key] || 0), 0) || null;
+  return {
+    status: latest.status,
+    finishedAt: latest.finishedAt ?? null,
+    percent: latest.percent,
+    heldAt: latest.heldAt,
+    heldAutomatically: latest.heldAutomatically,
+    lastReadAt: most('lastReadAt'),
+    lastOpenedAt: most('lastOpenedAt'),
+    readEdition: latest.id,
+  };
 }
 
 /** The state a book is actually in: what was set, or what can be inferred. */
@@ -252,9 +283,15 @@ export function goneQuiet(books, { days, now = Date.now() } = {}) {
   let last = null;
   for (const book of shelf) if (touchedAt(book) && (!last || touchedAt(book) > touchedAt(last))) last = book;
   const spared = last ? workOf(last, byId) : null;
+  // A bundle is one book: read any edition of it lately, and none is held.
+  const workTouched = new Map();
+  for (const book of shelf) {
+    const work = workOf(book, byId);
+    workTouched.set(work, Math.max(workTouched.get(work) || 0, touchedAt(book)));
+  }
   return shelf.filter((book) => statusOf(book) === 'reading'
     && touchedAt(book) > 0
-    && now - touchedAt(book) >= days * DAY
+    && now - workTouched.get(workOf(book, byId)) >= days * DAY
     && workOf(book, byId) !== spared);
 }
 
@@ -1211,7 +1248,9 @@ async function renderContinueCard(books, onOpen) {
   if (!candidates.length) { card.hidden = true; return; }
 
   const book = candidates[0];
-  const position = await store.get('positions', book.id);
+  // A bundle carries on in the edition read last, wherever that was.
+  const edition = book.bundle?.find((member) => member.id === book.readEdition) || book;
+  const position = await store.get('positions', edition.id);
   const coverUrl = coverUrlFor(book);
 
   card.hidden = false;
@@ -1228,7 +1267,7 @@ async function renderContinueCard(books, onOpen) {
     ? `Ch. ${position.chapterIndex + 1} · p. ${position.pageInBook} of ${position.totalPages} · ${Math.round(position.percent * 100)}%`
     : 'Not started';
   el('continue-bar').style.width = `${Math.round((book.percent || 0) * 100)}%`;
-  card.onclick = () => onOpen(book);
+  card.onclick = () => onOpen(edition);
 }
 
 /**
@@ -1259,12 +1298,18 @@ async function applyTitleTranslations(books, settings) {
   for (const book of books) {
     if (titles.has(book.id)) continue;
     try {
+      // The language the title is written in, from its characters when the
+      // book does not say -- or says wrong, as a scraped EPUB's "en" on a
+      // Korean title does.
       const { results } = await translate.translateBatch(
         book.id, [{ field: 'title', text: book.title }], lang,
-        translate.sourceFor(book));
+        translate.sourceFor(book, book.title));
       const value = results.get('title');
       if (value && value !== book.title) { titles.set(book.id, value); changed = true; }
     } catch (error) {
+      // One title whose language cannot be told is that title left as it
+      // is, not the end of the rest.
+      if (/Could not tell what language|does not cover/i.test(error.message || '')) continue;
       // Swallowing this was the whole reason translation looked like it did
       // nothing: no key, no quota or -- most often -- no language pack, and
       // not a word about it. Reported once, then the loop stops rather than

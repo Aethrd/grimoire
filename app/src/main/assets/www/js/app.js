@@ -340,6 +340,9 @@ function settleGreyMix(book) {
 async function openBook(book, opts) {
   // Opened afresh, so nothing is waiting to be reopened.
   readerStale = null;
+  // Another book: the last one's page and name are cleared before the reader
+  // shows, not left up until this one has been read in.
+  if (reader.state.book?.id !== book.id) blankReader(book);
   await show('reader');
   try {
     // Opened, not read. Continue follows this; the status does not, because
@@ -832,9 +835,12 @@ async function openDetails(tapped, { editions = [] } = {}) {
   statusField.className = 'field';
   // Automatic is always what it is left on: a status chosen here is set once,
   // and holds only until the book is next read.
-  const nowLabel = library.STATUS_LABELS[library.statusOf(book)];
+  // A bundle's status is the bundle's: where the edition read last stands.
+  const editionBooks = (await Promise.all(editions.map((id) => store.get('books', id)))).filter(Boolean);
+  const asRead = editionBooks.length ? { ...book, ...library.readAsOne([book, ...editionBooks]) } : book;
+  const nowLabel = library.STATUS_LABELS[library.statusOf(asRead)];
   statusField.innerHTML = `<label><span>Status</span><span class="muted">${escapeText(
-    library.statusIsPinned(book)
+    library.statusIsPinned(asRead)
       ? `${nowLabel}, as you set it, until you next read it`
       : `${nowLabel}, from your reading`)}</span></label>`;
   const statusChips = document.createElement('div');
@@ -962,7 +968,6 @@ async function openDetails(tapped, { editions = [] } = {}) {
   /* Any picture in the book -- or, for a bundle, in any of its editions --
    * as its cover: the first page of a comic is often a credit page, and the
    * real cover is the third. */
-  const editionBooks = (await Promise.all(editions.map((id) => store.get('books', id)))).filter(Boolean);
   const withPictures = [book, ...editionBooks];
   body.querySelector('#details-cover-from').onclick = () => openCoverPick({
     title: editions.length ? 'Cover from the editions' : 'Cover from the book',
@@ -2423,6 +2428,17 @@ async function importNow(files, { transient = false, into = '' } = {}, done) {
 }
 
 /* ── reader wiring ────────────────────────────────────────────────────── */
+
+/** The reader emptied for a book about to open: its name, and no page yet. */
+function blankReader(book) {
+  reader.blank();
+  el('reader-book').textContent = library.displayTitle(book) || book.title || '';
+  el('reader-pos').textContent = '';
+  el('progress-fill').style.width = '0%';
+  el('progress-knob').style.left = '0%';
+  el('progress-pct').textContent = '';
+  el('progress-page').textContent = '';
+}
 
 function paintReader() {
   const state = reader.state;
@@ -4275,6 +4291,9 @@ async function openRedact(bookId, href) {
 
 function closeRedact() {
   redacting = null;
+  redactFingers.clear();
+  redactIdle.clear();
+  redactPan = null;
   el('redact-text').hidden = true;
   el('redact').hidden = true;
   el('redact-leave').hidden = true;
@@ -4441,7 +4460,7 @@ function paintRedact() {
     note = 'Place points round what you want covered — as many as the shape needs. Each lands where your finger lifts.';
   }
   const notes = [note];
-  if (r.zoom > 1 && r.tool !== 'move') notes.push('Use Move to look around.');
+  if (r.zoom > 1 && r.tool !== 'move') notes.push('Two fingers move the picture.');
   if (r.image.animated || r.image.wasAnimated) {
     notes.push('This picture moves — saved, it keeps only its first frame.');
   }
@@ -4682,12 +4701,53 @@ function showLoupe(event) {
  * last point if that is where it belongs. Nothing already placed is taken
  * hold of while a shape is being drawn; Undo takes back a point.
  */
+/* ── two fingers move the picture ──────────────────────────────────────
+ *
+ * Zoomed in, the picture is larger than the screen, and switching to Move
+ * and back for every look round broke up the marking. So two fingers on the
+ * picture move it, in any tool: whatever the first finger had started -- a
+ * point being aimed, a corner being dragged -- is let go as if it never
+ * began, and the picture follows the middle of the two fingers until either
+ * lifts. The finger left on the glass does nothing more until it lifts too.
+ */
+const redactFingers = new Map();   // pointerId -> { x, y }, on the picture now
+let redactPan = null;              // { ids, mid, left, top }
+const redactIdle = new Set();      // fingers that ended a pan and are still down
+
+const fingersMiddle = (ids) => {
+  const [a, b] = ids.map((id) => redactFingers.get(id));
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+};
+
+/** Let go of whatever one finger had started, leaving things as they were. */
+function dropRedactDrag(r) {
+  const drag = r.drag;
+  if (!drag) return;
+  r.drag = null;
+  if (drag.kind !== 'aim') r.shapes = drag.before.shapes;
+  el('redact-loupe').hidden = true;
+}
+
+function startRedactPan(r) {
+  dropRedactDrag(r);
+  const ids = [...redactFingers.keys()].slice(-2);
+  const stage = el('redact-stage');
+  redactPan = { ids, mid: fingersMiddle(ids), left: stage.scrollLeft, top: stage.scrollTop };
+  paintRedact();
+}
+
 function redactDown(event) {
   const r = redacting;
   if (!r || r.busy || r.tool === 'move') return;
-  // One finger at a time. A second landing mid-drag is a palm or a pinch.
-  if (r.drag) return;
+  redactFingers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   event.preventDefault();
+  // A second finger: the picture is being moved, not marked.
+  if (redactFingers.size >= 2) {
+    try { el('redact-svg').setPointerCapture?.(event.pointerId); } catch { /* not every WebView can */ }
+    if (!redactPan) startRedactPan(r);
+    return;
+  }
+  if (r.drag || redactPan) return;
   /* Held by the picture's layer itself, not by what was under the finger:
    * a corner's handle is drawn again on every move, and the capture went
    * with the old one -- so a finger carried off the picture was lost, the
@@ -4756,6 +4816,18 @@ function redactDown(event) {
 
 function redactMove(event) {
   const r = redacting;
+  if (r && redactFingers.has(event.pointerId)) {
+    redactFingers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  }
+  if (r && redactPan) {
+    if (!redactPan.ids.includes(event.pointerId)) return;
+    if (event.cancelable) event.preventDefault();
+    const mid = fingersMiddle(redactPan.ids);
+    const stage = el('redact-stage');
+    stage.scrollLeft = redactPan.left - (mid.x - redactPan.mid.x);
+    stage.scrollTop = redactPan.top - (mid.y - redactPan.mid.y);
+    return;
+  }
   const drag = r?.drag;
   if (!drag || drag.pointer !== event.pointerId) return;
   if (event.cancelable) event.preventDefault();
@@ -4772,6 +4844,16 @@ function redactMove(event) {
 
 function redactUp(event) {
   const r = redacting;
+  redactFingers.delete(event.pointerId);
+  // The end of a pan: the other finger is let be until it lifts as well.
+  if (redactPan) {
+    if (!redactPan.ids.includes(event.pointerId)) return;
+    for (const id of redactPan.ids) if (id !== event.pointerId) redactIdle.add(id);
+    redactPan = null;
+    if (r) paintRedact();
+    return;
+  }
+  if (redactIdle.delete(event.pointerId)) return;
   const drag = r?.drag;
   if (!drag || drag.pointer !== event.pointerId) return;
   const cancelled = event.type === 'pointercancel';

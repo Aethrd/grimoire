@@ -247,6 +247,8 @@ In the black-out editor:
   the loupe and a cross show exactly where the point will land, so points can
   sit as close together as you need.
 - A finger carried past the edge of the picture keeps the point on the edge.
+- Two fingers move the picture, in any tool, which is useful when zoomed in.
+  Whatever the first finger had started is let go, and nothing is placed.
 - The outline is worked out again each time a point is added. A shape traced
   round its edge keeps its order. Points placed out of order are joined so
   that the outline never crosses itself, so four dots in a small square fill
@@ -256,6 +258,25 @@ In the black-out editor:
 - The Text tool letters words onto the picture, centred where you tap, in
   black or white. The size goes down to 4 pixels of the picture, small enough
   for the narrowest manga bubble.
+
+### Bundles read as one, and titles in any language
+
+A bundle is one book on the shelf. Reading any edition of it reads the bundle:
+- The bundle shows the status, progress and last-read date of the edition read
+  last. Grouped by status, a bundle no longer splits into editions.
+- A status set on the bundle ends for every edition once any of them is read.
+- Continue opens the edition read last, at its own place.
+
+Translated titles work out their language from the characters when the book
+doesn't say, or says wrong:
+- Hangul is Korean.
+- Kana, even one among kanji, is Japanese.
+- Han characters alone are Chinese.
+- Cyrillic is Russian, or Ukrainian when it has Ukrainian letters.
+- Other scripts are recognised the same way.
+
+Latin letters are left to the translator to identify. A title cached
+untranslated under the wrong language is asked for again, once.
 
 ### Books left unread
 

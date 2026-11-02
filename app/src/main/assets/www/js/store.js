@@ -470,6 +470,19 @@ async function noteRead(bookId) {
   delete book.heldAt;
   delete book.heldAutomatically;
   await put('books', book);
+  /* Its other editions too: a bundle is one book, so a status set on it --
+   * by hand on the bundle, or On hold when it was left -- is over for all of
+   * them once any is read, not left on the editions not opened. */
+  if (book.bundleId != null) {
+    for (const other of await all('books')) {
+      if (other.id === book.id || other.bundleId !== book.bundleId) continue;
+      if (other.status === undefined && !other.heldAt) continue;
+      delete other.status;
+      delete other.heldAt;
+      delete other.heldAutomatically;
+      await put('books', other);
+    }
+  }
 }
 
 export async function recordEvent({

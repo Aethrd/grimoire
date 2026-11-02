@@ -1250,4 +1250,15 @@ t('back on the shelf with a build under way, books are picked for it in order', 
   assert.match(lib, /<span class="tile-order\$\{placed\.already \? ' already' : ''\}">\$\{placed\.place\}<\/span>/);
 });
 
+t('opening another book clears the last one off the reader before it shows', () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const open = app.slice(app.indexOf('async function openBook('), app.indexOf('/* ── selection'));
+  // Blanked before the reader is shown, not after the new book is read in.
+  assert.ok(open.indexOf('blankReader(book)') > -1 && open.indexOf('blankReader(book)') < open.indexOf("await show('reader')"),
+    'the last book is still on screen while the next one opens');
+  assert.match(open, /if \(reader\.state\.book\?\.id !== book\.id\) blankReader\(book\);/);
+  const readerSrc = read('app/src/main/assets/www/js/reader.js');
+  assert.match(readerSrc, /export function blank\(\) \{[\s\S]{0,200}releaseAllSections\(\);\s*flow\?\.replaceChildren\(\);/);
+});
+
 console.log(`\n${pass} assertions passed`);

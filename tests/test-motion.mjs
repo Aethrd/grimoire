@@ -323,7 +323,7 @@ t('a book with no declared language is detected, not asked about', () => {
   assert.ok(!/Translate from/.test(panels), 'the source picker is back');
 
   const translate = read('app/src/main/assets/www/js/translate.js');
-  assert.match(translate, /export function sourceFor\(book\)/);
+  assert.match(translate, /export function sourceFor\(book, text = ''\)/);
 });
 
 t('a failed translation can be diagnosed on the device', () => {
