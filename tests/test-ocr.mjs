@@ -226,7 +226,7 @@ await t('the sheet translates, and lays the translations over the pictures', () 
   assert.match(css, /\.pic-translation \{ position: absolute; pointer-events: none;/, 'taps go through to the page');
   const bridge = read('app/src/main/java/com/grimoire/ereader/TranslateBridge.java');
   assert.match(bridge, /public void translateWithContext\(/);
-  assert.match(bridge, /body\.put\("context", context\)/);
+  assert.match(bridge, /body\.put\("context", context\.toString\(\)\)/);
 });
 
 await t('settings offer a choice of translator, and a DeepL key box whatever is chosen', () => {

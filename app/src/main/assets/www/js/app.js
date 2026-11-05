@@ -6,7 +6,8 @@ import * as reader from './reader.js';
 import * as library from './library.js';
 import * as screens from './screens.js';
 import * as panels from './panels.js';
-import { nameWithFormat, chapterHtml } from './parse.js';
+import { nameWithFormat, chapterHtml, plainTextOf } from './parse.js';
+import * as glossary from './glossary.js';
 import * as build from './build.js';
 import * as epub from './epub.js';
 import * as trim from './trim.js';
@@ -364,6 +365,208 @@ async function openBook(book, opts) {
   }
 }
 
+/* ── a book's glossary ─────────────────────────────────────────────────
+ *
+ * Its names and terms, and how each is translated (glossary.js): edited here
+ * row by row, found in the book by the AI model, brought in from a file --
+ * Glossarion's own included -- and written out again. Nothing is kept until
+ * Save, so a scan or an import can be looked over first.
+ */
+
+let glossaryState = null;   // { book, entries, scanned, fresh: Set, filter }
+
+async function openGlossary(book) {
+  const loaded = await glossary.load(book);
+  glossaryState = { book, entries: loaded.entries.map((e) => ({ ...e })), scanned: { ...loaded.scanned }, fresh: new Set(), filter: '' };
+  el('glossary-of').textContent = `Glossary · ${library.displayTitle(book)}`;
+  const engine = translate.status().engine;
+  el('glossary-note').textContent = `For ${loaded.scope.label}. `
+    + (engine === 'llm' || engine === 'deepl'
+      ? 'Every translation keeps to it: the names in what is translated go with it.'
+      : 'It is used when the translator is an AI model or DeepL; on-device translation cannot take one.');
+  el('glossary-find').hidden = false;
+  el('glossary-filter').value = '';
+  el('glossary-sheet').hidden = false;
+  paintGlossary();
+}
+
+function closeGlossary() {
+  if (el('glossary-sheet').hidden) return false;
+  el('glossary-sheet').hidden = true;
+  glossaryState = null;
+  el('glossary-list').innerHTML = '';
+  return true;
+}
+
+function paintGlossary() {
+  const g = glossaryState;
+  if (!g) return;
+  const list = el('glossary-list');
+  list.innerHTML = '';
+  const needle = g.filter.trim().toLowerCase();
+  const shown = g.entries
+    .map((entry, at) => ({ entry, at }))
+    .filter(({ entry }) => !needle || `${entry.source} ${entry.target} ${entry.note}`.toLowerCase().includes(needle));
+  if (!g.entries.length) {
+    list.innerHTML = '<p class="glossary-empty">No names yet. Add them one by one, let the AI model find them in the book, or import a glossary — Glossarion’s JSON, CSV and text glossaries all read.</p>';
+    return;
+  }
+  for (const { entry, at } of shown) {
+    const row = document.createElement('div');
+    row.className = `glossary-row${g.fresh.has(entry) ? ' fresh' : ''}`;
+    const field = (value, placeholder, key) => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = value;
+      input.placeholder = placeholder;
+      input.spellcheck = false;
+      input.oninput = () => { g.entries[at][key] = input.value; };
+      return input;
+    };
+    const choose = (options, value, key, label) => {
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', label);
+      for (const [code, name] of options) {
+        const option = document.createElement('option');
+        option.value = code;
+        option.textContent = name;
+        option.selected = code === value;
+        select.appendChild(option);
+      }
+      select.onchange = () => { g.entries[at][key] = select.value; };
+      return select;
+    };
+    const more = document.createElement('div');
+    more.className = 'glossary-more';
+    const remove = document.createElement('button');
+    remove.className = 'glossary-remove';
+    remove.textContent = '✕';
+    remove.setAttribute('aria-label', `Remove ${entry.source}`);
+    remove.onclick = () => { g.entries.splice(at, 1); paintGlossary(); };
+    more.append(
+      choose([['', 'Kind'], ...glossary.KINDS], entry.kind, 'kind', 'Kind'),
+      choose(glossary.GENDERS, entry.gender, 'gender', 'Said as'),
+      field(entry.note, 'Note', 'note'),
+      remove,
+    );
+    row.append(field(entry.source, 'As written', 'source'), field(entry.target, 'Translated as', 'target'), more);
+    list.appendChild(row);
+  }
+}
+
+/** The book's words, chapter by chapter, for the model to look through. */
+async function glossaryScan() {
+  const g = glossaryState;
+  if (!g) return;
+  if (translate.status().engine !== 'llm' || !translate.status().configured) {
+    return toast('Finding names needs an AI model as the translator — Settings → Translation', 6000);
+  }
+  const book = g.book;
+  const chapters = await store.byIndex('chapters', 'bookId', book.id);
+  const from = g.scanned[book.id] || { chapter: 0, offset: 0 };
+  const { pieces, next } = glossary.nextPieces(chapters, from, (c) => plainTextOf(chapterHtml(c)));
+  if (!pieces.length) {
+    return toast(from.chapter || from.offset
+      ? 'The whole book has been looked through. Its names are all in the list.'
+      : 'This book has no text to look for names in — add them by hand, or import a glossary.', 6000);
+  }
+  const settings = await store.settings();
+  const target = translate.TARGETS.find(([code]) => code === settings.translateTarget)?.[1] || 'English';
+  const button = el('glossary-find');
+  button.disabled = true;
+  let added = 0;
+  try {
+    for (let i = 0; i < pieces.length; i++) {
+      button.textContent = `Looking… ${i + 1} of ${pieces.length}`;
+      const known = g.entries.map((e) => e.source).filter(Boolean).slice(0, 300);
+      const user = (known.length ? `Already in the glossary: ${known.join(', ')}\n\n` : '') + `Text:\n${pieces[i]}`;
+      const found = glossary.parseFound(await translate.complete(glossary.findingInstructions(target), user));
+      if (!glossaryState) return;
+      const merged = glossary.merge(g.entries, found);
+      for (const entry of merged.entries.slice(g.entries.length)) g.fresh.add(entry);
+      added += merged.added;
+      g.entries = merged.entries;
+      paintGlossary();
+    }
+    g.scanned[book.id] = next;
+    toast(added
+      ? `${added} found — look them over, then Save. Tap again to look further into the book.`
+      : 'Nothing new found there. Tap again to look further into the book.', 6000);
+  } catch (error) {
+    toast(error.message || 'The model could not be asked', 6000, { kind: 'failed' });
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Find names with AI';
+  }
+}
+
+function wireGlossary() {
+  el('glossary-cancel').onclick = () => closeGlossary();
+  el('glossary-sheet').onclick = (e) => { if (e.target === el('glossary-sheet')) closeGlossary(); };
+  el('glossary-filter').oninput = () => {
+    if (!glossaryState) return;
+    glossaryState.filter = el('glossary-filter').value;
+    paintGlossary();
+  };
+  el('glossary-add').onclick = () => {
+    const g = glossaryState;
+    if (!g) return;
+    const entry = { source: '', target: '', kind: '', gender: '', note: '' };
+    g.entries.unshift(entry);
+    g.fresh.add(entry);
+    g.filter = '';
+    el('glossary-filter').value = '';
+    paintGlossary();
+    el('glossary-list').querySelector('input')?.focus();
+  };
+  el('glossary-find').onclick = () => glossaryScan();
+  el('glossary-import').onclick = () => {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    // Typed loosely on purpose: a .json or .csv through a chat app is often "some file".
+    picker.accept = 'application/json,text/csv,text/plain,text/markdown,application/octet-stream,.json,.csv,.txt,.md,.tsv';
+    picker.onchange = async () => {
+      const file = picker.files?.[0];
+      const g = glossaryState;
+      if (!file || !g) return;
+      try {
+        const text = await (typeof file.text === 'function' ? file.text() : new Response(file).text());
+        const merged = glossary.merge(g.entries, glossary.parseFile(text, file.name));
+        for (const entry of merged.entries.slice(g.entries.length)) g.fresh.add(entry);
+        g.entries = merged.entries;
+        paintGlossary();
+        toast(`${merged.added} added${merged.filled ? `, ${merged.filled} filled in` : ''} — Save to keep them. Names already here keep their translation.`, 6000);
+      } catch (error) {
+        toast(error.message || 'That glossary could not be read', 6000);
+      }
+    };
+    picker.click();
+  };
+  const exportAs = (kind) => async () => {
+    const g = glossaryState;
+    if (!g) return;
+    const name = `${epub.safeName(library.displayTitle(g.book))} glossary.${kind}`;
+    const text = kind === 'json' ? glossary.toJson(g.entries) : glossary.toCsv(g.entries);
+    await writeOut(new Blob([text], { type: kind === 'json' ? 'application/json' : 'text/csv' }), name,
+      kind === 'json' ? 'application/json' : 'text/csv', { share: true });
+  };
+  el('glossary-export').onclick = exportAs('json');
+  el('glossary-export-csv').onclick = exportAs('csv');
+  el('glossary-save').onclick = async () => {
+    const g = glossaryState;
+    if (!g) return;
+    const entries = glossary.clean(g.entries);
+    await glossary.save(g.book, entries, { scanned: g.scanned });
+    const missing = entries.filter((e) => !e.target).length;
+    closeGlossary();
+    toast(`${entries.length} kept${missing ? ` · ${missing} still to be given a translation` : ''}. New translations keep to them.`, 5000, { kind: 'done' });
+  };
+  el('ocr-glossary').onclick = () => {
+    const book = reader.state.book;
+    if (book) openGlossary(book);
+  };
+}
+
 /* ── selection ────────────────────────────────────────────────────────────
  * Long press starts it; tapping adds and removes. Actions are buttons in a
  * bar, because choosing the books and then describing what to do with them in
@@ -695,10 +898,10 @@ function wireSelection() {
         const all = (await store.all('books')).filter((b) => ids.has(b.bundleId));
         for (const book of all) { delete book.bundleId; await store.put('books', book); }
         clearSelection();
-        return toast(`${all.length} editions taken out of ${ids.size === 1 ? 'their bundle' : 'their bundles'}`);
+        return toast(`${all.length} editions separated — each is a book of its own again`);
       }
 
-      if (books.length < 2) return toast('Select two or more books to bundle them');
+      if (books.length < 2) return toast('Select two or more books to join as editions of one book');
 
       /* A bundle already among them keeps leading, so books added to it join
        * it -- rather than its leader being made a member of something else,
@@ -706,7 +909,7 @@ function wireSelection() {
       const leader = books.find((b) => b.bundleId === b.id) || books[0];
       for (const book of books) { book.bundleId = leader.id; await store.put('books', book); }
       clearSelection();
-      toast(`${books.length} editions bundled under “${leader.title}”`);
+      toast(`${books.length} books joined as editions of “${leader.title}”`);
     },
 
     vault: async () => {
@@ -754,7 +957,7 @@ function wireSelection() {
       resetConfirm();
       const n = selectedIds().size;
       el('confirm-text').textContent = selectedBundles.size && n > selection.size
-        ? `Delete ${n} books, every edition in the bundle${soleBundle() ? '' : 's'}? They go to the bin.`
+        ? `Delete ${n} books, every edition of ${soleBundle() ? 'it' : 'them'}? They go to the bin.`
         : `Delete ${n} book${n === 1 ? '' : 's'}? They go to the bin.`;
       el('confirm-bar').hidden = false;
     },
@@ -802,7 +1005,7 @@ async function openDetails(tapped, { editions = [] } = {}) {
 
   body.innerHTML = `
     <p class="eyebrow">${editions.length
-      ? `Bundle details · folder and status go to all ${editions.length + 1} editions`
+      ? `Book details · ${editions.length + 1} editions · folder and status go to all of them`
       : 'Book details'}</p>
     <div class="details-head">
       <span class="details-cover" id="details-cover">
@@ -830,6 +1033,22 @@ async function openDetails(tapped, { editions = [] } = {}) {
   }
   exports.appendChild(row);
   body.appendChild(exports);
+
+  // The names and terms its translations keep to (glossary.js).
+  const terms = document.createElement('div');
+  terms.className = 'field';
+  const kept = await glossary.load(book);
+  terms.innerHTML = `<label><span>Glossary</span><span class="muted">${escapeText(
+    kept.scope.series ? 'shared by the series' : 'names and terms kept the same')}</span></label>`;
+  const termsButton = document.createElement('button');
+  termsButton.className = 'chip';
+  termsButton.style.textTransform = 'none';
+  termsButton.textContent = kept.entries.length
+    ? `${kept.entries.length} name${kept.entries.length === 1 ? '' : 's'} and term${kept.entries.length === 1 ? '' : 's'}…`
+    : 'Add names and terms…';
+  termsButton.onclick = () => openGlossary(book);
+  terms.appendChild(termsButton);
+  body.appendChild(terms);
 
   const statusField = document.createElement('div');
   statusField.className = 'field';
@@ -6838,7 +7057,8 @@ async function runOcr() {
           if (!read) continue;
         }
       }
-      reads.push(read);
+      // Which picture it is, for showing it to a model that can see.
+      reads.push({ ...read, href });
     }
   } catch (error) {
     if (token !== ocrState.token) return;
@@ -7094,18 +7314,56 @@ function textHash(text) {
 
 /** A reading's bubbles in order, each with its translation. The others on
  *  the page go along as context, for names and tone. */
-async function translateRead(bookId, read, direction) {
+async function translateRead(bookId, read, direction, href = read.href) {
   // Muddle is not sent: translated, it is nonsense over the picture.
   const blocks = ocr.orderedBlocks(read.blocks, read.script, { direction })
     .filter((block) => ocr.readable(block.joined, read.script));
   if (!blocks.length) return [];
   const settings = await store.settings();
   const items = blocks.map((block) => ({ field: `ocr:${textHash(block.joined)}`, text: block.joined }));
+  // An AI model that can see is shown the page itself: who is speaking, to
+  // whom, with what face. Only what it has not translated already is sent.
+  let image = null;
+  if (href && translate.status().engine === 'llm' && settings.aiSeesPage !== false) {
+    image = await pagePicture(href).catch(() => null);
+  }
   // The whole page at once, so that each bubble is translated knowing the
   // others; each part comes back to its own bubble.
   const { results } = await translate.translatePage(bookId, items, settings.translateTarget,
-    ocr.languageOf(read.script));
+    ocr.languageOf(read.script), { image });
   return blocks.map((block, i) => ({ ...block, translation: results.get(items[i].field) || '' }));
+}
+
+/* The page, made small enough to send: a model reads a page at about this
+ * size, and a full-size scan would cost several times as much to send for
+ * nothing. Kept while the book is open, so a page is shrunk once. */
+const PAGE_SIDE = 1568;
+const pagePictures = new Map();
+
+async function pagePicture(href) {
+  // By book as well: two comics both have a "p1.jpg".
+  const key = `${reader.state.book?.id}:${href}`;
+  if (pagePictures.has(key)) return pagePictures.get(key);
+  const blob = reader.state.images.get(href);
+  if (!blob) return null;
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const scale = Math.min(1, PAGE_SIDE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const url = canvas.toDataURL('image/jpeg', 0.82);
+    const picture = { type: 'image/jpeg', data: url.slice(url.indexOf(',') + 1) };
+    if (pagePictures.size > 6) pagePictures.delete(pagePictures.keys().next().value);
+    pagePictures.set(key, picture);
+    return picture;
+  } finally {
+    bitmap.close?.();
+  }
 }
 
 const overlay = {
@@ -7186,7 +7444,7 @@ async function pumpOverlay() {
         const read = await readWhole(book.id, href, scripts);
         if (!read) continue;
         const direction = await directionFor(book, read);
-        const blocks = await translateRead(book.id, read, direction);
+        const blocks = await translateRead(book.id, read, direction, href);
         const areas = await bubbleAreas(href, read, blocks);
         overlay.done.set(href, { read, blocks, areas });
         if (overlay.on && overlay.book === book.id) drawOverlay(href);
@@ -8312,7 +8570,7 @@ async function offerPicture(blob, { title = '', href = '' } = {}) {
   };
 
   if (native) {
-    choice('Save to Pictures', 'Into Pictures/Grimoire, where the gallery finds it', { toPictures: true });
+    choice('Save to Pictures', 'Into Pictures/Quire, where the gallery finds it', { toPictures: true });
     choice('Save as…', 'Choose the folder and name', {});
     choice('Share', 'Send the picture to another app', { share: true });
   } else {
@@ -8326,7 +8584,7 @@ window.Grimoire = {
   /** Called from Java once a file has been written where it was asked for. */
   exportSaved(name) { toast(`Saved ${name}`, 5000); },
   /** Called from Java once a picture is in the phone's Pictures folder. */
-  pictureSaved(name) { toast(`Saved to Pictures/Grimoire — ${name}`, 5000, { kind: 'done' }); },
+  pictureSaved(name) { toast(`Saved to Pictures/Quire — ${name}`, 5000, { kind: 'done' }); },
 
   /* Something the shell needs to say, said once the page can say it.
    *
@@ -8361,6 +8619,7 @@ window.Grimoire = {
     if (closeCopyMenu()) return true;
     // Picking for Build is a mode, and back leaves it -- to the build.
     if (buildPicks) { endPicking(); show('workshop'); return true; }
+    if (closeGlossary()) return true;
     if (closeCoverPick()) return true;
     if (tags.closeTagPicker()) return true;
     if (!el('ocr-sheet').hidden) { closeOcr(); return true; }
@@ -8476,6 +8735,7 @@ async function boot() {
   wireDivide();
   wireRemove();
   wireRedact();
+  wireGlossary();
   wireBin();
   wireChapterPad();
   paintChapterPad(settings);

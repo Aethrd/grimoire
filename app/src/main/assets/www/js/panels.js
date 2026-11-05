@@ -57,6 +57,7 @@ export async function openAppearance(host) {
   const body = host || el('appearance-body');
   const settings = await store.settings();
   body.innerHTML = '';
+  body.appendChild(themesField(settings, () => openAppearance(body)));
 
   const modes = document.createElement('div');
   modes.className = 'field';
@@ -185,9 +186,8 @@ export async function openAppearance(host) {
   fonts.innerHTML = `
     <h2>Font import</h2>
     <p class="muted" style="font-size:12px;line-height:1.5;margin:0">
-      Archivo and Newsreader are bundled. Importing your own .ttf or .otf needs a
-      persistent copy in app storage, which means one more bridge method —
-      <code>GrimoireNative.saveFont()</code>. Until then this is bundled faces only.</p>`;
+      Archivo and Newsreader come with the app. Adding your own .ttf or .otf
+      fonts is not possible yet.</p>`;
   body.appendChild(fonts);
 
   function renderPalette(palette) {
@@ -214,6 +214,185 @@ export async function openAppearance(host) {
     field.appendChild(list);
     paletteHost.appendChild(field);
   }
+}
+
+/* ── themes ───────────────────────────────────────────────────────────
+ *
+ * The look, kept by name: saved from what is set now, switched between with
+ * a tap, written out to send, and brought in from a file -- a theme someone
+ * sent, a settings file this app exported, or simply a picture, which
+ * becomes the background with an accent taken from it.
+ */
+
+/** The file kinds a theme can come in. Wide on purpose: a .json passed
+ *  through a chat app or a download often arrives typed as plain text or as
+ *  "some file", and a picker asked only for JSON greys those out. */
+const THEME_ACCEPT = `application/json,text/plain,application/octet-stream,.json,${blobs.COVER_ACCEPT}`;
+
+const sameLook = (a, b) => theme.THEME_KEYS.every((key) => (a[key] ?? null) === (b[key] ?? null));
+
+function themesField(settings, redraw) {
+  const field = document.createElement('div');
+  field.className = 'field themes-field';
+  field.innerHTML = '<label><span>Themes</span><span class="muted">Saved looks, to switch between or send</span></label>';
+  const saved = Array.isArray(settings.savedThemes) ? settings.savedThemes : [];
+
+  const list = document.createElement('div');
+  list.className = 'chip-row wrap theme-list';
+  for (const kept of saved) {
+    const item = document.createElement('span');
+    item.className = 'theme-chip';
+    const use = document.createElement('button');
+    use.className = 'chip';
+    use.setAttribute('aria-pressed', String(sameLook(kept, settings)));
+    use.innerHTML = `<i class="theme-dot" style="background:${kept.accent || settings.accent}"></i>${escape(kept.name)}`;
+    use.title = `Use ${kept.name}`;
+    use.onclick = async () => {
+      const look = {};
+      for (const key of theme.THEME_KEYS) if (key in kept) look[key] = kept[key];
+      const next = await store.saveSettings(look);
+      theme.apply(next);
+      refreshTheme();
+      redraw();
+    };
+    const remove = document.createElement('button');
+    remove.className = 'theme-remove';
+    remove.setAttribute('aria-label', `Remove ${kept.name}`);
+    remove.textContent = '✕';
+    remove.onclick = async () => {
+      await store.saveSettings({ savedThemes: saved.filter((t) => t !== kept) });
+      toast(`${kept.name} removed — the look on screen stays as it is`, 4000);
+      redraw();
+    };
+    item.append(use, remove);
+    list.appendChild(item);
+  }
+  if (!saved.length) {
+    const none = document.createElement('p');
+    none.className = 'muted';
+    none.style.cssText = 'font-size:12px;margin:0';
+    none.textContent = 'None saved yet. Set the look below, then save it here — or import one.';
+    list.appendChild(none);
+  }
+  field.appendChild(list);
+
+  // Naming one, in place: no dialog to block the page.
+  const naming = document.createElement('div');
+  naming.className = 'theme-naming';
+  naming.hidden = true;
+  const name = document.createElement('input');
+  name.type = 'text';
+  name.placeholder = 'Name this theme';
+  name.maxLength = 60;
+  const keep = document.createElement('button');
+  keep.className = 'btn primary';
+  keep.textContent = 'Save';
+  keep.onclick = async () => {
+    const look = theme.themeOf(settings, name.value || `Theme ${saved.length + 1}`);
+    await store.saveSettings({ savedThemes: theme.withTheme(saved, look) });
+    toast(`Saved as ${look.name}`, 3000);
+    redraw();
+  };
+  name.onkeydown = (e) => { if (e.key === 'Enter') keep.onclick(); };
+  naming.append(name, keep);
+  field.appendChild(naming);
+
+  const actions = document.createElement('div');
+  actions.className = 'chip-row wrap theme-actions';
+  const action = (label, run) => {
+    const button = document.createElement('button');
+    button.className = 'chip';
+    button.textContent = label;
+    button.onclick = run;
+    actions.appendChild(button);
+    return button;
+  };
+  action('Save this look…', () => {
+    naming.hidden = false;
+    name.value = '';
+    name.focus();
+  });
+  action('Import a theme…', () => importTheme(settings, redraw));
+  action('Send this look', async () => {
+    const current = saved.find((t) => sameLook(t, settings));
+    const look = theme.themeOf(settings, current?.name || 'My theme');
+    const text = JSON.stringify(theme.themeFile(look), null, 2);
+    const file = `${look.name.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'theme'}.quire-theme.json`;
+    if (onWriteOut) {
+      await onWriteOut(new Blob([text], { type: 'application/json' }), file, 'application/json', { share: true });
+    } else {
+      offerDownload(file, 'application/json', text);
+    }
+  });
+  field.appendChild(actions);
+  return field;
+}
+
+/** A theme from a file: put with the saved ones, and the first put to use. */
+function importTheme(settings, redraw) {
+  const picker = document.createElement('input');
+  picker.type = 'file';
+  picker.accept = THEME_ACCEPT;
+  picker.onchange = async () => {
+    const file = picker.files?.[0];
+    if (!file) return;
+    const stem = String(file.name || 'Imported theme').replace(/(\.quire-theme)?\.[a-z0-9]+$/i, '').slice(0, 60);
+    try {
+      let found;
+      if (/^image\//.test(file.type || '') || /\.(png|jpe?g|webp|gif|avif|bmp|heic|heif)$/i.test(file.name || '')) {
+        found = [await themeFromPicture(file, stem, settings)];
+      } else {
+        let data;
+        try {
+          data = JSON.parse(await readText(file));
+        } catch {
+          throw new Error('That file is not a theme — a theme is a .json file, or a picture.');
+        }
+        found = theme.readThemes(data, stem);
+      }
+      let saved = Array.isArray(settings.savedThemes) ? settings.savedThemes : [];
+      for (const look of found) saved = theme.withTheme(saved, look);
+      const first = {};
+      for (const key of theme.THEME_KEYS) if (key in found[0]) first[key] = found[0][key];
+      const next = await store.saveSettings({ savedThemes: saved, ...first });
+      theme.apply(next);
+      refreshTheme();
+      toast(found.length === 1
+        ? `${found[0].name} imported and in use`
+        : `${found.length} themes imported · ${found[0].name} in use`, 5000);
+      redraw();
+    } catch (error) {
+      toast(error.message || 'That theme could not be read', 6000);
+    }
+  };
+  picker.click();
+}
+
+/** A picture as a theme: the background, veiled, with an accent from it. */
+async function themeFromPicture(file, name, settings) {
+  const usable = await blobs.normaliseCover(file);
+  const dataUrl = await new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(new Error('That picture could not be read.'));
+    fr.readAsDataURL(usable);
+  });
+  const img = await new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('That picture could not be read.'));
+    image.src = dataUrl;
+  });
+  const palette = theme.extractPalette(img) || [];
+  const accent = palette[0]?.[1] || settings.accent;
+  return {
+    name,
+    themeMode: settings.themeMode,
+    accent,
+    heatRamp: settings.heatRamp,
+    backgroundImage: dataUrl,
+    veil: settings.veil ?? 0.62,
+  };
 }
 
 function pickImage(onPicked) {
@@ -283,6 +462,100 @@ function offerDownload(name, mimeType, text) {
   return true;
 }
 
+/** A field for one key or several, one to a line, shown as dots. */
+function keysBox(placeholder) {
+  const box = document.createElement('textarea');
+  box.className = 'keys-box';
+  box.rows = 2;
+  box.placeholder = placeholder;
+  box.autocapitalize = 'off';
+  box.autocomplete = 'off';
+  box.spellcheck = false;
+  return box;
+}
+
+/* ── what the AI model is told ────────────────────────────────────────────
+ *
+ * The instructions an AI model translates by, in the reader's own words if
+ * they like: one set for each language translated from, as translators of
+ * Korean, Japanese and Chinese fiction each have their own habits -- keep
+ * the honorifics, leave the sound effects, romanise names this way. The
+ * reply's form is not theirs to change, and is added to whatever they write.
+ */
+async function instructionsCard() {
+  const settings = await store.settings();
+  const card = document.createElement('div');
+  card.className = 'card prompts-card';
+  card.innerHTML = `<h2>Instructions for the model</h2>
+    <p class="muted" style="font-size:12px;line-height:1.55;margin:0 0 10px">
+      What the model is told before every page, for each language it translates from.
+      {source} and {target} become the two languages. How it must reply is added for you.
+      Each book’s glossary of names is in its details.</p>`;
+  const tabs = document.createElement('div');
+  tabs.className = 'chip-row wrap';
+  const box = document.createElement('textarea');
+  box.className = 'prompt-box';
+  box.rows = 9;
+  box.spellcheck = false;
+  const note = document.createElement('p');
+  note.className = 'muted';
+  note.style.cssText = 'font-size:12px;margin:6px 0 0';
+  let profile = 'ko';
+  const saved = () => ({ ...(settings.translatePrompts || {}) });
+  const paint = () => {
+    for (const tab of tabs.children) tab.setAttribute('aria-pressed', String(tab.dataset.profile === profile));
+    const own = String(saved()[profile] || '').trim();
+    box.value = own || translate.DEFAULT_PROMPT;
+    note.textContent = own && own !== translate.DEFAULT_PROMPT ? 'Your own instructions.' : 'The usual instructions.';
+  };
+  for (const [code, label] of translate.PROMPT_PROFILES) {
+    const tab = document.createElement('button');
+    tab.className = 'chip';
+    tab.style.textTransform = 'none';
+    tab.dataset.profile = code;
+    tab.textContent = label;
+    tab.onclick = () => { profile = code; paint(); };
+    tabs.appendChild(tab);
+  }
+  const buttons = document.createElement('div');
+  buttons.style.cssText = 'display:flex;gap:8px;margin-top:8px';
+  const keep = document.createElement('button');
+  keep.className = 'btn primary';
+  keep.style.flex = '1';
+  keep.textContent = 'Save';
+  keep.onclick = async () => {
+    const all = saved();
+    const text = box.value.trim();
+    if (!text || text === translate.DEFAULT_PROMPT) delete all[profile];
+    else all[profile] = text;
+    settings.translatePrompts = all;
+    await store.saveSettings({ translatePrompts: all });
+    toast('Saved. New translations follow it; ones already made stay until translated again.', 5000);
+    paint();
+  };
+  const reset = document.createElement('button');
+  reset.className = 'btn ghost';
+  reset.style.flex = '1';
+  reset.textContent = 'Back to the usual';
+  reset.onclick = async () => {
+    const all = saved();
+    delete all[profile];
+    settings.translatePrompts = all;
+    await store.saveSettings({ translatePrompts: all });
+    paint();
+  };
+  buttons.append(keep, reset);
+
+  // The page itself, for a model that can see.
+  const sees = row('Show the model the page',
+    'When translating text in pictures, the page goes too — faces and who is speaking set the tone. A picture costs more than its words.',
+    toggle(settings.aiSeesPage !== false, (on) => store.saveSettings({ aiSeesPage: on })));
+  sees.style.marginTop = '12px';
+  card.append(tabs, box, note, buttons, sees);
+  paint();
+  return card;
+}
+
 /* ── SCR-10 Language ──────────────────────────────────────────────────── */
 
 export async function openLanguage(host) {
@@ -339,22 +612,18 @@ export async function openLanguage(host) {
   keyCard.innerHTML = `<h2>DeepL</h2>
     <p class="muted" style="font-size:12px;line-height:1.55;margin:0 0 12px">
       ${state.deeplConfigured
-        ? `Connected on the ${escape(state.plan === 'free' ? 'free' : 'Pro')} API plan, key ${escape(state.hint || '')}.`
+        ? `Connected on the ${escape(state.plan === 'free' ? 'free' : 'Pro')} API plan, key ${escape(state.hint || '')}`
+          + (state.deeplKeys > 1 ? ` and ${state.deeplKeys - 1} more, used in turn when one runs out.` : '.')
           + (state.engine === 'deepl' ? '' : ' Choose DeepL above to use it.')
         : `Paste a DeepL API key to use DeepL. A free API key covers 500,000
            characters a month. It is made at deepl.com → Account → API Keys &amp; Limits,
            on a DeepL API plan (a DeepL Translator account alone has none).`}
       <br><br>DeepL is only asked anything while it is the chosen translator.</p>`;
 
-  if (!state.deeplConfigured) {
+  const keyField = () => {
     const field = document.createElement('div');
     field.className = 'field';
-    const input = document.createElement('input');
-    input.type = 'password';
-    input.placeholder = 'DeepL API key';
-    input.autocapitalize = 'off';
-    input.autocomplete = 'off';
-    input.spellcheck = false;
+    const input = keysBox('DeepL API key — or several, one to a line, used in turn when one runs out');
     const save = document.createElement('button');
     save.className = 'btn primary block';
     save.style.marginTop = '10px';
@@ -379,7 +648,10 @@ export async function openLanguage(host) {
       }
     };
     field.append(input, save);
-    keyCard.appendChild(field);
+    return field;
+  };
+  if (!state.deeplConfigured) {
+    keyCard.appendChild(keyField());
   } else {
     const keys = document.createElement('div');
     keys.style.cssText = 'display:flex;gap:8px';
@@ -408,7 +680,12 @@ export async function openLanguage(host) {
       openLanguage(body);
       refreshTheme();
     };
-    keys.append(check, forget);
+    const change = document.createElement('button');
+    change.className = 'btn ghost';
+    change.style.flex = '1';
+    change.textContent = 'Change keys';
+    change.onclick = () => { change.disabled = true; keyCard.appendChild(keyField()); };
+    keys.append(check, change, forget);
     keyCard.appendChild(keys);
   }
   body.appendChild(keyCard);
@@ -423,7 +700,8 @@ export async function openLanguage(host) {
     card.innerHTML = `<h2>AI model</h2>
       <p class="muted" style="font-size:12px;line-height:1.55;margin:0 0 10px">
         ${state.llmConfigured
-          ? `Using ${escape(info[1])}, model ${escape(state.llmModel || info[2])}${state.llmHint ? `, key ${escape(state.llmHint)}` : ''}.`
+          ? `Using ${escape(info[1])}, model ${escape(state.llmModel || info[2])}${state.llmHint ? `, key ${escape(state.llmHint)}` : ''}`
+            + (state.llmKeys > 1 ? ` and ${state.llmKeys - 1} more, used in turn when one runs out.` : '.')
           : 'Choose the service, paste your API key, and connect. The key stays on this phone.'}
         Each page’s text goes to the service you choose, and is billed to your account there.</p>`;
     const providers = document.createElement('div');
@@ -445,12 +723,9 @@ export async function openLanguage(host) {
       base.value = code === 'custom' ? (state.llmBase || '') : '';
       base.autocapitalize = 'off';
       base.spellcheck = false;
-      const key = document.createElement('input');
-      key.type = 'password';
-      key.placeholder = code === 'custom' ? 'API key, if the service needs one' : 'API key';
-      key.autocomplete = 'off';
-      key.autocapitalize = 'off';
-      key.spellcheck = false;
+      const key = keysBox(code === 'custom'
+        ? 'API key, if the service needs one — several, one to a line'
+        : 'API key — or several, one to a line, used in turn when one runs out');
       key.style.marginTop = '8px';
       const modelBox = document.createElement('input');
       modelBox.type = 'text';
@@ -508,6 +783,7 @@ export async function openLanguage(host) {
     card.append(providers, fields);
     paint();
     body.appendChild(card);
+    body.appendChild(await instructionsCard());
   }
 
   // LibreTranslate: the server's address, and its key if it has one.
@@ -990,7 +1266,7 @@ export async function openStats({ onOpen = null } = {}) {
   exportBtn.textContent = 'Export the reading log as JSON';
   exportBtn.onclick = () => {
     // Everything is computed locally; the log belongs to the reader.
-    offerDownload('grimoire-reading-log.json', 'application/json',
+    offerDownload('quire-reading-log.json', 'application/json',
       JSON.stringify(log, null, 2));
   };
   body.appendChild(exportBtn);
@@ -1323,7 +1599,7 @@ export async function openVault(onVaultChange, host) {
         const backup = await store.exportBackup();
         await onWriteOut?.(
           new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }),
-          `grimoire-backup-${store.dayKey()}.json`, 'application/json', { share });
+          `quire-backup-${store.dayKey()}.json`, 'application/json', { share });
       } catch (error) {
         toast(error.message || 'That backup could not be written', 6000);
       } finally {
@@ -1341,7 +1617,8 @@ export async function openVault(onVaultChange, host) {
   restoreBtn.onclick = () => {
     const picker = document.createElement('input');
     picker.type = 'file';
-    picker.accept = 'application/json,.json';
+    // As wide as a theme's: a .json from a chat app is often typed as text.
+    picker.accept = 'application/json,text/plain,application/octet-stream,.json';
     picker.onchange = async () => {
       const file = picker.files?.[0];
       if (!file) return;
@@ -1366,7 +1643,7 @@ export async function openVault(onVaultChange, host) {
   note.className = 'muted';
   note.style.cssText = 'font-size:12px;line-height:1.55;margin:10px 0 0';
   note.textContent = 'Books are matched by file name and size, so import the '
-    + 'same files first and then restore: folders, statuses, bundles, bookmarks, '
+    + 'same files first and then restore: folders, statuses, editions, bookmarks, '
     + 'your place in each book and the reading log all come back.';
   data.appendChild(note);
 
@@ -1375,10 +1652,37 @@ export async function openVault(onVaultChange, host) {
   exportBtn.style.marginTop = '14px';
   exportBtn.textContent = 'Export settings only';
   exportBtn.onclick = async () => {
-    offerDownload('grimoire-settings.json', 'application/json',
+    offerDownload('quire-settings.json', 'application/json',
       JSON.stringify(await store.settings(), null, 2));
   };
   data.appendChild(exportBtn);
+
+  // And back in: only settings the app knows, each as the kind of value it
+  // takes. A settings file can carry nothing that reaches outside the app.
+  const importBtn = document.createElement('button');
+  importBtn.className = 'btn ghost block';
+  importBtn.style.marginTop = '8px';
+  importBtn.textContent = 'Import settings';
+  importBtn.onclick = () => {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = 'application/json,text/plain,application/octet-stream,.json';
+    picker.onchange = async () => {
+      const file = picker.files?.[0];
+      if (!file) return;
+      try {
+        const count = await store.importSettings(JSON.parse(await readText(file)));
+        const next = await store.settings();
+        theme.apply(next);
+        refreshTheme();
+        toast(`${count} setting${count === 1 ? '' : 's'} imported`, 4000);
+      } catch (error) {
+        toast(error instanceof SyntaxError ? 'That file is not a settings file.' : (error.message || 'Those settings could not be read'), 6000);
+      }
+    };
+    picker.click();
+  };
+  data.appendChild(importBtn);
   body.appendChild(data);
 }
 

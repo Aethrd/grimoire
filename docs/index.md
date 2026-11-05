@@ -1,4 +1,4 @@
-# Grimoire
+# Quire
 
 A quiet, offline ebook reader for Android.
 

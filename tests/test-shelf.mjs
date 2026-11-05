@@ -631,8 +631,8 @@ t('bundling is one action that reads both ways', () => {
   // Several books become a bundle; a bundle already selected comes apart.
   // Two buttons for something that is its own opposite is one too many.
   assert.match(app, /bundle: async/);
-  assert.match(app, /taken out of/);
-  assert.match(app, /Select two or more books to bundle/);
+  assert.match(app, /editions separated/);
+  assert.match(app, /Select two or more books to join as editions/);
   // Unbundling releases every member, not only what was selected: a bundle
   // shows as one tile, so selecting it selects the leader alone.
   assert.match(app, /ids\.has\(b\.bundleId\)/);
@@ -1085,10 +1085,11 @@ t('exports go through the native side, not an anchor', () => {
   assert.match(panels, /function offerDownload/);
   assert.match(panels, /window\.GrimoireNative\?\.saveText/);
   // Both buttons use it, and neither builds its own anchor any more.
-  // Its definition plus its callers: the reading log and the settings export.
-  // The full backup goes out through the file writer instead, which can save
-  // to a folder rather than only share.
-  assert.equal((panels.match(/offerDownload\(/g) || []).length, 3);
+  // Its definition plus its callers: the reading log, the settings export,
+  // and a theme sent where there is no file writer to send it with. The full
+  // backup goes out through the file writer instead, which can save to a
+  // folder rather than only share.
+  assert.equal((panels.match(/offerDownload\(/g) || []).length, 4);
   assert.ok(!/a\.download = 'grimoire/.test(panels), 'an export still relies on an anchor');
   // A failure says so rather than looking like a dead button again.
   assert.match(panels, /That file could not be saved/);
@@ -1259,6 +1260,25 @@ t('opening another book clears the last one off the reader before it shows', () 
   assert.match(open, /if \(reader\.state\.book\?\.id !== book\.id\) blankReader\(book\);/);
   const readerSrc = read('app/src/main/assets/www/js/reader.js');
   assert.match(readerSrc, /export function blank\(\) \{[\s\S]{0,200}releaseAllSections\(\);\s*flow\?\.replaceChildren\(\);/);
+});
+
+t('the app is called Quire, and books kept together are editions', () => {
+  assert.match(read('app/src/main/res/values/strings.xml'), /<string name="app_name">Quire<\/string>/);
+  const html = read('app/src/main/assets/www/index.html');
+  assert.match(html, /<title>Quire<\/title>/);
+  assert.match(html, /data-act="bundle">[\s\S]{0,200}<span>Editions<\/span>/);
+  const seen = [read('app/src/main/assets/www/js/app.js'), read('app/src/main/assets/www/js/library.js'),
+    read('app/src/main/assets/www/js/panels.js'), html].join('\n');
+  // None of what used to say bundle says it now: the word stays only in the
+  // code's own names.
+  for (const old of ['<span>Bundle</span>', 'Bundle details', 'to bundle them', 'bundled under',
+    'their bundle', "bundle: 'Bundle'", 'statuses, bundles,', 'every edition in the bundle']) {
+    assert.ok(!seen.includes(old), `still says: ${old}`);
+  }
+  assert.match(seen, /Book details · \$\{editions\.length \+ 1\} editions/);
+  assert.match(seen, /joined as editions of/);
+  // The package and the stored names stay, so the app updates in place.
+  assert.match(read('app/build.gradle.kts'), /applicationId = "com\.grimoire\.ereader"/);
 });
 
 console.log(`\n${pass} assertions passed`);

@@ -1225,7 +1225,7 @@ await t('the reel holds to save, and the viewer saves the picture rather than it
   assert.ok(!/shareText\?\.\(`Image from/.test(screens), 'the viewer still shares only words');
   const java = fs.readFileSync(new URL('../app/src/main/java/com/grimoire/ereader/GrimoireBridge.java', import.meta.url), 'utf8');
   assert.match(java, /public void saveToPictures\(String handle, String mimeType\)/);
-  assert.match(java, /Environment\.DIRECTORY_PICTURES \+ File\.separator \+ "Grimoire"/);
+  assert.match(java, /Environment\.DIRECTORY_PICTURES \+ File\.separator \+ "Quire"/);
   // No storage permission is asked for: before Android 10 it asks where.
   assert.match(java, /SDK_INT < Build\.VERSION_CODES\.Q\) \{\s*main\.offerExport\(file, mimeType, false\)/);
 });

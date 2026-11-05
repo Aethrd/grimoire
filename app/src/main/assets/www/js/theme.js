@@ -273,3 +273,76 @@ const matrixFor = ([r, g, b]) => [
   r, g, b, 0, 0,
   0, 0, 0, 1, 0,
 ].map((n) => Number(n.toFixed(4))).join(' ');
+
+/* ── themes, saved and shared ─────────────────────────────────────────────
+ *
+ * A theme is the look as a whole: light or dark, the accent, the reading-log
+ * colours, the background picture and how far it is veiled. Kept by name to
+ * switch between, and written out as a small file to send to someone -- or
+ * to bring back after a reinstall. The picture travels inside the file.
+ */
+
+export const THEME_KEYS = ['themeMode', 'accent', 'heatRamp', 'backgroundImage', 'veil'];
+/** What a theme file says it is, so that one can be told from any other JSON. */
+export const THEME_FORMAT = 'quire-theme';
+
+/** The look as it is now, as a theme called `name`. */
+export function themeOf(settings, name) {
+  const theme = { name: String(name || 'My theme').trim().slice(0, 60) || 'My theme' };
+  for (const key of THEME_KEYS) theme[key] = settings[key] ?? null;
+  return theme;
+}
+
+/** A file's worth of themes: one, or several. */
+export function themeFile(themes) {
+  return { format: THEME_FORMAT, version: 1, themes: [].concat(themes) };
+}
+
+const HEX = /^#[0-9a-f]{6}$/i;
+/* Only a picture carried in the file itself: a theme must never make the
+ * app reach out to the network for its background. */
+const PICTURE = /^data:image\/(png|jpe?g|webp|gif|avif|bmp);base64,[A-Za-z0-9+/=\s]+$/i;
+
+/**
+ * The themes in a file, checked: a theme file, a list of themes, one theme on
+ * its own, or a whole settings file exported from the app (its look is
+ * taken, nothing else). Anything that is not a valid value is left at what it
+ * is now rather than taken on trust.
+ *
+ * @returns [{ name, themeMode?, accent?, heatRamp?, backgroundImage?, veil? }]
+ * @throws when there is no theme in it at all
+ */
+export function readThemes(data, fallbackName = 'Imported theme') {
+  let list;
+  if (data && Array.isArray(data.themes)) list = data.themes;
+  else if (Array.isArray(data)) list = data;
+  else if (data && typeof data === 'object') list = [data];
+  else list = [];
+  const out = [];
+  list.forEach((raw, at) => {
+    if (!raw || typeof raw !== 'object') return;
+    const theme = {};
+    if (['light', 'dark', 'system'].includes(raw.themeMode)) theme.themeMode = raw.themeMode;
+    if (typeof raw.accent === 'string' && HEX.test(raw.accent.trim())) theme.accent = raw.accent.trim().toLowerCase();
+    if (raw.heatRamp === 'accent' || (typeof raw.heatRamp === 'string' && HEAT_RAMPS[raw.heatRamp])) theme.heatRamp = raw.heatRamp;
+    if (raw.backgroundImage === null) theme.backgroundImage = null;
+    else if (typeof raw.backgroundImage === 'string' && PICTURE.test(raw.backgroundImage)) {
+      theme.backgroundImage = raw.backgroundImage.replace(/\s+/g, '');
+    }
+    const veil = Number(raw.veil);
+    if (raw.veil != null && Number.isFinite(veil)) theme.veil = Math.max(0, Math.min(0.95, veil));
+    if (!THEME_KEYS.some((key) => key in theme)) return;
+    const name = typeof raw.name === 'string' && raw.name.trim()
+      ? raw.name.trim().slice(0, 60)
+      : list.length > 1 ? `${fallbackName} ${at + 1}` : fallbackName;
+    out.push({ name, ...theme });
+  });
+  if (!out.length) throw new Error('There is no theme in that file.');
+  return out;
+}
+
+/** The saved themes, with this one added -- or put in place of one of the same name. */
+export function withTheme(saved, theme) {
+  const list = (Array.isArray(saved) ? saved : []).filter((t) => t && t.name !== theme.name);
+  return [...list, theme];
+}

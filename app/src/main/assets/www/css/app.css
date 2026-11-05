@@ -2555,3 +2555,41 @@ body.in-book .import-progress .jobs-summary { display: block; }
 /* Held and dragged to pick a run of them: not a text selection, not a menu. */
 #remove-body .remove-row, #remove-body .remove-cell {
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+/* ── themes, saved ── */
+.themes-field .theme-list { margin-bottom: 8px; }
+.theme-chip { display: inline-flex; align-items: center; gap: 2px; }
+.theme-chip .chip { display: inline-flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; }
+.theme-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; border: 1px solid rgba(127, 127, 127, .5); }
+.theme-remove { min-width: 32px; min-height: 32px; border-radius: 50%; color: var(--muted); font-size: 12px; }
+.theme-remove:active { background: var(--surface); }
+.theme-naming { display: flex; gap: 8px; margin-bottom: 8px; }
+.theme-naming[hidden] { display: none; }
+.theme-naming input { flex: 1; min-width: 0; }
+.theme-actions .chip { text-transform: none; letter-spacing: 0; }
+
+/* ── keys and instructions ── */
+.keys-box { width: 100%; box-sizing: border-box; resize: vertical; min-height: 44px;
+  font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; -webkit-text-security: disc; }
+.keys-box:focus { -webkit-text-security: none; }
+.prompt-box { width: 100%; box-sizing: border-box; margin-top: 8px; resize: vertical; min-height: 160px;
+  padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--divider);
+  background: var(--surface); color: var(--text); font-family: inherit; font-size: 13px; line-height: 1.5; }
+
+/* ── glossary ── */
+#glossary-sheet { z-index: 44; }
+.glossary-sheet { display: flex; flex-direction: column; max-height: 88%; overflow: hidden; }
+.glossary-note { flex: none; margin: 0 0 8px; font-size: 12px; line-height: 1.5; }
+.glossary-tools { flex: none; margin-bottom: 8px; }
+.glossary-tools .chip { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.glossary-filter { flex: none; margin-bottom: 8px; }
+.glossary-list { flex: 1; min-height: 80px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.glossary-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px 0;
+  border-bottom: 1px solid var(--divider); }
+.glossary-row input, .glossary-row select { min-width: 0; font-size: 14px; }
+.glossary-row .glossary-more { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; }
+.glossary-row .glossary-more select { flex: none; }
+.glossary-row .glossary-more input { flex: 1; }
+.glossary-row .glossary-remove { flex: none; min-width: 36px; min-height: 36px; border-radius: 50%; color: var(--muted); }
+.glossary-row.fresh { background: var(--surface); }
+.glossary-empty { padding: 16px 0; font-size: 13px; color: var(--muted); line-height: 1.5; }

@@ -6,6 +6,9 @@ google.properties
 personal.keystore.properties
 *.jks
 *.keystore
+# Except the shared signing key every build uses, so each APK installs
+# over the last instead of needing an uninstall. See app/build.gradle.kts.
+!app/signing/grimoire.keystore
 .idea/
 .DS_Store
 build/
@@ -14,6 +17,9 @@ node_modules/
 tests/fixtures/*.epub
 tests/fixtures/*.cbz
 tests/fixtures/*.pdf
+tests/fixtures/*.cbr
+tests/fixtures/*.rar
+tests/fixtures/*.mobi
 
 # pdf.js is fetched by the vendorPdfJs Gradle task rather than committed:
 # 4.3MB of unmodified library code, 169 of them cmap files.

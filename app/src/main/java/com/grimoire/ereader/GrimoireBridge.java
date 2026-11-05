@@ -293,7 +293,7 @@ public class GrimoireBridge {
                 values.put(MediaStore.MediaColumns.DISPLAY_NAME, file.getName());
                 values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
                 values.put(MediaStore.MediaColumns.RELATIVE_PATH,
-                        Environment.DIRECTORY_PICTURES + File.separator + "Grimoire");
+                        Environment.DIRECTORY_PICTURES + File.separator + "Quire");
                 values.put(MediaStore.MediaColumns.IS_PENDING, 1);
                 uri = resolver.insert(
                         MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values);

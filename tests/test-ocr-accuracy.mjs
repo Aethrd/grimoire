@@ -174,7 +174,7 @@ await t('readings made before this version are read again, and answer keys survi
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /:ocrpic2:/);
   const translate = read('app/src/main/assets/www/js/translate.js');
-  assert.match(translate, /const isKey = \(row\) => row\.lang === 'key';/);
+  assert.match(translate, /const isKey = \(row\) => row\.lang === 'key' \|\| row\.lang === 'glossary';/);
   assert.match(translate, /filter\(\(row\) => !isKey\(row\)\)/);
 });
 

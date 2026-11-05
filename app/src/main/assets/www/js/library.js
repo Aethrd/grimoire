@@ -14,7 +14,7 @@ import * as mix from './mix.js';
 const el = (id) => document.getElementById(id);
 
 export const SORT_KEYS = {
-  bundle: 'Bundle',
+  bundle: 'Editions',
   folder: 'Folder',
   author: 'Author',
   added: 'Date added',
@@ -1000,7 +1000,7 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
       <span class="tile-bar"><span style="width:${Math.round((book.percent || 0) * 100)}%"></span></span>
       ${selecting ? '<span class="tile-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7"/></svg></span>' : ''}
       ${book.bundle
-        ? `<span class="tile-bundle"><img src="img/bundle.png" alt="">${book.bundle.length}</span>`
+        ? `<span class="tile-bundle" title="${book.bundle.length} editions"><img src="img/bundle.png" alt="Editions: ">${book.bundle.length}</span>`
         : ''}
     </span>
     <span class="tile-name${isTranslatedTitle(book) ? ' translated-text' : ''}">${escape(displayTitle(book))}</span>

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="color-scheme" content="dark light">
-<title>Grimoire</title>
+<title>Quire</title>
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
@@ -558,7 +558,7 @@
   </button>
   <button data-act="bundle">
     <svg viewBox="0 0 24 24"><path d="M4 8h13v12H4z"/><path d="M7 5h13v12"/></svg>
-    <span>Bundle</span>
+    <span>Editions</span>
   </button>
   <button data-act="merge">
     <svg viewBox="0 0 24 24"><path d="M7 4v6a4 4 0 004 4h6"/><path d="M17 4v6a4 4 0 01-4 4H7"/><path d="M15 11l2 3 2-3"/></svg>
@@ -616,6 +616,28 @@
   </div>
 </div>
 
+<!-- A book's glossary: its names and terms, and how each is translated.
+     Shared by a whole series. Typed, found by the AI model, or imported. -->
+<div class="sheet-scrim" id="glossary-sheet" hidden>
+  <div class="sheet glossary-sheet">
+    <p class="eyebrow" id="glossary-of">Glossary</p>
+    <p class="muted glossary-note" id="glossary-note"></p>
+    <div class="chip-row wrap glossary-tools">
+      <button class="chip" id="glossary-add">＋ Add</button>
+      <button class="chip" id="glossary-find">Find names with AI</button>
+      <button class="chip" id="glossary-import">Import…</button>
+      <button class="chip" id="glossary-export">Export JSON</button>
+      <button class="chip" id="glossary-export-csv">Export CSV</button>
+    </div>
+    <input type="search" class="glossary-filter" id="glossary-filter" placeholder="Search the glossary" autocomplete="off">
+    <div class="glossary-list" id="glossary-list"></div>
+    <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
+      <button class="btn ghost" id="glossary-cancel">Cancel</button>
+      <button class="btn primary" id="glossary-save">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Choosing tags: the ones on the shelf, the common ones, or a new one. -->
 <div class="sheet-scrim" id="tag-sheet" hidden>
   <div class="sheet tag-sheet">
@@ -669,6 +691,7 @@
            right (つ for っ, カ for 力): to see, and undo, every correction. -->
       <button class="chip" id="ocr-asread" aria-pressed="false" title="Show the text exactly as the recogniser read it, before corrections">As read</button>
       <button class="chip" id="ocr-check" aria-expanded="false" title="Measure how much of this picture is read right">Check accuracy</button>
+      <button class="chip" id="ocr-glossary" title="The names and terms translations of this book keep to">Glossary</button>
     </div>
     <textarea class="ocr-translation" id="ocr-translation" rows="5" readonly hidden></textarea>
     <!-- The accuracy check: the picture's text as it really is, typed or put

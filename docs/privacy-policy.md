@@ -1,8 +1,8 @@
-# Grimoire Privacy Policy
+# Quire Privacy Policy
 
 _Last updated: 5 September 2026_
 
-Grimoire collects nothing and sends nothing anywhere, with exactly one
+Quire collects nothing and sends nothing anywhere, with exactly one
 exception you have to switch on yourself: translation.
 
 The app declares one permission, `INTERNET`, and uses it for one thing:
@@ -68,7 +68,7 @@ only if you have given the app a key.
 ## Files you open
 
 When you open a book, Android grants read access to that one file through the
-Storage Access Framework. Grimoire reads it and does not modify it. It has no
+Storage Access Framework. Quire reads it and does not modify it. It has no
 access to the rest of your storage.
 
 ## System backup

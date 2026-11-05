@@ -19,6 +19,7 @@
 
 import * as store from './store.js';
 import { chapterHtml } from './parse.js';
+import { termsFor as glossaryTerms, relevant as glossaryRelevant } from './glossary.js';
 
 /* ── the promise bridge ───────────────────────────────────────────────── */
 
@@ -263,9 +264,10 @@ async function remember(bookId, field, lang, value) {
   });
 }
 
-/* Answer keys for the accuracy check (lang 'key') are kept in the same
- * place, but are the reader's own typing, not a cache: never cleared here. */
-const isKey = (row) => row.lang === 'key';
+/* Answer keys for the accuracy check (lang 'key') and glossaries (lang
+ * 'glossary') are kept in the same place, but are the reader's own work, not
+ * a cache: never cleared here. */
+const isKey = (row) => row.lang === 'key' || row.lang === 'glossary';
 
 /** Forget everything translated for one book, or for the whole library. */
 export async function clearCache(bookId = null) {
@@ -294,54 +296,174 @@ export async function cacheSize() {
  */
 const askedAgain = new Set();
 
-export async function translateBatch(bookId, items, lang, sourceLang = '', { context = '' } = {}) {
+/* ── what a translation is given besides the words ────────────────────────
+ *
+ * For an AI model and for DeepL: the book's glossary (glossary.js), the part
+ * of it that occurs in what is translated. For a model also: the reader's own
+ * instructions, by the language translated from, and the page as a picture.
+ * A translation made with other entries or instructions is kept apart from
+ * one made without, so changing a name in the glossary is a fresh translation
+ * of where that name occurs -- and nowhere else.
+ */
+
+/** The instruction profiles, by the language translated from. */
+export const PROMPT_PROFILES = [['ko', 'Korean'], ['ja', 'Japanese'], ['zh', 'Chinese'], ['other', 'Other languages']];
+
+/** What a model is told unless told otherwise (LlmTranslator.DEFAULT_INSTRUCTIONS). */
+export const DEFAULT_PROMPT = 'You translate for a reading app. The user sends a JSON array of strings: '
+  + 'consecutive parts of one page of a book or comic -- speech bubbles, captions or paragraphs, in reading '
+  + 'order. Translate each string from {source} into {target}. Read them together for context: keep names, '
+  + 'terms and tone consistent, and keep each translation in its own place even when a sentence runs on from '
+  + 'one part into the next. Translate faithfully and naturally, keeping the register as written -- casual '
+  + 'speech stays casual, sound effects become English-style sound effects.';
+
+export const profileOf = (source) => {
+  const base = String(source || '').split('-')[0].toLowerCase();
+  return ['ko', 'ja', 'zh'].includes(base) ? base : 'other';
+};
+
+/** The reader's own instructions for translating from this language; '' for the usual. */
+export function promptFor(settings, source) {
+  const text = String(settings?.translatePrompts?.[profileOf(source)] || '').trim();
+  return text && text !== DEFAULT_PROMPT ? text : '';
+}
+
+function hashOf(text) {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * Whether a translation came back as the original, or largely still in its
+ * script: a model that skipped a line, a bubble DeepL took for a name. Only
+ * for a source written in a script of its own -- Korean, Japanese, Chinese,
+ * Russian and the like -- translated into another; a French line left in
+ * French cannot be told from one translated into it by its letters.
+ */
+export function untranslated(text, out, target = '') {
+  const original = String(text || '');
+  const result = String(out ?? '');
+  if (!original.trim()) return false;
+  if (!result.trim()) return true;
+  const script = languageOfText(original);
+  const into = String(target || '').split('-')[0].toLowerCase();
+  if (!script || script === into) return false;
+  const pattern = SCRIPTS.find(([code]) => code === script)?.[1];
+  const letters = [...result].filter((c) => /\p{L}/u.test(c)).length;
+  if (!pattern || !letters) return false;
+  const left = (result.match(new RegExp(pattern.source, 'gu')) || []).length;
+  return left / letters > 0.2;
+}
+
+export async function translateBatch(bookId, items, lang, sourceLang = '',
+  { context = '', previous = '', image = null, glossary: given = null } = {}) {
   const results = new Map();
   const misses = [];
 
+  const engine = status().engine;
+  const rich = typeof window.GrimoireTranslate?.translateWith === 'function';
+  const takesGlossary = rich && (engine === 'llm' || engine === 'deepl');
+  const terms = takesGlossary ? (given || await glossaryTerms(bookId)) : [];
+  const instructions = rich && engine === 'llm' ? promptFor(await store.settings(), sourceLang) : '';
+  // Kept apart by the glossary entries and the instructions it was made with.
+  const keyed = (item) => {
+    const used = glossaryRelevant(terms, item.text);
+    if (!used.length && !instructions) return item.field;
+    return `${item.field}#${hashOf(JSON.stringify([used.map((e) => [e.source, e.target, e.gender]), instructions]))}`;
+  };
+
   const into = String(lang || '').split('-')[0].toLowerCase();
   for (const item of items) {
-    const hit = await cached(bookId, item.field, lang);
+    const field = keyed(item);
+    const hit = await cached(bookId, field, lang);
     // Kept untranslated -- a Korean title sent as English, from a book that
     // said it was, came back as it went -- is asked again, now the language
     // is told from the characters. Not when it is already in the language
     // wanted: that one is right as it is.
     // Once a session: one that comes back unchanged again is let be.
-    const again = `${bookId}:${item.field}:${lang}`;
+    const again = `${bookId}:${field}:${lang}`;
     const stuck = hit !== null && hit === item.text && !!languageOfText(item.text)
       && languageOfText(item.text) !== into && !askedAgain.has(again);
     if (stuck) askedAgain.add(again);
     if (hit !== null && !stuck) results.set(item.field, hit);
-    else if (item.text && item.text.trim()) misses.push(item);
+    else if (item.text && item.text.trim()) misses.push({ ...item, keyedField: field });
   }
 
   if (!misses.length) return { results, translated: 0, characters: 0 };
 
-  // ML Kit needs to be told the source language; it does not sniff. The
-  // book's own declared language is the answer nearly every time.
-  // Context -- the bubbles around the one being translated, say -- goes
-  // to DeepL to steer names and tone, and is not translated or charged.
-  // Builds without it are asked plainly.
-  const withContext = context && typeof window.GrimoireTranslate?.translateWithContext === 'function';
-  const response = await call(withContext ? 'translateWithContext' : 'translate', [
-    JSON.stringify(misses.map((m) => m.text)),
-    lang,
-    sourceLang || '',
-    ...(withContext ? [String(context).slice(0, 2000)] : []),
-  ], 120000);
-  const payload = parse(response);
-  if (!payload?.texts) {
-    // Not always DeepL: this is whichever engine is selected.
-    throw new Error('The translation engine returned something unreadable.');
+  const ask = async (list, { insist = false } = {}) => {
+    const texts = list.map((m) => m.text);
+    const around = String(context || '').slice(0, 2000);
+    const used = glossaryRelevant(terms, `${texts.join('\n')}\n${around}`);
+    const options = {
+      ...(around ? { context: around } : {}),
+      ...(previous ? { previous: String(previous).slice(-1500) } : {}),
+      ...(used.length ? { glossary: used.map(({ source, target, kind, gender, note }) => ({ source, target, kind, gender, note })) } : {}),
+      ...(instructions ? { instructions } : {}),
+      ...(image && engine === 'llm' ? { image } : {}),
+      ...(insist ? { insist: true } : {}),
+    };
+    // ML Kit needs to be told the source language; it does not sniff. The
+    // book's own declared language is the answer nearly every time. Context
+    // -- the bubbles around the one being translated, say -- goes to DeepL to
+    // steer names and tone, and is not translated or charged. Builds without
+    // the newer bridge methods are asked plainly.
+    let response;
+    if (rich && Object.keys(options).length) {
+      response = await call('translateWith', [JSON.stringify(texts), lang, sourceLang || '', JSON.stringify(options)], 180000);
+    } else {
+      const withContext = around && typeof window.GrimoireTranslate?.translateWithContext === 'function';
+      response = await call(withContext ? 'translateWithContext' : 'translate', [
+        JSON.stringify(texts), lang, sourceLang || '', ...(withContext ? [around] : []),
+      ], 120000);
+    }
+    const payload = parse(response);
+    if (!payload?.texts) {
+      // Not always DeepL: this is whichever engine is selected.
+      throw new Error('The translation engine returned something unreadable.');
+    }
+    return payload;
+  };
+
+  const payload = await ask(misses);
+  const out = misses.map((_, i) => payload.texts[i]);
+  let characters = payload.characters || 0;
+
+  /* Checked: a part left untranslated is asked for once more, on its own
+   * with the others as context, told plainly to translate it. Still left,
+   * it is shown as it came but not kept, so the next look asks again. */
+  const left = misses.map((m, i) => i).filter((i) => out[i] != null && untranslated(misses[i].text, out[i], lang));
+  if (left.length && rich && (engine === 'llm' || engine === 'deepl')) {
+    try {
+      const again = await ask(left.map((i) => misses[i]), { insist: true });
+      characters += again.characters || 0;
+      left.forEach((i, k) => {
+        const value = again.texts[k];
+        if (value != null && !untranslated(misses[i].text, value, lang)) out[i] = value;
+      });
+    } catch {
+      // The first answer stands.
+    }
   }
 
   for (let i = 0; i < misses.length; i++) {
-    const value = payload.texts[i];
+    const value = out[i];
     if (value == null) continue;
     results.set(misses[i].field, value);
-    await remember(bookId, misses[i].field, lang, value);
+    if (!untranslated(misses[i].text, value, lang)) await remember(bookId, misses[i].keyedField, lang, value);
   }
 
-  return { results, translated: misses.length, characters: payload.characters || 0 };
+  return { results, translated: misses.length, characters };
+}
+
+/** A question for the AI model set up, and its answer as text (finding a book's names). */
+export async function complete(system, user) {
+  if (typeof window.GrimoireTranslate?.complete !== 'function') {
+    throw new Error('This version of the app cannot ask the model that.');
+  }
+  const payload = parse(await call('complete', [system, user], 180000));
+  return String(payload?.text || '');
 }
 
 /**
@@ -356,9 +478,9 @@ export async function translateBatch(bookId, items, lang, sourceLang = '', { con
  *
  * @param items [{ field, text }], in reading order
  */
-export async function translatePage(bookId, items, lang, sourceLang = '') {
+export async function translatePage(bookId, items, lang, sourceLang = '', { image = null } = {}) {
   const context = items.map((item) => item.text).join('\n');
-  return translateBatch(bookId, items, lang, sourceLang, { context });
+  return translateBatch(bookId, items, lang, sourceLang, { context, image });
 }
 
 /** Chapter names for the index and the reader header. */
@@ -385,15 +507,23 @@ export async function translateChapterBody(bookId, chapter, lang, sourceLang) {
     .filter((node) => node.textContent.trim());
   if (!blocks.length) return { html: chapterHtml(chapter), translated: 0, characters: 0 };
 
+  /* Carried on from the chapter before: how its translation ended goes
+   * with this one, so a scene running over the chapter break keeps its
+   * voice, its names and who is speaking. */
+  const previous = chapter.index > 0 ? await cached(bookId, `tail:${chapter.index - 1}`, lang) : null;
   const { results, translated, characters } = await translateBatch(
     bookId,
     blocks.map((node, i) => ({ field: `body:${chapter.index}:${i}`, text: node.textContent.trim() })),
-    lang, sourceLang);
+    lang, sourceLang, { previous: previous || '' });
 
+  const done = [];
   blocks.forEach((node, i) => {
     const value = results.get(`body:${chapter.index}:${i}`);
-    if (value != null) node.textContent = value;
+    if (value != null) { node.textContent = value; done.push(value); }
   });
+  // And this one's ending kept, for the chapter after.
+  const tail = done.slice(-4).join('\n').slice(-1500);
+  if (tail.trim()) await remember(bookId, `tail:${chapter.index}`, lang, tail);
 
   return { html: holder.innerHTML, translated, characters };
 }

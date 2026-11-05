@@ -436,6 +436,60 @@ await t2('a title left untranslated when its language was wrong is asked again, 
   await store.del('translations', '77:name:EN-US');
 });
 
+console.log('themes');
+
+t('a theme is the look as a whole, written out and read back', () => {
+  const settings = { themeMode: 'dark', accent: '#b4b0d6', heatRamp: 'ink', backgroundImage: null, veil: 0.62, columns: 3 };
+  const look = theme.themeOf(settings, '  Night  ');
+  assert.deepEqual(look, { name: 'Night', themeMode: 'dark', accent: '#b4b0d6', heatRamp: 'ink', backgroundImage: null, veil: 0.62 });
+  const file = theme.themeFile(look);
+  assert.equal(file.format, 'quire-theme');
+  assert.deepEqual(theme.readThemes(JSON.parse(JSON.stringify(file))), [look]);
+});
+
+t('a theme file is checked: nothing unsafe or unknown is taken on trust', () => {
+  const [kept] = theme.readThemes({
+    name: 'Mixed', themeMode: 'sepia', accent: 'red; background:url(x)', heatRamp: 'nope',
+    backgroundImage: 'https://example.com/spy.png', veil: 7, columns: 9,
+  });
+  assert.deepEqual(kept, { name: 'Mixed', veil: 0.95 }, 'an unsafe value got through');
+  assert.throws(() => theme.readThemes({ hello: 'world' }), /no theme/);
+  assert.throws(() => theme.readThemes('just text'), /no theme/);
+  const picture = 'data:image/png;base64,iVBORw0KGgo=';
+  assert.equal(theme.readThemes({ backgroundImage: picture })[0].backgroundImage, picture);
+  assert.throws(() => theme.readThemes({ backgroundImage: 'data:text/html;base64,PHNjcmlwdD4=' }), /no theme/,
+    'a page dressed as a picture was taken');
+});
+
+t('a settings file, a list of themes, or one on its own: each is read', () => {
+  // A whole settings export: its look, and nothing else.
+  const [fromSettings] = theme.readThemes({ themeMode: 'light', accent: '#336699', translateTitles: true, columns: 4 }, 'quire-settings');
+  assert.deepEqual(fromSettings, { name: 'quire-settings', themeMode: 'light', accent: '#336699' });
+  const many = theme.readThemes([{ accent: '#111111' }, { accent: '#222222' }], 'Pack');
+  assert.deepEqual(many.map((t) => t.name), ['Pack 1', 'Pack 2']);
+  // Saved again under the same name, it takes the old one's place.
+  const saved = theme.withTheme([{ name: 'A', accent: '#000000' }, { name: 'B' }], { name: 'A', accent: '#ffffff' });
+  assert.deepEqual(saved.map((t) => [t.name, t.accent]), [['B', undefined], ['A', '#ffffff']]);
+});
+
+await t2('settings come back in from a file, only the ones the app knows, as the kind they are', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const before = await store.settings();
+  const count = await store.importSettings({
+    columns: 4, accent: '#123456', translateTitles: 'yes', hackerKey: 1,
+    backgroundImage: 'https://example.com/x.png', lastCrash: 'boom',
+  });
+  assert.equal(count, 2);
+  const after = await store.settings();
+  assert.equal(after.columns, 4);
+  assert.equal(after.accent, '#123456');
+  assert.equal(after.translateTitles, before.translateTitles, 'a setting of the wrong kind was taken');
+  assert.equal(after.hackerKey, undefined);
+  assert.equal(after.backgroundImage, before.backgroundImage, 'a picture from the web was taken');
+  await assert.rejects(store.importSettings({ nothing: 1 }), /no settings/);
+  await store.saveSettings({ columns: before.columns, accent: before.accent });
+});
+
 console.log('reading elsewhere');
 
 await (async () => {

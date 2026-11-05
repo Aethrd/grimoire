@@ -1,4 +1,6 @@
-# Grimoire
+# Quire
+
+*Formerly Grimoire. The repository, the package ID (`com.grimoire.ereader`) and the code's internal names keep the old name, so the app updates in place and nothing saved is lost.*
 
 An offline ebook reader for Android. Every feature, free, with no account and
 no network access.
@@ -277,6 +279,64 @@ doesn't say, or says wrong:
 
 Latin letters are left to the translator to identify. A title cached
 untranslated under the wrong language is asked for again, once.
+
+### Glossaries, instructions and keys
+
+These ideas come from [Glossarion](https://github.com/Shirochi-stack/Glossarion),
+written fresh for this app. No Glossarion code is used, so its AGPL licence
+does not apply here.
+
+- **Glossary.** Open it from a book's Details, or the Glossary chip in the
+  picture-text sheet.
+  - Each name or term has its translation, its kind and, for a character, he
+    or she. Korean, Japanese and Chinese leave pronouns out, so this tells the
+    translator which to use.
+  - A series shares one glossary.
+  - **Find names with AI** looks through the book a stretch at a time.
+  - **Import…** reads Glossarion's JSON, CSV and compact text glossaries, as
+    well as plain "original → translation" lists. **Export** writes them back
+    out.
+  - Every translation is given the entries that occur in what is being
+    translated. An AI model reads them; DeepL gets them as one of its own
+    glossaries. On-device translation can't take a glossary.
+  - Changing a name gives a fresh translation where that name occurs, and
+    nowhere else.
+- **Instructions for the model.** Settings → Translate, when an AI model is the
+  translator.
+  - There is one set of instructions for each language translated from:
+    Korean, Japanese, Chinese and the rest.
+  - The form of the reply is added for you, so the answer can always be put
+    back in place.
+- **The page as a picture.** An AI model translating text in pictures can be
+  shown the page as well, shrunk to 1568 pixels. The switch is in the same
+  card.
+- **Carrying on.** Each chapter is translated knowing how the translation of
+  the one before ended.
+- **Checked.** A part that comes back still largely in the original script is
+  asked for again, plainly. If it still isn't translated, it is shown but not
+  kept, so the next look tries again.
+- **Asked again, and several keys.**
+  - Busy or failing services (429, 5xx, timeouts) are tried three times, with
+    growing pauses.
+  - A key field can hold several keys, one to a line. When one is refused or
+    runs out of credit or quota, the next is used, and the app stays with the
+    one that works.
+
+### Themes
+
+Settings → Theme → Themes keeps looks by name. A look is light or dark, the
+accent, the reading-log colours, the background picture and its veil.
+- **Save this look…** names the current one.
+- Tap a saved theme to switch to it.
+- **Send this look** writes it out as a `.quire-theme.json` file, with the
+  picture inside.
+- **Import a theme…** takes such a file, a list of themes, a settings file
+  exported from the app, or just a picture. A picture becomes the background,
+  with an accent taken from it.
+
+Every value in an imported file is checked. A background is taken only when
+the picture is inside the file itself, never from a web address. Settings →
+Vault → Import settings brings back a settings export the same way.
 
 ### Books left unread
 

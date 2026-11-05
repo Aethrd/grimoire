@@ -107,15 +107,19 @@ public class TranslateBridge {
             String libreUrl = prefs.getString(KEY_LIBRE_URL, null);
 
             out.put("engine", engine);
-            out.put("deeplConfigured", key != null && !key.isEmpty());
-            out.put("plan", key == null ? null : (key.endsWith(FREE_SUFFIX) ? "free" : "pro"));
+            List<String> deeplKeys = keysIn(key);
+            String first = deeplKeys.isEmpty() ? null : deeplKeys.get(0);
+            out.put("deeplConfigured", first != null);
+            out.put("deeplKeys", deeplKeys.size());
+            out.put("plan", first == null ? null : (first.endsWith(FREE_SUFFIX) ? "free" : "pro"));
             // Enough to recognise which key is in use without exposing it.
-            out.put("hint", key == null || key.length() < 8 ? null
-                    : key.substring(0, 4) + "\u2026" + key.substring(key.length() - 3));
+            out.put("hint", first == null || first.length() < 8 ? null
+                    : first.substring(0, 4) + "\u2026" + first.substring(first.length() - 3));
             out.put("libreUrl", libreUrl);
 
             String provider = prefs.getString(KEY_LLM_PROVIDER, LlmTranslator.ANTHROPIC);
-            String llmKey = prefs.getString("llm_key_" + provider, null);
+            List<String> llmKeys = keysIn(prefs.getString("llm_key_" + provider, null));
+            String llmKey = llmKeys.isEmpty() ? null : llmKeys.get(0);
             String llmBase = prefs.getString(KEY_LLM_BASE, "");
             boolean llmReady = LlmTranslator.CUSTOM.equals(provider)
                     ? !llmBase.isEmpty() && prefs.getBoolean("llm_ready_custom", false)
@@ -124,6 +128,7 @@ public class TranslateBridge {
             out.put("llmModel", prefs.getString("llm_model_" + provider, LlmTranslator.defaultModel(provider)));
             out.put("llmBase", llmBase);
             out.put("llmConfigured", llmReady);
+            out.put("llmKeys", llmKeys.size());
             out.put("llmHint", llmKey == null || llmKey.length() < 10 ? null
                     : llmKey.substring(0, 6) + "\u2026" + llmKey.substring(llmKey.length() - 3));
 
@@ -176,15 +181,19 @@ public class TranslateBridge {
             return;
         }
         io.execute(() -> {
-            try {
-                // Verify before storing, so a typo is caught here rather than
-                // silently failing on the first chapter someone translates.
-                fetchUsage(trimmed);
-                prefs.edit().putString(KEY_AUTH, trimmed).apply();
-                succeed(requestId, status());
-            } catch (Exception e) {
-                fail(requestId, describe(e));
+            // Several keys, one to a line: each is checked before any is kept,
+            // so a typo is caught here rather than on the first chapter.
+            List<String> keys = keysIn(trimmed);
+            for (int i = 0; i < keys.size(); i++) {
+                try {
+                    fetchUsage(keys.get(i));
+                } catch (Exception e) {
+                    fail(requestId, (keys.size() > 1 ? "Key " + (i + 1) + ": " : "") + describe(e));
+                    return;
+                }
             }
+            prefs.edit().putString(KEY_AUTH, String.join("\n", keys)).putInt(KEY_AUTH + "_at", 0).apply();
+            succeed(requestId, status());
         });
     }
 
@@ -214,14 +223,28 @@ public class TranslateBridge {
             try {
                 LlmTranslator.Setup setup = new LlmTranslator.Setup(provider, cleanKey, model, cleanBase);
                 if (setup.model.isEmpty()) { fail(requestId, "Name the model to use"); return; }
-                List<String> probe = LlmTranslator.translate(setup,
-                        java.util.Collections.singletonList("こんにちは"), "EN-GB", "ja", null);
-                if (probe.isEmpty()) throw new IOException("The model gave no answer.");
+                // Each key tried with a word of translation: several, one to a line,
+                // are taken in turn when one runs out.
+                List<String> keys = keysIn(cleanKey);
+                if (keys.isEmpty()) keys.add("");
+                for (int i = 0; i < keys.size(); i++) {
+                    try {
+                        List<String> probe = LlmTranslator.translate(setup.withKey(keys.get(i)),
+                                java.util.Collections.singletonList("こんにちは"), "EN-GB", "ja", (String) null);
+                        if (probe.isEmpty()) throw new IOException("The model gave no answer.");
+                    } catch (Exception e) {
+                        fail(requestId, (keys.size() > 1 ? "Key " + (i + 1) + ": " : "") + describe(e));
+                        return;
+                    }
+                }
                 SharedPreferences.Editor edit = prefs.edit()
                         .putString(KEY_LLM_PROVIDER, provider)
                         .putString("llm_model_" + provider, setup.model)
                         .putString(KEY_ENGINE, ENGINE_LLM);
-                if (!cleanKey.isEmpty()) edit.putString("llm_key_" + provider, cleanKey);
+                if (!cleanKey.isEmpty()) {
+                    edit.putString("llm_key_" + provider, String.join("\n", keysIn(cleanKey)))
+                            .putInt("llm_key_" + provider + "_at", 0);
+                }
                 else edit.remove("llm_key_" + provider);
                 if (LlmTranslator.CUSTOM.equals(provider)) {
                     edit.putString(KEY_LLM_BASE, cleanBase).putBoolean("llm_ready_custom", true);
@@ -254,10 +277,12 @@ public class TranslateBridge {
     @JavascriptInterface
     public void usage(final String requestId) {
         io.execute(() -> {
-            String key = prefs.getString(KEY_AUTH, null);
-            if (key == null) { fail(requestId, "No DeepL key is set"); return; }
+            List<String> keys = keysIn(prefs.getString(KEY_AUTH, null));
+            if (keys.isEmpty()) { fail(requestId, "No DeepL key is set"); return; }
             try {
-                succeed(requestId, fetchUsage(key));
+                // The key in use now: the one a quota running out would move on from.
+                int at = Math.max(0, prefs.getInt(KEY_AUTH + "_at", 0)) % keys.size();
+                succeed(requestId, fetchUsage(keys.get(at)));
             } catch (Exception e) {
                 fail(requestId, describe(e));
             }
@@ -287,7 +312,45 @@ public class TranslateBridge {
     public void translateWithContext(final String requestId, final String textsJson,
                                      final String targetLang, final String sourceLang,
                                      final String context) {
-        run(requestId, textsJson, targetLang, sourceLang, context, null);
+        run(requestId, textsJson, targetLang, sourceLang, LlmTranslator.Options.context(context), null);
+    }
+
+    /**
+     * As translate, with everything else that helps (LlmTranslator.Options,
+     * as JSON): the context around the text; the book's glossary; how the
+     * part before ended; the reader's own instructions for a model; and the
+     * page as a picture, for a model that can see. DeepL takes the context,
+     * the glossary and what came before; a model takes all of it; on-device
+     * and LibreTranslate take none of it, and translate as before.
+     */
+    @JavascriptInterface
+    public void translateWith(final String requestId, final String textsJson,
+                              final String targetLang, final String sourceLang,
+                              final String optionsJson) {
+        run(requestId, textsJson, targetLang, sourceLang, LlmTranslator.Options.of(optionsJson), null);
+    }
+
+    /**
+     * A question for the language model set up, and its answer as text: how
+     * a book's names and terms are found for its glossary. Only a model can
+     * be asked; the other engines say so.
+     */
+    @JavascriptInterface
+    public void complete(final String requestId, final String system, final String user) {
+        io.execute(() -> {
+            try {
+                if (!ENGINE_LLM.equals(engine())) {
+                    fail(requestId, "Finding names needs an AI model as the translator — Settings → Translation.");
+                    return;
+                }
+                String answer = withLlmKeys((setup) -> LlmTranslator.complete(setup, system, user));
+                JSONObject result = new JSONObject();
+                result.put("text", answer);
+                succeed(requestId, result.toString());
+            } catch (Exception e) {
+                fail(requestId, describe(e));
+            }
+        });
     }
 
     /**
@@ -300,12 +363,12 @@ public class TranslateBridge {
     @JavascriptInterface
     public void translateTagged(final String requestId, final String textsJson,
                                 final String targetLang, final String sourceLang) {
-        run(requestId, textsJson, targetLang, sourceLang, null, "xml");
+        run(requestId, textsJson, targetLang, sourceLang, new LlmTranslator.Options(), "xml");
     }
 
     private void run(final String requestId, final String textsJson,
                      final String targetLang, final String sourceLang,
-                     final String context, final String tagHandling) {
+                     final LlmTranslator.Options options, final String tagHandling) {
         io.execute(() -> {
             try {
                 JSONArray texts = new JSONArray(textsJson);
@@ -317,9 +380,9 @@ public class TranslateBridge {
                 }
 
                 switch (engine()) {
-                    case ENGINE_DEEPL: translateWithDeepL(requestId, texts, targetLang, sourceLang, chars, context, tagHandling); break;
+                    case ENGINE_DEEPL: translateWithDeepL(requestId, texts, targetLang, sourceLang, chars, options, tagHandling); break;
                     case ENGINE_LIBRE: translateWithLibre(requestId, texts, targetLang, sourceLang, chars); break;
-                    case ENGINE_LLM: translateWithLlm(requestId, texts, targetLang, sourceLang, context, chars); break;
+                    case ENGINE_LLM: translateWithLlm(requestId, texts, targetLang, sourceLang, options, chars); break;
                     default: translateOnDevice(requestId, texts, targetLang, sourceLang, chars); break;
                 }
             } catch (Exception e) {
@@ -537,9 +600,8 @@ public class TranslateBridge {
             "LT", "LV", "NB", "NL", "PL", "PT", "RO", "RU", "SK", "SL", "SV", "TR", "UK", "ZH"));
 
     private void translateWithDeepL(String requestId, JSONArray texts, String targetLang, String sourceLang,
-                                    int chars, String context, String tagHandling) throws Exception {
-        String key = prefs.getString(KEY_AUTH, null);
-        if (key == null) {
+                                    int chars, LlmTranslator.Options options, String tagHandling) throws Exception {
+        if (keysIn(prefs.getString(KEY_AUTH, null)).isEmpty()) {
             fail(requestId, "No DeepL key is set. Add one, or switch to on-device translation.");
             return;
         }
@@ -550,7 +612,12 @@ public class TranslateBridge {
         // Keeps paragraph structure rather than reflowing it, which matters
         // when the result is put back into a chapter.
         body.put("preserve_formatting", true);
-        if (context != null && !context.trim().isEmpty()) body.put("context", context);
+        // What came before, and what is around: DeepL reads it for sense and
+        // charges nothing for it.
+        StringBuilder context = new StringBuilder();
+        if (options.previous != null && !options.previous.trim().isEmpty()) context.append(options.previous.trim()).append('\n');
+        if (options.context != null && !options.context.trim().isEmpty()) context.append(options.context.trim());
+        if (context.length() > 0) body.put("context", context.toString());
         if (tagHandling != null) body.put("tag_handling", tagHandling);
         // The model DeepL's own website translates with. Left unasked, the
         // API answers with the one made for speed, which is the difference
@@ -561,7 +628,18 @@ public class TranslateBridge {
         String from = sourceLang == null ? "" : base(sourceLang).toUpperCase(java.util.Locale.ROOT);
         if (DEEPL_SOURCES.contains(from)) body.put("source_lang", from);
 
-        String response = post(key, "/v2/translate", body.toString());
+        final String into = base(targetLang).toUpperCase(java.util.Locale.ROOT);
+        String response = withDeepLKeys((key) -> {
+            // The book's glossary, as a DeepL glossary: names rendered the
+            // same every time. It needs the source language said; one that
+            // cannot be made is no reason not to translate.
+            JSONObject request = new JSONObject(body.toString());
+            if (body.has("source_lang") && !options.glossary.isEmpty()) {
+                String glossary = deepLGlossary(key, from, into, options.glossary);
+                if (glossary != null) request.put("glossary_id", glossary);
+            }
+            return post(key, "/v2/translate", request.toString());
+        });
         JSONArray translations = new JSONObject(response).getJSONArray("translations");
 
         JSONArray out = new JSONArray();
@@ -583,18 +661,16 @@ public class TranslateBridge {
     /* ── a language model ─────────────────────────────────────────────── */
 
     private void translateWithLlm(String requestId, JSONArray texts, String targetLang, String sourceLang,
-                                  String context, int chars) throws Exception {
+                                  LlmTranslator.Options options, int chars) throws Exception {
         String provider = prefs.getString(KEY_LLM_PROVIDER, LlmTranslator.ANTHROPIC);
-        String key = prefs.getString("llm_key_" + provider, "");
-        LlmTranslator.Setup setup = new LlmTranslator.Setup(provider, key,
-                prefs.getString("llm_model_" + provider, ""), prefs.getString(KEY_LLM_BASE, ""));
-        if (!LlmTranslator.CUSTOM.equals(provider) && key.isEmpty()) {
+        if (!LlmTranslator.CUSTOM.equals(provider) && keysIn(prefs.getString("llm_key_" + provider, "")).isEmpty()) {
             fail(requestId, "No key is set for the model. Add one in Settings → Translation.");
             return;
         }
         List<String> in = new ArrayList<>();
         for (int i = 0; i < texts.length(); i++) in.add(texts.getString(i));
-        List<String> translated = LlmTranslator.translate(setup, in, targetLang, sourceLang, context);
+        List<String> translated = withLlmKeys((setup) ->
+                LlmTranslator.translate(setup, in, targetLang, sourceLang, options));
         JSONArray out = new JSONArray();
         for (String t : translated) out.put(t);
         JSONObject result = new JSONObject();
@@ -662,6 +738,139 @@ public class TranslateBridge {
         succeed(requestId, result.toString());
     }
 
+    /* ── several keys ─────────────────────────────────────────────────────
+     *
+     * A key field may hold several keys, one to a line. The one in use is
+     * remembered; when it is refused or runs out of quota or credit, the next
+     * is tried, and the next, and the one that worked is used from then on.
+     * Only when every key has failed does the translation fail -- with the
+     * last one's reason.
+     */
+
+    /** The keys in a stored or typed value: one to a line (or a comma, or a space between). */
+    static List<String> keysIn(String value) {
+        List<String> out = new ArrayList<>();
+        if (value == null) return out;
+        for (String part : value.split("[\\s,;]+")) {
+            String key = part.trim();
+            if (!key.isEmpty() && !out.contains(key)) out.add(key);
+        }
+        return out;
+    }
+
+    interface Keyed<T> {
+        T run(String key) throws Exception;
+    }
+
+    private <T> T withKeys(String pref, Keyed<T> work) throws Exception {
+        List<String> keys = keysIn(prefs.getString(pref, ""));
+        if (keys.isEmpty()) keys.add("");
+        int start = Math.max(0, prefs.getInt(pref + "_at", 0)) % keys.size();
+        Exception last = null;
+        for (int n = 0; n < keys.size(); n++) {
+            int at = (start + n) % keys.size();
+            try {
+                T result = work.run(keys.get(at));
+                if (at != start) prefs.edit().putInt(pref + "_at", at).apply();
+                return result;
+            } catch (LlmTranslator.HttpError e) {
+                if (!e.keySpent) throw e;
+                last = e;
+                if (keys.size() > 1) Log.w(TAG, "Key " + (at + 1) + " of " + keys.size() + " spent; trying the next");
+            }
+        }
+        if (keys.size() > 1 && last != null) {
+            throw new IOException("Every key has been refused or has run out. The last said: " + last.getMessage());
+        }
+        throw last;
+    }
+
+    private String withDeepLKeys(Keyed<String> work) throws Exception {
+        return withKeys(KEY_AUTH, work);
+    }
+
+    interface Modelled<T> {
+        T run(LlmTranslator.Setup setup) throws Exception;
+    }
+
+    private <T> T withLlmKeys(Modelled<T> work) throws Exception {
+        String provider = prefs.getString(KEY_LLM_PROVIDER, LlmTranslator.ANTHROPIC);
+        LlmTranslator.Setup setup = new LlmTranslator.Setup(provider, "",
+                prefs.getString("llm_model_" + provider, ""), prefs.getString(KEY_LLM_BASE, ""));
+        return withKeys("llm_key_" + provider, (key) -> work.run(setup.withKey(key)));
+    }
+
+    /* ── DeepL glossaries ─────────────────────────────────────────────────
+     *
+     * A book's glossary, made a DeepL glossary for its pair of languages and
+     * kept by what it holds: the same entries are the same glossary, used
+     * again; changed entries are a new one, and the oldest are deleted once
+     * there are more than a handful, so an account is not filled with them.
+     */
+    private static final String KEY_GLOSSARIES = "deepl_glossaries";
+    private static final int KEEP_GLOSSARIES = 12;
+
+    private String deepLGlossary(String key, String from, String into, List<LlmTranslator.Term> terms) {
+        StringBuilder tsv = new StringBuilder();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (LlmTranslator.Term term : terms) {
+            String source = term.source.replaceAll("[\\t\\r\\n]+", " ").trim();
+            String target = term.target.replaceAll("[\\t\\r\\n]+", " ").trim();
+            if (source.isEmpty() || target.isEmpty() || !seen.add(source)) continue;
+            tsv.append(source).append('\t').append(target).append('\n');
+        }
+        if (tsv.length() == 0) return null;
+        try {
+            String id = hashOf(hostFor(key) + key + "|" + from + "|" + into + "|" + tsv);
+            JSONObject kept = new JSONObject(prefs.getString(KEY_GLOSSARIES, "{}"));
+            JSONObject known = kept.optJSONObject(id);
+            if (known != null) return known.getString("id");
+
+            JSONObject body = new JSONObject();
+            body.put("name", "Quire " + from + "-" + into);
+            body.put("source_lang", from);
+            body.put("target_lang", into.toLowerCase(java.util.Locale.ROOT));
+            body.put("entries", tsv.toString());
+            body.put("entries_format", "tsv");
+            String made = new JSONObject(post(key, "/v2/glossaries", body.toString())).getString("glossary_id");
+            kept.put(id, new JSONObject().put("id", made).put("key", hashOf(key)).put("at", System.currentTimeMillis()));
+            // The oldest made with this key go, beyond a handful.
+            List<String> mine = new ArrayList<>();
+            for (java.util.Iterator<String> it = kept.keys(); it.hasNext();) {
+                String k = it.next();
+                if (hashOf(key).equals(kept.getJSONObject(k).optString("key"))) mine.add(k);
+            }
+            java.util.Collections.sort(mine, (a, b) -> Long.compare(
+                    kept.optJSONObject(a).optLong("at"), kept.optJSONObject(b).optLong("at")));
+            while (mine.size() > KEEP_GLOSSARIES) {
+                String old = mine.remove(0);
+                try {
+                    request(key, "DELETE", "/v2/glossaries/" + kept.getJSONObject(old).getString("id"), null);
+                } catch (Exception ignored) {
+                    // Gone already, or never there: forgotten either way.
+                }
+                kept.remove(old);
+            }
+            prefs.edit().putString(KEY_GLOSSARIES, kept.toString()).apply();
+            return made;
+        } catch (Exception e) {
+            Log.w(TAG, "No DeepL glossary for " + from + "-" + into + ": " + describe(e));
+            return null;
+        }
+    }
+
+    private static String hashOf(String text) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(text.getBytes(StandardCharsets.UTF_8));
+            StringBuilder out = new StringBuilder();
+            for (int i = 0; i < 12; i++) out.append(String.format("%02x", bytes[i]));
+            return out.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return Integer.toHexString(text.hashCode());
+        }
+    }
+
     /* ── HTTP ─────────────────────────────────────────────────────────── */
 
     /** Asked with GET, as DeepL documents it: an empty POST is a request
@@ -676,21 +885,25 @@ public class TranslateBridge {
     }
 
     private String post(String key, String path, String body) throws IOException {
+        return LlmTranslator.withRetries(() -> request(key, "POST", path, body));
+    }
+
+    private String request(String key, String method, String path, String body) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(hostFor(key) + path).openConnection();
         try {
-            connection.setRequestMethod("POST");
+            connection.setRequestMethod(method);
             connection.setConnectTimeout(TIMEOUT_MS);
             connection.setReadTimeout(TIMEOUT_MS);
             connection.setRequestProperty("Authorization", "DeepL-Auth-Key " + key);
             if (body != null) connection.setRequestProperty("Content-Type", "application/json");
-            connection.setRequestProperty("User-Agent", "Grimoire/" + BuildConfig.VERSION_NAME);
+            connection.setRequestProperty("User-Agent", "Quire/" + BuildConfig.VERSION_NAME);
 
             if (body != null) {
                 connection.setDoOutput(true);
                 try (OutputStream out = connection.getOutputStream()) {
                     out.write(body.getBytes(StandardCharsets.UTF_8));
                 }
-            } else {
+            } else if ("POST".equals(method)) {
                 // Nothing to send: a plain GET.
                 connection.setRequestMethod("GET");
             }
@@ -702,12 +915,13 @@ public class TranslateBridge {
             // words rather than as a status number.
             switch (code) {
                 case 401:
-                case 403: throw new IOException("DeepL rejected that key. Copy it again from Account → API Keys & Limits: "
-                        + "a DeepL API key, not a password, and a free one ends in :fx.");
-                case 429: throw new IOException("Too many requests. Wait a moment and try again.");
-                case 456: throw new IOException("This key has used its character quota for the period.");
-                case 400: throw new IOException("DeepL could not read that request: " + read(connection.getErrorStream()));
-                default: throw new IOException("DeepL returned HTTP " + code);
+                case 403: throw new LlmTranslator.HttpError(code, "DeepL rejected that key. Copy it again from "
+                        + "Account → API Keys & Limits: a DeepL API key, not a password, and a free one ends in :fx.", true);
+                case 429: throw new LlmTranslator.HttpError(code, "Too many requests. Wait a moment and try again.", false);
+                case 456: throw new LlmTranslator.HttpError(code, "This key has used its character quota for the period.", true);
+                case 400: throw new LlmTranslator.HttpError(code, "DeepL could not read that request: "
+                        + read(connection.getErrorStream()), false);
+                default: throw new LlmTranslator.HttpError(code, "DeepL returned HTTP " + code, false);
             }
         } finally {
             connection.disconnect();

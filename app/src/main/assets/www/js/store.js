@@ -197,6 +197,13 @@ export const DEFAULT_SETTINGS = {
   // A book being read and not read for this many days goes On hold by
   // itself, the one read last excepted (library.holdQuietBooks). 0 for never.
   autoHoldDays: 5,
+  // Looks saved by name, to switch between (theme.js, themesField in panels).
+  savedThemes: [],
+  // The reader's own instructions for an AI model, by the language translated
+  // from (ko, ja, zh, other); none is the usual (translate.DEFAULT_PROMPT).
+  translatePrompts: {},
+  // An AI model that can see is shown the page when translating its text.
+  aiSeesPage: true,
   turnBySwipe: true,
   turnBySideTap: true,
   tapZone: 0.18,                  // adjustable 12–40% in Settings, Behaviour
@@ -291,6 +298,32 @@ export const DEFAULT_SETTINGS = {
 };
 
 let cache = null;
+
+/**
+ * Settings from a file this app exported: each one the app knows, of the
+ * kind it takes (a number for a number, a list for a list), taken; anything
+ * else left as it is. A background picture is taken only when it is carried
+ * in the file itself.
+ *
+ * @returns how many were taken
+ */
+export async function importSettings(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('That file is not a settings file.');
+  const patch = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (!(key in DEFAULT_SETTINGS) || key === 'lastCrash') continue;
+    const wanted = DEFAULT_SETTINGS[key];
+    if (key === 'backgroundImage') {
+      if (value === null || (typeof value === 'string' && /^data:image\//i.test(value))) patch[key] = value;
+      continue;
+    }
+    const kind = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
+    if (wanted === null || wanted === undefined || kind(value) === kind(wanted)) patch[key] = value;
+  }
+  if (!Object.keys(patch).length) throw new Error('There are no settings of this app in that file.');
+  await saveSettings(patch);
+  return Object.keys(patch).length;
+}
 
 export async function settings() {
   if (cache) return cache;
@@ -617,6 +650,13 @@ export async function exportBackup() {
     marks: (await all('marks'))
       .map((m) => ({ ...m, fingerprint: byId.get(m.bookId)?.fingerprint }))
       .filter((m) => m.fingerprint),
+
+    /* Glossaries: typed by hand, or found at the cost of a model's time --
+     * like a chosen cover, they exist nowhere else. A series' glossary is
+     * the series'; a book's goes with the book it belongs to. */
+    glossaries: (await all('translations'))
+      .filter((row) => row.lang === 'glossary')
+      .map((row) => ({ key: row.key, value: row.value, fingerprint: byId.get(row.bookId)?.fingerprint || null })),
   };
 
   /* Carried on, not dropped: a restore still waiting for some of its books
@@ -821,7 +861,7 @@ export async function restorePending(book) {
  */
 export async function importBackup(data) {
   if (data?.format !== 'grimoire-backup') {
-    throw new Error('That is not a Grimoire backup file.');
+    throw new Error('That is not a backup file from this app.');
   }
   if (data.version > BACKUP_VERSION) {
     throw new Error('That backup was made by a newer version of the app.');
@@ -880,6 +920,19 @@ export async function importBackup(data) {
     }
   }
   await savePending(pending);
+
+  // Glossaries: a series' as it was; a book's under the book's id here.
+  for (const row of data.glossaries || []) {
+    if (typeof row?.key !== 'string' || typeof row.value !== 'string') continue;
+    const book = row.fingerprint ? byFingerprint.get(row.fingerprint) : null;
+    let key = row.key;
+    if (key.startsWith('glossary:book:')) {
+      if (!book) continue;
+      key = `glossary:book:${book.bundleId != null ? book.bundleId : book.id}`;
+    } else if (!key.startsWith('glossary:series:')) continue;
+    await put('translations', { key, bookId: book ? book.id : -1, field: 'glossary', lang: 'glossary', value: row.value, at: Date.now() });
+    report.glossaries = (report.glossaries || 0) + 1;
+  }
 
   // The log is keyed by book too, but a reading history is worth keeping even
   // for books no longer on the shelf.

@@ -328,7 +328,7 @@ await t('a book not back on the shelf is reported, not invented', async () => {
 
 await t('something that is not a backup is refused', async () => {
   const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
-  await assert.rejects(store.importBackup({ hello: true }), /not a Grimoire backup/);
+  await assert.rejects(store.importBackup({ hello: true }), /not a backup file from this app/);
   await assert.rejects(
     store.importBackup({ format: 'grimoire-backup', version: 99 }), /newer version/);
 });
