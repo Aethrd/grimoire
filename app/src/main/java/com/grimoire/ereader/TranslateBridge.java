@@ -74,6 +74,8 @@ public class TranslateBridge {
     static final String ENGINE_LLM = "llm";
     private static final String KEY_LLM_PROVIDER = "llm_provider";
     private static final String KEY_LLM_BASE = "llm_base";
+    /** The OpenRouter key came from signing in, not from being pasted. */
+    private static final String KEY_OPENROUTER_LINKED = "openrouter_linked";
 
     /** Free keys carry this suffix and must use a different host. */
     private static final String FREE_SUFFIX = ":fx";
@@ -129,6 +131,8 @@ public class TranslateBridge {
             out.put("llmBase", llmBase);
             out.put("llmConfigured", llmReady);
             out.put("llmKeys", llmKeys.size());
+            out.put("llmLinked", LlmTranslator.OPENROUTER.equals(provider) && llmKey != null
+                    && prefs.getBoolean(KEY_OPENROUTER_LINKED, false));
             out.put("llmHint", llmKey == null || llmKey.length() < 10 ? null
                     : llmKey.substring(0, 6) + "\u2026" + llmKey.substring(llmKey.length() - 3));
 
@@ -246,6 +250,10 @@ public class TranslateBridge {
                             .putInt("llm_key_" + provider + "_at", 0);
                 }
                 else edit.remove("llm_key_" + provider);
+                // A key pasted in place of the one from signing in.
+                if (LlmTranslator.OPENROUTER.equals(provider) && key != null && !key.trim().isEmpty()) {
+                    edit.remove(KEY_OPENROUTER_LINKED);
+                }
                 if (LlmTranslator.CUSTOM.equals(provider)) {
                     edit.putString(KEY_LLM_BASE, cleanBase).putBoolean("llm_ready_custom", true);
                 }
@@ -262,9 +270,111 @@ public class TranslateBridge {
     public void clearLlm(final String requestId, final String provider) {
         SharedPreferences.Editor edit = prefs.edit().remove("llm_key_" + provider);
         if (LlmTranslator.CUSTOM.equals(provider)) edit.remove("llm_ready_custom");
+        if (LlmTranslator.OPENROUTER.equals(provider)) edit.remove(KEY_OPENROUTER_LINKED);
         if (ENGINE_LLM.equals(engine())) edit.putString(KEY_ENGINE, ENGINE_ONDEVICE);
         edit.apply();
         succeed(requestId, status());
+    }
+
+    /* ── OpenRouter: signing in instead of pasting a key ──────────────── */
+
+    /** The sign-in under way, if any: only one at a time. */
+    private volatile OpenRouterLink linking;
+
+    /**
+     * Sign in to OpenRouter in the browser and come back with a key of the
+     * reader's own (OpenRouterLink), which is kept here like a pasted one and
+     * never handed to the page. Settles once the browser has come back and
+     * the key has been fetched, or when signing in is cancelled or given up.
+     */
+    @JavascriptInterface
+    public void connectOpenRouter(final String requestId) {
+        OpenRouterLink before = linking;
+        if (before != null) before.cancel();
+        final OpenRouterLink link;
+        try {
+            link = OpenRouterLink.open();
+        } catch (IOException e) {
+            fail(requestId, "Could not get ready to sign in: " + describe(e));
+            return;
+        }
+        linking = link;
+        // Its own thread: waiting up to ten minutes for the browser must not
+        // hold up translation, which runs on the io thread.
+        Thread wait = new Thread(() -> {
+            try {
+                String code = link.waitForCode(OpenRouterLink.WAIT_MS);
+                String key = OpenRouterLink.exchange(OpenRouterLink.KEYS, code, link.verifier);
+                String model = prefs.getString("llm_model_" + LlmTranslator.OPENROUTER, "");
+                if (model.isEmpty()) {
+                    try {
+                        model = OpenRouterLink.startingModel(
+                                OpenRouterLink.models(LlmTranslator.get(OpenRouterLink.MODELS)));
+                    } catch (Exception e) {
+                        model = LlmTranslator.defaultModel(LlmTranslator.OPENROUTER);
+                    }
+                }
+                prefs.edit()
+                        .putString("llm_key_" + LlmTranslator.OPENROUTER, key)
+                        .putInt("llm_key_" + LlmTranslator.OPENROUTER + "_at", 0)
+                        .putBoolean(KEY_OPENROUTER_LINKED, true)
+                        .putString("llm_model_" + LlmTranslator.OPENROUTER, model)
+                        .putString(KEY_LLM_PROVIDER, LlmTranslator.OPENROUTER)
+                        .putString(KEY_ENGINE, ENGINE_LLM)
+                        .apply();
+                bringToFront();
+                succeed(requestId, status());
+            } catch (Exception e) {
+                fail(requestId, describe(e));
+            } finally {
+                if (linking == link) linking = null;
+            }
+        }, "openrouter-sign-in");
+        wait.setDaemon(true);
+        wait.start();
+        // The browser, on OpenRouter's own page: the password is typed there,
+        // never into the app.
+        activity.runOnUiThread(() -> {
+            try {
+                activity.startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse(link.authUrl("Quire"))));
+            } catch (Exception e) {
+                link.cancel();
+                fail(requestId, "No browser to sign in with.");
+            }
+        });
+    }
+
+    /** Stop waiting for the browser. */
+    @JavascriptInterface
+    public void cancelOpenRouter() {
+        OpenRouterLink link = linking;
+        if (link != null) link.cancel();
+    }
+
+    /** OpenRouter's models: [{id, name, free, vision, context}]. Needs no key. */
+    @JavascriptInterface
+    public void openRouterModels(final String requestId) {
+        io.execute(() -> {
+            try {
+                succeed(requestId, OpenRouterLink.models(LlmTranslator.get(OpenRouterLink.MODELS)).toString());
+            } catch (Exception e) {
+                fail(requestId, describe(e));
+            }
+        });
+    }
+
+    /** Back from the browser. Android may not allow it from behind; the page's button does it then. */
+    private void bringToFront() {
+        activity.runOnUiThread(() -> {
+            try {
+                activity.startActivity(new android.content.Intent(activity, MainActivity.class)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                                | android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP));
+            } catch (Exception e) {
+                Log.w(TAG, "Could not come back to the front by itself", e);
+            }
+        });
     }
 
     @JavascriptInterface

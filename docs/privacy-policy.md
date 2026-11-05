@@ -46,24 +46,39 @@ over HTTPS. Which text depends on the switches you set:
 **LibreTranslate.** The same, but sent to whichever server you nominate — which
 may be one you run yourself.
 
+**An AI model.** The same text goes to the AI service you choose and give a
+key for: Anthropic (Claude), OpenAI (ChatGPT), Google (Gemini), OpenRouter, or
+another service at an address you enter. You can also choose to send the page
+picture and your glossary entries along with the text.
+
+**Signing in with OpenRouter.** Instead of pasting a key, you can sign in to
+OpenRouter. Your browser opens on openrouter.ai, and your password is typed
+there, never into Quire. OpenRouter then hands the browser back to Quire
+through a listener on the phone's own loopback address, which nothing on the
+network can reach. Quire trades the one-time code for an API key. That key is
+kept like a pasted one. Sign out in Language settings to forget it, and delete
+it at openrouter.ai/keys to cancel it.
+
 Your book files are never uploaded — only the words being translated, and only
 by the engines that leave the device at all. Every result is cached so nothing
 is sent twice.
 
-Your API key is stored in the app's private storage and is never shown to the
-page, logged, or sent anywhere except to DeepL as your authorisation. Remove it
+Your API keys are stored in the app's private storage and are never shown to
+the page, logged, or sent anywhere except to the service they belong to, as
+your authorisation. Remove it
 in Language settings and the app stops making requests immediately.
 
-What DeepL does with text you send them is covered by their privacy policy, not
-this one. If that matters to you, leave translation switched off — everything
+What DeepL, or the AI service you choose, does with text you send is covered
+by their privacy policy, not this one. If that matters to you, leave translation switched off — everything
 else in the app works without it.
 
 ## What is not here
 
-No account. No sign-in. No sync. No analytics. No crash reporting. No
+No Quire account, and no sign-in to Quire. (Signing in to OpenRouter, above, is
+optional, and only gives the app a translation key.) No sync. No analytics. No crash reporting. No
 advertising identifier. No advertisements. No in-app purchases. No third-party
-SDKs of any kind. DeepL is contacted only when you translate something, and
-only if you have given the app a key.
+SDKs of any kind. A translation service is contacted only when you translate
+something, and only if you have set it up.
 
 ## Files you open
 

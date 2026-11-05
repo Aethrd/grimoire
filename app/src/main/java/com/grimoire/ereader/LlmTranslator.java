@@ -44,6 +44,11 @@ final class LlmTranslator {
     static final String GEMINI = "gemini";
     /** Anything that answers OpenAI's chat format at an address you give. */
     static final String CUSTOM = "custom";
+    /** OpenRouter: one account for DeepSeek, Claude, GPT, Gemini and many
+     *  more, signed in to from the app rather than a key copied over
+     *  (TranslateBridge.connectOpenRouter). Its chat format is OpenAI's. */
+    static final String OPENROUTER = "openrouter";
+    static final String OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 
     /** The fast, inexpensive model of each, until another is named. */
     static String defaultModel(String provider) {
@@ -51,13 +56,15 @@ final class LlmTranslator {
             case ANTHROPIC: return "claude-haiku-5-5";
             case OPENAI: return "gpt-6-luna";
             case GEMINI: return "gemini-3.8-flash";
+            // Its own choice of model for each request, until one is picked.
+            case OPENROUTER: return "openrouter/auto";
             default: return "";
         }
     }
 
     static boolean known(String provider) {
         return ANTHROPIC.equals(provider) || OPENAI.equals(provider)
-                || GEMINI.equals(provider) || CUSTOM.equals(provider);
+                || GEMINI.equals(provider) || CUSTOM.equals(provider) || OPENROUTER.equals(provider);
     }
 
     private static final int CONNECT_MS = 20000;
@@ -377,7 +384,8 @@ final class LlmTranslator {
             }
             default: {
                 // OpenAI, and everything that speaks its chat format.
-                String base = OPENAI.equals(setup.provider) ? "https://api.openai.com/v1" : setup.base;
+                String base = OPENAI.equals(setup.provider) ? "https://api.openai.com/v1"
+                        : OPENROUTER.equals(setup.provider) ? OPENROUTER_BASE : setup.base;
                 if (base.isEmpty()) throw new IOException("No address is set for the model's service.");
                 JSONObject body = new JSONObject();
                 body.put("model", setup.model);
@@ -393,10 +401,16 @@ final class LlmTranslator {
                     messages.put(new JSONObject().put("role", "user").put("content", user));
                 }
                 body.put("messages", messages);
-                String answer = setup.key.isEmpty()
-                        ? post(base + "/chat/completions", body.toString())
-                        : post(base + "/chat/completions", body.toString(),
-                                "Authorization", "Bearer " + setup.key);
+                String answer;
+                if (OPENROUTER.equals(setup.provider)) {
+                    // Named, so the reader's OpenRouter activity says which app it was.
+                    answer = post(base + "/chat/completions", body.toString(),
+                            "Authorization", "Bearer " + setup.key, "X-Title", "Quire");
+                } else if (setup.key.isEmpty()) {
+                    answer = post(base + "/chat/completions", body.toString());
+                } else {
+                    answer = post(base + "/chat/completions", body.toString(), "Authorization", "Bearer " + setup.key);
+                }
                 JSONArray choices = new JSONObject(answer).optJSONArray("choices");
                 return choices == null || choices.length() == 0 ? ""
                         : choices.getJSONObject(0).getJSONObject("message").optString("content");
@@ -523,8 +537,24 @@ final class LlmTranslator {
     }
 
     /** POST, with headers given as name, value, name, value; tried again when it is worth it. */
-    private static String post(String address, String body, String... headers) throws IOException {
+    static String post(String address, String body, String... headers) throws IOException {
         return withRetries(() -> postOnce(address, body, headers));
+    }
+
+    /** GET, for lists a service publishes: OpenRouter's models. */
+    static String get(String address) throws IOException {
+        return withRetries(() -> {
+            HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
+            try {
+                connection.setConnectTimeout(CONNECT_MS);
+                connection.setReadTimeout(60000);
+                int code = connection.getResponseCode();
+                if (code >= 200 && code < 300) return read(connection.getInputStream());
+                throw new HttpError(code, "The service answered " + code + "." + said(read(connection.getErrorStream())), false);
+            } finally {
+                connection.disconnect();
+            }
+        });
     }
 
     private static String postOnce(String address, String body, String... headers) throws IOException {

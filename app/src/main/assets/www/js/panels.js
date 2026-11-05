@@ -462,6 +462,162 @@ function offerDownload(name, mimeType, text) {
   return true;
 }
 
+/* ── OpenRouter ───────────────────────────────────────────────────────────
+ *
+ * One account at openrouter.ai reaches most models -- DeepSeek, Claude, GPT,
+ * Gemini, Qwen, and some free ones -- and, unlike the others, it lets an app
+ * be given a key by signing in: the browser opens on openrouter.ai, the
+ * reader signs in there (or makes an account) and approves, and comes back
+ * with the key kept on the phone (OpenRouterLink.java). The password is only
+ * ever typed into openrouter.ai, and the page here never sees the key.
+ */
+function openRouterFields(state, pasteInstead, done) {
+  const box = document.createElement('div');
+  const note = (text) => {
+    const p = document.createElement('p');
+    p.className = 'muted';
+    p.style.cssText = 'font-size:12px;line-height:1.5;margin:6px 0';
+    p.textContent = text;
+    return p;
+  };
+  const button = (label, kind = 'ghost') => {
+    const b = document.createElement('button');
+    b.className = `btn ${kind} block`;
+    b.style.marginTop = '8px';
+    b.textContent = label;
+    return b;
+  };
+  const connected = state.llmConfigured && state.llmProvider === 'openrouter';
+
+  if (!connected) {
+    box.appendChild(note('Sign in at openrouter.ai — or make a free account there — and approve Quire. '
+      + 'Your browser opens for it and you come straight back: no key to copy. '
+      + 'Free models cost nothing; others use the credits on your OpenRouter account.'));
+    const go = button('Sign in with OpenRouter', 'primary');
+    const cancel = button('Cancel');
+    cancel.hidden = true;
+    const paste = button('Paste a key instead');
+    let waiting = false;
+    go.onclick = async () => {
+      if (waiting) return;
+      waiting = true;
+      go.disabled = true;
+      go.textContent = 'Waiting for the browser…';
+      cancel.hidden = false;
+      paste.hidden = true;
+      try {
+        await translate.connectOpenRouter();
+        toast('Signed in with OpenRouter', 3000, { kind: 'done' });
+        done();
+      } catch (error) {
+        waiting = false;
+        go.disabled = false;
+        go.textContent = 'Sign in with OpenRouter';
+        cancel.hidden = true;
+        paste.hidden = false;
+        toast(/cancelled/i.test(error.message) ? 'Signing in was cancelled' : error.message, 7000);
+      }
+    };
+    cancel.onclick = () => translate.cancelOpenRouter();
+    paste.onclick = pasteInstead;
+    box.append(go, cancel, paste);
+    return box;
+  }
+
+  box.appendChild(note(state.llmLinked
+    ? 'Signed in with OpenRouter. The key it gave is kept on this phone.'
+    : `Using your OpenRouter key${state.llmHint ? ` ${state.llmHint}` : ''}.`));
+  box.appendChild(modelPicker(state, done));
+  const out = button(state.llmLinked ? 'Sign out' : 'Disconnect');
+  out.onclick = async () => {
+    await translate.clearLlm('openrouter');
+    toast(state.llmLinked
+      ? 'Signed out. To cancel the key itself, delete “Quire” at openrouter.ai/keys.'
+      : 'Key removed. No further requests will be made.', 6000);
+    done();
+  };
+  box.appendChild(out);
+  return box;
+}
+
+/** OpenRouter's models to choose from: searchable, free ones first. */
+function modelPicker(state, done) {
+  const wrap = document.createElement('div');
+  wrap.className = 'or-models';
+  const current = document.createElement('button');
+  current.className = 'btn ghost block or-current';
+  current.style.marginTop = '8px';
+  current.innerHTML = `<span class="muted">Model</span> <b>${escape(state.llmModel || 'openrouter/auto')}</b> <span class="muted">— change</span>`;
+  wrap.appendChild(current);
+  current.onclick = async () => {
+    current.disabled = true;
+    let models;
+    try {
+      models = await translate.openRouterModels();
+    } catch (error) {
+      current.disabled = false;
+      return toast(error.message, 5000);
+    }
+    current.hidden = true;
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.placeholder = `Search ${models.length} models`;
+    search.autocapitalize = 'off';
+    search.spellcheck = false;
+    search.style.marginTop = '8px';
+    const freeOnly = document.createElement('button');
+    freeOnly.className = 'chip';
+    freeOnly.textContent = 'Free only';
+    freeOnly.setAttribute('aria-pressed', 'false');
+    const filters = document.createElement('div');
+    filters.className = 'chip-row';
+    filters.style.marginTop = '8px';
+    filters.appendChild(freeOnly);
+    const list = document.createElement('div');
+    list.className = 'or-list';
+    const SHOWN = 60;
+    const show = () => {
+      const found = translate.sortModels(models, search.value, freeOnly.getAttribute('aria-pressed') === 'true');
+      list.innerHTML = '';
+      for (const model of found.slice(0, SHOWN)) {
+        const row = document.createElement('button');
+        row.className = 'or-row';
+        row.setAttribute('aria-pressed', String(model.id === state.llmModel));
+        const tags = [model.free ? '<span class="or-tag free">Free</span>' : '',
+          model.vision ? '<span class="or-tag">Sees pictures</span>' : ''].join('');
+        row.innerHTML = `<span class="or-name">${escape(model.name || model.id)}</span>${tags}`
+          + `<span class="or-id">${escape(model.id)}</span>`;
+        row.onclick = async () => {
+          for (const other of list.children) other.disabled = true;
+          row.classList.add('busy');
+          try {
+            await translate.setLlm('openrouter', '', model.id, '');
+            toast(`Translating with ${model.name || model.id}`, 3000, { kind: 'done' });
+            done();
+          } catch (error) {
+            for (const other of list.children) other.disabled = false;
+            row.classList.remove('busy');
+            toast(error.message, 7000);
+          }
+        };
+        list.appendChild(row);
+      }
+      if (!found.length) list.appendChild(Object.assign(document.createElement('p'),
+        { className: 'muted', textContent: 'No model matches.' }));
+      else if (found.length > SHOWN) list.appendChild(Object.assign(document.createElement('p'),
+        { className: 'muted', textContent: `And ${found.length - SHOWN} more — search to narrow them down.` }));
+    };
+    search.oninput = show;
+    freeOnly.onclick = () => {
+      freeOnly.setAttribute('aria-pressed', String(freeOnly.getAttribute('aria-pressed') !== 'true'));
+      show();
+    };
+    wrap.append(search, filters, list);
+    show();
+  };
+  return wrap;
+}
+
 /** A field for one key or several, one to a line, shown as dots. */
 function keysBox(placeholder) {
   const box = document.createElement('textarea');
@@ -702,24 +858,33 @@ export async function openLanguage(host) {
         ${state.llmConfigured
           ? `Using ${escape(info[1])}, model ${escape(state.llmModel || info[2])}${state.llmHint ? `, key ${escape(state.llmHint)}` : ''}`
             + (state.llmKeys > 1 ? ` and ${state.llmKeys - 1} more, used in turn when one runs out.` : '.')
-          : 'Choose the service, paste your API key, and connect. The key stays on this phone.'}
+          : (chosen === 'openrouter' ? 'Sign in with OpenRouter, or choose another service and paste your API key.' : 'Choose the service, paste your API key, and connect.') + ' The key stays on this phone.'}
         Each page’s text goes to the service you choose, and is billed to your account there.</p>`;
     const providers = document.createElement('div');
     providers.className = 'chip-row wrap';
     let picked = chosen;
     const fields = document.createElement('div');
     fields.className = 'field';
+    let pasting = false;
     const paint = () => {
       const [code, , model, where] = translate.LLM_PROVIDERS.find(([c]) => c === picked);
       for (const chip of providers.children) chip.setAttribute('aria-pressed', String(chip.dataset.code === code));
       fields.innerHTML = '';
+      // OpenRouter: signing in rather than pasting, unless asked for.
+      if (code === 'openrouter' && !(pasting && !(state.llmConfigured && state.llmProvider === code))) {
+        fields.appendChild(openRouterFields(state, () => { pasting = true; paint(); }, () => {
+          openLanguage(body);
+          refreshTheme();
+        }));
+        return;
+      }
       const hint = document.createElement('p');
       hint.className = 'muted';
       hint.style.cssText = 'font-size:12px;line-height:1.5;margin:6px 0';
       hint.textContent = code === 'custom' ? where : `Key from ${where}.`;
       const base = document.createElement('input');
       base.type = 'url';
-      base.placeholder = 'https://openrouter.ai/api/v1';
+      base.placeholder = 'https://api.deepseek.com/v1';
       base.value = code === 'custom' ? (state.llmBase || '') : '';
       base.autocapitalize = 'off';
       base.spellcheck = false;
@@ -777,7 +942,7 @@ export async function openLanguage(host) {
       chip.style.textTransform = 'none';
       chip.dataset.code = code;
       chip.textContent = label;
-      chip.onclick = () => { picked = code; paint(); };
+      chip.onclick = () => { picked = code; pasting = false; paint(); };
       providers.appendChild(chip);
     }
     card.append(providers, fields);

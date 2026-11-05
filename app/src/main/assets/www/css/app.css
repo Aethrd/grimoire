@@ -222,7 +222,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .field > label { display: flex; justify-content: space-between; align-items: baseline;
                  font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .field input[type="range"] { width: 100%; accent-color: var(--accent); }
-.field input[type="text"], .field input[type="password"] {
+.field input[type="text"], .field input[type="password"], .field input[type="url"], .field input[type="search"] {
   width: 100%; padding: 11px 12px; border-radius: var(--radius-md);
   border: 1px solid var(--hairline); background: var(--surface);
   color: var(--text); font: 15px var(--font-ui); outline: none;
@@ -2575,6 +2575,28 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .prompt-box { width: 100%; box-sizing: border-box; margin-top: 8px; resize: vertical; min-height: 160px;
   padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--divider);
   background: var(--surface); color: var(--text); font-family: inherit; font-size: 13px; line-height: 1.5; }
+
+/* ── OpenRouter models ── */
+.or-current { text-transform: none; letter-spacing: 0; text-align: left; }
+.or-current b { font-weight: 600; word-break: break-all; }
+.or-models .chip-row { padding: 0; }
+.or-models .chip { text-transform: none; letter-spacing: 0; }
+.or-list { margin-top: 8px; max-height: 340px; overflow-y: auto; border: 1px solid var(--divider);
+  border-radius: var(--radius-md); }
+.or-list > p { margin: 10px 12px; font-size: 12px; }
+.or-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; width: 100%; padding: 10px 12px;
+  border: 0; border-bottom: 1px solid var(--divider); background: none; color: var(--text);
+  font: 14px/1.35 var(--font-ui); text-align: left; }
+.or-row:last-child { border-bottom: 0; }
+.or-row:active, .or-row.busy { background: var(--surface); }
+.or-row[aria-pressed="true"] .or-name { color: var(--accent); font-weight: 600; }
+.or-row:disabled { opacity: .55; }
+.or-name { flex: 1 1 auto; min-width: 0; }
+.or-id { flex: 1 0 100%; font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
+  word-break: break-all; }
+.or-tag { flex: none; font-size: 10px; line-height: 1; padding: 4px 7px; border-radius: var(--radius-pill);
+  border: 1px solid var(--divider); color: var(--muted); }
+.or-tag.free { border-color: var(--accent); color: var(--accent); }
 
 /* ── glossary ── */
 #glossary-sheet { z-index: 44; }

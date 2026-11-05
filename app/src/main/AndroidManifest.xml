@@ -88,6 +88,15 @@
                 <data android:mimeType="text/markdown" />
                 <data android:mimeType="text/html" />
             </intent-filter>
+            <!-- The "Back to Quire" button on the page the browser shows
+                 after signing in to OpenRouter (OpenRouterLink). It only
+                 brings the app to the front; nothing is read from it. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="quire" android:host="back" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />

@@ -229,12 +229,32 @@ export const LLM_PROVIDERS = [
   ['anthropic', 'Claude', 'claude-haiku-5-5', 'console.anthropic.com → API Keys'],
   ['openai', 'ChatGPT', 'gpt-6-luna', 'platform.openai.com → API keys'],
   ['gemini', 'Gemini', 'gemini-3.8-flash', 'aistudio.google.com → Get API key'],
-  ['custom', 'Other', '', 'Any service that speaks OpenAI’s chat format: OpenRouter, DeepSeek, or Ollama / LM Studio on your own computer'],
+  ['openrouter', 'OpenRouter', 'openrouter/auto', 'Sign in instead of copying a key — DeepSeek, Claude, GPT, Gemini, Qwen and free models with one account'],
+  ['custom', 'Other', '', 'Any service that speaks OpenAI’s chat format: DeepSeek, or Ollama / LM Studio on your own computer'],
 ];
 /** Tried with a word of translation before it is kept, then made the translator. */
 export const setLlm = (provider, key, model, base) =>
   call('setLlm', [provider, key || '', model || '', base || ''], 60000).then(parse);
 export const clearLlm = (provider) => call('clearLlm', [provider]).then(parse);
+
+/* OpenRouter: signing in at openrouter.ai, in the browser, gives the app a key
+ * of the reader's own (OpenRouterLink.java), kept natively like a pasted one.
+ * Settles when the browser comes back: up to ten minutes, so the wait here is
+ * a little longer than the native one. */
+export const connectOpenRouter = () => call('connectOpenRouter', [], 11 * 60 * 1000).then(parse);
+export function cancelOpenRouter() {
+  try { if (available()) window.GrimoireTranslate.cancelOpenRouter(); } catch { /* nothing to stop */ }
+}
+/** [{id, name, free, vision, context}], as OpenRouter lists them. */
+export const openRouterModels = () => call('openRouterModels', [], 30000).then(parse);
+/** Free first, then by name; a search matches the id or the name. */
+export function sortModels(models, query = '', freeOnly = false) {
+  const words = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+  return (Array.isArray(models) ? models : [])
+    .filter((m) => m && m.id && (!freeOnly || m.free))
+    .filter((m) => words.every((w) => `${m.id} ${m.name || ''}`.toLowerCase().includes(w)))
+    .sort((a, b) => (b.free - a.free) || String(a.name || a.id).localeCompare(String(b.name || b.id)));
+}
 export const clearKey = () => call('clearKey').then(parse);
 export const usage = () => call('usage').then(parse);
 

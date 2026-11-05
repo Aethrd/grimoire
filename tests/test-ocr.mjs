@@ -273,7 +273,7 @@ await t('a translation covers the bubble it is in, or the text where there is no
 await t("AI models translate too: Claude, ChatGPT, Gemini, or another, with the reader's key", async () => {
   const translate = await import(new URL('../app/src/main/assets/www/js/translate.js', import.meta.url).href);
   assert.ok(translate.ENGINES.some(([code]) => code === 'llm'));
-  assert.deepEqual(translate.LLM_PROVIDERS.map(([code]) => code), ['anthropic', 'openai', 'gemini', 'custom']);
+  assert.deepEqual(translate.LLM_PROVIDERS.map(([code]) => code), ['anthropic', 'openai', 'gemini', 'openrouter', 'custom']);
   const bridge = read('app/src/main/java/com/grimoire/ereader/TranslateBridge.java');
   assert.match(bridge, /public void setLlm\(/);
   assert.match(bridge, /case ENGINE_LLM: translateWithLlm\(/);

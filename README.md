@@ -321,6 +321,31 @@ does not apply here.
   - A key field can hold several keys, one to a line. When one is refused or
     runs out of credit or quota, the next is used, and the app stays with the
     one that works.
+- **Sign in with OpenRouter.** Settings → Translate → AI model → OpenRouter.
+  One OpenRouter account reaches DeepSeek, Claude, GPT, Gemini, Qwen and some
+  free models, and it can give the app a key without you copying one.
+  - **Sign in with OpenRouter** opens your browser on openrouter.ai. Sign in,
+    or make a free account, and approve Quire. You come back to the app
+    signed in. If Android keeps the browser in front, tap **Back to Quire**.
+  - Your password is only typed into openrouter.ai, never into the app. The
+    key it gives is kept on the phone like a pasted one, and the page never
+    sees it.
+  - It starts on a free DeepSeek model when one is offered. **Model — change**
+    lists every model, free ones first, with a search box and a Free only
+    filter. "Sees pictures" marks the ones that can be shown the page.
+  - Free models cost nothing but are rate-limited. Others are paid from your
+    OpenRouter credits.
+  - **Sign out** forgets the key. To cancel it for good, delete "Quire" at
+    openrouter.ai/keys.
+  - **Paste a key instead** is still there if you'd rather.
+  - How it works: OpenRouter's PKCE sign-in (OpenRouterLink.java). The browser
+    comes back to a small listener on the phone's own loopback address, which
+    is never reachable from the network. It takes only this sign-in's answer
+    and stops as soon as that arrives, after ten minutes, or on Cancel.
+  - Not offered: signing in to the DeepSeek, ChatGPT, Claude or Gemini
+    websites and translating through their chat pages. That goes against
+    their terms, can get an account banned, and breaks whenever the sites
+    change.
 
 ### Themes
 

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /* These assert the shape of the build, not its behaviour: no paywall, no ads,
- * no sign-in, no network. They exist because those are easy things to
+ * no account of the app's own, no network the reader did not ask for. They exist because those are easy things to
  * reintroduce by accident — a dependency, a stray import, one merged manifest
  * entry — and hard to notice once they are back. */
 
@@ -45,12 +45,35 @@ t('no advertising SDK or ad vocabulary', () => {
   assert.ok(!/rewarded|interstitial|admob/i.test(allJs));
 });
 
-console.log('no sign-in');
+console.log('no account');
 
 t('no account, credential or OAuth code', () => {
-  for (const word of ['GrimoireAccount', 'credential', 'oauth', 'signIn', 'googleid', 'accessToken']) {
+  for (const word of ['GrimoireAccount', 'credential', 'oauth', 'googleid', 'accessToken']) {
     assert.ok(!new RegExp(word, 'i').test(allJs), `"${word}" is back in the reader`);
   }
+  // The app has no account of its own to sign in to. (Words, not code, may
+  // mention signing in to OpenRouter: see below.)
+  assert.ok(!/\bsignIn\w*\s*\(|\bsignOut\w*\s*\(/.test(allJs), 'a sign-in function is back in the reader');
+});
+
+t('the one sign-in is optional, to a translation service, in the browser', () => {
+  /* Signing in to OpenRouter gives the app a translation key, like one
+   * pasted in. What has to hold: nothing needs it (on-device stays the
+   * default); the password is typed into openrouter.ai in the browser, never
+   * into the app; the answer comes back only to the phone's own loopback,
+   * only for this sign-in; and the key, like every other, stays native. */
+  const link = read('app/src/main/java/com/grimoire/ereader/OpenRouterLink.java');
+  assert.match(link, /static final String AUTH = "https:\/\/openrouter\.ai\/auth"/);
+  assert.match(link, /InetAddress\.getByName\("127\.0\.0\.1"\)/, 'the callback listens beyond the phone');
+  assert.ok(!/0\.0\.0\.0|new ServerSocket\(\s*0\s*\)/.test(link), 'the callback listens on every address');
+  assert.match(link, /code_challenge_method=S256/);
+  assert.match(link, /state\.equals\(query\.get\("state"\)\)/, 'an answer for another sign-in would be taken');
+  const bridge = read('app/src/main/java/com/grimoire/ereader/TranslateBridge.java');
+  const connect = bridge.slice(bridge.indexOf('public void connectOpenRouter('), bridge.indexOf('public void cancelOpenRouter('));
+  assert.match(connect, /Intent\.ACTION_VIEW/, 'signing in is not done in the browser');
+  assert.ok(!/succeed\(requestId, key|succeed\(requestId, "\{\\"key/.test(connect), 'the key is handed to the page');
+  assert.match(connect, /succeed\(requestId, status\(\)\)/);
+  assert.ok(!/WebView|loadUrl/.test(connect), 'the sign-in page is opened inside the app');
 });
 
 t('no auth libraries in the dependency graph', () => {

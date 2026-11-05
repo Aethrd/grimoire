@@ -735,6 +735,12 @@ public class MainActivity extends AppCompatActivity {
             Log.w(TAG, "A view intent arrived with no file on it: " + intent.getAction());
             return;
         }
+        // "Back to Quire" from the page shown after signing in to OpenRouter:
+        // being brought to the front was all it asked for.
+        if ("quire".equals(data.getScheme())) {
+            setIntent(new Intent(Intent.ACTION_MAIN));
+            return;
+        }
 
         /* No grant is taken here.
          *
