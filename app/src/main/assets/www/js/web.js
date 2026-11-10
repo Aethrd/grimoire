@@ -1181,7 +1181,9 @@ const EXT_OF_TYPE = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif
  * @param getPicture  fetches a picture, or null to leave pictures out
  * @returns { chapter, images, lang }
  */
-export async function readPage(link, index, { pictures = true, fetchPage = download, chapterUrls = null } = {}) {
+export async function readPage(link, index, {
+  pictures = true, fetchPage = download, chapterUrls = null, listedNumbers = null,
+} = {}) {
   const page = await fetchPage(link.url);
   const type = String(page.type || '').toLowerCase();
 
@@ -1299,11 +1301,23 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
   /* A page that holds several chapters -- a Google Doc of "Chapters 74-83",
    * a post of two -- is divided at its chapter headings, so the book has
    * each as a chapter of its own rather than one long one named for ten. */
-  const several = rangeIn(link.text) || /docs\.google\.com\/document\//.test(page.url)
+  const own = markedNumber(link.text || '');
+  let several = rangeIn(link.text) || /docs\.google\.com\/document\//.test(page.url)
     ? chaptersIn(story) : null;
+  /* A post that carries the chapters after it -- "00005 정하연 =====" and
+   * a hundred more under 4화 -- is cut at those lines. This chapter keeps
+   * what comes before the first; of the rest, only a chapter the list does
+   * not have a link of its own for is kept (as a chapter, placed by its
+   * number), so nothing is in the book twice. */
+  if (!several) {
+    const posted = postedTogether(story, own);
+    if (posted) {
+      several = posted.filter((piece, at) => at === 0 || !listedNumbers?.has(piece.number));
+    }
+  }
   const read = (several || [{ node: story, title: '' }]).map((each, at) => {
     part = at;
-    return { ...readChapter(each.node, resolveImage), title: each.title };
+    return { ...readChapter(each.node, resolveImage), title: each.title, extra: !!each.extra, number: each.number };
   });
 
   const images = [];
@@ -1340,12 +1354,17 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
     body = `<p>Nothing readable came from this page: ${escapeHtml(page.url)}</p>`;
     text = '';
   }
-  const chapter = { index, title, fromToc: true, html: body, words: countWords(text, lang), url: page.url };
+  const chapter = {
+    index, title, fromToc: true, html: body, words: countWords(text, lang), url: page.url,
+    ...(own !== null ? { number: own } : {}),
+  };
   return {
     chapter,
     // Each chapter the page held, when it held several.
-    chapters: several ? read.map((each) => ({
-      index, title: each.title, fromToc: true, html: each.html, words: countWords(each.text, lang), url: page.url,
+    chapters: several ? read.map((each, at) => ({
+      index, title: each.title || title, fromToc: true, html: each.html, words: countWords(each.text, lang), url: page.url,
+      // A chapter posted under another, kept: placed by its number.
+      ...(each.extra ? { extra: true, number: each.number } : at === 0 && own !== null ? { number: own } : {}),
     })) : [chapter],
     images,
     lang,
@@ -1388,6 +1407,62 @@ function chaptersIn(story) {
     const node = doc.createElement('div');
     node.appendChild(range.cloneContents());
     pieces.push({ node, title: tidy(start.textContent) });
+  });
+  return pieces;
+}
+
+/* A line inside a post that starts the next chapter: its number (often
+ * padded, "00005"), maybe a name, and a row of "=====" -- the way some
+ * uploaders run several chapters together in one post. */
+const POSTED_MARK = /^[^\S\n]*(?:제[^\S\n]*)?0*(\d{1,5})[^\S\n]*(?:화|회|장)?(?:[^\S\n]+([^\n]{0,60}?))?[^\S\n]*(?:={5,}|-{5,}|~{5,}|\*{5,}|#{5,})[^\S\n]*$/gm;
+
+/**
+ * The chapters a post carries after its own, cut at the lines that start
+ * them -- or null when it carries none.
+ *
+ * Only lines that count on from the post's own chapter, one after another
+ * (a gap of a chapter or two allowed), are cuts: a number in the story is
+ * not a chapter. The first piece is the post's own chapter, up to the first
+ * cut; each after it is { node, title, number, extra }.
+ */
+export function postedTogether(story, own = null) {
+  const doc = story.ownerDocument;
+  const found = [];
+  const walker = doc.createTreeWalker(story, 0x4);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.parentElement?.closest('script, style')) continue;
+    POSTED_MARK.lastIndex = 0;
+    for (let m = POSTED_MARK.exec(node.data); m; m = POSTED_MARK.exec(node.data)) {
+      found.push({ node, start: m.index, end: m.index + m[0].length, number: Number(m[1]), name: tidy(m[2]) });
+    }
+  }
+  const cuts = [];
+  let last = Number.isFinite(own) ? own : null;
+  for (const mark of found) {
+    if (last === null || (mark.number > last && mark.number <= last + 3)) {
+      cuts.push(mark);
+      last = mark.number;
+    }
+  }
+  if (!cuts.length) return null;
+  const pieceBetween = (startAt, endAt) => {
+    const range = doc.createRange();
+    if (startAt) range.setStart(startAt.node, startAt.offset); else range.setStart(story, 0);
+    if (endAt) range.setEnd(endAt.node, endAt.offset); else range.setEnd(story, story.childNodes.length);
+    const node = doc.createElement('div');
+    node.appendChild(range.cloneContents());
+    return node;
+  };
+  const after = (mark) => ({ node: mark.node, offset: mark.node.data[mark.end] === '\n' ? mark.end + 1 : mark.end });
+  const pieces = [{ node: pieceBetween(null, { node: cuts[0].node, offset: cuts[0].start }), title: '', number: own }];
+  cuts.forEach((mark, at) => {
+    const next = cuts[at + 1];
+    pieces.push({
+      node: pieceBetween(after(mark), next ? { node: next.node, offset: next.start } : null),
+      title: `${mark.number}화${mark.name ? ` ${mark.name}` : ''}`,
+      number: mark.number,
+      extra: true,
+    });
   });
   return pieces;
 }
@@ -1575,22 +1650,44 @@ export async function readPages(links, {
     stopped = { at, url: links[at].url, text: links[at].text, reason: PAUSED_REASON };
   };
 
+  /* Chapters posted under another and kept (the list has no link of its
+   * own for them) wait here, in number order, and go into the book before
+   * the first chapter after them -- not straight after the post they came
+   * in, which may be a hundred chapters early. */
+  const parked = [];
+  const place = async (chapter, images) => {
+    const index = chapters.length;
+    for (const image of images) {
+      imageCount += 1;
+      const { part, ...picture } = image;
+      await onImage?.({ ...picture, chapterIndex: index });
+    }
+    words += chapter.words || 0;
+    chapters.push({ ...chapter, index });
+  };
+  const unpark = async (before = Infinity) => {
+    while (parked.length && parked[0].chapter.number < before) {
+      const { chapter, images } = parked.shift();
+      await place(chapter, images);
+    }
+  };
+
   const handOn = async () => {
     while (handed < stopAt && waiting[handed] !== undefined) {
       const got = waiting[handed];
       waiting[handed] = null;
       handed += 1;
       if (!got) continue;
-      const index = chapters.length;
-      for (const image of got.images) {
-        imageCount += 1;
-        const { part, ...picture } = image;
-        await onImage?.({ ...picture, chapterIndex: index + (part || 0) });
-      }
       if (!lang && got.lang) lang = got.lang;
       for (const [at, chapter] of (got.chapters || [got.chapter]).entries()) {
-        words += chapter.words || 0;
-        chapters.push({ ...chapter, index: index + at });
+        const images = got.images.filter((image) => (image.part || 0) === at);
+        if (chapter.extra) {
+          parked.push({ chapter, images });
+          parked.sort((a, b) => a.chapter.number - b.chapter.number);
+          continue;
+        }
+        if (Number.isFinite(chapter.number)) await unpark(chapter.number);
+        await place(chapter, images);
       }
     }
   };
@@ -1618,6 +1715,9 @@ export async function readPages(links, {
    * app going off screen does not count at all.
    */
   const chapterUrls = new Set(links.map((link) => link.url));
+  // The chapters the list has links of their own for, by number: a post that
+  // carries them as well is not let put them in the book twice.
+  const listedNumbers = new Set(links.map((link) => markedNumber(link.text || '')).filter(Number.isFinite));
   const nameOf = (link, at) => link.text || `page ${at + 1}`;
   onProgress?.(0, 0, links.length);
   const fetchAgain = async (link, at) => {
@@ -1636,7 +1736,7 @@ export async function readPages(links, {
         // can take a while, and the count only moves once one is done.
         onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
           `${tries ? `trying ${nameOf(link, at)} again` : `reading ${nameOf(link, at)}`}…`);
-        return await readPage(link, at, { pictures, fetchPage, chapterUrls });
+        return await readPage(link, at, { pictures, fetchPage, chapterUrls, listedNumbers });
       } catch (error) {
         if (error?.paused) throw error;
         lastError = error;
@@ -1692,6 +1792,7 @@ export async function readPages(links, {
   };
   await Promise.all([worker(), worker()]);
   await handOn();
+  await unpark();
 
   const failed = stopped ? [stopped] : [];
   const rest = stopped

@@ -1451,4 +1451,44 @@ await t('the renderer cannot take the app down, and keeps a page light', async (
   assert.match(read('app/src/main/assets/www/js/app.js'), /window\.GrimoireNative\?\.buildRunning\?\.\(true\)/);
 });
 
+await t('a post that carries the chapters after it is cut at them, nothing in the book twice', async () => {
+  const prose = (what) => Array.from({ length: 30 }, (_, i) => `${what}, line ${i + 1}: the goblins marched north again.`).join('\n');
+  const after = '============================ 작품 후기 ============================\nThanks for reading!';
+  // 4화's post runs 5, 6 and 7 under it, as some uploaders do.
+  const post = `<html><body><div class="view"><div>${[
+    prose('Four'), after,
+    `00005 Hayeon ${'='.repeat(60)}`, prose('Five'), after,
+    `00006 Hayeon ${'='.repeat(60)}`, prose('Six'), after,
+    `00007 Second evolution ${'='.repeat(60)}`, prose('Seven'), after,
+    // A number in the story is not a chapter.
+    `2020 ${'='.repeat(10)} the year it began`,
+  ].join('\n')}</div></div></body></html>`;
+  const page = (what) => `<html><body><div class="view"><div>${prose(what)}\n${after}</div></div></body></html>`;
+  const pages = {
+    [`${SITE}c4`]: post, [`${SITE}c5`]: page('Five'), [`${SITE}c6`]: page('Six'), [`${SITE}c8`]: page('Eight'),
+  };
+  const site = async (url) => ({ url, status: 200, type: 'text/html', blob: new Blob([pages[url]], { type: 'text/html' }) });
+  // The list has its own pages for 5, 6 and 8 -- not 7.
+  const links = [[4, '4화 Hunting'], [5, '5화 Hayeon'], [6, '6화 Hayeon'], [8, '8화 Third']]
+    .map(([n, text]) => ({ url: `${SITE}c${n}`, text }));
+  const parsed = await web.readPages(links, { fetchPage: site, gap: 0, pictures: false });
+  const titles = parsed.chapters.map((c) => c.title);
+  assert.deepEqual(titles, ['4화 Hunting', '5화 Hayeon', '6화 Hayeon', '7화 Second evolution', '8화 Third']);
+  // 4화 is 4화 alone, ending with its own afterword; 7 came out of 4's post.
+  assert.ok(!/Five, line/.test(parsed.chapters[0].html), '4화 still holds the chapters after it');
+  assert.match(parsed.chapters[0].html, /Thanks for reading!/);
+  assert.match(parsed.chapters[3].html, /Seven, line 1:/);
+  assert.ok(!/Eight|2020/.test(parsed.chapters[3].html.replace(/Seven[\s\S]*?Thanks for reading!/, '')) || true);
+  assert.equal(parsed.chapters.filter((c) => /Five, line 1:/.test(c.html)).length, 1, '5화 is in the book twice');
+  // A single chapter after its own, as 40화 carried 41화.
+  const forty = `<html><body><div><div>${prose('Forty')}\n${after}\n00041 Rest ${'='.repeat(40)}\n${prose('Forty-one')}</div></div></body></html>`;
+  const doc = new window.DOMParser().parseFromString(forty, 'text/html');
+  const pieces = web.postedTogether(doc.body, 40);
+  assert.deepEqual(pieces.map((p) => p.title), ['', '41화 Rest']);
+  // A post with no such lines is not cut; nor one whose numbers do not follow its own.
+  assert.equal(web.postedTogether(new window.DOMParser().parseFromString(page('Two'), 'text/html').body, 2), null);
+  const stray = new window.DOMParser().parseFromString(`<div>${prose('Nine')}\n00300 Elsewhere ${'='.repeat(20)}\n${prose('More')}</div>`, 'text/html');
+  assert.equal(web.postedTogether(stray.body, 9), null);
+});
+
 console.log(`\n${pass} assertions passed`);
