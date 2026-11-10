@@ -75,7 +75,76 @@ export const available = () => typeof window.GrimoireWeb?.fetch === 'function';
  * @returns {{ url, status, type, blob }} -- url is where it ended up, after
  *   any redirects, which is what its own links are relative to.
  */
-export function download(url, { timeout = 90000 } = {}) {
+export async function download(url, options = {}) {
+  if (!canRender()) return fetchNative('fetch', url, options);
+  let host = '';
+  try { host = new URL(url).host; } catch { /* the fetch says what is wrong with it */ }
+  /* A site already found to build its pages in script is rendered from the
+   * start: asking it twice for every chapter would be twice the load. */
+  if (host && renderedHosts.has(host)) return fetchNative('render', url, options);
+  let page;
+  try {
+    page = await fetchNative('fetch', url, options);
+  } catch (error) {
+    // A bot check lets a browser through, and the renderer is one.
+    if (!BOT_CHECK.test(error.message)) throw error;
+    if (host) renderedHosts.add(host);
+    return fetchNative('render', url, options);
+  }
+  if (!looksLikeHtml(page)) return page;
+  const html = decodePage(await bytesOf(page.blob), page.type);
+  if (!scriptBuilt(html)) return page;
+  try {
+    const rendered = await fetchNative('render', page.url || url, options);
+    if (host) renderedHosts.add(host);
+    return rendered;
+  } catch {
+    return page; // what the site sent is still better than nothing
+  }
+}
+
+/* ── pages built by script ────────────────────────────────────────────
+ *
+ * Some sites send an empty frame and build the page in the browser: the
+ * contents page arrives as a title and a script, without one link, and a
+ * chapter without a line of the story. What the reader sees on such a site
+ * is only there once its script has run. So a page like that is asked for
+ * again from the renderer (WebBridge.render): an unseen browser in the app
+ * that opens the page as the phone's browser would, waits for it to settle,
+ * and hands back the page as it then stands.
+ */
+const renderedHosts = new Set();
+const BOT_CHECK = /bot check|only lets a browser/i;
+
+/** Whether this build of the app has the renderer. */
+export const canRender = () => typeof window.GrimoireWeb?.render === 'function';
+
+function looksLikeHtml(page) {
+  const type = String(page.type || '').toLowerCase();
+  return !type || type.includes('html') || type.includes('xml');
+}
+
+/* The frame a script fills: the roots the common page builders draw into. */
+const APP_ROOTS = '#__next, #__nuxt, #app, #root, #svelte, #___gatsby, app-root, [data-reactroot], [data-server-rendered]';
+
+/**
+ * Whether a page as sent is only a frame that its script fills: scripts, and
+ * next to nothing to read or follow. Nothing a reader would read is this
+ * empty -- a chapter is thousands of characters, a contents page dozens of
+ * links -- so asking the renderer for such a page loses nothing.
+ */
+export function scriptBuilt(html) {
+  if (!/<script\b/i.test(html)) return false;
+  const doc = parseHtml(html);
+  for (const node of doc.querySelectorAll('script, style, noscript, template')) node.remove();
+  const body = doc.body;
+  if (!body) return true;
+  const root = body.querySelector(APP_ROOTS);
+  if (root && tidy(root.textContent).length < 40 && root.querySelectorAll('a[href]').length < 3) return true;
+  return tidy(body.textContent).length < 400 && body.querySelectorAll('a[href]').length < 8;
+}
+
+function fetchNative(method, url, { timeout = 90000 } = {}) {
   return new Promise((resolve, reject) => {
     if (!available()) {
       reject(new Error('Downloading needs the app: this copy of the reader cannot reach the web.'));
@@ -119,7 +188,7 @@ export function download(url, { timeout = 90000 } = {}) {
       },
     });
     try {
-      window.GrimoireWeb.fetch(id, url);
+      window.GrimoireWeb[method](id, url);
     } catch (error) {
       pending.delete(id);
       clearInterval(timer);

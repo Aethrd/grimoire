@@ -257,9 +257,11 @@ await t('without the app, it says so rather than trying', async () => {
 await t('the native side fetches only web addresses, and only when asked', () => {
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /if \(!scheme\.equals\("http"\) && !scheme\.equals\("https"\)\)/);
-  // One way in: a call from the page with an address.
+  // Two ways in, both a call from the page with an address: fetched as
+  // sent, or rendered for a page its script builds.
   const entries = [...java.matchAll(/@JavascriptInterface\s+public \w+ (\w+)\(/g)].map((m) => m[1]);
-  assert.deepEqual(entries.sort(), ['fetch', 'release']);
+  assert.deepEqual(entries.sort(), ['fetch', 'release', 'render']);
+  assert.equal(java.match(/if \(!scheme\.equals\("http"\) && !scheme\.equals\("https"\)\)/g).length, 2);
   // And no cookies kept past the app being closed.
   assert.ok(!/SharedPreferences|getSharedPreferences/.test(java));
 });
@@ -970,6 +972,108 @@ await t('the delay varies within the range set: 500 give or take 200 is 300 to 7
   assert.equal(build.contents()[0].web.jitter, 200);
   assert.match(build.describe(build.contents()[0]), /500 ± 200 ms apart/);
   build.clear();
+});
+
+/* ── pages built by script ───────────────────────────────────────────── */
+
+/* What a site like marumaru109 sends: a title, a line, and the script that
+ * builds everything else. */
+const SHELL = `<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<title>웹소설 업데이트 | 마루마루</title><meta property="og:url" content="https://maru.example/novel/updates">
+<script type="module" src="/_app/immutable/entry/start.js"></script></head>
+<body><div id="svelte"><h1>웹소설 업데이트</h1><p>업데이트가 있는 웹소설 목록입니다.</p></div>
+<script>window.__data = {}</script></body></html>`;
+const BUILT = `<!doctype html><html><head><title>그린 스킨 | 마루마루</title></head><body>
+<header><a href="/">홈</a><a href="/novel/updates">업데이트</a><a href="/login">로그인</a></header>
+<h1>그린 스킨</h1><ul class="episodes">
+${Array.from({ length: 12 }, (_, i) => `<li><a href="/novel/green-skin/${i + 1}">그린 스킨 ${i + 1}화</a></li>`).join('\n')}
+</ul></body></html>`;
+
+await t('a page that is only a frame for its script is recognised', async () => {
+  assert.equal(web.scriptBuilt(SHELL), true);
+  assert.equal(web.scriptBuilt('<html><head><script src="/x.js"></script></head><body><div id="__next"></div></body></html>'), true);
+  assert.equal(web.scriptBuilt(contents), false);              // a real contents page
+  assert.equal(web.scriptBuilt(chapterPage(3)), false);        // a real chapter
+  assert.equal(web.scriptBuilt('<html><body><p>Short.</p></body></html>'), false); // empty, but no script to fill it
+  assert.equal(web.scriptBuilt(`<html><head><script>ga()</script></head><body>${chapterPage(4)}</body></html>`), false);
+});
+
+/** A downloaded page's text (the test's Blob has no .text()). */
+const textOf = (blob) => new Promise((resolve, reject) => {
+  const reader = new window.FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = () => reject(reader.error);
+  reader.readAsText(blob);
+});
+
+/** A pretend native side: fetch answers with `sent`, render with `rendered`. */
+function fakeBridge({ sent = {}, rendered = {}, refuse = null } = {}) {
+  const calls = [];
+  const answer = (id, url, pages, how) => {
+    calls.push(`${how} ${url}`);
+    if (how === 'fetch' && refuse) { setTimeout(() => web.settleWeb(id, false, refuse), 0); return; }
+    const body = pages[url];
+    setTimeout(() => {
+      if (body === undefined) { web.settleWeb(id, false, 'that page does not exist (404)'); return; }
+      const path = `data:text/html;base64,${Buffer.from(body, 'utf8').toString('base64')}`;
+      web.settleWeb(id, true, JSON.stringify({ url, status: 200, type: 'text/html; charset=utf-8', path }));
+    }, 0);
+  };
+  window.GrimoireWeb = {
+    fetch: (id, url) => answer(id, url, sent, 'fetch'),
+    render: (id, url) => answer(id, url, rendered, 'render'),
+    release() {},
+  };
+  return calls;
+}
+
+await t('a script-built contents page is rendered, and its chapters listed', async () => {
+  const list = 'https://maru.example/novel/green-skin';
+  const calls = fakeBridge({ sent: { [list]: SHELL }, rendered: { [list]: BUILT } });
+  const found = await web.findLinks([list]);
+  assert.deepEqual(calls, [`fetch ${list}`, `render ${list}`]);
+  const chapters = found.links.filter((l) => /\/novel\/green-skin\/\d+$/.test(l.url));
+  assert.equal(chapters.length, 12);
+  assert.equal(chapters[0].text, '그린 스킨 1화');
+  // The site is remembered: its chapters go straight to the renderer.
+  const chapter = 'https://maru.example/novel/green-skin/1';
+  const again = fakeBridge({ rendered: { [chapter]: chapterPage(1) } });
+  const page = await web.download(chapter);
+  assert.equal(page.status, 200);
+  assert.deepEqual(again, [`render ${chapter}`]);
+  delete window.GrimoireWeb;
+});
+
+await t('a site behind a bot check is rendered instead', async () => {
+  const url = 'https://guarded.example/book/1';
+  const calls = fakeBridge({
+    refuse: 'the site only lets a browser in (it is behind a bot check), so it refused the download',
+    rendered: { [url]: chapterPage(1) },
+  });
+  const page = await web.download(url);
+  assert.match(await textOf(page.blob), /lit the lamp/);
+  assert.deepEqual(calls, [`fetch ${url}`, `render ${url}`]);
+  delete window.GrimoireWeb;
+});
+
+await t('an ordinary page is fetched once, and an app without the renderer only fetches', async () => {
+  const url = 'https://plain.example/ch/1';
+  const calls = fakeBridge({ sent: { [url]: chapterPage(1) }, rendered: { [url]: 'never' } });
+  await web.download(url);
+  assert.deepEqual(calls, [`fetch ${url}`]);
+  // An older build of the app has no render(): nothing changes for it.
+  const shellUrl = 'https://old.example/novel';
+  const older = fakeBridge({ sent: { [shellUrl]: SHELL } });
+  delete window.GrimoireWeb.render;
+  const page = await web.download(shellUrl);
+  assert.match(await textOf(page.blob), /마루마루/);
+  assert.deepEqual(older, [`fetch ${shellUrl}`]);
+  delete window.GrimoireWeb;
+  // The renderer is native and kept to http(s), its own browser, never the reader's.
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  assert.match(java, /public void render\(final String id, final String address\)/);
+  assert.match(java, /view = new WebView\(activity\)/);
+  assert.match(java, /only web addresses can be downloaded/);
 });
 
 console.log(`\n${pass} assertions passed`);

@@ -1,21 +1,34 @@
 package com.grimoire.ereader;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.graphics.Bitmap;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
+import android.view.View;
+import android.view.ViewGroup;
+import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.CookieManager;
+import java.nio.charset.StandardCharsets;
 import java.net.CookiePolicy;
 import java.net.HttpCookie;
 import java.net.HttpURLConnection;
@@ -24,8 +37,10 @@ import java.net.URL;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Pages fetched from the web, for the bulk downloader.
@@ -62,7 +77,15 @@ public class WebBridge {
     private final WebView webView;
     /** Two at a time: quick enough, and gentle on a site being read. */
     private final ExecutorService io = Executors.newFixedThreadPool(2);
-    private final CookieManager cookies = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
+    private final java.net.CookieManager cookies = new java.net.CookieManager(null, CookiePolicy.ACCEPT_ALL);
+    /** One page rendered at a time: each is a whole browser while it runs. */
+    private final ExecutorService renderer = Executors.newSingleThreadExecutor();
+    private final Handler main = new Handler(Looper.getMainLooper());
+    /** How long a page may take to settle, and how long it must stay still
+     *  to count as settled. */
+    private static final long RENDER_MAX_MS = 40000;
+    private static final long RENDER_QUIET_MS = 2100;
+    private static final long RENDER_POLL_MS = 700;
     private final String userAgent;
 
     WebBridge(Activity activity, WebView webView) {
@@ -81,6 +104,12 @@ public class WebBridge {
         File[] old = dir().listFiles();
         if (old != null) for (File file : old) //noinspection ResultOfMethodCallIgnored
             file.delete();
+        // Nor are the cookies the renderer was given last time (see render).
+        try {
+            CookieManager.getInstance().removeAllCookies(null);
+        } catch (Exception ignored) {
+            // No WebView provider yet: then there are none to clear either.
+        }
     }
 
     private File dir() {
@@ -111,6 +140,244 @@ public class WebBridge {
             }
         });
     }
+
+    /**
+     * Open one address in an unseen browser, let its scripts build the page,
+     * and answer as fetch does, with the page as it then stands.
+     *
+     * For sites that send an empty frame and build every page in script, and
+     * for those that let only a browser past their bot check: to either, a
+     * plain request gets nothing to read. The page is loaded in a WebView of
+     * its own, never the reader's, with scripts on and nothing of the app
+     * reachable from it. It counts as ready once its text and links have
+     * stopped changing for a moment (scrolled to the end on the way, for a
+     * list that loads more as it is scrolled), or at the latest after
+     * RENDER_MAX_MS, and the browser is thrown away after each page.
+     *
+     * Cookies: the reader keeps none, but a bot check is passed by a cookie,
+     * so while the app is open the renderer's are kept, and handed to plain
+     * fetches of the same site too. They are cleared when the app next opens.
+     */
+    @JavascriptInterface
+    public void render(final String id, final String address) {
+        renderer.execute(() -> {
+            String safeId = id == null ? "x" : id.replaceAll("[^A-Za-z0-9_-]", "_");
+            File target = new File(dir(), safeId);
+            try {
+                URL url = new URL(address);
+                String scheme = url.getProtocol().toLowerCase(Locale.ROOT);
+                if (!scheme.equals("http") && !scheme.equals("https")) {
+                    throw new IOException("only web addresses can be downloaded");
+                }
+                Rendering job = new Rendering(address);
+                main.post(job::start);
+                if (!job.done.await(RENDER_MAX_MS + 20000, TimeUnit.MILLISECONDS)) {
+                    main.post(job::finish);
+                    throw new IOException("the site took too long to answer");
+                }
+                if (job.error != null) throw new IOException(job.error);
+                byte[] bytes = job.html.getBytes(StandardCharsets.UTF_8);
+                try (OutputStream out = new FileOutputStream(target)) {
+                    out.write(bytes);
+                }
+                keepRenderedCookies(job.finalUrl);
+                JSONObject result = new JSONObject();
+                result.put("url", job.finalUrl);
+                result.put("status", 200);
+                result.put("type", "text/html; charset=utf-8");
+                result.put("bytes", bytes.length);
+                result.put("rendered", true);
+                result.put("path", ORIGIN + "/handoff/web/" + Uri.encode(safeId));
+                settle(id, true, result.toString());
+            } catch (Exception e) {
+                //noinspection ResultOfMethodCallIgnored
+                target.delete();
+                Log.w(TAG, "Could not render " + address, e);
+                settle(id, false, describe(e));
+            }
+        });
+    }
+
+    /** What the renderer's browser was given, kept for plain fetches too. */
+    private void keepRenderedCookies(String address) {
+        try {
+            String header = CookieManager.getInstance().getCookie(address);
+            if (header == null || header.isEmpty()) return;
+            URI uri = new URI(address);
+            for (String part : header.split(";\\s*")) {
+                int eq = part.indexOf('=');
+                if (eq <= 0) continue;
+                HttpCookie cookie = new HttpCookie(part.substring(0, eq).trim(), part.substring(eq + 1).trim());
+                cookie.setPath("/");
+                cookie.setVersion(0);
+                cookies.getCookieStore().add(uri, cookie);
+            }
+        } catch (Exception ignored) {
+            // A cookie that will not carry over only means the next fetch renders too.
+        }
+    }
+
+    /** One page in the unseen browser. Everything but the waiting runs on the main thread. */
+    private final class Rendering {
+        final String address;
+        final CountDownLatch done = new CountDownLatch(1);
+        volatile String html;
+        volatile String error;
+        volatile String finalUrl;
+        private WebView view;
+        private boolean loaded;
+        private int mainStatus;
+        private String lastShape = "";
+        private long stillSince;
+        private long startedAt;
+
+        Rendering(String address) {
+            this.address = address;
+            this.finalUrl = address;
+        }
+
+        @SuppressLint("SetJavaScriptEnabled")
+        void start() {
+            try {
+                startedAt = System.currentTimeMillis();
+                view = new WebView(activity);
+                WebSettings settings = view.getSettings();
+                settings.setJavaScriptEnabled(true);
+                settings.setDomStorageEnabled(true);
+                settings.setUserAgentString(userAgent);
+                settings.setLoadsImagesAutomatically(false); // pictures are fetched later, as files
+                settings.setAllowFileAccess(false);
+                settings.setAllowContentAccess(false);
+                settings.setJavaScriptCanOpenWindowsAutomatically(false);
+                settings.setSupportMultipleWindows(false);
+                settings.setMediaPlaybackRequiresUserGesture(true);
+                CookieManager manager = CookieManager.getInstance();
+                manager.setAcceptCookie(true);
+                manager.setAcceptThirdPartyCookies(view, true);
+                view.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
+                        // Redirects within the web are followed; anything that
+                        // would leave it (an app link, a store) is not.
+                        String s = request.getUrl().getScheme();
+                        return s == null || !(s.equalsIgnoreCase("http") || s.equalsIgnoreCase("https"));
+                    }
+
+                    @Override
+                    public void onPageStarted(WebView v, String url, Bitmap favicon) {
+                        if (url != null) finalUrl = url;
+                    }
+
+                    @Override
+                    public void onPageFinished(WebView v, String url) {
+                        if (url != null) finalUrl = url;
+                        if (!loaded) {
+                            loaded = true;
+                            main.postDelayed(Rendering.this::poll, RENDER_POLL_MS);
+                        }
+                    }
+
+                    @Override
+                    public void onReceivedHttpError(WebView v, WebResourceRequest request, WebResourceResponse response) {
+                        if (request.isForMainFrame()) mainStatus = response.getStatusCode();
+                    }
+
+                    @Override
+                    public void onReceivedError(WebView v, WebResourceRequest request, WebResourceError err) {
+                        if (request.isForMainFrame()) {
+                            fail("the page could not be opened: " + err.getDescription());
+                        }
+                    }
+                });
+                // Laid out at the screen's size, as the page would be, but
+                // under the reader and fully transparent: never seen or touched.
+                view.setAlpha(0f);
+                view.setFocusable(false);
+                view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+                ViewGroup root = activity.findViewById(android.R.id.content);
+                if (root != null) {
+                    root.addView(view, 0, new FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                }
+                view.loadUrl(address);
+                main.postDelayed(() -> { if (!loaded && view != null) { loaded = true; poll(); } }, RENDER_MAX_MS / 2);
+            } catch (Exception e) {
+                fail(describe(e));
+            }
+        }
+
+        /** Still changing? Scroll on, and look again shortly. */
+        private void poll() {
+            if (view == null) return;
+            view.evaluateJavascript(SHAPE, (value) -> {
+                if (view == null) return;
+                String shape = value == null ? "" : value;
+                long now = System.currentTimeMillis();
+                boolean waiting = shape.contains("checking"); // a bot check still at work
+                if (!shape.equals(lastShape) || waiting) {
+                    lastShape = shape;
+                    stillSince = now;
+                }
+                boolean settled = !waiting && !shape.contains("\"0|") && now - stillSince >= RENDER_QUIET_MS;
+                if (settled || now - startedAt >= RENDER_MAX_MS) {
+                    take();
+                } else {
+                    main.postDelayed(this::poll, RENDER_POLL_MS);
+                }
+            });
+        }
+
+        private void take() {
+            if (mainStatus == 404) {
+                fail("that page does not exist (404)");
+                return;
+            }
+            view.evaluateJavascript("'<!DOCTYPE html>'+document.documentElement.outerHTML", (value) -> {
+                try {
+                    Object text = new JSONTokener(value == null ? "null" : value).nextValue();
+                    if (!(text instanceof String) || ((String) text).isEmpty()) {
+                        error = "the page came back empty";
+                    } else if (lastShape.contains("checking")) {
+                        error = "the site only lets a browser in (it is behind a bot check), and its check did not finish";
+                    } else {
+                        html = (String) text;
+                    }
+                } catch (JSONException e) {
+                    error = "the page could not be read";
+                }
+                finish();
+            });
+        }
+
+        private void fail(String why) {
+            if (error == null && html == null) error = why;
+            finish();
+        }
+
+        void finish() {
+            if (view != null) {
+                WebView gone = view;
+                view = null;
+                try {
+                    gone.stopLoading();
+                    ViewGroup parent = (ViewGroup) gone.getParent();
+                    if (parent != null) parent.removeView(gone);
+                    gone.destroy();
+                } catch (Exception ignored) {
+                    // Gone either way.
+                }
+            }
+            done.countDown();
+        }
+    }
+
+    /** The page's text length, link count and title: what changes while it is still being built. */
+    private static final String SHAPE = "(function(){try{var b=document.body;"
+            + "if(b)window.scrollTo(0,b.scrollHeight);"
+            + "var t=document.title||'';"
+            + "var c=/just a moment|checking your browser|잠시만 기다|請稍候|请稍候|attention required/i.test(t+' '+(b?b.innerText.slice(0,300):''));"
+            + "return (b?b.innerText.length:0)+'|'+document.links.length+'|'+(c?'checking':'')+'|'+t;"
+            + "}catch(e){return '0|0||';}})()";
 
     /** The page has read what was fetched; the file can go. */
     @JavascriptInterface
