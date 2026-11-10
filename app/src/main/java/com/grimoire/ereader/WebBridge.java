@@ -19,6 +19,9 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONTokener;
@@ -35,6 +38,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.util.List;
+import java.util.Collections;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -82,10 +86,16 @@ public class WebBridge {
     private final ExecutorService renderer = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     /** How long a page may take to settle, and how long it must stay still
-     *  to count as settled. */
+     *  to count as settled -- each longer at every level of patience the page
+     *  asks for (a chapter that came back empty is asked for more patiently). */
     private static final long RENDER_MAX_MS = 40000;
+    private static final long RENDER_MAX_STEP_MS = 10000;
     private static final long RENDER_QUIET_MS = 2100;
+    private static final long RENDER_QUIET_STEP_MS = 2000;
     private static final long RENDER_POLL_MS = 700;
+    /** A page still waiting on a request this many quiet spells on has one
+     *  that never ends (a live feed, an advert): it is taken as it stands. */
+    private static final int RENDER_STUCK_SPELLS = 4;
     private final String userAgent;
 
     WebBridge(Activity activity, WebView webView) {
@@ -159,7 +169,15 @@ public class WebBridge {
      * fetches of the same site too. They are cleared when the app next opens.
      */
     @JavascriptInterface
-    public void render(final String id, final String address) {
+    public void render(final String id, final String address, final String patience) {
+        int level = 0;
+        try {
+            level = Math.max(0, Math.min(3, Integer.parseInt(String.valueOf(patience).trim())));
+        } catch (NumberFormatException ignored) {
+            // Not a number: the usual patience.
+        }
+        final long quietMs = RENDER_QUIET_MS + level * RENDER_QUIET_STEP_MS;
+        final long maxMs = RENDER_MAX_MS + level * RENDER_MAX_STEP_MS;
         renderer.execute(() -> {
             String safeId = id == null ? "x" : id.replaceAll("[^A-Za-z0-9_-]", "_");
             File target = new File(dir(), safeId);
@@ -169,9 +187,9 @@ public class WebBridge {
                 if (!scheme.equals("http") && !scheme.equals("https")) {
                     throw new IOException("only web addresses can be downloaded");
                 }
-                Rendering job = new Rendering(address);
+                Rendering job = new Rendering(address, quietMs, maxMs);
                 main.post(job::start);
-                if (!job.done.await(RENDER_MAX_MS + 20000, TimeUnit.MILLISECONDS)) {
+                if (!job.done.await(maxMs + 20000, TimeUnit.MILLISECONDS)) {
                     main.post(job::finish);
                     throw new IOException("the site took too long to answer");
                 }
@@ -220,6 +238,8 @@ public class WebBridge {
     /** One page in the unseen browser. Everything but the waiting runs on the main thread. */
     private final class Rendering {
         final String address;
+        final long quietMs;
+        final long maxMs;
         final CountDownLatch done = new CountDownLatch(1);
         volatile String html;
         volatile String error;
@@ -230,9 +250,12 @@ public class WebBridge {
         private String lastShape = "";
         private long stillSince;
         private long startedAt;
+        private boolean tracked;
 
-        Rendering(String address) {
+        Rendering(String address, long quietMs, long maxMs) {
             this.address = address;
+            this.quietMs = quietMs;
+            this.maxMs = maxMs;
             this.finalUrl = address;
         }
 
@@ -266,6 +289,9 @@ public class WebBridge {
                     @Override
                     public void onPageStarted(WebView v, String url, Bitmap favicon) {
                         if (url != null) finalUrl = url;
+                        // Without the document-start hook (an old WebView), as
+                        // early as can be: later requests are still counted.
+                        if (!tracked && v != null) v.evaluateJavascript(TRACKER, null);
                     }
 
                     @Override
@@ -299,8 +325,15 @@ public class WebBridge {
                     root.addView(view, 0, new FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
                 }
+                // Counting the page's own requests from before its first
+                // script runs: a chapter fetched after the page opens is only
+                // there once its request has come back.
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                    WebViewCompat.addDocumentStartJavaScript(view, TRACKER, Collections.singleton("*"));
+                    tracked = true;
+                }
                 view.loadUrl(address);
-                main.postDelayed(() -> { if (!loaded && view != null) { loaded = true; poll(); } }, RENDER_MAX_MS / 2);
+                main.postDelayed(() -> { if (!loaded && view != null) { loaded = true; poll(); } }, maxMs / 2);
             } catch (Exception e) {
                 fail(describe(e));
             }
@@ -311,15 +344,31 @@ public class WebBridge {
             if (view == null) return;
             view.evaluateJavascript(SHAPE, (value) -> {
                 if (view == null) return;
-                String shape = value == null ? "" : value;
+                String reply = value == null ? "" : value;
+                // "pending|text|links|checking|resources|title": all but the
+                // pending count make the page's shape.
+                int bar = reply.indexOf('|');
+                int pending = 0;
+                try {
+                    pending = Integer.parseInt(reply.substring(1, Math.max(1, bar)));
+                } catch (Exception ignored) {
+                    // Unreadable: as though nothing were pending.
+                }
+                String shape = bar < 0 ? reply : reply.substring(bar + 1);
                 long now = System.currentTimeMillis();
-                boolean waiting = shape.contains("checking"); // a bot check still at work
+                boolean waiting = shape.contains("|checking|"); // a bot check still at work
                 if (!shape.equals(lastShape) || waiting) {
                     lastShape = shape;
                     stillSince = now;
                 }
-                boolean settled = !waiting && !shape.contains("\"0|") && now - stillSince >= RENDER_QUIET_MS;
-                if (settled || now - startedAt >= RENDER_MAX_MS) {
+                long still = now - stillSince;
+                boolean blank = shape.startsWith("0|");
+                // Settled: nothing more on its way and nothing changing -- or
+                // nothing changing for so long that what is still on its way
+                // is not the page.
+                boolean settled = !waiting && !blank
+                        && ((pending <= 0 && still >= quietMs) || still >= quietMs * RENDER_STUCK_SPELLS);
+                if (settled || now - startedAt >= maxMs) {
                     take();
                 } else {
                     main.postDelayed(this::poll, RENDER_POLL_MS);
@@ -337,7 +386,7 @@ public class WebBridge {
                     Object text = new JSONTokener(value == null ? "null" : value).nextValue();
                     if (!(text instanceof String) || ((String) text).isEmpty()) {
                         error = "the page came back empty";
-                    } else if (lastShape.contains("checking")) {
+                    } else if (lastShape.contains("|checking|")) {
                         error = "the site only lets a browser in (it is behind a bot check), and its check did not finish";
                     } else {
                         html = (String) text;
@@ -371,13 +420,27 @@ public class WebBridge {
         }
     }
 
-    /** The page's text length, link count and title: what changes while it is still being built. */
+    /** Counts the page's fetch and XMLHttpRequest calls still on their way, in window.__grimoirePending. */
+    private static final String TRACKER = "(function(){if(window.__grimoirePending!==undefined)return;"
+            + "window.__grimoirePending=0;"
+            + "var f=window.fetch;if(f){window.fetch=function(){window.__grimoirePending++;var p;"
+            + "try{p=f.apply(this,arguments);}catch(e){window.__grimoirePending--;throw e;}"
+            + "var d=function(){window.__grimoirePending--;};p.then(d,d);return p;};}"
+            + "var X=window.XMLHttpRequest;if(X&&X.prototype){var s=X.prototype.send;"
+            + "X.prototype.send=function(){window.__grimoirePending++;var done=false;"
+            + "var d=function(){if(!done){done=true;window.__grimoirePending--;}};"
+            + "this.addEventListener('loadend',d);try{return s.apply(this,arguments);}catch(e){d();throw e;}};}"
+            + "})();";
+
+    /** What is still on its way, then the page's shape -- text length, link count, a bot check at
+     *  work, resources loaded, title -- which changes while it is still being built. */
     private static final String SHAPE = "(function(){try{var b=document.body;"
             + "if(b)window.scrollTo(0,b.scrollHeight);"
             + "var t=document.title||'';"
             + "var c=/just a moment|checking your browser|잠시만 기다|請稍候|请稍候|attention required/i.test(t+' '+(b?b.innerText.slice(0,300):''));"
-            + "return (b?b.innerText.length:0)+'|'+document.links.length+'|'+(c?'checking':'')+'|'+t;"
-            + "}catch(e){return '0|0||';}})()";
+            + "var r=(window.performance&&performance.getEntriesByType)?performance.getEntriesByType('resource').length:0;"
+            + "return (window.__grimoirePending||0)+'|'+(b?b.innerText.length:0)+'|'+document.links.length+'|'+(c?'checking':'')+'|'+r+'|'+t;"
+            + "}catch(e){return '0|0|0||0|';}})()";
 
     /** The page has read what was fetched; the file can go. */
     @JavascriptInterface

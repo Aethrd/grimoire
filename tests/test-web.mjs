@@ -1071,9 +1071,45 @@ await t('an ordinary page is fetched once, and an app without the renderer only 
   delete window.GrimoireWeb;
   // The renderer is native and kept to http(s), its own browser, never the reader's.
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
-  assert.match(java, /public void render\(final String id, final String address\)/);
+  assert.match(java, /public void render\(final String id, final String address, final String patience\)/);
+  // Ready only once the page's own requests are back, counted from before its first script.
+  assert.match(java, /WebViewCompat\.addDocumentStartJavaScript\(view, TRACKER/);
+  assert.match(java, /pending <= 0 && still >= quietMs/);
   assert.match(java, /view = new WebView\(activity\)/);
   assert.match(java, /only web addresses can be downloaded/);
+});
+
+await t('a rendered chapter caught before its story arrived is asked for again, more patiently', async () => {
+  const url = 'https://maru.example/novel/green-skin/2';
+  // The site's frame and menus are there; the chapter itself is not yet.
+  const early = `<!doctype html><html><head><title>그린 스킨 2화 | 마루마루</title></head><body>
+<header><a href="/">홈</a><a href="/novel/updates">업데이트</a></header><main><p>불러오는 중…</p></main></body></html>`;
+  let answers = [early, chapterPage(2)];
+  const calls = [];
+  window.GrimoireWeb = {
+    fetch() { throw new Error('a rendered site is not fetched'); },
+    render(id, address, level) {
+      calls.push(level);
+      const body = answers.shift();
+      const path = `data:text/html;base64,${Buffer.from(body, 'utf8').toString('base64')}`;
+      setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type: 'text/html', path, rendered: true })), 0);
+    },
+    release() {},
+  };
+  const link = { url, text: '그린 스킨 2화' };
+  await assert.rejects(web.readPage(link, 1, { pictures: false }), /had not finished loading/);
+  const got = await web.readPage(link, 1, { pictures: false });
+  assert.match(got.chapter.html, /lit the lamp/);
+  assert.deepEqual(calls, ['0', '1']);   // the second time, more patiently
+  // Through the whole download: the empty first answer is retried, never kept.
+  answers = [early, chapterPage(3)];
+  calls.length = 0;
+  const book = await web.readPages([{ url: 'https://maru.example/novel/green-skin/3', text: '3화' }],
+    { pictures: false, gap: 0, patience: { retry: 0, refresh: [], backoff: [0, 0] } });
+  assert.equal(book.chapters.length, 1);
+  assert.match(book.chapters[0].html, /lit the lamp/);
+  assert.equal(book.failed.length, 0);
+  delete window.GrimoireWeb;
 });
 
 console.log(`\n${pass} assertions passed`);

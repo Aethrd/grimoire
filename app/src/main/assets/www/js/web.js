@@ -114,7 +114,20 @@ export async function download(url, options = {}) {
  * and hands back the page as it then stands.
  */
 const renderedHosts = new Set();
+/** Fewer characters than this, and no picture, is a chapter not yet loaded. */
+const MIN_RENDERED_STORY = 200;
 const BOT_CHECK = /bot check|only lets a browser/i;
+
+/* How patiently the renderer waits on a page: more each time the same page
+ * came back without its story, up to the most it allows (3). */
+const patience = new Map();
+const patienceFor = (url) => patience.get(url) || 0;
+
+/** A rendered page whose story had not arrived: ask more patiently next time. */
+export function notLoadedYet(url) {
+  patience.set(url, Math.min(3, patienceFor(url) + 1));
+  return new Error('the chapter had not finished loading on the site');
+}
 
 /** Whether this build of the app has the renderer. */
 export const canRender = () => typeof window.GrimoireWeb?.render === 'function';
@@ -179,7 +192,8 @@ function fetchNative(method, url, { timeout = 90000 } = {}) {
           if (!response.ok) throw new Error(`the downloaded copy could not be read (${response.status})`);
           const bytes = await response.arrayBuffer();
           const type = String(info.type || '').split(';')[0].trim().toLowerCase();
-          resolve({ url: info.url || url, status: info.status, type: info.type || '', blob: new Blob([bytes], { type }) });
+          resolve({ url: info.url || url, status: info.status, type: info.type || '', blob: new Blob([bytes], { type }),
+            rendered: !!info.rendered });
         } catch (error) {
           reject(error);
         } finally {
@@ -188,7 +202,8 @@ function fetchNative(method, url, { timeout = 90000 } = {}) {
       },
     });
     try {
-      window.GrimoireWeb[method](id, url);
+      if (method === 'render') window.GrimoireWeb.render(id, url, String(patienceFor(url)));
+      else window.GrimoireWeb.fetch(id, url);
     } catch (error) {
       pending.delete(id);
       clearInterval(timer);
@@ -988,6 +1003,14 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
   let further = nextPageOf(doc, page.url);
   const story = (wordpress && wordPressStory(doc)) || findStory(doc);
   stripPageLinks(story);
+  /* A chapter a site loads after the page opens can be caught before it has
+   * arrived, the page all there but the story. Nothing so short is a
+   * chapter, so it is asked for again, more patiently each time, and the
+   * download stops there if it never comes -- never a blank chapter kept. */
+  if (page.rendered && tidy(story?.textContent).length < MIN_RENDERED_STORY && !story?.querySelector('img')) {
+    throw notLoadedYet(link.url);
+  }
+  patience.delete(link.url);
 
   /* The rest of a chapter split across pages, joined on, in order. Many
    * Chinese serial sites give a chapter as two or three pages, each ending
