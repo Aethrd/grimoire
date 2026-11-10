@@ -1827,4 +1827,31 @@ await t('a site whose chapters come only with nothing kept out is opened that wa
   assert.match(read('app/src/main/java/com/grimoire/ereader/WebBridge.java'), /final boolean ownSiteOnly = level < 2 && !open;/);
 });
 
+await t('how far it has got and what it is doing now are told apart', async () => {
+  // The download reports what it is doing as such: waiting, reading, another try.
+  const now = [];
+  let failed = false;
+  const flaky = async (url, options) => {
+    if (url.endsWith('chapter-2') && !failed) { failed = true; throw new Error('the site took too long to answer'); }
+    return fakeFetch(url, options);
+  };
+  await web.readPages([1, 2].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` })), {
+    fetchPage: flaky, gap: 1600, jitter: 0, pictures: false, patience: { retry: 0, refresh: [0], backoff: [0, 0] },
+    onProgress: (fraction, done, total, note, activity) => { if (activity) now.push(activity); },
+  });
+  const kinds = now.map((a) => a.kind);
+  for (const kind of ['read', 'wait', 'failed', 'retry']) assert.ok(kinds.includes(kind), `${kind} not said: ${kinds.join(', ')}`);
+  const wait = now.find((a) => a.kind === 'wait');
+  assert.ok(wait.until > Date.now() - 5000 && wait.name, JSON.stringify(wait));
+  const retry = now.find((a) => a.kind === 'retry');
+  assert.deepEqual([retry.name, retry.attempt, retry.of], ['No. 2', 2, 3]);
+  // Build keeps the count on the bar's line and passes what it is doing apart.
+  const build = read('app/src/main/assets/www/js/build.js');
+  assert.match(build, /`Downloading \$\{part\.name\} · \$\{done\} of \$\{total\}`,\s+\(at \+ fraction\) \/ parts\.length, at, parts\.length, now \?\? null\)/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /<div class="job-activity" hidden><span class="job-tag"><\/span><span class="job-now"><\/span><\/div>/);
+  assert.match(app, /what\.textContent = `\$\{left\} s left of your delay, then \$\{name\}`;/);
+  assert.match(app, /if \(now !== undefined\) finish\.activity\(now\);/);
+});
+
 console.log(`\n${pass} assertions passed`);

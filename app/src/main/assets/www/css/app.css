@@ -1328,6 +1328,22 @@ body[data-view="reader"] .stepper {
                                 text-overflow: ellipsis; min-width: 0; }
 .job-count { flex: none; }
 
+/* What it is doing right now, apart from how far it has got: under the
+   bar, smaller, with a tag that says which -- waiting out the delay,
+   reading a page, another try -- and the page it is about. */
+.job-activity { display: flex; align-items: baseline; gap: 8px; margin-top: 7px;
+                font-size: 11.5px; color: var(--muted); min-width: 0; }
+.job-activity[hidden] { display: none; }
+.job-tag { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 10px;
+           font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+           background: var(--accent-100); color: var(--accent-ink); }
+.job-activity.wait .job-tag { background: transparent; color: var(--muted);
+                              box-shadow: inset 0 0 0 1px currentColor; }
+.job-activity.retry .job-tag, .job-activity.failed .job-tag { background: transparent; color: var(--text);
+                                                            box-shadow: inset 0 0 0 1px currentColor; }
+.job-now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job.done .job-activity, .job.failed .job-activity { display: none; }
+
 /* Finished, it stays a moment, marked, rather than vanishing mid-glance. */
 .job.done .job-label::before { content: "✓ "; color: var(--accent-ink); }
 .job.done .bar-fill { background: var(--accent-ink); }

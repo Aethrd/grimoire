@@ -1860,8 +1860,10 @@ export async function readPages(links, {
     gap, jitter, stop: () => pausing(),
     onWait: (url, ms) => {
       const at = links.findIndex((link) => link.url === url);
+      const name = at >= 0 ? nameOf(links[at], at) : 'the next page';
       onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
-        `waiting ${Math.round(ms / 1000)} s (your delay) before ${at >= 0 ? nameOf(links[at], at) : 'the next page'}…`);
+        `waiting ${Math.round(ms / 1000)} s (your delay) before ${name}…`,
+        { kind: 'wait', name, until: Date.now() + ms });
     },
   });
   let nextAt = 0;
@@ -1909,7 +1911,10 @@ export async function readPages(links, {
           tries
             // With why the last try failed: "stuck on a chapter" says what at.
             ? `trying ${nameOf(link, at)} again (${tries + 1} of ${(waits?.length || 0) + 1}) — last time ${shortReason(lastError)}…`
-            : `reading ${nameOf(link, at)}…`);
+            : `reading ${nameOf(link, at)}…`,
+          tries
+            ? { kind: 'retry', name: nameOf(link, at), attempt: tries + 1, of: (waits?.length || 0) + 1, reason: shortReason(lastError) }
+            : { kind: 'read', name: nameOf(link, at) });
         return await readPage(link, at, { pictures, fetchPage: paced, chapterUrls, listedNumbers });
       } catch (error) {
         if (error?.paused) throw error;
@@ -1932,7 +1937,8 @@ export async function readPages(links, {
         }
         if (tries >= waits.length) break;
         onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
-          `${nameOf(link, at)}: ${error?.message || 'could not be read'} — trying again`);
+          `${nameOf(link, at)}: ${error?.message || 'could not be read'} — trying again`,
+          { kind: 'failed', name: nameOf(link, at), reason: shortReason(error) });
         await napUnless(waits[tries], pausing);
         tries += 1;
       }

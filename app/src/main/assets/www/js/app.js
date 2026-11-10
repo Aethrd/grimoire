@@ -2292,7 +2292,8 @@ const progress = (() => {
     row.className = 'job';
     row.innerHTML = '<div class="import-line"><span class="job-label"></span>'
       + '<span class="muted job-count"></span></div>'
-      + '<span class="bar"><span class="bar-fill" style="width:0%"></span></span>';
+      + '<span class="bar"><span class="bar-fill" style="width:0%"></span></span>'
+      + '<div class="job-activity" hidden><span class="job-tag"></span><span class="job-now"></span></div>';
     row.querySelector('.job-label').textContent = label || 'Working';
     list()?.appendChild(row);
     return row;
@@ -2331,8 +2332,44 @@ const progress = (() => {
      *
      * @param failed  marks the row as having failed rather than finished.
      */
+    /**
+     * What it is doing right now, on a line of its own under the bar -- not
+     * mixed into how far it has got. { kind: 'wait' | 'read' | 'retry' |
+     * 'failed', name, until, attempt, of, reason }, or null for nothing.
+     */
+    const activity = (now) => {
+      if (job.ended) return;
+      clearInterval(job.ticker);
+      const line = job.row.querySelector('.job-activity');
+      if (!now) { line.hidden = true; return; }
+      const tag = line.querySelector('.job-tag');
+      const what = line.querySelector('.job-now');
+      line.className = `job-activity ${now.kind}`;
+      const name = now.name || 'the next page';
+      const paint = () => {
+        if (now.kind === 'wait') {
+          const left = Math.max(0, Math.ceil((now.until - Date.now()) / 1000));
+          tag.textContent = 'Waiting';
+          what.textContent = `${left} s left of your delay, then ${name}`;
+        } else if (now.kind === 'retry') {
+          tag.textContent = `Try ${now.attempt} of ${now.of}`;
+          what.textContent = `${name}${now.reason ? ` · last time: ${now.reason}` : ''}`;
+        } else if (now.kind === 'failed') {
+          tag.textContent = 'Failed';
+          what.textContent = `${name} · ${now.reason || 'it did not come'} — trying again`;
+        } else {
+          tag.textContent = 'Reading';
+          what.textContent = name;
+        }
+      };
+      paint();
+      if (now.kind === 'wait') job.ticker = setInterval(paint, 1000);
+      line.hidden = false;
+    };
+
     const end = (failed = false) => {
       if (job.ended) return;
+      clearInterval(job.ticker);
       job.ended = true;
       job.row.classList.add(failed ? 'failed' : 'done');
       if (!failed) job.row.querySelector('.bar-fill').style.width = '100%';
@@ -2351,6 +2388,7 @@ const progress = (() => {
     // step on it for routing progress to this row and no other.
     const handle = () => end(false);
     handle.say = say;
+    handle.activity = activity;
     handle.step = (message, fraction) => say(message, fraction);
     handle.fail = () => end(true);
     handle.end = end;
@@ -6701,8 +6739,10 @@ function wireWorkshop() {
         // Into the folder the shelf is open at, as an import would be.
         folder: activeFolder || null,
         cover: buildCover,
-        onProgress: (message, fraction, at, total) => {
+        onProgress: (message, fraction, at, total, now) => {
           finish.say(message, fraction, total > 1 ? `${at + 1} of ${total}` : '');
+          // What it is doing this moment, on its own line under the bar.
+          if (now !== undefined) finish.activity(now);
           // Beside the button, briefly: "120 of 669", or how far in.
           if (buildRun && !buildRun.pausing) {
             buildRun.status = /(\d+ of \d+)/.exec(message || '')?.[1]

@@ -537,11 +537,11 @@ export async function build({
           shouldStop: pausing,
           onChapter,
           onImage,
-          onProgress: (fraction, done, total, note) => onProgress?.(
-            // With a note, the note before the book's name: it is what the
-            // line is for, and a long name would push it out of sight.
-            note ? `${done} of ${total} · ${note}` : `Downloading ${part.name} · ${done} of ${total}`,
-            (at + fraction) / parts.length, at, parts.length),
+          // How far it has got, on the line with the bar; what it is doing
+          // this moment (waiting out the delay, reading, another try) apart.
+          onProgress: (fraction, done, total, note, now) => onProgress?.(
+            `Downloading ${part.name} · ${done} of ${total}`,
+            (at + fraction) / parts.length, at, parts.length, now ?? null),
         })
         : part.bookId
         ? await readShelfBook(part)
