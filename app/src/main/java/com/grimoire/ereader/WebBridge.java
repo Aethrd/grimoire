@@ -95,6 +95,10 @@ public class WebBridge {
      *  asks for (a chapter that came back empty is asked for more patiently). */
     private static final long RENDER_MAX_MS = 40000;
     private static final long RENDER_MAX_STEP_MS = 10000;
+    /** How long a page that says to wait -- a check at work, "잠시만 기다려",
+     *  a spinner -- is waited on, on the same page, before it is given up:
+     *  never reloaded meanwhile. */
+    private static final long RENDER_WAIT_MS = 180000;
     private static final long RENDER_QUIET_MS = 2500;
     private static final long RENDER_QUIET_STEP_MS = 2000;
     private static final long RENDER_POLL_MS = 400;
@@ -216,7 +220,7 @@ public class WebBridge {
                 }
                 Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly);
                 main.post(job::start);
-                if (!job.done.await(maxMs + 20000, TimeUnit.MILLISECONDS)) {
+                if (!job.done.await(RENDER_WAIT_MS + 20000, TimeUnit.MILLISECONDS)) {
                     main.post(job::finish);
                     throw new IOException("the site took too long to answer");
                 }
@@ -725,9 +729,14 @@ public class WebBridge {
                 // A chapter whose page still shows "loading" is not ready, however
                 // still it is (a site that waits before putting the chapter up).
                 boolean busy = pending > 0 || (!scroll && loading);
-                boolean settled = !waiting && !blank
+                // Says to wait -- a check at work, a chapter's "loading" -- so it
+                // is waited on, on the same page: not taken, not timed out and
+                // reloaded, until it is done or RENDER_WAIT_MS has gone.
+                boolean saysWait = waiting || (!scroll && loading);
+                boolean settled = !waiting && !blank && !(!scroll && loading)
                         && ((!busy && still >= need) || still >= quietMs * RENDER_STUCK_SPELLS);
-                if (settled || now - startedAt >= maxMs) {
+                long limit = saysWait ? RENDER_WAIT_MS : maxMs;
+                if (settled || now - startedAt >= limit) {
                     take();
                 } else {
                     main.postDelayed(this::poll, RENDER_POLL_MS);
@@ -839,8 +848,14 @@ public class WebBridge {
             // A loading message or spinner on show -- a site that waits a
             // moment before it puts the chapter up shows one meanwhile.
             // Shown only: a hidden one is a site at rest.
-            + "var w=0,B=document.querySelectorAll('[aria-busy=\"true\"],[class*=\"loading\"],[class*=\"spinner\"],[class*=\"loader\"],[id*=\"loading\"],[id*=\"loader\"]');"
-            + "for(var q=0;q<B.length&&q<30;q++){var e=B[q],st=getComputedStyle(e);"
+            // Only what says so: a spinner or progress bar, or a short "wait"
+            // message -- not a picture's lazy-loading placeholder.
+            + "var w=0,B=document.querySelectorAll('[aria-busy=\"true\"],[role=\"progressbar\"],[class*=\"loading\"],[class*=\"spinner\"],[class*=\"loader\"],[id*=\"loading\"],[id*=\"loader\"]');"
+            + "for(var q=0;q<B.length&&q<40;q++){var e=B[q];if(e.tagName==='IMG'||e.querySelector('img'))continue;"
+            + "var tx=(e.textContent||'').trim(),cl=String(e.className&&e.className.baseVal!==undefined?e.className.baseVal:e.className);"
+            + "var sp=/spinner|progress/i.test(cl+' '+(e.getAttribute('role')||''))||e.getAttribute('aria-busy')==='true';"
+            + "var say=tx.length>0&&tx.length<120&&/잠시만|기다려|로딩|불러오는|loading|please wait/i.test(tx);"
+            + "if(!sp&&!say)continue;var st=getComputedStyle(e);"
             + "if(st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0'&&e.getClientRects().length){w=1;break;}}"
             + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(blk?'blocked':c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+t;"
             + "}catch(e){return '0|0|0||0|0|0|';}})()";

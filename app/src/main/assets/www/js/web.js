@@ -210,6 +210,8 @@ export function scriptBuilt(html) {
 }
 
 function fetchNative(method, url, { timeout = 90000, list = false } = {}) {
+  // A page that says to wait is waited on for up to three minutes, there.
+  if (method === 'render') timeout = Math.max(timeout, 240000);
   return new Promise((resolve, reject) => {
     if (!available()) {
       reject(new Error('Downloading needs the app: this copy of the reader cannot reach the web.'));
@@ -1009,6 +1011,9 @@ export async function findLinks(addresses, {
   const links = [];
   const seen = new Map();
   const failed = [];
+  // Every page of the list at the reader's pace: after the last came,
+  // whatever became of it.
+  fetchPage = pacer(fetchPage, { gap: listGap, jitter: listJitter, stop: () => typeof shouldStop === 'function' && !!shouldStop() });
   let title = '';
   let author = '';
   let cover = '';
@@ -1036,9 +1041,6 @@ export async function findLinks(addresses, {
       pages += 1;
       onProgress?.(at / addresses.length, next, pages, numbered ? total : 0);
       try {
-        // The pause between pages is counted from when this one was asked
-        // for: a page that took four seconds to come has waited two already.
-        const askedAt = Date.now();
         const level = Math.max(0, Math.min(3, Math.round(Number(startPatience) || 0)));
         if (level) patience.set(next, level);
         let page = await fetchPage(next, { list: true });
@@ -1080,11 +1082,7 @@ export async function findLinks(addresses, {
         if (pages === 1) for (const page of found.pages || []) if (!visited.has(page)) { queue.push(page); numbered = true; }
         if (numbered && !total) total = 1 + queue.length;
         next = found.list ? found.older : nextOf(queue);
-        // Gently, as the chapters are: a site with a hundred pages of posts.
-        if (next) {
-          const left = spacing(listGap, listJitter) - (Date.now() - askedAt);
-          if (left > 0) await pause(left);
-        }
+        // (The pause before the next is the pacer's.)
       } catch (error) {
         // The first page failing is the address failing; a later one of a
         // WordPress list is the end of what could be listed. A numbered page
@@ -1528,6 +1526,34 @@ const escapeHtml = (text) => String(text).replace(/[&<>"]/g,
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The reader's pace, kept for every page asked of a site: one at a time,
+ * each `gap` (give or take `jitter`) after the last one came -- a retry,
+ * the second page of a chapter, a list page asked again, all of them. A
+ * picture is not a page and is not held back. With no pace set, nothing
+ * waits and nothing queues.
+ */
+function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false } = {}) {
+  if (!(gap > 0) && !(jitter > 0)) return fetchPage;
+  let line = Promise.resolve();
+  let lastEnd = 0;
+  return async (url, options = {}) => {
+    if (options.picture) return fetchPage(url, options);
+    const before = line;
+    let release;
+    line = new Promise((resolve) => { release = resolve; });
+    await before;
+    try {
+      if (lastEnd) await napUnless(Math.max(0, lastEnd + spacing(gap, jitter) - Date.now()), stop);
+      if (stop()) throw Object.assign(new Error(PAUSED_REASON), { paused: true, tries: 1 });
+      return await fetchPage(url, options);
+    } finally {
+      lastEnd = Date.now();
+      release();
+    }
+  };
+}
+
 /** A pause cut short the moment `stop` says so (Pause & keep). */
 async function napUnless(ms, stop) {
   const end = Date.now() + ms;
@@ -1781,6 +1807,9 @@ export async function readPages(links, {
   /* The rate is the reader's: `gap` milliseconds between one page being
    * asked for and the next, give or take `jitter` (see spacing), across both
    * of the requests that run at once. Nought is as fast as the two will go. */
+  /* Every page at the reader's pace, through one line (see pacer): the
+   * first ask, a retry, a chapter's second page alike. */
+  const paced = pacer(fetchPage, { gap, jitter, stop: () => pausing() });
   let nextAt = 0;
   const myTurn = async () => {
     const now = Date.now();
@@ -1816,13 +1845,15 @@ export async function readPages(links, {
       await whenOnScreen();
       const before = interruptions;
       try {
-        if (tries === 0 && uncounted === 0) await myTurn();
+        // Unpaced (no delay set), two at a time as ever; paced, the pacer
+        // holds each page -- this one too -- until its turn.
+        if (!(gap > 0) && !(jitter > 0) && tries === 0 && uncounted === 0) await myTurn();
         if (pausing()) throw PAUSED();
         // Said while it is read: on a site rendered page by page, a chapter
         // can take a while, and the count only moves once one is done.
         onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
           `${tries ? `trying ${nameOf(link, at)} again` : `reading ${nameOf(link, at)}`}…`);
-        return await readPage(link, at, { pictures, fetchPage, chapterUrls, listedNumbers });
+        return await readPage(link, at, { pictures, fetchPage: paced, chapterUrls, listedNumbers });
       } catch (error) {
         if (error?.paused) throw error;
         // Blocked: not asked again, and the download stops here.

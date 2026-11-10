@@ -1086,8 +1086,8 @@ await t('an ordinary page is fetched once, and an app without the renderer only 
   // a chapter asked for again patiently gets the whole spell.
   assert.match(java, /boolean ready = scroll \? chapterLinks >= 3 : !patient && textLength >= READY_TEXT;/);
   assert.match(java, /private static final long READY_QUIET_MS = 900;/);
-  // The pause between list pages counts from when each was asked for.
-  assert.match(read('app/src/main/assets/www/js/web.js'), /const left = spacing\(listGap, listJitter\) - \(Date\.now\(\) - askedAt\);/);
+  // The pause between list pages: the pacer's, after each one came.
+  assert.match(read('app/src/main/assets/www/js/web.js'), /fetchPage = pacer\(fetchPage, \{ gap: listGap, jitter: listJitter/);
   assert.match(java, /view = new WebView\(activity\)/);
   assert.match(java, /only web addresses can be downloaded/);
 });
@@ -1724,6 +1724,50 @@ await t('Pause & keep stops now: a chapter on its way is dropped, not waited for
   assert.equal(stoppedNative, 1);
   delete window.GrimoireWeb;
   assert.match(read('app/src/main/assets/www/js/app.js'), /\/\/ Stopped now: what is on its way is dropped, and is where it carries on\.\s+web\.stopAll\(\);/);
+});
+
+await t('the delay is kept for every page -- retries too -- from when the last one came', async () => {
+  const gap = 300;
+  const log = [];   // [start, end] of each page asked for
+  let failedOnce = false;
+  const slow = async (url, options) => {
+    const start = Date.now();
+    await new Promise((r) => setTimeout(r, 120));   // the page takes a while to come
+    log.push([start, Date.now(), url]);
+    if (url.endsWith('chapter-2') && !failedOnce) { failedOnce = true; throw new Error('the site took too long to answer'); }
+    return fakeFetch(url, options);
+  };
+  const parsed = await web.readPages([1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` })), {
+    fetchPage: slow, gap, jitter: 0, pictures: false, patience: { retry: 0, refresh: [0], backoff: [0, 0] },
+  });
+  assert.deepEqual(parsed.chapters.map((c) => c.title), ['No. 1', 'No. 2', 'No. 3']);
+  const pages = log.filter(([, , url]) => /chapter-\d$/.test(url));
+  assert.equal(pages.length, 4, 'chapter 2 was asked for twice');
+  for (let n = 1; n < pages.length; n += 1) {
+    const idle = pages[n][0] - pages[n - 1][1];
+    assert.ok(idle >= gap - 15, `page ${n + 1} began ${idle} ms after the last came (delay ${gap})`);
+  }
+  // The list's pages too, from when each came, failed or not.
+  const listLog = [];
+  const list = async (url) => {
+    const start = Date.now();
+    await new Promise((r) => setTimeout(r, 80));
+    listLog.push([start, Date.now()]);
+    const page = Number(new URL(url).searchParams.get('page')) || 1;
+    if (page === 2) throw new Error('the site took too long to answer');
+    return { url, status: 200, type: 'text/html', blob: new Blob([maruPage(page, 3)], { type: 'text/html' }) };
+  };
+  await web.findLinks(['https://pace.example/novel/47997'], { fetchPage: list, listGap: gap });
+  assert.equal(listLog.length, 3);
+  for (let n = 1; n < listLog.length; n += 1) {
+    const idle = listLog[n][0] - listLog[n - 1][1];
+    assert.ok(idle >= gap - 15, `list page ${n + 1} began ${idle} ms after the last came`);
+  }
+  // A page that says to wait is waited on, there, for up to three minutes.
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  assert.match(java, /private static final long RENDER_WAIT_MS = 180000;/);
+  assert.match(java, /long limit = saysWait \? RENDER_WAIT_MS : maxMs;/);
+  assert.match(read('app/src/main/assets/www/js/web.js'), /if \(method === 'render'\) timeout = Math\.max\(timeout, 240000\);/);
 });
 
 console.log(`\n${pass} assertions passed`);
