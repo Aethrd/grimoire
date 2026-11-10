@@ -1555,6 +1555,10 @@ async function openBookMenu(book) {
   }
 
   choice('Build onto this book', 'Add more files to the end of it', () => buildOnto(book));
+  choice('Check for new chapters', book.webSources?.length
+    ? 'List its website again, and add what it does not have yet'
+    : 'From its contents page: add what it does not have yet',
+  () => checkNewChapters(book));
   choice('Write out', 'As an EPUB, whole or smaller', () => askAboutExport(book));
   choice(book.coverBlur ? 'Show the cover' : 'Blur the cover', 'For a shelf read in public', async () => {
     await library.blurCovers([book.id], !book.coverBlur);
@@ -6277,6 +6281,38 @@ function rememberStops(sources, failed, book) {
 }
 const LEFTOVER_SUFFIX = /\s+— (the rest|from .*)$/;
 
+/**
+ * Builds the app was closed or killed in the middle of: each a book of the
+ * chapters that had come (they were kept as they came), and what was left --
+ * the website from the chapter after, and any not begun -- kept in Build to
+ * carry it on, with where it stopped remembered for the website screen.
+ */
+async function rescueCutBuilds() {
+  const unfinished = (await store.all('books')).filter((book) => book.importing && book.building);
+  const saved = [];
+  for (const book of unfinished) {
+    try {
+      const kept = await build.rescueCutBuild(book);
+      if (kept) saved.push(kept);
+    } catch (error) {
+      console.warn('A cut-off build could not be kept', error);
+    }
+  }
+  if (!saved.length) return saved;
+  // Read fresh: this runs before anything else has loaded them.
+  const settings = await store.settings();
+  webLeftovers = Array.isArray(settings.webLeftovers) ? settings.webLeftovers : [];
+  webStops = Array.isArray(settings.webStops) ? settings.webStops : [];
+  for (const { book, rest } of saved) {
+    const reason = 'cut off when the app closed';
+    const failed = rest.map((part) => ({ name: part.name, reason, web: { ...part, reason } }));
+    // The leftovers that build was carrying on are settled by it.
+    keepLeftovers(failed, rest.map((part) => part.leftover).filter(Boolean), book);
+    rememberStops(rest.map((part) => part.sources?.[0]).filter(Boolean), failed, book);
+  }
+  return saved;
+}
+
 /** Take a build's failures in; returns the newest kept, or null. */
 function keepLeftovers(failed, retried = [], book = null) {
   webLeftovers = webLeftovers.filter((left) => !retried.includes(left.id));
@@ -8251,6 +8287,12 @@ async function findWebLinks() {
         + (order.how === 'sorted' ? ' The site listed them out of order, so they have been put in chapter order.' : '')
         + (!el('web-direct').checked && chapters < 3 ? ' No chapters yet? The site may still have been loading — tap Search for more.' : ''));
     el('web-filter').value = '';
+    const update = await markWhatTheBookHas(webState.links);
+    if (update) {
+      webNote(update.fresh
+        ? `${update.fresh} chapter${update.fresh === 1 ? '' : 's'} not in “${library.displayTitle(update.book)}” yet, ticked to add to its end. The ${update.had} it has are marked “in book”.`
+        : `“${library.displayTitle(update.book)}” has every chapter listed (${update.had}). If it should have more, Search for more.`);
+    }
     drawWebList();
     paintResume();
   } catch (error) {
@@ -8260,6 +8302,55 @@ async function findWebLinks() {
     button.textContent = 'Find links';
   }
 }
+
+/* ── Check for new chapters ─────────────────────────────────────────────
+ *
+ * As WebToEpub's library does: a book remembers the website it came from
+ * (and each chapter the link it came from), so listing that website again
+ * can tell what the book already has from what it has not -- chapters a
+ * pause, a crash or a site's lost requests left out, and chapters
+ * published since. What it has is shown "in book" and unticked; the rest
+ * is ticked, and added builds onto the end of the book.
+ */
+async function checkNewChapters(book) {
+  clearWeb();
+  webState.updating = book.id;
+  el('web-direct').checked = false;
+  el('web-title').value = library.displayTitle(book);
+  webState.titleTouched = true;
+  await show('web');
+  if (!book.webSources?.length) {
+    webNote(`Paste the address of “${library.displayTitle(book)}”'s contents page and tap Find links: what it has will be unticked, the rest ticked to add to its end.`);
+    return;
+  }
+  el('web-address').value = book.webSources.join('\n');
+  await findWebLinks();
+}
+
+/** On a list found for a book being updated: what it has, and what not. */
+async function markWhatTheBookHas(links) {
+  const book = webState.updating != null ? await store.get('books', webState.updating) : null;
+  if (!book) return null;
+  const chapters = await store.byIndex('chapters', 'bookId', book.id);
+  const fromLinks = new Set(chapters.map((chapter) => chapter.from).filter(Boolean));
+  // Books built before chapters kept their links: by name, which for a web
+  // chapter is its link's text.
+  const names = new Set(chapters.map((chapter) => tidyName(chapter.title)).filter(Boolean));
+  let had = 0;
+  for (const link of links) {
+    if (fromLinks.has(link.url) || (link.text && names.has(tidyName(link.text)))) {
+      link.got = true;
+      link.picked = false;
+      had += 1;
+    } else {
+      link.got = undefined;
+      link.picked = !!link.likely;
+    }
+  }
+  webState.carryOn = book.id;
+  return { book, had, fresh: links.filter((link) => link.picked).length };
+}
+const tidyName = (text) => String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
 /* ── Search for more ───────────────────────────────────────────────────
  *
@@ -8313,6 +8404,7 @@ async function searchMore() {
       webState.reversed = order.how === 'reversed';
     }
     webState.links = links;
+    if (webState.updating != null) await markWhatTheBookHas(webState.links);
     if (!webState.title && found.title) webState.title = found.title;
     if (!webState.author && found.author) webState.author = found.author;
     if (!webState.cover && found.cover) webState.cover = found.cover;
@@ -8344,6 +8436,8 @@ async function searchMore() {
 function paintResume() {
   const box = el('web-resume');
   if (!box) return;
+  // A book being updated already knows what it has: no resume to offer.
+  if (webState.updating != null) { box.hidden = true; return; }
   webState.carryOn = null;
   const stop = !el('web-direct').checked && webState.sources.length ? stopFor(webState.sources[0]) : null;
   let at = stop ? webState.links.findIndex((link) => link.url === stop.url) : -1;
@@ -8471,7 +8565,7 @@ function webDelay() {
 function clearWeb() {
   Object.assign(webState, {
     links: [], title: '', author: '', cover: '', sources: [], reversed: false, titleTouched: false, leftover: null,
-    manualOrder: false, carryOn: null, searches: 0,
+    manualOrder: false, carryOn: null, searches: 0, updating: null,
   });
   const resume = el('web-resume');
   if (resume) { resume.hidden = true; resume.replaceChildren(); }
@@ -9107,7 +9201,10 @@ async function boot() {
     activeFolder = null;
     await store.saveSettings({ shelfFolder: null });
   }
-  // Anything a crash left half-written is cleared before the shelf is drawn.
+  // A build cut off by the app closing is a book of what had come, and the
+  // rest is kept to carry it on; anything else a crash left half-written is
+  // cleared before the shelf is drawn.
+  const rescued = await rescueCutBuilds().catch(() => []);
   await library.sweepUnfinishedImports();
   // Books left unread for days go On hold before the shelf shows them.
   const held = await library.holdQuietBooks().catch(() => 0);
@@ -9138,6 +9235,10 @@ async function boot() {
    * A crash takes the process with it, so from the outside the app simply
    * goes away and whatever launched it comes back -- indistinguishable from
    * it refusing to do anything. The reason is kept and reported here. */
+  if (rescued.length) {
+    const { book } = rescued[0];
+    toast(`A build was cut off when the app closed. “${book.title}” is on the shelf with the ${book.chapters} chapter${book.chapters === 1 ? '' : 's'} that had come; the rest is in Build — Carry on picks up from there.`, 12000);
+  }
   const crash = window.GrimoireNative?.lastCrash?.();
   if (crash) {
     await store.saveSettings({ lastCrash: crash });

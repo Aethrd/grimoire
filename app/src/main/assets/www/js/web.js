@@ -1355,7 +1355,7 @@ export async function readPage(link, index, {
     text = '';
   }
   const chapter = {
-    index, title, fromToc: true, html: body, words: countWords(text, lang), url: page.url,
+    index, title, fromToc: true, html: body, words: countWords(text, lang), url: page.url, from: link.url,
     ...(own !== null ? { number: own } : {}),
   };
   return {
@@ -1363,6 +1363,8 @@ export async function readPage(link, index, {
     // Each chapter the page held, when it held several.
     chapters: several ? read.map((each, at) => ({
       index, title: each.title || title, fromToc: true, html: each.html, words: countWords(each.text, lang), url: page.url,
+      // The link it came from -- a chapter cut out of another's post has none of its own.
+      ...(at === 0 ? { from: link.url } : {}),
       // A chapter posted under another, kept: placed by its number.
       ...(each.extra ? { extra: true, number: each.number } : at === 0 && own !== null ? { number: own } : {}),
     })) : [chapter],
@@ -1617,6 +1619,10 @@ async function closeGaps(bookId, kept) {
 export async function readPages(links, {
   title = '', author = '', cover = null, pictures = true, onImage, onProgress,
   fetchPage = download, gap = 250, jitter = 0, patience = {}, shouldStop = null,
+  // Each chapter as it goes into the book, in order, with the link to resume
+  // from should everything stop now: Build writes it there and then, so a
+  // build the app is closed in the middle of keeps what had come.
+  onChapter = null,
 } = {}) {
   const wait = { ...PATIENCE, ...patience };
   const chapters = [];
@@ -1663,7 +1669,9 @@ export async function readPages(links, {
       await onImage?.({ ...picture, chapterIndex: index });
     }
     words += chapter.words || 0;
-    chapters.push({ ...chapter, index });
+    const placed = { ...chapter, index };
+    chapters.push(placed);
+    await onChapter?.(placed, handed);
   };
   const unpark = async (before = Infinity) => {
     while (parked.length && parked[0].chapter.number < before) {

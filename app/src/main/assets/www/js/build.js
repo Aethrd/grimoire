@@ -378,6 +378,15 @@ export async function build({
   /* Filed where it was asked for -- the folder the shelf is open at -- or,
    * when it was not, where the book it was built onto is filed. A volume
    * added to a book in "Manhwa" belongs in "Manhwa", not loose on the shelf. */
+  /* The websites the book comes from -- its own parts', and those of any
+   * book it is built onto -- kept on it, as WebToEpub's library keeps a
+   * story's address: "Check for new chapters" lists them again. */
+  const webSources = [];
+  for (const part of parts) {
+    const from = part.web ? part.web.sources || [] : part.bookId ? (await store.get('books', part.bookId))?.webSources || [] : [];
+    for (const address of from) if (address && !webSources.includes(address)) webSources.push(address);
+  }
+
   let filed = folder || '';
   if (!filed) {
     for (const part of parts) {
@@ -399,6 +408,45 @@ export async function build({
     words: 0,
     importing: true,
     builtFrom: parts.map((p) => (p.bookId ? { name: p.name, bookId: p.bookId } : { name: p.name })),
+    ...(webSources.length ? { webSources } : {}),
+    /* What a website part is downloading, kept on the book until it is
+     * built: should the app be closed or killed meanwhile, the chapters
+     * that had come are a book on the next start, and the rest -- from
+     * `building.at.next` -- is kept to carry it on. */
+    building: {
+      webParts: parts.map((p, at) => (p.web ? { at, ...leftOf(p, p.web.links).web, leftover: p.leftover || null } : null))
+        .filter(Boolean),
+      at: null,
+    },
+  });
+  /* A chapter as it is kept: the part's name above its first, when the book
+   * has more than one part. */
+  const recordOf = (part, chapter, n, prefix, volume) => ({
+    bookId,
+    index: index++,
+    /* The part's name above its first chapter marks the seam between one
+       part and the next. With a single part there is no seam, and the label
+       would just repeat the book's own title on its first chapter. */
+    /* Not where a book is carried on from where its download stopped: the
+       parts are one serial, and the seam would be named again at every
+       carry -- "Title — Title — 1화". */
+    title: n === 0 && parts.length > 1 && !part.seamless
+      ? `${stripExtension(part.name)} — ${chapter.title}`
+      : chapter.title,
+    volume,
+    fromToc: chapter.fromToc,
+    words: chapter.words || 0,
+    base: prefix + (chapter.base || ''),
+    // The link a web chapter came from: how "Check for new chapters" knows
+    // what the book already has.
+    ...(chapter.from ? { from: chapter.from } : {}),
+    /* A part whose chapters arrive as finished markup -- a comic, a text
+       file -- has its picture references already resolved, so they need the
+       prefix applying too. One that arrives as source resolves them later,
+       against the prefixed base above. */
+    ...(chapter.source != null
+      ? { source: chapter.source }
+      : { html: reKeyImages(chapter.html || '', prefix) }),
   });
 
   let index = 0;
@@ -458,6 +506,22 @@ export async function build({
       if (pending.length >= 12) await flush();
     };
 
+    /* A website's chapters are kept as they come, each with where to resume
+     * from, not all at the end: a build of six hundred is an hour or two,
+     * and the app can be closed, or killed, in the middle of it. */
+    let streamed = 0;
+    const onChapter = part.web ? async (chapter, next) => {
+      const record = recordOf(part, chapter, streamed, prefix, volume);
+      streamed += 1;
+      words += record.words;
+      await store.put('chapters', record);
+      const book = await store.get('books', bookId);
+      if (book?.building) {
+        book.building.at = { part: at, next, chapters: index, words };
+        await store.put('books', book);
+      }
+    } : null;
+
     let parsed;
     try {
       parsed = part.web
@@ -471,6 +535,7 @@ export async function build({
           jitter: part.web.jitter,
           patience: part.web.patience,
           shouldStop: pausing,
+          onChapter,
           onImage,
           onProgress: (fraction, done, total, note) => onProgress?.(
             // With a note, the note before the book's name: it is what the
@@ -521,34 +586,11 @@ export async function build({
       });
     }
 
-    await store.putAll('chapters', parsed.chapters.map((chapter, n) => ({
-      bookId,
-      index: index++,
-      // The part's name above its first chapter, so the seams are findable in
-      // a book that is now thousands of chapters long.
-      /* The part's name above its first chapter marks the seam between one
-         part and the next. With a single part there is no seam, and the label
-         would just repeat the book's own title on its first chapter. */
-      /* Not where a book is carried on from where its download stopped:
-         the parts are one serial, and the seam would be named again at
-         every carry -- "Title — Title — 1화". */
-      title: n === 0 && parts.length > 1 && !part.seamless
-        ? `${stripExtension(part.name)} — ${chapter.title}`
-        : chapter.title,
-      volume,
-      fromToc: chapter.fromToc,
-      words: chapter.words || 0,
-      base: prefix + (chapter.base || ''),
-      /* A part whose chapters arrive as finished markup -- a comic, a text
-         file -- has its picture references already resolved, so they need the
-         prefix applying too. One that arrives as source resolves them later,
-         against the prefixed base above. */
-      ...(chapter.source != null
-        ? { source: chapter.source }
-        : { html: reKeyImages(chapter.html || '', prefix) }),
-    })));
-
-    words += parsed.chapters.reduce((n, c) => n + (c.words || 0), 0);
+    // A website's were kept as they came; the rest are kept now.
+    if (!part.web) {
+      await store.putAll('chapters', parsed.chapters.map((chapter, n) => recordOf(part, chapter, n, prefix, volume)));
+      words += parsed.chapters.reduce((n, c) => n + (c.words || 0), 0);
+    }
 
     if (parsed.images?.length) {
       await store.putAll('images', parsed.images.map((image) => ({
@@ -591,9 +633,41 @@ export async function build({
   finished.coverBytes = (chosenCover || cover)?.size ?? null;
   if (chosenCover) finished.coverCustom = true;
   delete finished.importing;
+  delete finished.building;
   await store.put('books', finished);
 
   return { book: finished, failed };
+}
+
+/**
+ * A build the app was closed (or killed) in the middle of, made a book of
+ * what had come -- or null when nothing had, or it was not a website.
+ *
+ * Its chapters were kept as they came, in order; this counts them, takes
+ * the book off "importing", and says what is left: the website being read,
+ * from the chapter after the last kept, and any website not begun.
+ *
+ * @returns {{ book, rest: [{ name, links, sources, pictures, author, gap,
+ *   jitter, leftover }] }} or null
+ */
+export async function rescueCutBuild(book) {
+  if (!book?.importing || !book.building?.webParts?.length) return null;
+  const chapters = await store.byIndex('chapters', 'bookId', book.id);
+  if (!chapters.length) return null;
+  const { webParts, at } = book.building;
+  const rest = [];
+  for (const part of webParts) {
+    if (at && part.at < at.part) continue;                 // read to its end
+    const links = at && part.at === at.part ? part.links.slice(at.next) : part.links;
+    if (links.length) rest.push({ ...part, links });
+  }
+  book.chapters = chapters.length;
+  book.words = chapters.reduce((n, c) => n + (c.words || 0), 0);
+  book.cutOff = Date.now();
+  delete book.importing;
+  delete book.building;
+  await store.put('books', book);
+  return { book, rest };
 }
 
 /**
@@ -624,6 +698,7 @@ async function readShelfBook(part) {
       fromToc: !!chapter.fromToc,
       words: chapter.words || 0,
       html: chapterHtml(chapter),
+      ...(chapter.from ? { from: chapter.from } : {}),
     })),
     images: images.map((image, order) => ({
       href: image.href,

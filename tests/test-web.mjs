@@ -1499,4 +1499,67 @@ await t('a post that carries the chapters after it is cut at them, nothing in th
   assert.equal(web.postedTogether(stray.body, 9), null);
 });
 
+await t('a build the app is closed in the middle of keeps what had come, and where to carry on', async () => {
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  build.clear();
+  // The site answers two chapters, then the app is "killed": nothing more ever comes.
+  const hang = async (url, options) => (/chapter-[3-9]/.test(url) ? new Promise(() => {}) : fakeFetch(url, options));
+  const links = [1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` }));
+  build.addWeb({ name: 'Cut off', links, sources: [SITE], leftover: 'left-old' });
+  Object.assign(build.contents()[0].web, { fetchPage: hang, gap: 0 });
+  build.build({ title: 'Cut off' });   // never finishes
+  let book = null;
+  for (let tries = 0; tries < 200 && !book; tries += 1) {
+    await new Promise((r) => setTimeout(r, 20));
+    const unfinished = (await store.all('books')).find((b) => b.importing && b.building && b.title === 'Cut off');
+    if (unfinished && (await store.byIndex('chapters', 'bookId', unfinished.id)).length === 2) book = unfinished;
+  }
+  assert.ok(book, 'the chapters that came were not kept as they came');
+  assert.deepEqual(book.building.at && { part: book.building.at.part, next: book.building.at.next }, { part: 0, next: 2 });
+  // The next start: a book of what came, and the rest to carry it on.
+  const kept = await build.rescueCutBuild(await store.get('books', book.id));
+  assert.equal(kept.book.chapters, 2);
+  assert.ok(!kept.book.importing && !kept.book.building);
+  assert.deepEqual(kept.rest.map((part) => part.links.map((l) => l.text)), [['No. 3']]);
+  assert.equal(kept.rest[0].leftover, 'left-old');
+  assert.deepEqual(kept.rest[0].sources, [SITE]);
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
+  assert.deepEqual(chapters.map((c) => c.title), ['No. 1', 'No. 2']);
+  // A half-written import with nothing kept is still swept away.
+  assert.equal(await build.rescueCutBuild({ importing: true, building: { webParts: [{ at: 0, links }], at: null }, id: 987654 }), null);
+  // The app does it before clearing what a crash left, and says so.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.ok(app.indexOf('await rescueCutBuilds()') < app.indexOf('await library.sweepUnfinishedImports();'));
+  assert.match(app, /A build was cut off when the app closed/);
+  build.clear();
+});
+
+await t('a book remembers its website and each chapter\'s link, and can be checked for new chapters', async () => {
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  build.clear();
+  const links = [1, 2].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` }));
+  build.addWeb({ name: 'Kept', links, sources: [SITE] });
+  Object.assign(build.contents()[0].web, { fetchPage: fakeFetch, gap: 0 });
+  const { book } = await build.build({ title: 'Kept' });
+  assert.deepEqual(book.webSources, [SITE]);
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
+  assert.deepEqual(chapters.map((c) => c.from), links.map((l) => l.url));
+  // Built onto, the book keeps them: its website, and its chapters' links.
+  build.clear();
+  build.addBook(book);
+  build.addWeb({ name: 'Kept', links: [{ url: `${SITE}chapter-3`, text: 'No. 3' }], sources: [SITE] });
+  for (const part of build.contents()) part.seamless = true;
+  Object.assign(build.contents()[1].web, { fetchPage: fakeFetch, gap: 0 });
+  const whole = (await build.build({ title: 'Kept' })).book;
+  assert.deepEqual(whole.webSources, [SITE]);
+  const all = (await store.byIndex('chapters', 'bookId', whole.id)).sort((a, b) => a.index - b.index);
+  assert.deepEqual(all.map((c) => c.from), [1, 2, 3].map((n) => `${SITE}chapter-${n}`));
+  build.clear();
+  // In the book's menu, and marking what the book has.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /choice\('Check for new chapters'/);
+  assert.match(app, /if \(fromLinks\.has\(link\.url\) \|\| \(link\.text && names\.has\(tidyName\(link\.text\)\)\)\) \{\s+link\.got = true;\s+link\.picked = false;/);
+  assert.match(app, /const update = await markWhatTheBookHas\(webState\.links\);/);
+});
+
 console.log(`\n${pass} assertions passed`);
