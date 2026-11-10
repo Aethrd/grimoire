@@ -1000,7 +1000,12 @@ body[data-view="reader"] .stepper {
 /* The one piece of chrome allowed to appear in NONE. */
 .toast { position: fixed; left: 50%; transform: translateX(-50%);
          bottom: calc(var(--safe-bottom) + 82px); z-index: 50;
-         max-width: 78%; padding: 11px 16px; border-radius: var(--radius-md);
+         /* As wide as its words, up to nearly the screen: placed from the
+            middle, a box sized by itself only had half the screen to fill,
+            and a long notice stood as a narrow column. The longest scroll. */
+         width: max-content; max-width: min(92vw, 560px); box-sizing: border-box;
+         max-height: 42vh; overflow-y: auto; overscroll-behavior: contain;
+         padding: 11px 16px; border-radius: var(--radius-md);
          color: var(--accent-100);
          font-size: 13px; text-align: center;
 

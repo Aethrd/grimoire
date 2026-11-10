@@ -6097,6 +6097,44 @@ function paintBuildFoot() {
   if (run.status) el('build-count').textContent = run.status;
 }
 
+/* ── how long it has been, and is to be ───────────────────────────────── */
+
+/** "45 s", "12 m", "1 h 05 m". */
+function span(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} m`;
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} m`;
+}
+
+/**
+ * Time so far, and an estimate of the time left -- on the progress row, by
+ * the count, and beside Pause & keep. The estimate is from how long this
+ * website's pages have taken so far, the delay and any tries included, so
+ * it follows the site as it gets slower or quicker; until a page has come
+ * it says so.
+ */
+function paintTimes() {
+  const run = buildRun;
+  if (!run) return;
+  const now = Date.now();
+  const elapsed = span(now - run.startedAt);
+  let left = '';
+  if (Number.isFinite(run.total) && Number.isFinite(run.done)) {
+    const came = run.done - (run.partFrom || 0);
+    left = run.done >= run.total ? '' : came > 0
+      ? `~${span(((now - run.partStart) / came) * (run.total - run.done))} left`
+      : 'estimating…';
+  }
+  const parts = run.parts > 1 ? `${run.at + 1} of ${run.parts} · ` : '';
+  run.finish?.say(null, null, `${parts}${elapsed}${left ? ` · ${left}` : ''}`);
+  if (!run.pausing && Number.isFinite(run.total)) {
+    run.status = `${run.done} of ${run.total}${left ? ` · ${left}` : ''}`;
+    paintBuildFoot();
+  }
+}
+
 /** Pause & keep: the download stops now -- a chapter half-come is dropped,
  *  and is where it carries on -- the book is made of what came, and the
  *  rest is kept to carry it on. */
@@ -6205,7 +6243,7 @@ function overnightAfter({ book, failed, kept, paused }) {
     endOvernight();
     const text = 'The site blocked this connection (Cloudflare). Overnight has stopped: wait some hours, then carry on, more slowly.';
     toast(`Overnight stopped. ${text}`, 15000);
-    notifyBuild({ title: 'Overnight stopped — the site blocked the connection', text });
+    notifyBuild({ title: 'Overnight stopped', text });
     return true;   // said; no other notification
   }
   if (!kept) {
@@ -6728,7 +6766,8 @@ function wireWorkshop() {
     /* "Pause & keep": stop downloading after the chapters under way and make
      * the book of what has come. The rest is kept in Build, to carry the
      * book on with later. */
-    buildRun = { online, pausing: false, status: 'Starting…', finish };
+    buildRun = { online, pausing: false, status: 'Starting…', finish, startedAt: Date.now(), at: -1 };
+    buildRun.ticker = setInterval(paintTimes, 1000);
     paintBuildFoot();
     try { window.GrimoireNative?.buildRunning?.(true); } catch { /* not in the app */ }
     try {
@@ -6739,12 +6778,21 @@ function wireWorkshop() {
         // Into the folder the shelf is open at, as an import would be.
         folder: activeFolder || null,
         cover: buildCover,
-        onProgress: (message, fraction, at, total, now) => {
-          finish.say(message, fraction, total > 1 ? `${at + 1} of ${total}` : '');
+        onProgress: (message, fraction, at, total, now, counts) => {
+          finish.say(message, fraction);
           // What it is doing this moment, on its own line under the bar.
           if (now !== undefined) finish.activity(now);
-          // Beside the button, briefly: "120 of 669", or how far in.
-          if (buildRun && !buildRun.pausing) {
+          // The pages of this part so far, for how long it has been and is to be.
+          if (buildRun) {
+            if (buildRun.at !== at) {
+              Object.assign(buildRun, { at, partStart: Date.now(), partFrom: counts?.done || 0 });
+            }
+            buildRun.parts = total;
+            if (counts) Object.assign(buildRun, { done: counts.done, total: counts.total });
+            paintTimes();
+          }
+          // Beside the button, briefly: "120 of 669 · ~5 h left", or how far in.
+          if (buildRun && !buildRun.pausing && !counts) {
             buildRun.status = /(\d+ of \d+)/.exec(message || '')?.[1]
               || (Number.isFinite(fraction) ? `${Math.round(fraction * 100)}%` : 'Building…');
             paintBuildFoot();
@@ -6796,11 +6844,13 @@ function wireWorkshop() {
         await refreshShelf();
       }
       const again = overnightAfter({ book, failed, kept, paused });
+      // A notification's title is a few words -- the popup shows one line of
+      // it -- and the book and the numbers lead what is under it.
       if (!again) notifyBuild(paused
-        ? { title: `Paused — “${book.title}” is on the shelf`, text: `${book.chapters} chapters kept. The other ${left} are in Build, to carry it on.` }
+        ? { title: 'Build paused', text: `“${book.title}”: ${book.chapters} chapters kept, ${left} left in Build to carry it on.` }
         : failed.length
-        ? { title: `Built “${book.title}” — stopped short`, text: `${book.chapters} chapters. ${failed[0].name}: ${failed[0].reason}` }
-        : { title: `Built “${book.title}”`, text: `${book.chapters} chapters${filed}, on the shelf.` });
+        ? { title: 'Build stopped short', text: `“${book.title}”: ${book.chapters} chapters. Stopped: ${failed[0].reason}` }
+        : { title: 'Build done', text: `“${book.title}”: ${book.chapters} chapters${filed}, on the shelf.` });
       const made = await store.get('books', book.id);
       // Overnight, Build stays up between tries, saying when the next is.
       if (made && current === 'workshop' && !again) await openBook(made);
@@ -6813,6 +6863,7 @@ function wireWorkshop() {
       if (!again) notifyBuild({ title: error.paused ? 'Build paused' : 'Build stopped', text: error.message || 'That could not be built' });
     } finally {
       finish();
+      clearInterval(buildRun?.ticker);
       buildRun = null;
       try { window.GrimoireNative?.buildRunning?.(false); } catch { /* not in the app */ }
       renderWorkshop();

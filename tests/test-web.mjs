@@ -284,7 +284,7 @@ await t('the screen is reached from Build, and only from there', () => {
   // Emptied for the next one: on adding, on a build, and on Clear in Build.
   const add = app.slice(app.indexOf('async function addWebToBuild('), app.indexOf('function clearWeb('));
   assert.match(add, /clearWeb\(\);/);
-  const go = app.slice(app.indexOf("el('build-go').onclick"), app.indexOf("el('build-go').onclick") + 4000);
+  const go = app.slice(app.indexOf("el('build-go').onclick"), app.indexOf('\nfunction wireReader('));
   assert.match(go, /clearWeb\(\);/);
   assert.match(app, /el\('build-clear'\)\.onclick = \(\) => \{\n    build\.clear\(\);\n    clearWeb\(\);/);
 });
@@ -1594,7 +1594,7 @@ await t('Overnight: a build that stops is carried on every 15 minutes until it i
   // A build cut off by the app closing is carried on too.
   assert.match(app, /if \(settings\.buildOvernight === true && left\) \{/);
   // One notification for the night, not one a try.
-  assert.match(app, /const again = overnightAfter\(\{ book, failed, kept, paused \}\);\s+if \(!again\) notifyBuild/);
+  assert.match(app, /const again = overnightAfter\(\{ book, failed, kept, paused \}\);[\s\S]{0,300}?if \(!again\) notifyBuild/);
 });
 
 await t('a bot check is known by its title or its own markup, never by words in the page', async () => {
@@ -1847,11 +1847,28 @@ await t('how far it has got and what it is doing now are told apart', async () =
   assert.deepEqual([retry.name, retry.attempt, retry.of], ['No. 2', 2, 3]);
   // Build keeps the count on the bar's line and passes what it is doing apart.
   const build = read('app/src/main/assets/www/js/build.js');
-  assert.match(build, /`Downloading \$\{part\.name\} · \$\{done\} of \$\{total\}`,\s+\(at \+ fraction\) \/ parts\.length, at, parts\.length, now \?\? null\)/);
+  assert.match(build, /`Downloading \$\{part\.name\} · \$\{done\} of \$\{total\}`,\s+\(at \+ fraction\) \/ parts\.length, at, parts\.length, now \?\? null, \{ done, total \}\)/);
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /<div class="job-activity" hidden><span class="job-tag"><\/span><span class="job-now"><\/span><\/div>/);
   assert.match(app, /what\.textContent = `\$\{left\} s left of your delay, then \$\{name\}`;/);
   assert.match(app, /if \(now !== undefined\) finish\.activity\(now\);/);
+});
+
+await t('a build says how long it has been and how long it should be yet', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  // From how long this website's pages have taken so far, delay and tries included.
+  assert.match(app, /`~\$\{span\(\(\(now - run\.partStart\) \/ came\) \* \(run\.total - run\.done\)\)\} left`/);
+  assert.match(app, /: 'estimating…';/);
+  assert.match(app, /buildRun\.ticker = setInterval\(paintTimes, 1000\);/);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /now \?\? null, \{ done, total \}\)/);
+  // span(): seconds, minutes, hours.
+  const body = app.slice(app.indexOf('function span(ms) {'), app.indexOf('function paintTimes()'));
+  const span = new Function(`${body}; return span;`)();
+  assert.equal(span(45000), '45 s');
+  assert.equal(span(12 * 60000), '12 m');
+  assert.equal(span(65 * 60000), '1 h 05 m');
+  // The notification popup shows a line of the title: a few words.
+  assert.match(app, /title: 'Build done', text: `“\$\{book\.title\}”: /);
 });
 
 console.log(`\n${pass} assertions passed`);
