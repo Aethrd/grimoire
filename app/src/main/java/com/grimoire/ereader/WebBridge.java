@@ -480,6 +480,8 @@ public class WebBridge {
         private WebView view;
         private boolean loaded;
         private String lastShape = "";
+        /** What it was opened for is plainly on the page: then it is kept. */
+        private boolean there;
         private long stillSince;
         private long startedAt;
 
@@ -552,6 +554,8 @@ public class WebBridge {
                 // its text being there did not mean its story was, last time.
                 boolean patient = quietMs > RENDER_QUIET_MS;
                 boolean ready = scroll ? chapterLinks >= 3 : !patient && textLength >= READY_TEXT;
+                // Plainly there, whatever else the page seems to be doing.
+                there = scroll ? chapterLinks >= 3 : textLength >= READY_TEXT;
                 long need = ready ? Math.min(quietMs, scroll ? READY_LIST_QUIET_MS : READY_QUIET_MS) : quietMs;
                 // Settled: nothing more on its way and nothing changing -- or
                 // nothing changing for so long that what is still on its way
@@ -572,7 +576,7 @@ public class WebBridge {
                 return;
             }
             view.evaluateJavascript("'<!DOCTYPE html>'+document.documentElement.outerHTML", (value) -> {
-                if (lastShape.contains("|checking|")) {
+                if (lastShape.contains("|checking|") && !there) {
                     error = "the site only lets a browser in (it is behind a bot check), and its check did not finish";
                 } else {
                     raw = value;
@@ -642,7 +646,12 @@ public class WebBridge {
     private static final String SCROLL = "try{if(document.body)window.scrollTo(0,document.body.scrollHeight);}catch(e){}";
     private static final String SHAPE = "(function(){try{var b=document.body;"
             + "var t=document.title||'';"
-            + "var c=/just a moment|checking your browser|잠시만 기다|請稍候|请稍候|attention required/i.test(t+' '+(b?b.textContent.slice(0,300):''));"
+            // A bot check at work: by the page's title, or the challenge's own
+            // markup -- never by words in the page, whose hidden "please
+            // wait" made every page of a site look like one.
+            + "var c=/just a moment|checking your browser|잠시만 기다|請稍候|请稍候|attention required/i.test(t)"
+            + "||!!document.querySelector('#challenge-form,#challenge-running,#cf-challenge-running,"
+            + ".cf-browser-verification,#cf-please-wait,[name=\"cf-turnstile-response\"],#turnstile-wrapper');"
             + "var r=(window.performance&&performance.getEntriesByType)?performance.getEntriesByType('resource').length:0;"
             // Links that look like chapters: under this page's address, or
             // named as one ("14화", "Chapter 3", "第三章").

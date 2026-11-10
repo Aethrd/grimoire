@@ -1591,4 +1591,13 @@ await t('Overnight: a build that stops is carried on every 15 minutes until it i
   assert.match(app, /const again = overnightAfter\(\{ book, failed, kept, paused \}\);\s+if \(!again\) notifyBuild/);
 });
 
+await t('a bot check is known by its title or its own markup, never by words in the page', async () => {
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  // A hidden "잠시만 기다려 주세요" on every page made every page look like a check.
+  assert.ok(!/test\(t\+' '\+\(b\?b\.textContent/.test(java), 'the page\'s own words are read for a bot check again');
+  assert.match(java, /#challenge-form,#challenge-running,#cf-challenge-running/);
+  // And a page whose content is plainly there is kept, whatever else it seems to be doing.
+  assert.match(java, /if \(lastShape\.contains\("\|checking\|"\) && !there\) \{/);
+});
+
 console.log(`\n${pass} assertions passed`);
