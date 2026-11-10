@@ -651,12 +651,6 @@ public class WebBridge {
     private static final String SCROLL = "try{if(document.body)window.scrollTo(0,document.body.scrollHeight);}catch(e){}";
     private static final String SHAPE = "(function(){try{var b=document.body;"
             + "var t=document.title||'';"
-            // A bot check at work: by the page's title, or the challenge's own
-            // markup -- never by words in the page, whose hidden "please
-            // wait" made every page of a site look like one.
-            + "var c=/just a moment|checking your browser|잠시만 기다|請稍候|请稍候|attention required/i.test(t)"
-            + "||!!document.querySelector('#challenge-form,#challenge-running,#cf-challenge-running,"
-            + ".cf-browser-verification,#cf-please-wait,[name=\"cf-turnstile-response\"],#turnstile-wrapper');"
             + "var r=(window.performance&&performance.getEntriesByType)?performance.getEntriesByType('resource').length:0;"
             // Links that look like chapters: under this page's address, or
             // named as one ("14화", "Chapter 3", "第三章").
@@ -666,6 +660,15 @@ public class WebBridge {
             // The text a reader would read: the page's scripts and styles are not it.
             + "var n=b?b.textContent.length:0,S=b?b.querySelectorAll('script,style'):[];"
             + "for(var j=0;j<S.length;j++)n-=S[j].textContent.length;"
+            /* A bot check at work: a page that is nothing but the check -- its
+             * title or Cloudflare's own markup says so, and there is next to
+             * nothing else on it. Never by words in the page (a hidden "please
+             * wait" made every page of a site look like a check), nor by a
+             * check widget tucked into a whole page's sign-in form. */
+            + "var sign=/just a moment|checking your browser|잠시만 기다|請稍候|请稍候|attention required/i.test(t)"
+            + "||!!window._cf_chl_opt||!!document.querySelector('#challenge-form,#challenge-running,#cf-challenge-running,"
+            + ".cf-browser-verification,#cf-please-wait,#turnstile-wrapper');"
+            + "var c=sign&&n<1500&&L.length<10;"
             // A loading message or spinner on show -- a site that waits a
             // moment before it puts the chapter up shows one meanwhile.
             // Shown only: a hidden one is a site at rest.

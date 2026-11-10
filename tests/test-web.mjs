@@ -1078,7 +1078,7 @@ await t('an ordinary page is fetched once, and an app without the renderer only 
   assert.match(java, /Object text = new JSONTokener\(job\.raw/);
   // Ready only once the page's own requests are back, counted from before its first script.
   assert.match(java, /WebViewCompat\.addDocumentStartJavaScript\(view, TRACKER/);
-  assert.match(java, /pending <= 0 && still >= need/);
+  assert.match(java, /!busy && still >= need/);
   // Taken as soon as what it was opened for is there -- a list's chapters, a
   // chapter's story -- after a short still moment, not the whole quiet spell;
   // a chapter asked for again patiently gets the whole spell.
@@ -1599,6 +1599,10 @@ await t('a bot check is known by its title or its own markup, never by words in 
   // A hidden "잠시만 기다려 주세요" on every page made every page look like a check.
   assert.ok(!/test\(t\+' '\+\(b\?b\.textContent/.test(java), 'the page\'s own words are read for a bot check again');
   assert.match(java, /#challenge-form,#challenge-running,#cf-challenge-running/);
+  // Only a page that is nothing but the check: a widget in a whole page's
+  // sign-in form, or a site's own "please wait" title, is not one.
+  assert.match(java, /var c=sign&&n<1500&&L\.length<10;/);
+  assert.ok(!/cf-turnstile-response/.test(java), 'a Turnstile field on a page makes it a check again');
   // And a page whose content is plainly there is kept, whatever else it seems to be doing.
   assert.match(java, /if \(lastShape\.contains\("\|checking\|"\) && !there\) \{/);
 });
