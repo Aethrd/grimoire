@@ -1422,4 +1422,16 @@ ${Array.from({ length: 30 }, (_, i) => `<a href="https://ads${i}.example/">광�
   assert.match(read('app/src/main/java/com/grimoire/ereader/MainActivity.java'), /requestCode == GrimoireBridge\.ASK_TO_NOTIFY/);
 });
 
+await t('Pause & keep is on Build\'s footer; the progress panel takes no taps', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const css = read('app/src/main/assets/www/css/app.css');
+  // The panel only reports: no button is put on it, and it lets taps through.
+  assert.ok(!/job-action/.test(app) && !/job-action/.test(css), 'a button is put on the progress panel again');
+  assert.match(css, /\.import-progress \{[\s\S]*?pointer-events: none;/);
+  // Build's own button is Pause & keep while a website downloads.
+  assert.match(app, /if \(buildRun\) \{ pauseBuild\(\); return; \}/);
+  assert.match(app, /go\.textContent = run\.pausing \? 'Pausing…' : run\.online \? 'Pause & keep' : 'Building…';/);
+  assert.match(app, /shouldPause: \(\) => !!buildRun\?\.pausing/);
+});
+
 console.log(`\n${pass} assertions passed`);

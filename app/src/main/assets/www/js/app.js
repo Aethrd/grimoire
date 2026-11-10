@@ -57,6 +57,7 @@ function viewChanged() {
   if (current === 'reader') inBook = true;
   else if (!BESIDE_THE_BOOK.has(current)) inBook = false;
   document.body.classList.toggle('in-book', inBook);
+  liftProgress();
   if (!inBook && held.length) {
     for (const deliver of held.splice(0)) {
       try { deliver(); } catch (error) { console.warn('A held notice could not be shown', error); }
@@ -2349,17 +2350,6 @@ const progress = (() => {
     handle.step = (message, fraction) => say(message, fraction);
     handle.fail = () => end(true);
     handle.end = end;
-    /** A button on this row -- "Pause & keep" -- or none (label null). */
-    handle.action = (label, onClick) => {
-      job.row.querySelector('.job-action')?.remove();
-      if (!label || job.ended) return;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'btn ghost job-action';
-      button.textContent = label;
-      button.onclick = (e) => { e.stopPropagation(); onClick?.(); };
-      job.row.appendChild(button);
-    };
     return handle;
   }
 
@@ -6030,6 +6020,52 @@ function closeCoverPick() {
   return true;
 }
 
+/* ── a build under way ─────────────────────────────────────────────────
+ *
+ * The progress panel only reports: it takes no taps, so nothing on it gets
+ * in the way of the shelf or the page (minimising aside). What a build can
+ * be told -- "Pause & keep" -- is on Build's own footer instead, where it
+ * was started: the Build button becomes Pause & keep while a website is
+ * downloading, and the count beside it says how far it has got.
+ */
+let buildRun = null;   // { online, pausing, status, finish } while a build runs
+
+/** The progress panel above Build's footer while that is on screen. */
+function liftProgress() {
+  const foot = el('build-foot');
+  document.body.classList.toggle('build-foot-up', current === 'workshop' && !!foot && !foot.hidden);
+}
+
+function paintBuildFoot() {
+  liftProgress();
+  const go = el('build-go');
+  const clear = el('build-clear');
+  if (!go || !clear) return;
+  const run = buildRun;
+  go.classList.toggle('primary', !run);
+  go.classList.toggle('ghost', !!run);
+  clear.disabled = !!run;
+  if (!run) {
+    go.textContent = 'Build';
+    go.disabled = false;
+    return;
+  }
+  go.textContent = run.pausing ? 'Pausing…' : run.online ? 'Pause & keep' : 'Building…';
+  go.disabled = run.pausing || !run.online;
+  if (run.status) el('build-count').textContent = run.status;
+}
+
+/** Pause & keep: the chapters under way finish, the book is made of what
+ *  came, and the rest is kept to carry it on. */
+function pauseBuild() {
+  const run = buildRun;
+  if (!run || !run.online || run.pausing) return;
+  run.pausing = true;
+  run.status = 'Pausing — finishing the chapters under way…';
+  run.finish?.say('Pausing — finishing the chapters under way, then making the book…');
+  paintBuildFoot();
+}
+
 /* ── a notification when a build ends ─────────────────────────────────
  *
  * "Notify me when it's built or stops", in Build: a website of six hundred
@@ -6125,6 +6161,7 @@ function renderWorkshop() {
   // open at is two tabs away from here.
   el('build-count').textContent = parts.length
     ? `${parts.length} part${parts.length === 1 ? '' : 's'}${activeFolder ? ` · into “${activeFolder}”` : ''}` : '';
+  paintBuildFoot();
 
   /* The suggested name follows what has been added, until it is typed over.
    *
@@ -6434,6 +6471,8 @@ function wireWorkshop() {
   wireBuildNotify();
 
   el('build-go').onclick = async () => {
+    // Pressed again while it runs: that is Pause & keep.
+    if (buildRun) { pauseBuild(); return; }
     const finish = progress.start('Building');
     // Leftovers being tried again in this build: settled by it either way.
     const retried = build.contents().map((part) => part.leftover).filter(Boolean);
@@ -6447,17 +6486,11 @@ function wireWorkshop() {
     /* "Pause & keep": stop downloading after the chapters under way and make
      * the book of what has come. The rest is kept in Build, to carry the
      * book on with later. */
-    let pausing = false;
-    if (online) {
-      finish.action('Pause & keep', () => {
-        pausing = true;
-        finish.action(null);
-        finish.say('Pausing — finishing the chapters under way, then making the book…');
-      });
-    }
+    buildRun = { online, pausing: false, status: 'Starting…', finish };
+    paintBuildFoot();
     try {
       const { book, failed } = await build.build({
-        shouldPause: () => pausing,
+        shouldPause: () => !!buildRun?.pausing,
         title: el('build-title').value.trim() || undefined,
         author: el('build-author').value.trim() || undefined,
         // Into the folder the shelf is open at, as an import would be.
@@ -6465,6 +6498,12 @@ function wireWorkshop() {
         cover: buildCover,
         onProgress: (message, fraction, at, total) => {
           finish.say(message, fraction, total > 1 ? `${at + 1} of ${total}` : '');
+          // Beside the button, briefly: "120 of 669", or how far in.
+          if (buildRun && !buildRun.pausing) {
+            buildRun.status = /(\d+ of \d+)/.exec(message || '')?.[1]
+              || (Number.isFinite(fraction) ? `${Math.round(fraction * 100)}%` : 'Building…');
+            paintBuildFoot();
+          }
         },
       });
       /* Into the book itself, as a cover chosen in Details is: its cover page
@@ -6520,6 +6559,8 @@ function wireWorkshop() {
       notifyBuild({ title: error.paused ? 'Build paused' : 'Build stopped', text: error.message || 'That could not be built' });
     } finally {
       finish();
+      buildRun = null;
+      renderWorkshop();
       // Let go again, unless a book is open to read.
       if (online && current !== 'reader') {
         try { window.GrimoireNative?.keepScreenOn?.(false); } catch { /* not in a browser */ }
