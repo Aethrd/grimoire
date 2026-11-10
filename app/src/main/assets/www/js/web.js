@@ -1533,7 +1533,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * picture is not a page and is not held back. With no pace set, nothing
  * waits and nothing queues.
  */
-function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false } = {}) {
+function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = null } = {}) {
   if (!(gap > 0) && !(jitter > 0)) return fetchPage;
   let line = Promise.resolve();
   let lastEnd = 0;
@@ -1544,7 +1544,12 @@ function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false } = {}) {
     line = new Promise((resolve) => { release = resolve; });
     await before;
     try {
-      if (lastEnd) await napUnless(Math.max(0, lastEnd + spacing(gap, jitter) - Date.now()), stop);
+      if (lastEnd) {
+        const wait = Math.max(0, lastEnd + spacing(gap, jitter) - Date.now());
+        // Said, so a minute's pause is not taken for being stuck.
+        if (wait >= 1500) onWait?.(url, wait);
+        await napUnless(wait, stop);
+      }
       if (stop()) throw Object.assign(new Error(PAUSED_REASON), { paused: true, tries: 1 });
       return await fetchPage(url, options);
     } finally {
@@ -1809,7 +1814,14 @@ export async function readPages(links, {
    * of the requests that run at once. Nought is as fast as the two will go. */
   /* Every page at the reader's pace, through one line (see pacer): the
    * first ask, a retry, a chapter's second page alike. */
-  const paced = pacer(fetchPage, { gap, jitter, stop: () => pausing() });
+  const paced = pacer(fetchPage, {
+    gap, jitter, stop: () => pausing(),
+    onWait: (url, ms) => {
+      const at = links.findIndex((link) => link.url === url);
+      onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
+        `waiting ${Math.round(ms / 1000)} s (your delay) before ${at >= 0 ? nameOf(links[at], at) : 'the next page'}…`);
+    },
+  });
   let nextAt = 0;
   const myTurn = async () => {
     const now = Date.now();
@@ -1852,7 +1864,10 @@ export async function readPages(links, {
         // Said while it is read: on a site rendered page by page, a chapter
         // can take a while, and the count only moves once one is done.
         onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
-          `${tries ? `trying ${nameOf(link, at)} again` : `reading ${nameOf(link, at)}`}…`);
+          tries
+            // With why the last try failed: "stuck on a chapter" says what at.
+            ? `trying ${nameOf(link, at)} again (${tries + 1} of ${(waits?.length || 0) + 1}) — last time ${shortReason(lastError)}…`
+            : `reading ${nameOf(link, at)}…`);
         return await readPage(link, at, { pictures, fetchPage: paced, chapterUrls, listedNumbers });
       } catch (error) {
         if (error?.paused) throw error;
@@ -1926,6 +1941,12 @@ export async function readPages(links, {
     title, author: author || null, lang, format: 'WEB',
     chapters, images: [], imageCount, words, coverBlob: cover, failed, rest,
   };
+}
+
+/** A failure, said briefly enough for a progress line. */
+function shortReason(error) {
+  const text = String(error?.message || error || 'it failed').replace(/\s+/g, ' ').trim();
+  return text.length > 90 ? `${text.slice(0, 89)}…` : text;
 }
 
 /** What a download stopped by hand says where it stopped. */

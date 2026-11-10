@@ -1615,7 +1615,7 @@ await t('a chapter whose page still shows "loading" is waited for', async () => 
   // A loader on show (not a hidden one) holds a chapter back, as a request on its way does.
   assert.match(java, /\[class\*=\\"loading\\"\],\[class\*=\\"spinner\\"\]/);
   assert.match(java, /st\.display!=='none'&&st\.visibility!=='hidden'/);
-  assert.match(java, /boolean busy = pending > 0 \|\| \(!scroll && loading\);/);
+  assert.match(java, /boolean busy = pending > 0 \|\| holding;/);
   // Never for ever: a page still for long enough is taken all the same.
   assert.match(java, /\(\(!busy && still >= need\) \|\| still >= quietMs \* RENDER_STUCK_SPELLS\)/);
 });
@@ -1766,8 +1766,27 @@ await t('the delay is kept for every page -- retries too -- from when the last o
   // A page that says to wait is waited on, there, for up to three minutes.
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /private static final long RENDER_WAIT_MS = 180000;/);
-  assert.match(java, /long limit = saysWait \? RENDER_WAIT_MS : maxMs;/);
+  assert.match(java, /long limit = holding \? RENDER_WAIT_MS : maxMs;/);
   assert.match(read('app/src/main/assets/www/js/web.js'), /if \(method === 'render'\) timeout = Math\.max\(timeout, 240000\);/);
+});
+
+await t('a spinner left going once the chapter is there holds nothing; waiting and retries are said', async () => {
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\)\);/);
+  assert.match(java, /long limit = holding \? RENDER_WAIT_MS : maxMs;/);
+  // The progress line: the delay being waited out, and why a chapter is tried again.
+  const notes = [];
+  let failed = false;
+  const flaky = async (url, options) => {
+    if (url.endsWith('chapter-2') && !failed) { failed = true; throw new Error('the site took too long to answer'); }
+    return fakeFetch(url, options);
+  };
+  await web.readPages([1, 2].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` })), {
+    fetchPage: flaky, gap: 1600, jitter: 0, pictures: false, patience: { retry: 0, refresh: [0], backoff: [0, 0] },
+    onProgress: (fraction, done, total, note) => { if (note) notes.push(note); },
+  });
+  assert.ok(notes.some((n) => /^waiting \d+ s \(your delay\) before No\. 2…$/.test(n)), notes.join('\n'));
+  assert.ok(notes.some((n) => /^trying No\. 2 again \(2 of 3\) — last time the site took too long to answer…$/.test(n)), notes.join('\n'));
 });
 
 console.log(`\n${pass} assertions passed`);

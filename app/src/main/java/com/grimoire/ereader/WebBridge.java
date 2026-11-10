@@ -728,14 +728,17 @@ public class WebBridge {
                 // is not the page.
                 // A chapter whose page still shows "loading" is not ready, however
                 // still it is (a site that waits before putting the chapter up).
-                boolean busy = pending > 0 || (!scroll && loading);
-                // Says to wait -- a check at work, a chapter's "loading" -- so it
-                // is waited on, on the same page: not taken, not timed out and
-                // reloaded, until it is done or RENDER_WAIT_MS has gone.
-                boolean saysWait = waiting || (!scroll && loading);
-                boolean settled = !waiting && !blank && !(!scroll && loading)
+                /* Says to wait -- a check at work, a chapter's "loading" -- while
+                 * what it was opened for is not there yet: then it is waited on,
+                 * on the same page, not taken, timed out or reloaded, for up to
+                 * RENDER_WAIT_MS. Once the chapter is there, a spinner left
+                 * going elsewhere on the page (comments, adverts) holds nothing:
+                 * that held every chapter for the whole three minutes. */
+                boolean holding = !there && (waiting || (!scroll && loading));
+                boolean busy = pending > 0 || holding;
+                boolean settled = !blank && !holding
                         && ((!busy && still >= need) || still >= quietMs * RENDER_STUCK_SPELLS);
-                long limit = saysWait ? RENDER_WAIT_MS : maxMs;
+                long limit = holding ? RENDER_WAIT_MS : maxMs;
                 if (settled || now - startedAt >= limit) {
                     take();
                 } else {
