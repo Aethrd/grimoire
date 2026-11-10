@@ -2349,6 +2349,17 @@ const progress = (() => {
     handle.step = (message, fraction) => say(message, fraction);
     handle.fail = () => end(true);
     handle.end = end;
+    /** A button on this row -- "Pause & keep" -- or none (label null). */
+    handle.action = (label, onClick) => {
+      job.row.querySelector('.job-action')?.remove();
+      if (!label || job.ended) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn ghost job-action';
+      button.textContent = label;
+      button.onclick = (e) => { e.stopPropagation(); onClick?.(); };
+      job.row.appendChild(button);
+    };
     return handle;
   }
 
@@ -6123,10 +6134,61 @@ store.settings().then((settings) => {
 }).catch(() => {});
 
 const saveLeftovers = () => store.saveSettings({ webLeftovers }).catch(() => {});
+
+/* ── where a website's download stopped ───────────────────────────────
+ *
+ * Paused, or stopped at a page the site would not give: remembered by the
+ * address of the book's contents page, apart from Build's list and its
+ * leftovers -- so clearing either loses nothing, and listing the same book
+ * again offers to resume from that chapter or start from the beginning.
+ * A build that downloads to the end forgets it.
+ */
+let webStops = [];
+store.settings().then((settings) => {
+  webStops = Array.isArray(settings.webStops) ? settings.webStops : [];
+}).catch(() => {});
+const saveStops = () => store.saveSettings({ webStops }).catch(() => {});
+
+/** A contents page's address, as one book is known by: no fragment, no
+ *  page number, no trailing slash. */
+function stopKey(address) {
+  try {
+    const url = new URL(String(address || '').trim());
+    url.hash = '';
+    for (const key of [...url.searchParams.keys()]) if (/^(page|p|pg|paged|pageno)$/i.test(key)) url.searchParams.delete(key);
+    return url.href.replace(/\/+$/, '');
+  } catch {
+    return String(address || '').trim().replace(/\/+$/, '');
+  }
+}
+
+const stopFor = (address) => webStops.find((stop) => stop.key === stopKey(address)) || null;
+
+/**
+ * After a build: each website in it either went to the end, and where it
+ * once stopped is forgotten, or stopped again, and that is remembered --
+ * with the book it stopped short of, to carry on.
+ */
+function rememberStops(sources, failed, book) {
+  const keys = new Set(sources.map(stopKey).filter(Boolean));
+  webStops = webStops.filter((stop) => !keys.has(stop.key));
+  for (const failure of failed || []) {
+    const links = failure.web?.links;
+    const source = failure.web?.sources?.[0];
+    if (!links?.length || !source) continue;
+    webStops.push({
+      key: stopKey(source), url: links[0].url, text: links[0].text || '', left: links.length,
+      reason: failure.web.reason || failure.reason || '', at: Date.now(),
+      bookId: book?.id ?? null, bookTitle: book?.title || '',
+    });
+  }
+  webStops = webStops.slice(-50);
+  saveStops();
+}
 const LEFTOVER_SUFFIX = /\s+— (the rest|from .*)$/;
 
 /** Take a build's failures in; returns the newest kept, or null. */
-function keepLeftovers(failed, retried = []) {
+function keepLeftovers(failed, retried = [], book = null) {
   webLeftovers = webLeftovers.filter((left) => !retried.includes(left.id));
   let newest = null;
   for (const failure of failed || []) {
@@ -6147,6 +6209,9 @@ function keepLeftovers(failed, retried = []) {
       jitter: failure.web.jitter,
       reason: failure.web.reason || failure.reason || '',
       at: Date.now(),
+      // The book it stopped short of, to carry on rather than start another.
+      bookId: book?.id ?? null,
+      bookTitle: book?.title || '',
     };
     webLeftovers.push(newest);
   }
@@ -6168,17 +6233,53 @@ function paintLeftovers(parts) {
     const first = escapeText(left.links[0]?.text || 'a page');
     const box = document.createElement('div');
     box.className = 'build-leftover';
-    box.innerHTML = `<p><b>“${book}” stopped at ${first}</b>`
-      + (left.reason ? ` — ${escapeText(left.reason)}` : '') + '. '
-      + `${count === 1 ? 'That chapter is' : `It and the ${count - 1} after it are`} kept, to download as another book that carries on where that one stops.`
+    const paused = left.reason === web.PAUSED_REASON;
+    box.innerHTML = (paused
+      ? `<p><b>“${book}” paused at ${first}</b>. `
+        + `${count === 1 ? 'That chapter is' : `It and the ${count - 1} after it are`} kept: carry the book on with them, or download them as another book.`
+      : `<p><b>“${book}” stopped at ${first}</b>`
+        + (left.reason ? ` — ${escapeText(left.reason)}` : '') + '. '
+        + `${count === 1 ? 'That chapter is' : `It and the ${count - 1} after it are`} kept, to download as another book that carries on where that one stops.`)
       + `<small>${crowded
         ? 'The site turned a request away. Trying again usually works straight away.'
         : 'If that page is not the book, look them over and untick it first.'}`
       + (busy ? ' Build or clear the list above first.' : '') + '</small></p>'
       + '<div class="web-row"><button class="btn ghost" data-forget>Forget</button>'
       + '<button class="btn ghost" data-look>Look over</button>'
-      + '<button class="btn primary" data-retry>Download as another book</button></div>';
+      + (left.bookId != null
+        ? '<button class="btn ghost" data-retry>As another book</button><button class="btn primary" data-carry>Carry on</button>'
+        : '<button class="btn primary" data-retry>Download as another book</button>')
+      + '</div>';
     box.querySelector('[data-look]').disabled = busy;
+    const carry = box.querySelector('[data-carry]');
+    if (carry) {
+      carry.disabled = busy;
+      /* The book it stopped short of, and the rest after it: one book
+       * again, as Build onto makes one. The shorter one stays on the shelf
+       * until you are happy with the whole. */
+      carry.onclick = async () => {
+        if (build.contents().length) return;
+        const book = await store.get('books', left.bookId);
+        if (!book) {
+          toast(`“${left.bookTitle || 'That book'}” is no longer on the shelf — downloading the rest as another book`, 6000);
+          box.querySelector('[data-retry]').click();
+          return;
+        }
+        build.addBook(book);
+        build.addWeb({
+          name: left.name, links: left.links, pictures: left.pictures,
+          author: left.author, sources: left.sources, leftover: left.id,
+          gap: Number.isFinite(left.gap) ? left.gap : webDelay(),
+          jitter: Number.isFinite(left.jitter) ? left.jitter : webJitter(),
+        });
+        for (const part of build.contents()) part.seamless = true;
+        el('build-title').value = library.displayTitle(book);
+        buildTitleTouched = true;
+        if (book.author || left.author) el('build-author').value = book.author || left.author;
+        renderWorkshop();
+        el('build-go').click();
+      };
+    }
     box.querySelector('[data-look]').onclick = () => {
       showLeftoverInWeb(left);
       show('web');
@@ -6286,9 +6387,23 @@ function wireWorkshop() {
      * phone soon pauses the app, and a download of a few hundred chapters
      * then stalls until someone looks at it again. */
     const online = build.contents().some((part) => part.web);
+    // The websites in it, by contents page: where each stops is remembered.
+    const webSources = build.contents().filter((part) => part.web).map((part) => part.web.sources?.[0]).filter(Boolean);
     if (online) { try { window.GrimoireNative?.keepScreenOn?.(true); } catch { /* not in a browser */ } }
+    /* "Pause & keep": stop downloading after the chapters under way and make
+     * the book of what has come. The rest is kept in Build, to carry the
+     * book on with later. */
+    let pausing = false;
+    if (online) {
+      finish.action('Pause & keep', () => {
+        pausing = true;
+        finish.action(null);
+        finish.say('Pausing — finishing the chapters under way, then making the book…');
+      });
+    }
     try {
       const { book, failed } = await build.build({
+        shouldPause: () => pausing,
         title: el('build-title').value.trim() || undefined,
         author: el('build-author').value.trim() || undefined,
         // Into the folder the shelf is open at, as an import would be.
@@ -6317,7 +6432,8 @@ function wireWorkshop() {
        * list: a site that said "too many requests" will usually give them an
        * hour later, as a book of their own. The website screen holds them too,
        * address and all; otherwise it starts empty for the next one. */
-      const kept = keepLeftovers(failed, retried);
+      const kept = keepLeftovers(failed, retried, book);
+      rememberStops(webSources, failed, book);
       if (kept) showLeftoverInWeb(kept);
       else clearWeb();
       renderWorkshop();
@@ -6326,7 +6442,11 @@ function wireWorkshop() {
       // three volumes should not look like a complete one.
       const filed = book.folder ? ` · in “${book.folder}”` : '';
       const later = kept ? ' — the rest is kept in Build to download as another book' : '';
-      whenNotReading(() => toast(failed.length
+      const paused = failed.length > 0 && failed.every((each) => each.paused);
+      const left = failed.reduce((sum, each) => sum + (each.web?.links?.length || 0), 0);
+      whenNotReading(() => toast(paused
+        ? `Paused — built “${book.title}” with ${book.chapters} chapters${filed}. The other ${left} are kept in Build: “Carry on” adds them to the end.`
+        : failed.length
         ? `Built “${book.title}” — ${book.chapters} chapters${filed} · skipped ${failed[0].name}${failed.length > 1 ? ` and ${failed.length - 1} more` : ''}: ${failed[0].reason}${later}`
         : `Built “${book.title}” — ${book.chapters} chapters${filed}`, 8000, { kind: 'done' }));
       /* Straight into the book that was just made, not out to the shelf to
@@ -6337,7 +6457,7 @@ function wireWorkshop() {
       if (made && current === 'workshop') await openBook(made);
     } catch (error) {
       finish.fail();
-      whenNotReading(() => toast(error.message || 'That could not be built', 6000, { kind: 'failed' }));
+      whenNotReading(() => toast(error.message || 'That could not be built', 6000, { kind: error.paused ? 'done' : 'failed' }));
     } finally {
       finish();
       // Let go again, unless a book is open to read.
@@ -8022,12 +8142,69 @@ async function findWebLinks() {
         + (order.how === 'sorted' ? ' The site listed them out of order, so they have been put in chapter order.' : ''));
     el('web-filter').value = '';
     drawWebList();
+    paintResume();
   } catch (error) {
     webNote(error.message || 'Those links could not be found.', true);
   } finally {
     button.disabled = false;
     button.textContent = 'Find links';
   }
+}
+
+/**
+ * Where this book stopped last time, if it did: resume from there -- the
+ * chapters before it unticked, and the book it stopped short of carried on
+ * -- or start from the beginning.
+ */
+function paintResume() {
+  const box = el('web-resume');
+  if (!box) return;
+  webState.carryOn = null;
+  const stop = !el('web-direct').checked && webState.sources.length ? stopFor(webState.sources[0]) : null;
+  let at = stop ? webState.links.findIndex((link) => link.url === stop.url) : -1;
+  if (stop && at < 0 && stop.text) at = webState.links.findIndex((link) => link.text === stop.text);
+  if (!stop || at <= 0) { box.hidden = true; box.replaceChildren(); return; }
+
+  const paused = stop.reason === web.PAUSED_REASON;
+  const name = escapeText(stop.text || 'a page');
+  const short = escapeText((stop.text || 'there').length > 32 ? `${stop.text.slice(0, 31)}…` : stop.text || 'there');
+  const when = new Date(stop.at).toLocaleDateString();
+  const ask = () => {
+    box.innerHTML = `<p><b>Last time this ${paused ? 'was paused' : 'stopped'} at ${name}</b> · ${escapeText(when)}`
+      + (!paused && stop.reason ? ` — ${escapeText(stop.reason)}` : '') + '.'
+      + `<small>${stop.bookId != null
+        ? `Resume adds the chapters from there to the end of “${escapeText(stop.bookTitle || 'that book')}”, as one book, if it is still on the shelf.`
+        : 'Resume ticks the chapters from there on.'}</small></p>`
+      + '<div class="web-row"><button class="btn ghost" data-begin>Start from the beginning</button>'
+      + `<button class="btn primary" data-resume>Resume from ${short}</button></div>`;
+    box.querySelector('[data-begin]').onclick = () => {
+      webState.links.forEach((link) => { link.picked = true; });
+      webState.carryOn = null;
+      webState.leftover = null;
+      repaintWebRows();
+      box.hidden = true;
+      toast('Starting from the beginning — every chapter is ticked');
+    };
+    box.querySelector('[data-resume]').onclick = () => {
+      webState.links.forEach((link, n) => { if (n < at) link.picked = false; });
+      webState.carryOn = stop.bookId;
+      // The same pages kept in Build as left over: this settles them.
+      webState.leftover = webLeftovers.find((left) => left.links[0]?.url === stop.url)?.id || null;
+      repaintWebRows();
+      box.innerHTML = `<p><b>Resuming from ${name}</b> — the chapters before it are unticked.</p>`
+        + '<div class="web-row"><button class="btn ghost" data-undo>Start from the beginning instead</button></div>';
+      box.querySelector('[data-undo]').onclick = () => {
+        webState.links.forEach((link) => { link.picked = true; });
+        webState.carryOn = null;
+        webState.leftover = null;
+        repaintWebRows();
+        ask();
+      };
+      el('web-list').children[at]?.scrollIntoView?.({ block: 'center' });
+    };
+  };
+  ask();
+  box.hidden = false;
 }
 
 /**
@@ -8054,6 +8231,16 @@ async function addWebToBuild() {
   go.disabled = true;
   go.textContent = 'Adding…';
   try {
+    /* Resumed: the book it stopped short of goes in first, so what is built
+     * is that book carried on to the end, not a second one beside it. */
+    const carried = webState.carryOn != null ? await store.get('books', webState.carryOn) : null;
+    if (carried && !build.hasBook(carried.id)) {
+      build.addBook(carried);
+      build.contents().at(-1).seamless = true;
+      if (!webState.titleTouched) name = library.displayTitle(carried);
+      el('build-title').value = library.displayTitle(carried);
+      buildTitleTouched = true;
+    }
     const cover = await web.fetchCover(webState.cover);
     build.addWeb({
       name, links: chosen, pictures: webState.pictures, cover,
@@ -8061,9 +8248,12 @@ async function addWebToBuild() {
       // Pages left over from an earlier build: this settles them.
       leftover: webState.leftover || null,
     });
+    if (carried) build.contents().at(-1).seamless = true;
     if (webState.author && !el('build-author').value) el('build-author').value = webState.author;
     clearWeb();
-    toast(`${chosen.length} page${chosen.length === 1 ? '' : 's'} added to Build — downloaded when it is built`);
+    toast(carried
+      ? `${chosen.length} page${chosen.length === 1 ? '' : 's'} added after “${library.displayTitle(carried)}” — built, they carry it on as one book`
+      : `${chosen.length} page${chosen.length === 1 ? '' : 's'} added to Build — downloaded when it is built`);
     // Back to the workshop, which draws itself on the way in.
     back();
   } finally {
@@ -8096,8 +8286,10 @@ function webDelay() {
 function clearWeb() {
   Object.assign(webState, {
     links: [], title: '', author: '', cover: '', sources: [], reversed: false, titleTouched: false, leftover: null,
-    manualOrder: false,
+    manualOrder: false, carryOn: null,
   });
+  const resume = el('web-resume');
+  if (resume) { resume.hidden = true; resume.replaceChildren(); }
   el('web-list').replaceChildren();
   el('web-address').value = '';
   el('web-filter').value = '';

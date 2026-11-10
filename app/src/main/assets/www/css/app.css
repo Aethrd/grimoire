@@ -1334,6 +1334,10 @@ body[data-view="reader"] .stepper {
 .job.failed .job-label::before { content: "✕ "; }
 .job.failed .job-label { color: var(--muted); }
 .job.failed .bar-fill { background: var(--muted); }
+/* "Pause & keep" on a download: under its bar, small, and the whole width so
+   a thumb finds it. */
+.job-action { display: block; width: 100%; margin-top: 8px; padding: 6px 10px; font-size: 13px; }
+.job.done .job-action, .job.failed .job-action { display: none; }
 .job.done, .job.failed { opacity: .72; transition: opacity var(--motion) var(--ease); }
 
 .jobs-more { margin: 8px 0 0; font-size: 11px; }

@@ -23,7 +23,7 @@ import {
   coverOf, picturesInFile,
 } from './parse.js';
 import { planBooks } from './group.js';
-import { readPages } from './web.js';
+import { readPages, PAUSED_REASON } from './web.js';
 
 /** The parts waiting to be built, in the order they will be joined. */
 let parts = [];
@@ -360,7 +360,9 @@ export function describe(part) {
  * two volumes of a serial name their pictures identically, and without a
  * prefix the later ones quietly replace the earlier.
  */
-export async function build({ title, author, folder = null, cover: chosenCover = null, onProgress } = {}) {
+export async function build({
+  title, author, folder = null, cover: chosenCover = null, onProgress, shouldPause = null,
+} = {}) {
   /* One part is a book too.
    *
    * A zip of a volume's saved pages, or a folder of a chapter's images, is a
@@ -407,8 +409,24 @@ export async function build({ title, author, folder = null, cover: chosenCover =
   let cover = null;
   const failed = [];
 
+  /* "Pause & keep": the website being downloaded stops after the chapters
+   * under way, and a website not yet begun is not begun -- both kept whole
+   * as what is left, to carry on with. Files are still read: they take
+   * moments, and a book missing its own volumes is not what was asked for. */
+  const pausing = () => typeof shouldPause === 'function' && !!shouldPause();
+
   for (let at = 0; at < parts.length; at++) {
     const part = parts[at];
+    if (part.web && pausing()) {
+      const count = part.web.links.length;
+      failed.push({
+        name: `${part.name}: all ${count} page${count === 1 ? '' : 's'}`,
+        reason: PAUSED_REASON,
+        paused: true,
+        ...leftOf(part, part.web.links, PAUSED_REASON),
+      });
+      continue;
+    }
     onProgress?.(`Reading ${part.name}`, at / parts.length, at, parts.length);
 
     const prefix = `p${at}/`;
@@ -451,6 +469,7 @@ export async function build({ title, author, folder = null, cover: chosenCover =
           gap: part.web.gap,
           jitter: part.web.jitter,
           patience: part.web.patience,
+          shouldStop: pausing,
           onImage,
           onProgress: (fraction, done, total, note) => onProgress?.(
             // With a note, the note before the book's name: it is what the
@@ -479,7 +498,11 @@ export async function build({ title, author, folder = null, cover: chosenCover =
       for (const image of await store.byIndex('images', 'bookId', bookId)) {
         if (image.href.startsWith(prefix)) await store.del('images', [bookId, image.href]);
       }
-      failed.push({ name: part.name, reason: error.message, ...leftOf(part, error.rest, error.failed?.[0]?.reason) });
+      const paused = error.failed?.[0]?.reason === PAUSED_REASON;
+      failed.push({
+        name: part.name, reason: paused ? PAUSED_REASON : error.message, paused,
+        ...leftOf(part, error.rest, error.failed?.[0]?.reason),
+      });
       continue;
     }
     if (!cover && parsed.coverBlob) cover = parsed.coverBlob;
@@ -488,9 +511,11 @@ export async function build({ title, author, folder = null, cover: chosenCover =
     if (parsed.rest?.length) {
       const count = parsed.rest.length;
       const at = parsed.failed[0];
+      const paused = at?.reason === PAUSED_REASON;
       failed.push({
         name: `${part.name}: the last ${count} page${count === 1 ? '' : 's'}`,
-        reason: `stopped at ${at?.text || at?.url} — ${at?.reason}`,
+        reason: paused ? PAUSED_REASON : `stopped at ${at?.text || at?.url} — ${at?.reason}`,
+        paused,
         ...leftOf(part, parsed.rest, at?.reason),
       });
     }
@@ -503,7 +528,10 @@ export async function build({ title, author, folder = null, cover: chosenCover =
       /* The part's name above its first chapter marks the seam between one
          part and the next. With a single part there is no seam, and the label
          would just repeat the book's own title on its first chapter. */
-      title: n === 0 && parts.length > 1
+      /* Not where a book is carried on from where its download stopped:
+         the parts are one serial, and the seam would be named again at
+         every carry -- "Title — Title — 1화". */
+      title: n === 0 && parts.length > 1 && !part.seamless
         ? `${stripExtension(part.name)} — ${chapter.title}`
         : chapter.title,
       volume,
@@ -543,10 +571,14 @@ export async function build({ title, author, folder = null, cover: chosenCover =
      * "None of those parts could be read" is true and useless: every part had
      * a reason, and throwing them away left nothing to act on. */
     const why = failed[0]?.reason;
+    // Paused before a single chapter had come: nothing to keep, nothing wrong.
+    const paused = failed.length > 0 && failed.every((each) => each.paused);
     // With what failed, so pages from a website can be tried again.
-    throw Object.assign(new Error(why
+    throw Object.assign(new Error(paused
+      ? 'Paused before any chapter had come, so there is no book yet. The list is still here to build.'
+      : why
       ? `None of those parts could be read — ${failed[0].name}: ${why}`
-      : 'None of those parts could be read.'), { failed });
+      : 'None of those parts could be read.'), { failed, paused });
   }
 
   const finished = await store.get('books', bookId);

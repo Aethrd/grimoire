@@ -1518,7 +1518,7 @@ async function closeGaps(bookId, kept) {
  */
 export async function readPages(links, {
   title = '', author = '', cover = null, pictures = true, onImage, onProgress,
-  fetchPage = download, gap = 250, jitter = 0, patience = {},
+  fetchPage = download, gap = 250, jitter = 0, patience = {}, shouldStop = null,
 } = {}) {
   const wait = { ...PATIENCE, ...patience };
   const chapters = [];
@@ -1539,6 +1539,18 @@ export async function readPages(links, {
    * built together later. */
   let stopAt = links.length;
   let stopped = null;    // { at, url, text, reason } of the page it stopped at
+
+  /* Paused by hand ("Pause & keep"): no page is begun after it, the ones
+   * under way are finished, and it stops where the first not begun is --
+   * the same as a page that would not come, so what came is a book and the
+   * rest is kept to carry on with. */
+  const pausing = () => typeof shouldStop === 'function' && !!shouldStop();
+  const PAUSED = () => Object.assign(new Error(PAUSED_REASON), { paused: true, tries: 1 });
+  const pauseAt = (at) => {
+    if (at >= stopAt || at >= links.length) return;
+    stopAt = at;
+    stopped = { at, url: links[at].url, text: links[at].text, reason: PAUSED_REASON };
+  };
 
   const handOn = async () => {
     while (handed < stopAt && waiting[handed] !== undefined) {
@@ -1596,13 +1608,17 @@ export async function readPages(links, {
       const before = interruptions;
       try {
         if (tries === 0 && uncounted === 0) await myTurn();
+        if (pausing()) throw PAUSED();
         // Said while it is read: on a site rendered page by page, a chapter
         // can take a while, and the count only moves once one is done.
         onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
           `${tries ? `trying ${nameOf(link, at)} again` : `reading ${nameOf(link, at)}`}…`);
         return await readPage(link, at, { pictures, fetchPage, chapterUrls });
       } catch (error) {
+        if (error?.paused) throw error;
         lastError = error;
+        // Paused meanwhile: this page is where it stops, not tried again.
+        if (pausing()) throw PAUSED();
         // Failed while the app was away: asked again once it is back.
         if (interruptions !== before && uncounted < 20) { uncounted += 1; continue; }
         if (!waits) {
@@ -1627,6 +1643,7 @@ export async function readPages(links, {
 
   const worker = async () => {
     while (next < stopAt) {
+      if (pausing()) { pauseAt(next); break; }
       const at = next++;
       const link = links[at];
       let got = false;
@@ -1635,7 +1652,8 @@ export async function readPages(links, {
       } catch (error) {
         // The earliest page to fail is where it stops; a later one that
         // fails meanwhile is part of the rest anyway.
-        if (at < stopAt) {
+        if (error?.paused) pauseAt(at);
+        else if (at < stopAt) {
           stopAt = at;
           const tried = error.tries > 1 ? ` (tried ${error.tries} times)` : '';
           stopped = { at, url: link.url, text: link.text, reason: `${error.message || 'could not be read'}${tried}` };
@@ -1666,6 +1684,9 @@ export async function readPages(links, {
     chapters, images: [], imageCount, words, coverBlob: cover, failed, rest,
   };
 }
+
+/** What a download stopped by hand says where it stopped. */
+export const PAUSED_REASON = 'paused';
 
 /** How long to wait between tries of a page, in milliseconds. */
 export const PATIENCE = {

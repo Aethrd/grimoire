@@ -282,7 +282,7 @@ await t('the screen is reached from Build, and only from there', () => {
   // Emptied for the next one: on adding, on a build, and on Clear in Build.
   const add = app.slice(app.indexOf('async function addWebToBuild('), app.indexOf('function clearWeb('));
   assert.match(add, /clearWeb\(\);/);
-  const go = app.slice(app.indexOf("el('build-go').onclick"), app.indexOf("el('build-go').onclick") + 2500);
+  const go = app.slice(app.indexOf("el('build-go').onclick"), app.indexOf("el('build-go').onclick") + 4000);
   assert.match(go, /clearWeb\(\);/);
   assert.match(app, /el\('build-clear'\)\.onclick = \(\) => \{\n    build\.clear\(\);\n    clearWeb\(\);/);
 });
@@ -453,7 +453,7 @@ await t('the pages are asked for at the rate set, in milliseconds', async () => 
 
 await t('Build offers the rest as another book, and remembers it across a restart', () => {
   const app = read('app/src/main/assets/www/js/app.js');
-  assert.match(app, /const kept = keepLeftovers\(failed, retried\);/);
+  assert.match(app, /const kept = keepLeftovers\(failed, retried, book\);/);
   assert.match(app, /if \(kept\) showLeftoverInWeb\(kept\);/);
   assert.match(app, /store\.saveSettings\(\{ webLeftovers \}\)/);
   assert.match(app, /data-retry>Download as another book</);
@@ -1236,6 +1236,88 @@ await t('pictures on a rendered site are fetched as they are, never rendered', a
   assert.deepEqual(calls, ['fetch https://pics.example/cover.jpg', 'fetch https://pics.example/img/12345',
     'render https://pics.example/novel/2']);
   delete window.GrimoireWeb;
+});
+
+/* ── Pause & keep ─────────────────────────────────────────────────────── */
+
+await t('a download paused by hand keeps the chapters under way and leaves the rest', async () => {
+  let paused = false;
+  const watching = async (url, options) => {
+    if (url.endsWith('chapter-2')) paused = true;   // "Pause & keep", pressed while 2 is coming
+    return fakeFetch(url, options);
+  };
+  const parsed = await web.readPages([
+    { url: `${SITE}chapter-1`, text: 'One' },
+    { url: `${SITE}chapter-2`, text: 'Two' },
+    { url: `${SITE}chapter-3`, text: 'Three' },
+  ], { fetchPage: watching, gap: 0, shouldStop: () => paused });
+  assert.deepEqual(parsed.chapters.map((c) => c.title), ['One', 'Two']);
+  assert.deepEqual(parsed.rest.map((l) => l.text), ['Three']);
+  assert.equal(parsed.failed[0].reason, web.PAUSED_REASON);
+  assert.equal(parsed.rest[0].reason, web.PAUSED_REASON);
+});
+
+await t('Build paused: the book of what came, the rest of it and any website not begun kept', async () => {
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  build.clear();
+  let paused = false;
+  const watching = async (url, options) => {
+    if (url.endsWith('chapter-2')) paused = true;
+    return fakeFetch(url, options);
+  };
+  build.addWeb({ name: 'The Lantern', links: [1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` })), sources: [SITE] });
+  build.addWeb({ name: 'The Sequel', links: [{ url: `${SITE}chapter-3`, text: 'Later' }], sources: [SITE] });
+  for (const part of build.contents()) Object.assign(part.web, { fetchPage: watching, gap: 0 });
+  const { book, failed } = await build.build({ title: 'Paused Lantern', shouldPause: () => paused });
+  assert.equal(book.chapters, 2);
+  assert.deepEqual(failed.map((f) => f.paused), [true, true]);
+  assert.deepEqual(failed.map((f) => f.reason), [web.PAUSED_REASON, web.PAUSED_REASON]);
+  assert.deepEqual(failed[0].web.links.map((l) => l.text), ['No. 3']);
+  assert.deepEqual(failed[1].web.links.map((l) => l.text), ['Later']);
+  assert.match(failed[1].name, /The Sequel: all 1 page/);
+  build.clear();
+
+  // Paused before anything came: no book, and said as a pause, not a failure.
+  build.addWeb({ name: 'Too soon', links: [{ url: `${SITE}chapter-1`, text: 'One' }], sources: [SITE] });
+  for (const part of build.contents()) Object.assign(part.web, { fetchPage: fakeFetch, gap: 0 });
+  const error = await build.build({ title: 'Too soon', shouldPause: () => true }).catch((e) => e);
+  assert.equal(error.paused, true);
+  assert.match(error.message, /Paused before any chapter had come/);
+  build.clear();
+});
+
+await t('a paused book carried on is one book, its chapters in order and unlabelled', async () => {
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  build.clear();
+  let paused = false;
+  const watching = async (url, options) => {
+    if (url.endsWith('chapter-2')) paused = true;
+    return fakeFetch(url, options);
+  };
+  const links = [1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` }));
+  build.addWeb({ name: 'Carried', links, sources: [SITE] });
+  Object.assign(build.contents()[0].web, { fetchPage: watching, gap: 0 });
+  const first = await build.build({ title: 'Carried', shouldPause: () => paused });
+  assert.equal(first.book.chapters, 2);
+  build.clear();
+  // Carry on: the paused book, then the rest, as the app puts them in.
+  build.addBook(first.book);
+  build.addWeb({ name: 'Carried', links: first.failed[0].web.links, sources: [SITE] });
+  for (const part of build.contents()) part.seamless = true;
+  Object.assign(build.contents()[1].web, { fetchPage: fakeFetch, gap: 0 });
+  const whole = await build.build({ title: 'Carried' });
+  assert.equal(whole.failed.length, 0);
+  const chapters = (await store.byIndex('chapters', 'bookId', whole.book.id)).sort((a, b) => a.index - b.index);
+  assert.deepEqual(chapters.map((c) => c.title), ['No. 1', 'No. 2', 'No. 3']);
+  build.clear();
+  // The app remembers where a website stopped, apart from Build and its
+  // leftovers, and offers to resume or start over when it is listed again.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /rememberStops\(webSources, failed, book\);/);
+  assert.match(app, /store\.saveSettings\(\{ webStops \}\)/);
+  assert.match(app, /data-resume>Resume from/);
+  assert.match(app, /data-begin>Start from the beginning/);
+  assert.match(read('app/src/main/assets/www/index.html'), /id="web-resume"/);
 });
 
 console.log(`\n${pass} assertions passed`);
