@@ -1522,11 +1522,14 @@ await t('a build the app is closed in the middle of keeps what had come, and whe
     if (unfinished && (await store.byIndex('chapters', 'bookId', unfinished.id)).length === 2) book = unfinished;
   }
   assert.ok(book, 'the chapters that came were not kept as they came');
-  assert.deepEqual(book.building.at && { part: book.building.at.part, next: book.building.at.next }, { part: 0, next: 2 });
+  // Checkpointed as it goes (written just after each chapter: one behind at most).
+  assert.equal(book.building.at?.part, 0);
+  assert.ok([1, 2].includes(book.building.at?.next), JSON.stringify(book.building.at));
   // The next start: a book of what came, and the rest to carry it on.
   const kept = await build.rescueCutBuild(await store.get('books', book.id));
   assert.equal(kept.book.chapters, 2);
   assert.ok(!kept.book.importing && !kept.book.building);
+  // Resumed after the last chapter kept, whatever the checkpoint got to.
   assert.deepEqual(kept.rest.map((part) => part.links.map((l) => l.text)), [['No. 3']]);
   assert.equal(kept.rest[0].leftover, 'left-old');
   assert.deepEqual(kept.rest[0].sources, [SITE]);

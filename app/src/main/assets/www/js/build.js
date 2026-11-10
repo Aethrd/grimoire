@@ -655,10 +655,18 @@ export async function rescueCutBuild(book) {
   const chapters = await store.byIndex('chapters', 'bookId', book.id);
   if (!chapters.length) return null;
   const { webParts, at } = book.building;
+  // Where to resume, from what was kept: the checkpoint is written just
+  // after each chapter, so a chapter kept with the app killed before its
+  // checkpoint would otherwise be downloaded, and be in the book, twice.
+  const have = new Set(chapters.map((chapter) => chapter.from).filter(Boolean));
   const rest = [];
   for (const part of webParts) {
     if (at && part.at < at.part) continue;                 // read to its end
-    const links = at && part.at === at.part ? part.links.slice(at.next) : part.links;
+    let next = at && part.at === at.part ? at.next : 0;
+    for (let n = part.links.length - 1; n >= next; n -= 1) {
+      if (have.has(part.links[n].url)) { next = n + 1; break; }
+    }
+    const links = part.links.slice(next);
     if (links.length) rest.push({ ...part, links });
   }
   book.chapters = chapters.length;
