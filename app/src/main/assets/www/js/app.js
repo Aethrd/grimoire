@@ -7973,14 +7973,16 @@ async function findWebLinks() {
       const found = await web.findLinks(addresses, {
         // The pages of a long list are asked for at the same pace as chapters.
         listGap: webDelay(), listJitter: webJitter(),
-        onProgress: (fraction, address, page) => {
-          if (address) webNote(page > 1 ? `Reading page ${page} of the list…` : `Reading ${webWhere(address)}…`);
+        onProgress: (fraction, address, page, pages) => {
+          if (address) {
+            webNote(page > 1 ? `Reading page ${page}${pages ? ` of ${pages}` : ''} of the list…` : `Reading ${webWhere(address)}…`);
+          }
         },
       });
       if (!found.links.length) {
         webNote(found.failed.length
           ? `That page could not be downloaded: ${found.failed[0].reason}.`
-          : 'No links were found on that page. Some sites build their chapter list with scripts this app does not run — try the site\'s plain contents page, or paste the chapter addresses themselves and tick "These are the chapters".', true);
+          : 'No links were found on that page. Try the site\'s plain contents page, or paste the chapter addresses themselves and tick "These are the chapters".', true);
         return;
       }
       links = found.links;

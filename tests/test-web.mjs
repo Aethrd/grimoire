@@ -1112,4 +1112,67 @@ await t('a rendered chapter caught before its story arrived is asked for again, 
   delete window.GrimoireWeb;
 });
 
+/* ── marumaru: rows of several things, and a list over numbered pages ──── */
+
+/* A row as marumaru draws one: a thumbnail with a counter on it, the
+ * title with the uploader's row of "=", the date and the views, and a
+ * chevron -- all one link, nothing between them. */
+const row = (counter, n, id, name = '북쪽 숲 정벌') => `<a href="/novel/47997/${id}" class="row">`
+  + `<div class="thumb"><img src="/t.jpg"><span>${counter}</span></div>`
+  + `<div class="body"><div class="title">${n}화 ${name} ==============================</div>`
+  + `<div class="meta"><span>26.05.12</span><svg></svg><span>0</span></div></div><span>›</span></a>`;
+const maruPage = (page, last = 3) => `<!doctype html><html><head><title>그린 스킨 | 마루마루</title></head><body>
+<header><a href="/">홈</a><a href="/novel/updates">소설</a></header><h1>그린 스킨</h1><div class="list">
+${Array.from({ length: 5 }, (_, i) => { const n = (page - 1) * 5 + i + 1; return row(670 - n, n, 2136000 + n); }).join('')}
+</div><nav class="pagination">
+${Array.from({ length: last }, (_, i) => `<a href="/novel/47997?order=desc&page=${i + 1}">${i + 1}</a>`).join('')}
+<a href="/novel/47997?order=desc&page=${Math.min(last, page + 1)}">›</a><a href="/novel/47997?order=desc&page=${last}">»</a>
+</nav></body></html>`;
+
+await t('a row of counter, title, date and views is named by its title', async () => {
+  const found = web.linksOf(maruPage(1), 'https://maru.example/novel/47997');
+  const first = found.links.find((l) => l.url.endsWith('/2136001'));
+  assert.equal(first.text, '1화 북쪽 숲 정벌');
+  assert.equal(web.numberIn('656 14화 북쪽 숲 정벌'), 14);
+  assert.equal(web.numberIn('제3화 시작'), 3);
+  assert.equal(web.chapterKind('14화 북쪽 숲 정벌').number, 14);
+  // A name that is all it says is left as it was.
+  assert.equal(web.numberIn('Chapter 12: The Bell'), 12);
+  const plain = web.linksOf('<a href="/c/1">Chapter <b>1</b>: The Start</a><a href="/c/2">»</a>', 'https://x.example/');
+  assert.deepEqual(plain.links.map((l) => l.text), ['Chapter 1: The Start', '»']);
+});
+
+await t('a contents page over numbered pages is read to its last page, in the order given', async () => {
+  const base = 'https://maru.example/novel/47997';
+  const asked = [];
+  const site = async (url) => {
+    asked.push(url);
+    const page = Number(new URL(url).searchParams.get('page')) || 1;
+    return { url, status: 200, type: 'text/html', blob: new Blob([maruPage(page)], { type: 'text/html' }) };
+  };
+  const found = await web.findLinks([base], { fetchPage: site, listGap: 0 });
+  // Pages 2 and 3, as the address given -- not the row's own order=desc.
+  assert.deepEqual(asked, [base, `${base}?page=2`, `${base}?page=3`]);
+  const chapters = found.links.filter((l) => /\/novel\/47997\/\d+$/.test(l.url));
+  assert.equal(chapters.length, 15);
+  assert.deepEqual(chapters.map((l) => web.numberIn(l.text)), Array.from({ length: 15 }, (_, i) => i + 1));
+  // The page row is not offered as chapters.
+  assert.ok(!found.links.some((l) => /[?&]page=/.test(l.url)), found.links.map((l) => l.url).join('\n'));
+  assert.equal(found.failed.length, 0);
+  // Its own pages, from the links: 2 and 3, never this one again.
+  assert.deepEqual(web.pagesOf(web.linksOf(maruPage(1), base).links, base), null);   // already left out
+});
+
+await t('a numbered page that fails is passed over and said, the rest still read', async () => {
+  const base = 'https://maru.example/novel/47997';
+  const site = async (url) => {
+    const page = Number(new URL(url).searchParams.get('page')) || 1;
+    if (page === 2) throw new Error('the site took too long to answer');
+    return { url, status: 200, type: 'text/html', blob: new Blob([maruPage(page)], { type: 'text/html' }) };
+  };
+  const found = await web.findLinks([base], { fetchPage: site, listGap: 0 });
+  assert.equal(found.links.filter((l) => /\/novel\/47997\/\d+$/.test(l.url)).length, 10);
+  assert.deepEqual(found.failed.map((f) => f.url), [`${base}?page=2`]);
+});
+
 console.log(`\n${pass} assertions passed`);

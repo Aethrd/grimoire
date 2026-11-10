@@ -364,6 +364,59 @@ function fileKind(path) {
 
 const tidy = (text) => String(text || '').replace(/\s+/g, ' ').trim();
 
+/* A row of decoration in a name: "=====", "-----", "~~~~". */
+const DECORATION = /([=~\-_*#·•─━])\1{3,}/g;
+/* A piece of a link that is only figures: a counter on a thumbnail, a date,
+ * a number of views. */
+const FIGURES = /^(?=.*\d)[\d\s.,:/\-()]+$/;
+
+/**
+ * What a link says, read as a person reads it.
+ *
+ * A list row is often one link holding several things -- a thumbnail with a
+ * counter on it, the title, the date, the views -- each in its own element
+ * and nothing between them, so its text runs them together: a counter of
+ * 656 beside "14화" read "65614화". Here text from different elements is kept
+ * apart, decoration is dropped, and where the name gives its chapter in so
+ * many words ("14화", "Chapter 14", "第十四章"), the bare figures around it
+ * -- counter, date, views -- are left out.
+ */
+function linkName(anchor) {
+  const pieces = [];
+  const walker = anchor.ownerDocument.createTreeWalker(anchor, 0x4);   // text
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.parentElement?.closest('script, style')) continue;
+    pieces.push({ text: String(node.nodeValue || '').replace(DECORATION, ' '), from: node.parentElement });
+  }
+  const named = pieces.some((piece) => markedNumber(tidy(piece.text)) !== null);
+  let out = '';
+  let last = null;
+  for (const piece of pieces) {
+    const words = tidy(piece.text);
+    if (named && FIGURES.test(words)) continue;
+    if (!words) { out += ' '; continue; }
+    if (last && piece.from !== last && /[\p{L}\p{N}]$/u.test(out) && /^[\p{L}\p{N}]/u.test(piece.text)) out += ' ';
+    out += piece.text;
+    last = piece.from;
+  }
+  // The row's "›" at the end is where it leads, not what it is called.
+  const name = tidy(out);
+  return name.replace(/\s*[›»→]+$/, '') || name;
+}
+
+/** A chapter number a name gives in so many words, not just a figure. */
+function markedNumber(text) {
+  const cjk = new RegExp(`第\\s*(${NUMERAL})\\s*[章话話回节節]`).exec(text);
+  if (cjk) return cjkNumber(cjk[1]);
+  const korean = KOREAN_EPISODE.exec(text);
+  if (korean) return parseFloat(korean[1]);
+  const marked = /(?:chapters?|chaps?|ch|episodes?|eps?)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(text);
+  return marked ? parseFloat(marked[1]) : null;
+}
+
+/* Korean: "14화", "제14화", "3회", "2장" -- not the start of a longer word. */
+const KOREAN_EPISODE = /(?:제\s*)?(\d+(?:\.\d+)?)\s*(?:화|회|장)(?![가-힣])/;
+
 /**
  * Every link on a page, in the order the page gives them, once each.
  *
@@ -391,7 +444,7 @@ export function linksOf(html, pageUrl) {
     url.hash = '';
     const href = url.href;
     if (href === self) continue;
-    const own = tidy(anchor.textContent) || tidy(anchor.getAttribute('title'))
+    const own = linkName(anchor) || tidy(anchor.getAttribute('title'))
       || tidy(anchor.querySelector('img')?.getAttribute('alt'));
     const text = labelled(own, contexts.get(anchor));
     // A post's title in a list of posts: a chapter, whatever it is called.
@@ -411,10 +464,70 @@ export function linksOf(html, pageUrl) {
   }
   const wordpress = isWordPress(doc, html);
   const list = wordpress && isWordPressList(doc, pageUrl);
+  // A list that goes on over numbered pages: those pages, not chapters.
+  const paging = list ? null : pagesOf(links, pageUrl);
   return {
-    links, title: pageTitle(doc), author: pageAuthor(doc), cover: pageCover(doc, base),
+    links: paging ? links.filter((link) => !paging.links.has(link.url)) : links,
+    title: pageTitle(doc), author: pageAuthor(doc), cover: pageCover(doc, base),
     wordpress, list, older: list ? olderPostsOf(doc, pageUrl) : null,
+    pages: paging ? paging.pages : [],
   };
+}
+
+/* ── a contents page over several pages ───────────────────────────────
+ *
+ * A long serial's contents are often split -- thirty chapters a page, a row
+ * of numbered links under them: "1 2 3 4 5 … › »", the last of them to page
+ * 23. Only the first page's chapters would be listed. So the page's own
+ * links to itself with another page number are found, the highest number
+ * among them is taken as the last page, and every page from the first to
+ * that is read: the row shows five of twenty-three, the last link says how
+ * many there are.
+ *
+ * Each is asked for as the address given, with only the page number
+ * changed -- the order and anything else it was given stay as they were, so
+ * every page lists the chapters the same way round as the first.
+ */
+const PAGE_KEYS = ['page', 'p', 'pg', 'paged', 'pageno', 'page_no', 'pagenum', 'pn', 'cpage', 'currentpage', 'pageindex'];
+const MAX_LIST_PAGES = 200;
+
+/**
+ * The other pages of a contents page split over several: { pages, links } --
+ * the addresses to read, first to last without this one, and the links on
+ * this page that only lead to them. Null when it has no such pages.
+ */
+export function pagesOf(links, pageUrl) {
+  let here;
+  try { here = new URL(pageUrl); } catch { return null; }
+  const keyOf = (url) => [...url.searchParams.keys()].find((key) => PAGE_KEYS.includes(key.toLowerCase()));
+  const found = new Map();   // key -> { highest, links }
+  for (const link of links) {
+    let url;
+    try { url = new URL(link.url); } catch { continue; }
+    if (url.origin !== here.origin || url.pathname.replace(/\/+$/, '') !== here.pathname.replace(/\/+$/, '')) continue;
+    const key = keyOf(url);
+    if (!key) continue;
+    const number = Number(url.searchParams.get(key));
+    if (!Number.isInteger(number) || number < 1) continue;
+    const entry = found.get(key) || { highest: 0, links: new Set() };
+    entry.highest = Math.max(entry.highest, number);
+    entry.links.add(link.url);
+    found.set(key, entry);
+  }
+  // The key most of the row uses.
+  const [key, entry] = [...found].sort((a, b) => b[1].links.size - a[1].links.size)[0] || [];
+  if (!key) return null;
+  const current = Number(here.searchParams.get(key)) || 1;
+  const last = Math.min(entry.highest, MAX_LIST_PAGES);
+  const pages = [];
+  for (let number = 1; number <= last; number += 1) {
+    if (number === current) continue;
+    const url = new URL(here.href);
+    url.searchParams.set(key, String(number));
+    url.hash = '';
+    pages.push(url.href);
+  }
+  return pages.length ? { pages, links: entry.links } : null;
 }
 
 /** Who wrote it, where the page says so in a way meant to be read by
@@ -540,6 +653,8 @@ export function shapeOf(href) {
  *  as opposed to a part of one ("part 2"), which means nothing without the
  *  chapter it is a part of. */
 function ownNumber(text) {
+  const korean = KOREAN_EPISODE.exec(text || '');
+  if (korean) return parseFloat(korean[1]);
   const match = /(?:chapters?|chaps?|ch|episodes?|eps?|第)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(text)
     || /^\s*[#№]?\s*(\d+(?:\.\d+)?)\s*([:.)\-–—]|$|\s)/.exec(text);
   return match ? parseFloat(match[1]) : null;
@@ -593,6 +708,8 @@ function labelled(text, context) {
 export function numberIn(text) {
   const cjk = new RegExp(`第\\s*(${NUMERAL})\\s*[章话話回节節]`).exec(text || '');
   if (cjk) return cjkNumber(cjk[1]);
+  const korean = KOREAN_EPISODE.exec(text || '');
+  if (korean) return parseFloat(korean[1]);
   const match = /(?:chapters?|chaps?|ch|episodes?|eps?|parts?|第)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(text)
     || /^\s*[#№]?\s*(\d+(?:\.\d+)?)/.exec(text);
   return match ? parseFloat(match[1]) : null;
@@ -812,7 +929,7 @@ export function addressesIn(text) {
  * Several contents pages -- page 1, page 2 of a long list -- read as one.
  */
 export async function findLinks(addresses, {
-  onProgress, fetchPage = download, maxPages = 100, listGap = 250, listJitter = 0,
+  onProgress, fetchPage = download, maxPages = MAX_LIST_PAGES, listGap = 250, listJitter = 0,
 } = {}) {
   const links = [];
   const seen = new Set();
@@ -830,10 +947,16 @@ export async function findLinks(addresses, {
      * listed from its contents page alone rather than its newest ten. */
     let next = address;
     let pages = 0;
-    while (next && !visited.has(next) && pages < maxPages) {
+    // The other pages of a contents page split over numbered pages.
+    const queue = [];
+    let numbered = false;
+    let total = 0;
+    while (next && pages < maxPages) {
+      // Already read (a numbered page that was also the next "older"): on.
+      if (visited.has(next)) { next = nextOf(queue); continue; }
       visited.add(next);
       pages += 1;
-      onProgress?.(at / addresses.length, next, pages);
+      onProgress?.(at / addresses.length, next, pages, numbered ? total : 0);
       try {
         const page = await fetchPage(next);
         visited.add(page.url);
@@ -849,14 +972,17 @@ export async function findLinks(addresses, {
           seen.add(link.url);
           links.push({ ...link, from: at });
         }
-        next = found.list ? found.older : null;
+        if (pages === 1) for (const page of found.pages || []) if (!visited.has(page)) { queue.push(page); numbered = true; }
+        if (numbered && !total) total = 1 + queue.length;
+        next = found.list ? found.older : nextOf(queue);
         // Gently, as the chapters are: a site with a hundred pages of posts.
         if (next) await pause(spacing(listGap, listJitter));
       } catch (error) {
-        // The first page failing is the address failing; a later one is the
-        // end of what could be listed.
-        if (pages === 1) failed.push({ url: next, reason: error.message });
-        next = null;
+        // The first page failing is the address failing; a later one of a
+        // WordPress list is the end of what could be listed. A numbered page
+        // that fails is passed over, and said.
+        if (pages === 1 || numbered) failed.push({ url: next, reason: error.message });
+        next = nextOf(queue);
       }
     }
   }
@@ -865,6 +991,9 @@ export async function findLinks(addresses, {
   onProgress?.(1, '');
   return { links: listed, title, author, cover, failed, wordpress, newestFirstList };
 }
+
+/** The next of the numbered pages waiting, if any. */
+const nextOf = (queue) => queue.shift() || null;
 
 /**
  * Whether the chapters as listed run newest first.
