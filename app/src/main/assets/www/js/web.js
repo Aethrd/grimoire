@@ -76,7 +76,10 @@ export const available = () => typeof window.GrimoireWeb?.fetch === 'function';
  *   any redirects, which is what its own links are relative to.
  */
 export async function download(url, options = {}) {
-  if (!canRender()) return fetchNative('fetch', url, options);
+  /* A picture (or any file) is fetched as it is, always: the renderer is
+   * for pages, and would wait out a page's settling for every picture and
+   * hand it back wrapped in one. */
+  if (!canRender() || options.picture || FILE_ADDRESS.test(url)) return fetchNative('fetch', url, options);
   let host = '';
   try { host = new URL(url).host; } catch { /* the fetch says what is wrong with it */ }
   /* A site already found to build its pages in script is rendered from the
@@ -114,6 +117,8 @@ export async function download(url, options = {}) {
  * and hands back the page as it then stands.
  */
 const renderedHosts = new Set();
+/* An address that names a file, not a page. */
+const FILE_ADDRESS = /\.(?:jpe?g|png|gif|webp|avif|bmp|svg|ico|css|js|mjs|json|xml|woff2?|ttf|otf|mp[34]|webm|zip|pdf|epub)(?:[?#]|$)/i;
 /** Fewer characters than this, and no picture, is a chapter not yet loaded. */
 const MIN_RENDERED_STORY = 200;
 const BOT_CHECK = /bot check|only lets a browser/i;
@@ -1281,7 +1286,7 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
   const images = [];
   for (const [n, picture] of wanted.entries()) {
     try {
-      const got = await fetchPage(picture.url);
+      const got = await fetchPage(picture.url, { picture: true });
       const kind = String(got.type || '').split(';')[0].toLowerCase();
       if (!kind.startsWith('image/') || !got.blob.size) throw new Error('not a picture');
       images.push({
@@ -1411,7 +1416,7 @@ export async function downloadBook({
   let cover = null;
   if (coverUrl) {
     try {
-      const got = await fetchPage(coverUrl);
+      const got = await fetchPage(coverUrl, { picture: true });
       if (String(got.type || '').toLowerCase().startsWith('image/') && got.blob.size > 2048) cover = got.blob;
     } catch {
       // A book with no cover is still the book.
@@ -1694,7 +1699,7 @@ export async function fetchCover(url, { fetchPage = download } = {}) {
   if (!url) return null;
   try {
     // Briefly: adding pages to Build should not sit waiting on a picture.
-    const got = await fetchPage(url, { timeout: 15000 });
+    const got = await fetchPage(url, { timeout: 15000, picture: true });
     return String(got.type || '').toLowerCase().startsWith('image/') && got.blob.size > 2048 ? got.blob : null;
   } catch {
     return null;

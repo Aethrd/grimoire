@@ -1217,4 +1217,25 @@ ${Array.from({ length: 30 }, (_, i) => `<a href="https://ads${i}.example/">ê´‘ê³
   delete window.GrimoireWeb;
 });
 
+await t('pictures on a rendered site are fetched as they are, never rendered', async () => {
+  const calls = [];
+  const send = (id, address, body, type) => {
+    const path = `data:${type};base64,${Buffer.from(body).toString('base64')}`;
+    setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type, path })), 0);
+  };
+  window.GrimoireWeb = {
+    fetch: (id, address) => { calls.push(`fetch ${address}`); send(id, address, address.includes('.jpg') || address.includes('/img/') ? 'JPEGDATA' : SHELL, address.includes('.jpg') || address.includes('/img/') ? 'image/jpeg' : 'text/html'); },
+    render: (id, address) => { calls.push(`render ${address}`); send(id, address, chapterPage(1), 'text/html'); },
+    release() {},
+  };
+  await web.download('https://pics.example/novel/1');            // the site is found to need rendering
+  calls.length = 0;
+  await web.download('https://pics.example/cover.jpg');          // a file by its name
+  await web.download('https://pics.example/img/12345', { picture: true });   // a picture by its use
+  await web.download('https://pics.example/novel/2');            // a page: rendered from the start
+  assert.deepEqual(calls, ['fetch https://pics.example/cover.jpg', 'fetch https://pics.example/img/12345',
+    'render https://pics.example/novel/2']);
+  delete window.GrimoireWeb;
+});
+
 console.log(`\n${pass} assertions passed`);

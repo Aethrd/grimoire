@@ -453,7 +453,9 @@ export async function build({ title, author, folder = null, cover: chosenCover =
           patience: part.web.patience,
           onImage,
           onProgress: (fraction, done, total, note) => onProgress?.(
-            `Downloading ${part.name} · ${done} of ${total}${note ? ` · ${note}` : ''}`,
+            // With a note, the note before the book's name: it is what the
+            // line is for, and a long name would push it out of sight.
+            note ? `${done} of ${total} · ${note}` : `Downloading ${part.name} · ${done} of ${total}`,
             (at + fraction) / parts.length, at, parts.length),
         })
         : part.bookId
