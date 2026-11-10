@@ -6030,6 +6030,56 @@ function closeCoverPick() {
   return true;
 }
 
+/* ── a notification when a build ends ─────────────────────────────────
+ *
+ * "Notify me when it's built or stops", in Build: a website of six hundred
+ * chapters is an hour or two of downloading, not something to sit and
+ * watch. Off until it is turned on; turning it on is when Android is asked
+ * whether Grimoire may notify at all. Remembered.
+ */
+let buildNotify = false;
+const canNotifyNow = () => {
+  try { return !!window.GrimoireNative?.canNotify?.(); } catch { return false; }
+};
+store.settings().then((settings) => {
+  buildNotify = settings.buildNotify === true;
+  const box = el('build-notify');
+  if (box) box.checked = buildNotify && canNotifyNow();
+}).catch(() => {});
+
+/** Said in a notification, if that was asked for: what became of a build. */
+function notifyBuild({ title, text }) {
+  if (!buildNotify) return;
+  try { window.GrimoireNative?.notify?.(title, text); } catch { /* not in the app */ }
+}
+
+/** Android's answer to "may Grimoire notify?". */
+function answerNotify(allowed) {
+  buildNotify = !!allowed;
+  const box = el('build-notify');
+  if (box) box.checked = buildNotify;
+  store.saveSettings({ buildNotify }).catch(() => {});
+  toast(allowed
+    ? 'You will get a notification when a build is done, paused or stopped'
+    : 'Grimoire is not allowed to notify — turn its notifications on in Android settings, then tick this again', 7000);
+}
+
+function wireBuildNotify() {
+  const box = el('build-notify');
+  if (!box) return;
+  box.onchange = () => {
+    if (!box.checked) {
+      buildNotify = false;
+      store.saveSettings({ buildNotify }).catch(() => {});
+      return;
+    }
+    if (canNotifyNow()) { answerNotify(true); return; }
+    // Ticked once Android says yes, not before.
+    box.checked = false;
+    try { window.GrimoireNative.askToNotify(); } catch { answerNotify(false); }
+  };
+}
+
 function wireBuildCover() {
   el('build-cover-pick').onclick = () => {
     const picker = document.createElement('input');
@@ -6068,6 +6118,9 @@ function renderWorkshop() {
   el('build-empty').hidden = parts.length > 0;
   el('build-naming').hidden = parts.length === 0;
   el('build-foot').hidden = parts.length === 0;
+  // Only where the app can notify at all (not in a plain browser).
+  const notifyRow = el('build-notify-row');
+  if (notifyRow) notifyRow.hidden = parts.length === 0 || typeof window.GrimoireNative?.notify !== 'function';
   // Where it will be filed, said before it is built: the folder the shelf is
   // open at is two tabs away from here.
   el('build-count').textContent = parts.length
@@ -6378,6 +6431,7 @@ function wireWorkshop() {
     renderWorkshop();
   };
   wireBuildCover();
+  wireBuildNotify();
 
   el('build-go').onclick = async () => {
     const finish = progress.start('Building');
@@ -6453,11 +6507,17 @@ function wireWorkshop() {
        * go looking for it. */
       /* Only if Build is still what is on screen. Gone off to read, or to
        * the shelf, while it worked, you are not taken out of that. */
+      notifyBuild(paused
+        ? { title: `Paused — “${book.title}” is on the shelf`, text: `${book.chapters} chapters kept. The other ${left} are in Build, to carry it on.` }
+        : failed.length
+        ? { title: `Built “${book.title}” — stopped short`, text: `${book.chapters} chapters. ${failed[0].name}: ${failed[0].reason}` }
+        : { title: `Built “${book.title}”`, text: `${book.chapters} chapters${filed}, on the shelf.` });
       const made = await store.get('books', book.id);
       if (made && current === 'workshop') await openBook(made);
     } catch (error) {
       finish.fail();
       whenNotReading(() => toast(error.message || 'That could not be built', 6000, { kind: error.paused ? 'done' : 'failed' }));
+      notifyBuild({ title: error.paused ? 'Build paused' : 'Build stopped', text: error.message || 'That could not be built' });
     } finally {
       finish();
       // Let go again, unless a book is open to read.
@@ -7971,6 +8031,7 @@ function webNote(message, problem = false) {
 }
 
 function renderWeb() {
+  paintMore();
   el('web-picked').hidden = !webState.links.length;
   el('web-foot').hidden = !webState.links.length;
   el('web-reverse').setAttribute('aria-pressed', String(webState.reversed));
@@ -8101,9 +8162,12 @@ async function findWebLinks() {
         },
       });
       if (!found.links.length) {
+        webState.sources = addresses;
+        webState.searches = 0;
+        paintMore();
         webNote(found.failed.length
-          ? `That page could not be downloaded: ${found.failed[0].reason}.`
-          : 'No links were found on that page. Try the site\'s plain contents page, or paste the chapter addresses themselves and tick "These are the chapters".', true);
+          ? `That page could not be downloaded: ${found.failed[0].reason}. Search for more tries again, waiting longer.`
+          : 'No links were found on that page. If the site was still loading, Search for more looks again and waits longer. Otherwise try the site\'s plain contents page, or paste the chapter addresses themselves and tick "These are the chapters".', true);
         return;
       }
       links = found.links;
@@ -8120,6 +8184,7 @@ async function findWebLinks() {
     const likely = web.likelyChapters(links, addresses[0]);
     webState.links = links.map((link) => ({ ...link, likely: likely.has(link.url), picked: true, got: undefined }));
     webState.sources = addresses;
+    webState.searches = 0;
     webState.title = title;
     webState.author = author;
     webState.cover = cover;
@@ -8140,7 +8205,8 @@ async function findWebLinks() {
         + 'Everything is ticked: untick what is not the book, or tap Just the chapters.'
         + (wordpress && newestFirstList ? ' A WordPress list of posts: every page of it was read.' : '')
         + (order.how === 'reversed' ? ' The site listed them newest first, so the order has been turned round.' : '')
-        + (order.how === 'sorted' ? ' The site listed them out of order, so they have been put in chapter order.' : ''));
+        + (order.how === 'sorted' ? ' The site listed them out of order, so they have been put in chapter order.' : '')
+        + (!el('web-direct').checked && chapters < 3 ? ' No chapters yet? The site may still have been loading — tap Search for more.' : ''));
     el('web-filter').value = '';
     drawWebList();
     paintResume();
@@ -8149,6 +8215,81 @@ async function findWebLinks() {
   } finally {
     button.disabled = false;
     button.textContent = 'Find links';
+  }
+}
+
+/* ── Search for more ───────────────────────────────────────────────────
+ *
+ * A site that builds its contents page in script can be read before its
+ * list has arrived: the menus, and no chapters. Instead of one fixed wait,
+ * the page can be read again, waiting longer each time it is asked (up to
+ * the longest the renderer allows), and whatever turns up is added to the
+ * list -- what was ticked or unticked stays as it was.
+ */
+function paintMore() {
+  const button = el('web-more');
+  if (!button) return;
+  button.hidden = !webState.sources.length || el('web-direct').checked || !web.available();
+  button.textContent = (webState.searches || 0) >= 3 ? 'Search again' : 'Search for more';
+}
+
+async function searchMore() {
+  const addresses = webState.sources;
+  if (!addresses.length || !web.available()) return;
+  const level = Math.min(3, (webState.searches || 0) + 1);
+  webState.searches = level;
+  const button = el('web-more');
+  const find = el('web-find');
+  button.disabled = true;
+  find.disabled = true;
+  button.textContent = 'Searching…';
+  const before = new Map(webState.links.map((link) => [link.url, link]));
+  try {
+    const found = await web.findLinks(addresses, {
+      patience: level, listGap: webDelay(), listJitter: webJitter(),
+      onProgress: (fraction, address, page, pages) => {
+        if (address) {
+          webNote(page > 1
+            ? `Searching again, waiting longer — page ${page}${pages ? ` of ${pages}` : ''} of the list…`
+            : `Searching ${webWhere(address)} again, waiting longer…`);
+        }
+      },
+    });
+    // What this look found, as it found it, and anything the last look had
+    // that this one did not.
+    const merged = found.links.map((link) => (before.has(link.url)
+      ? { ...link, picked: before.get(link.url).picked }
+      : { ...link, picked: true }));
+    const now = new Set(merged.map((link) => link.url));
+    for (const link of webState.links) if (!now.has(link.url)) merged.push(link);
+    const likely = web.likelyChapters(merged, addresses[0]);
+    let links = merged.map((link) => ({ ...link, likely: likely.has(link.url), got: undefined }));
+    if (!webState.manualOrder) {
+      const order = web.inReadingOrder(links, (link) => link.likely, found.newestFirstList);
+      links = order.links;
+      webState.reversed = order.how === 'reversed';
+    }
+    webState.links = links;
+    if (!webState.title && found.title) webState.title = found.title;
+    if (!webState.author && found.author) webState.author = found.author;
+    if (!webState.cover && found.cover) webState.cover = found.cover;
+    const added = links.filter((link) => !before.has(link.url)).length;
+    const chapters = links.filter((link) => link.likely).length;
+    webNote(added
+      ? `Searched again, waiting longer: ${added} more link${added === 1 ? '' : 's'}`
+        + `${chapters ? ` — ${chapters} of them all look like chapters` : ''}.`
+      : level < 3
+      ? 'Nothing more turned up. Search for more again to wait longer still.'
+      : 'Nothing more turned up, even waiting as long as it can. The site may need its plain contents page, or the chapter addresses pasted in.');
+    if (found.failed.length) toast(`${found.failed.length} of those pages could not be read: ${found.failed[0].reason}`, 6000);
+    drawWebList();
+    paintResume();
+  } catch (error) {
+    webNote(error.message || 'That page could not be searched again.', true);
+  } finally {
+    button.disabled = false;
+    find.disabled = false;
+    paintMore();
   }
 }
 
@@ -8287,7 +8428,7 @@ function webDelay() {
 function clearWeb() {
   Object.assign(webState, {
     links: [], title: '', author: '', cover: '', sources: [], reversed: false, titleTouched: false, leftover: null,
-    manualOrder: false, carryOn: null,
+    manualOrder: false, carryOn: null, searches: 0,
   });
   const resume = el('web-resume');
   if (resume) { resume.hidden = true; resume.replaceChildren(); }
@@ -8301,6 +8442,7 @@ function clearWeb() {
 
 function wireWeb() {
   el('web-find').onclick = findWebLinks;
+  el('web-more').onclick = searchMore;
   el('web-go').onclick = addWebToBuild;
   // Remembered: a site that wants a slower pace wants it every time.
   store.settings().then((settings) => {
@@ -8804,6 +8946,8 @@ window.Grimoire = {
   settleFile,
   /** Called from Java when a page asked for has been downloaded. */
   settleWeb: web.settleWeb,
+  /** Called from Java with Android's answer to "may Grimoire notify?". */
+  notifyAnswer: (allowed) => answerNotify(allowed),
   /** Called from Java when a picture has been read for its text. */
   settleOcr: ocr.settleOcr,
 

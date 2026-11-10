@@ -963,6 +963,9 @@ export function addressesIn(text) {
  */
 export async function findLinks(addresses, {
   onProgress, fetchPage = download, maxPages = MAX_LIST_PAGES, listGap = 250, listJitter = 0,
+  // "Search for more": how patiently each page is rendered from the start
+  // (0 as usual, up to 3, the longest the renderer waits).
+  patience: startPatience = 0,
 } = {}) {
   const links = [];
   const seen = new Map();
@@ -991,14 +994,16 @@ export async function findLinks(addresses, {
       pages += 1;
       onProgress?.(at / addresses.length, next, pages, numbered ? total : 0);
       try {
+        const level = Math.max(0, Math.min(3, Math.round(Number(startPatience) || 0)));
+        if (level) patience.set(next, level);
         let page = await fetchPage(next, { list: true });
         let found = linksOf(decodePage(await bytesOf(page.blob), page.type), page.url);
         /* A contents page built in script, caught before its list arrived:
          * the site's menus and not one chapter. Asked for again, more
          * patiently each time, as a chapter caught early is. */
-        for (let more = 1; page.rendered && more <= 2 && !listsChapters(found, page.url); more += 1) {
-          patience.set(next, more);
-          patience.set(page.url, more);
+        for (let more = 1; page.rendered && more <= 2 && level + more <= 3 && !listsChapters(found, page.url); more += 1) {
+          patience.set(next, level + more);
+          patience.set(page.url, level + more);
           page = await fetchPage(next, { list: true });
           found = linksOf(decodePage(await bytesOf(page.blob), page.type), page.url);
         }

@@ -28,6 +28,9 @@
          moved, and the downloader is the only thing that asks. The reader
          itself loads only from the app's own https origin. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Only for "Notify me when it's built or stops" in Build, asked for when
+         that is turned on, never before. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".GrimoireApp"

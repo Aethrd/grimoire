@@ -1,6 +1,11 @@
 package com.grimoire.ereader;
 
+import android.Manifest;
 import android.app.Activity;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.pm.PackageManager;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.os.Build;
@@ -20,6 +25,10 @@ import org.json.JSONObject;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import androidx.core.app.ActivityCompat;
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 
 import java.io.File;
@@ -366,6 +375,82 @@ public class GrimoireBridge {
                         WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             }
         });
+    }
+
+    /* ── telling you a build is done ──────────────────────────────────
+     *
+     * A website of six hundred chapters takes an hour or two to download.
+     * With "Notify me" turned on in Build, its end -- built, paused, or
+     * stopped at a chapter the site would not give -- is a notification,
+     * and a tap on it brings the app back. Nothing else is ever notified.
+     */
+    private static final String BUILD_CHANNEL = "builds";
+    private static final int BUILD_NOTICE = 4201;
+    /** The request code MainActivity's permission answer comes back with. */
+    static final int ASK_TO_NOTIFY = 4202;
+
+    /** Whether a notification would be shown: allowed, and not turned off. */
+    @JavascriptInterface
+    public boolean canNotify() {
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(activity,
+                Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+        return NotificationManagerCompat.from(activity).areNotificationsEnabled();
+    }
+
+    /** Ask Android for leave to notify (Android 13 on); the answer comes back
+     *  to window.Grimoire.notifyAnswer. */
+    @JavascriptInterface
+    public void askToNotify() {
+        activity.runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(activity,
+                    Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(activity,
+                        new String[] { Manifest.permission.POST_NOTIFICATIONS }, ASK_TO_NOTIFY);
+            } else {
+                answerNotify();
+            }
+        });
+    }
+
+    /** Tell the page whether it may notify now. */
+    void answerNotify() {
+        final String js = "window.Grimoire && window.Grimoire.notifyAnswer && window.Grimoire.notifyAnswer("
+                + canNotify() + ")";
+        activity.runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
+    }
+
+    /** One notification for a build's end; a newer one takes its place. */
+    @JavascriptInterface
+    public void notify(final String title, final String text) {
+        if (!canNotify()) return;
+        try {
+            NotificationManager manager = activity.getSystemService(NotificationManager.class);
+            if (Build.VERSION.SDK_INT >= 26 && manager != null) {
+                NotificationChannel channel = new NotificationChannel(
+                        BUILD_CHANNEL, "Builds", NotificationManager.IMPORTANCE_DEFAULT);
+                channel.setDescription("When a book being built is done, paused or stopped");
+                manager.createNotificationChannel(channel);
+            }
+            Intent open = new Intent(activity, MainActivity.class)
+                    .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent tap = PendingIntent.getActivity(activity, 0, open,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            String body = text == null ? "" : text;
+            NotificationCompat.Builder notice = new NotificationCompat.Builder(activity, BUILD_CHANNEL)
+                    .setSmallIcon(R.drawable.ic_launcher_monochrome)
+                    .setContentTitle(title == null ? "Grimoire" : title)
+                    .setContentText(body)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+                    .setContentIntent(tap)
+                    .setAutoCancel(true);
+            NotificationManagerCompat.from(activity).notify(BUILD_NOTICE, notice.build());
+        } catch (SecurityException e) {
+            Log.w(TAG, "Not allowed to notify", e);
+        }
     }
 
     @JavascriptInterface

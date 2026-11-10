@@ -1139,7 +1139,9 @@ console.log('\nnot out to the shelf');
 
 await t('a finished build opens the book it made, not the shelf', () => {
   const app = read('app/src/main/assets/www/js/app.js');
-  const go = app.slice(app.indexOf("el('build-go').onclick"), app.indexOf("el('build-go').onclick") + 4500);
+  // The whole handler, to the next function: it grows (pause, notify).
+  const go = app.slice(app.indexOf("el('build-go').onclick"), app.indexOf('\nfunction wireReader('));
+  assert.ok(go.length > 1000 && go.length < 20000, 'the handler was not found');
   assert.ok(!/show\('library'\)/.test(go), 'building still ends on the shelf');
   assert.match(go, /openBook\(made\)/);
   const divide = app.slice(app.indexOf("el('divide-go').onclick"), app.indexOf("el('divide-go').onclick") + 1500);

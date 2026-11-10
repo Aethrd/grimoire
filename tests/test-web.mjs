@@ -1389,4 +1389,37 @@ await t('a rendered page that holds another chapter than the one asked for is no
   assert.match(read('app/src/main/java/com/grimoire/ereader/WebBridge.java'), /renderer = Executors\.newSingleThreadExecutor\(\)/);
 });
 
+await t('Search for more reads the list again, waiting longer, and merges what turns up', async () => {
+  const menus = `<!doctype html><html><head><title>소설 연재 칸 | 마루마루</title></head><body><header>
+${Array.from({ length: 30 }, (_, i) => `<a href="https://ads${i}.example/">광고 ${i}</a>`).join('')}</header></body></html>`;
+  const levels = [];
+  const answers = [menus, maruPage(1, 1)];
+  const send = (id, address, body, rendered) => {
+    const path = `data:text/html;base64,${Buffer.from(body, 'utf8').toString('base64')}`;
+    setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type: 'text/html', path, rendered })), 0);
+  };
+  window.GrimoireWeb = {
+    fetch: (id, address) => send(id, address, SHELL, false),
+    render: (id, address, level) => { levels.push(level); send(id, address, answers.shift(), true); },
+    release() {},
+  };
+  // Pressed twice already: rendered at 2 from the start, and once more at 3 -- never past it.
+  const found = await web.findLinks(['https://more.example/novel/47997'], { listGap: 0, patience: 2 });
+  assert.deepEqual(levels, ['2', '3']);
+  assert.ok(found.links.filter((l) => /\/novel\/47997\/\d+$/.test(l.url)).length >= 5);
+  delete window.GrimoireWeb;
+  // On the website screen, beside Find links; and Build's notification switch.
+  const app = read('app/src/main/assets/www/js/app.js');
+  const html = read('app/src/main/assets/www/index.html');
+  assert.match(html, /id="web-more" hidden>Search for more</);
+  assert.match(app, /el\('web-more'\)\.onclick = searchMore;/);
+  assert.match(app, /patience: level, listGap: webDelay\(\)/);
+  assert.match(html, /id="build-notify"> Notify me when it's built or stops/);
+  assert.match(app, /notifyBuild\(paused/);
+  assert.match(app, /notifyAnswer: \(allowed\) => answerNotify\(allowed\)/);
+  const bridge = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
+  assert.match(bridge, /public void notify\(final String title, final String text\)/);
+  assert.match(read('app/src/main/java/com/grimoire/ereader/MainActivity.java'), /requestCode == GrimoireBridge\.ASK_TO_NOTIFY/);
+});
+
 console.log(`\n${pass} assertions passed`);

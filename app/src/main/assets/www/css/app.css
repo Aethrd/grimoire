@@ -2477,9 +2477,14 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .web-address:focus-visible { border-color: var(--accent); }
 .web-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -4px 0 10px; }
 .web-row #web-find { margin-left: auto; }
+/* Under Find links, on a line of its own, at the same edge. */
+.web-row #web-more { flex-basis: 100%; max-width: max-content; margin-left: auto; }
+.web-row #web-more[hidden] { display: none; }
 .web-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
              color: var(--muted); min-height: 40px; }
 .web-check input { accent-color: var(--accent); width: 18px; height: 18px; }
+.build-notify { display: flex; margin: 14px 0 4px; font-size: 13px; }
+.build-notify[hidden] { display: none; }
 .web-note { font-size: 12px; line-height: 1.55; margin: 0 0 14px; }
 .web-note.problem { color: #c0553f; }
 #web-filter { width: 100%; margin: 0 0 4px; }

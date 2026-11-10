@@ -93,14 +93,20 @@ t('the Java bridge exposes nothing account-shaped', () => {
 
 console.log('no network');
 
-t('the manifest declares INTERNET and nothing else', () => {
-  // One permission, for translation and the web downloader, both of which
-  // only act when asked. Anything else means a dependency merged something in.
+t('the manifest declares INTERNET, POST_NOTIFICATIONS, and nothing else', () => {
+  // INTERNET for translation and the web downloader, both of which only act
+  // when asked; POST_NOTIFICATIONS for "Notify me when it's built or stops"
+  // in Build, asked of Android only when that is ticked. Anything else means
+  // a dependency merged something in.
   const manifest = read('app/src/main/AndroidManifest.xml');
   const withoutComments = manifest.replace(/<!--[\s\S]*?-->/g, '');
   const declared = [...withoutComments.matchAll(/<uses-permission android:name="([^"]+)"/g)]
     .map((m) => m[1]);
-  assert.deepEqual(declared, ['android.permission.INTERNET']);
+  assert.deepEqual(declared, ['android.permission.INTERNET', 'android.permission.POST_NOTIFICATIONS']);
+  // Asked for in one place only: ticking the box.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.equal((app.match(/askToNotify\(\)/g) || []).length, 1);
+  assert.match(app, /box\.onchange = \(\) => \{[\s\S]{0,600}window\.GrimoireNative\.askToNotify\(\)/);
 });
 
 t('nothing in the reader itself can reach the network', () => {

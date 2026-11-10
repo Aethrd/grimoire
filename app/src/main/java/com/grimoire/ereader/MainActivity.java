@@ -716,6 +716,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        // "Notify me" in Build: the answer goes back to the page either way.
+        if (requestCode == GrimoireBridge.ASK_TO_NOTIFY && bridge != null) bridge.answerNotify();
+    }
+
+    @Override
     protected void onNewIntent(@NonNull Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);

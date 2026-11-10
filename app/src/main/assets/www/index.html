@@ -397,6 +397,11 @@
         comics, EPUBs, PDFs and websites all mix.
       </p>
       <div id="build-list"></div>
+      <!-- A notification when it is built, paused or stopped: an hour of
+           downloading need not be watched. Remembered. -->
+      <label class="web-check build-notify" id="build-notify-row" hidden>
+        <input type="checkbox" id="build-notify"> Notify me when it's built or stops
+      </label>
     </div>
 
     <footer class="stepper" id="build-foot" hidden>
@@ -424,6 +429,9 @@
         <button class="btn ghost" id="web-paste">Paste</button>
         <label class="web-check"><input type="checkbox" id="web-direct"> These are the chapters</label>
         <button class="btn primary" id="web-find">Find links</button>
+        <!-- The same page read again, waiting longer: for a site whose list
+             arrives late. Shown once a search has been made. -->
+        <button class="btn ghost" id="web-more" hidden>Search for more</button>
       </div>
       <p class="muted web-note" id="web-note">
         Paste the address of a book's contents page. Every link on it is listed
