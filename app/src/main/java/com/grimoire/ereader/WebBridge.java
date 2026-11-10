@@ -521,12 +521,14 @@ public class WebBridge {
                 String reply = value == null ? "" : value;
                 // "pending|text|links|checking|resources|chapters|title": all
                 // but the pending count make the page's shape.
-                String[] parts = reply.replace("\"", "").split("\\|", 7);
+                String[] parts = reply.replace("\"", "").split("\\|", 8);
                 int textLength = 0;
                 int chapterLinks = 0;
+                boolean loading = false;
                 try {
                     textLength = Integer.parseInt(parts[1]);
                     chapterLinks = Integer.parseInt(parts[5]);
+                    loading = "1".equals(parts[6]);
                 } catch (Exception ignored) {
                     // Unreadable: as though nothing were there yet.
                 }
@@ -560,8 +562,11 @@ public class WebBridge {
                 // Settled: nothing more on its way and nothing changing -- or
                 // nothing changing for so long that what is still on its way
                 // is not the page.
+                // A chapter whose page still shows "loading" is not ready, however
+                // still it is (a site that waits before putting the chapter up).
+                boolean busy = pending > 0 || (!scroll && loading);
                 boolean settled = !waiting && !blank
-                        && ((pending <= 0 && still >= need) || still >= quietMs * RENDER_STUCK_SPELLS);
+                        && ((!busy && still >= need) || still >= quietMs * RENDER_STUCK_SPELLS);
                 if (settled || now - startedAt >= maxMs) {
                     take();
                 } else {
@@ -661,8 +666,14 @@ public class WebBridge {
             // The text a reader would read: the page's scripts and styles are not it.
             + "var n=b?b.textContent.length:0,S=b?b.querySelectorAll('script,style'):[];"
             + "for(var j=0;j<S.length;j++)n-=S[j].textContent.length;"
-            + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(c?'checking':'')+'|'+r+'|'+k+'|'+t;"
-            + "}catch(e){return '0|0|0||0|0|';}})()";
+            // A loading message or spinner on show -- a site that waits a
+            // moment before it puts the chapter up shows one meanwhile.
+            // Shown only: a hidden one is a site at rest.
+            + "var w=0,B=document.querySelectorAll('[aria-busy=\"true\"],[class*=\"loading\"],[class*=\"spinner\"],[class*=\"loader\"],[id*=\"loading\"],[id*=\"loader\"]');"
+            + "for(var q=0;q<B.length&&q<30;q++){var e=B[q],st=getComputedStyle(e);"
+            + "if(st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0'&&e.getClientRects().length){w=1;break;}}"
+            + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+t;"
+            + "}catch(e){return '0|0|0||0|0|0|';}})()";
 
     /** The page has read what was fetched; the file can go. */
     @JavascriptInterface

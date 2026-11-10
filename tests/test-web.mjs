@@ -1603,4 +1603,14 @@ await t('a bot check is known by its title or its own markup, never by words in 
   assert.match(java, /if \(lastShape\.contains\("\|checking\|"\) && !there\) \{/);
 });
 
+await t('a chapter whose page still shows "loading" is waited for', async () => {
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  // A loader on show (not a hidden one) holds a chapter back, as a request on its way does.
+  assert.match(java, /\[class\*=\\"loading\\"\],\[class\*=\\"spinner\\"\]/);
+  assert.match(java, /st\.display!=='none'&&st\.visibility!=='hidden'/);
+  assert.match(java, /boolean busy = pending > 0 \|\| \(!scroll && loading\);/);
+  // Never for ever: a page still for long enough is taken all the same.
+  assert.match(java, /\(\(!busy && still >= need\) \|\| still >= quietMs \* RENDER_STUCK_SPELLS\)/);
+});
+
 console.log(`\n${pass} assertions passed`);
