@@ -97,7 +97,14 @@ public class WebBridge {
     private static final long RENDER_MAX_STEP_MS = 10000;
     private static final long RENDER_QUIET_MS = 2500;
     private static final long RENDER_QUIET_STEP_MS = 2000;
-    private static final long RENDER_POLL_MS = 700;
+    private static final long RENDER_POLL_MS = 400;
+    /** How long a page whose content is plainly there -- a list with its
+     *  chapters, a chapter with its story -- must stay still. The full quiet
+     *  spell is for a page where that cannot be seen. */
+    private static final long READY_QUIET_MS = 900;
+    private static final long READY_LIST_QUIET_MS = 1200;
+    /** Characters of text that make a page a chapter with its story in it. */
+    private static final int READY_TEXT = 3000;
     /** A page still waiting on a request this many quiet spells on has one
      *  that never ends (a live feed, an advert): it is taken as it stands. */
     private static final int RENDER_STUCK_SPELLS = 4;
@@ -510,8 +517,17 @@ public class WebBridge {
             view.evaluateJavascript(scroll ? SCROLL + SHAPE : SHAPE, (value) -> {
                 if (view == null) return;
                 String reply = value == null ? "" : value;
-                // "pending|text|links|checking|resources|title": all but the
-                // pending count make the page's shape.
+                // "pending|text|links|checking|resources|chapters|title": all
+                // but the pending count make the page's shape.
+                String[] parts = reply.replace("\"", "").split("\\|", 7);
+                int textLength = 0;
+                int chapterLinks = 0;
+                try {
+                    textLength = Integer.parseInt(parts[1]);
+                    chapterLinks = Integer.parseInt(parts[5]);
+                } catch (Exception ignored) {
+                    // Unreadable: as though nothing were there yet.
+                }
                 int bar = reply.indexOf('|');
                 int pending = 0;
                 try {
@@ -528,11 +544,20 @@ public class WebBridge {
                 }
                 long still = now - stillSince;
                 boolean blank = shape.startsWith("0|");
+                /* What it was opened for, there to see: a list showing its
+                 * chapters, a chapter its story. Then it is taken once it has
+                 * been still a moment, not after the whole quiet spell --
+                 * twenty-three pages of a list were five minutes of waiting. */
+                // A chapter asked for again (patiently) gets the whole spell:
+                // its text being there did not mean its story was, last time.
+                boolean patient = quietMs > RENDER_QUIET_MS;
+                boolean ready = scroll ? chapterLinks >= 3 : !patient && textLength >= READY_TEXT;
+                long need = ready ? Math.min(quietMs, scroll ? READY_LIST_QUIET_MS : READY_QUIET_MS) : quietMs;
                 // Settled: nothing more on its way and nothing changing -- or
                 // nothing changing for so long that what is still on its way
                 // is not the page.
                 boolean settled = !waiting && !blank
-                        && ((pending <= 0 && still >= quietMs) || still >= quietMs * RENDER_STUCK_SPELLS);
+                        && ((pending <= 0 && still >= need) || still >= quietMs * RENDER_STUCK_SPELLS);
                 if (settled || now - startedAt >= maxMs) {
                     take();
                 } else {
@@ -619,8 +644,16 @@ public class WebBridge {
             + "var t=document.title||'';"
             + "var c=/just a moment|checking your browser|잠시만 기다|請稍候|请稍候|attention required/i.test(t+' '+(b?b.textContent.slice(0,300):''));"
             + "var r=(window.performance&&performance.getEntriesByType)?performance.getEntriesByType('resource').length:0;"
-            + "return (window.__grimoirePending||0)+'|'+(b?b.textContent.length:0)+'|'+document.links.length+'|'+(c?'checking':'')+'|'+r+'|'+t;"
-            + "}catch(e){return '0|0|0||0|';}})()";
+            // Links that look like chapters: under this page's address, or
+            // named as one ("14화", "Chapter 3", "第三章").
+            + "var u=location.origin+location.pathname.replace(/\\/+$/,'')+'/',k=0,L=document.links;"
+            + "for(var i=0;i<L.length&&k<9;i++){var h=L[i].href||'',x=L[i].textContent||'';"
+            + "if(h.indexOf(u)===0||/\\d+\\s*(화|회|장)|chapter\\s*\\d|第/i.test(x))k++;}"
+            // The text a reader would read: the page's scripts and styles are not it.
+            + "var n=b?b.textContent.length:0,S=b?b.querySelectorAll('script,style'):[];"
+            + "for(var j=0;j<S.length;j++)n-=S[j].textContent.length;"
+            + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(c?'checking':'')+'|'+r+'|'+k+'|'+t;"
+            + "}catch(e){return '0|0|0||0|0|';}})()";
 
     /** The page has read what was fetched; the file can go. */
     @JavascriptInterface

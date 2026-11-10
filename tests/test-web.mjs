@@ -1078,7 +1078,14 @@ await t('an ordinary page is fetched once, and an app without the renderer only 
   assert.match(java, /Object text = new JSONTokener\(job\.raw/);
   // Ready only once the page's own requests are back, counted from before its first script.
   assert.match(java, /WebViewCompat\.addDocumentStartJavaScript\(view, TRACKER/);
-  assert.match(java, /pending <= 0 && still >= quietMs/);
+  assert.match(java, /pending <= 0 && still >= need/);
+  // Taken as soon as what it was opened for is there -- a list's chapters, a
+  // chapter's story -- after a short still moment, not the whole quiet spell;
+  // a chapter asked for again patiently gets the whole spell.
+  assert.match(java, /boolean ready = scroll \? chapterLinks >= 3 : !patient && textLength >= READY_TEXT;/);
+  assert.match(java, /private static final long READY_QUIET_MS = 900;/);
+  // The pause between list pages counts from when each was asked for.
+  assert.match(read('app/src/main/assets/www/js/web.js'), /const left = spacing\(listGap, listJitter\) - \(Date\.now\(\) - askedAt\);/);
   assert.match(java, /view = new WebView\(activity\)/);
   assert.match(java, /only web addresses can be downloaded/);
 });

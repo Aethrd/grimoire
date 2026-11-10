@@ -994,6 +994,9 @@ export async function findLinks(addresses, {
       pages += 1;
       onProgress?.(at / addresses.length, next, pages, numbered ? total : 0);
       try {
+        // The pause between pages is counted from when this one was asked
+        // for: a page that took four seconds to come has waited two already.
+        const askedAt = Date.now();
         const level = Math.max(0, Math.min(3, Math.round(Number(startPatience) || 0)));
         if (level) patience.set(next, level);
         let page = await fetchPage(next, { list: true });
@@ -1036,7 +1039,10 @@ export async function findLinks(addresses, {
         if (numbered && !total) total = 1 + queue.length;
         next = found.list ? found.older : nextOf(queue);
         // Gently, as the chapters are: a site with a hundred pages of posts.
-        if (next) await pause(spacing(listGap, listJitter));
+        if (next) {
+          const left = spacing(listGap, listJitter) - (Date.now() - askedAt);
+          if (left > 0) await pause(left);
+        }
       } catch (error) {
         // The first page failing is the address failing; a later one of a
         // WordPress list is the end of what could be listed. A numbered page
