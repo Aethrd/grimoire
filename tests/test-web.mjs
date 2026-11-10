@@ -1120,9 +1120,11 @@ await t('a rendered chapter caught before its story arrived is asked for again, 
 const row = (counter, n, id, name = '북쪽 숲 정벌') => `<a href="/novel/47997/${id}" class="row">`
   + `<div class="thumb"><img src="/t.jpg"><span>${counter}</span></div>`
   + `<div class="body"><div class="title">${n}화 ${name} ==============================</div>`
-  + `<div class="meta"><span>26.05.12</span><svg></svg><span>0</span></div></div><span>›</span></a>`;
+  + `<div class="meta"><span>26.05.12</span><span>👁 0</span></div></div><span>›</span></a>`;
 const maruPage = (page, last = 3) => `<!doctype html><html><head><title>그린 스킨 | 마루마루</title></head><body>
-<header><a href="/">홈</a><a href="/novel/updates">소설</a></header><h1>그린 스킨</h1><div class="list">
+<header><a href="/">홈</a><a href="/novel/updates">소설</a></header><h1>그린 스킨</h1>
+<div class="buttons"><a href="/novel/47997/2136001">최신화 보기 669화</a><a href="/novel/47997/2136015">첫화부터 정주행</a></div>
+<div class="list">
 ${Array.from({ length: 5 }, (_, i) => { const n = (page - 1) * 5 + i + 1; return row(670 - n, n, 2136000 + n); }).join('')}
 </div><nav class="pagination">
 ${Array.from({ length: last }, (_, i) => `<a href="/novel/47997?order=desc&page=${i + 1}">${i + 1}</a>`).join('')}
@@ -1173,6 +1175,22 @@ await t('a numbered page that fails is passed over and said, the rest still read
   const found = await web.findLinks([base], { fetchPage: site, listGap: 0 });
   assert.equal(found.links.filter((l) => /\/novel\/47997\/\d+$/.test(l.url)).length, 10);
   assert.deepEqual(found.failed.map((f) => f.url), [`${base}?page=2`]);
+});
+
+await t('a chapter a button above the list also leads to is named and placed by its row', async () => {
+  const base = 'https://maru.example/novel/47997';
+  const site = async (url) => {
+    const page = Number(new URL(url).searchParams.get('page')) || 1;
+    return { url, status: 200, type: 'text/html', blob: new Blob([maruPage(page)], { type: 'text/html' }) };
+  };
+  const found = await web.findLinks([base], { fetchPage: site, listGap: 0 });
+  const chapters = found.links.filter((l) => /\/novel\/47997\/\d+$/.test(l.url));
+  assert.equal(chapters.length, 15);
+  // 1화 is 1화, not the "latest" button that leads to it; the last is 15화.
+  assert.deepEqual(chapters.map((l) => l.text).slice(0, 2), ['1화 북쪽 숲 정벌', '2화 북쪽 숲 정벌']);
+  assert.equal(chapters.at(-1).text, '15화 북쪽 숲 정벌');
+  assert.ok(!chapters.some((l) => /최신화|정주행|👁/.test(l.text)), chapters.map((l) => l.text).join('\n'));
+  assert.equal(web.chapterKind('1화 프롤로그').number, 1);
 });
 
 console.log(`\n${pass} assertions passed`);

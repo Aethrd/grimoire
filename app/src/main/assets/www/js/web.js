@@ -366,9 +366,9 @@ const tidy = (text) => String(text || '').replace(/\s+/g, ' ').trim();
 
 /* A row of decoration in a name: "=====", "-----", "~~~~". */
 const DECORATION = /([=~\-_*#·•─━])\1{3,}/g;
-/* A piece of a link that is only figures: a counter on a thumbnail, a date,
- * a number of views. */
-const FIGURES = /^(?=.*\d)[\d\s.,:/\-()]+$/;
+/* A piece of a link with no word in it: a counter on a thumbnail, a date,
+ * "👁 0" views. */
+const FIGURES = /^(?=.*[\d\p{Extended_Pictographic}])[^\p{L}]+$/u;
 
 /**
  * What a link says, read as a person reads it.
@@ -402,6 +402,12 @@ function linkName(anchor) {
   // The row's "›" at the end is where it leads, not what it is called.
   const name = tidy(out);
   return name.replace(/\s*[›»→]+$/, '') || name;
+}
+
+/** A name that starts with its chapter, as a row of a contents list does:
+ *  "14화 북쪽 숲 정벌", "Chapter 3: …", "第三章". */
+function rowName(text) {
+  return /^\s*(?:(?:제\s*)?\d+(?:\.\d+)?\s*(?:화|회|장)(?![가-힣])|(?:chapters?|chaps?|ch\.?|episodes?|ep\.?)\s*\d|第\s*\S{1,8}?[章话話回])/i.test(String(text || ''));
 }
 
 /** A chapter number a name gives in so many words, not just a figure. */
@@ -455,6 +461,16 @@ export function linksOf(html, pageUrl) {
       // and its "read more" -- keeps the first place it appeared and the
       // better of the names.
       if (text && (!known.text || (WEAK_TEXT.test(known.text) && !WEAK_TEXT.test(text)))) known.text = text;
+      else if (rowName(text) && !rowName(known.text)) {
+        /* A button above the list that leads to a chapter -- "최신화 보기
+         * 669화", "첫화부터 정주행", "Read the first chapter" -- and then the
+         * chapter's own row: the row's name is the chapter's, and the row's
+         * place in the list is where it stands. */
+        known.text = text;
+        known.chrome = !post && inChrome(anchor);
+        links.splice(links.indexOf(known), 1);
+        links.push(known);
+      }
       if (post) { known.post = true; known.chrome = false; }
       continue;
     }
@@ -932,7 +948,7 @@ export async function findLinks(addresses, {
   onProgress, fetchPage = download, maxPages = MAX_LIST_PAGES, listGap = 250, listJitter = 0,
 } = {}) {
   const links = [];
-  const seen = new Set();
+  const seen = new Map();
   const failed = [];
   let title = '';
   let author = '';
@@ -968,9 +984,21 @@ export async function findLinks(addresses, {
         if (found.wordpress) wordpress = true;
         if (found.list) newestFirstList = true;
         for (const link of found.links) {
-          if (seen.has(link.url) || visited.has(link.url)) continue;
-          seen.add(link.url);
-          links.push({ ...link, from: at });
+          if (visited.has(link.url)) continue;
+          const known = seen.get(link.url);
+          if (known) {
+            // A button on one page, its chapter's row on a later one: the
+            // row's name, and the row's place (as on a single page).
+            if (rowName(link.text) && !rowName(known.text)) {
+              Object.assign(known, link);
+              links.splice(links.indexOf(known), 1);
+              links.push(known);
+            }
+            continue;
+          }
+          const entry = { ...link, from: at };
+          seen.set(link.url, entry);
+          links.push(entry);
         }
         if (pages === 1) for (const page of found.pages || []) if (!visited.has(page)) { queue.push(page); numbered = true; }
         if (numbered && !total) total = 1 + queue.length;
