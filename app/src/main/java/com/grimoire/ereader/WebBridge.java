@@ -198,16 +198,21 @@ public class WebBridge {
         // next chapter under this one when the end is reached would go on
         // adding chapters for as long as it was scrolled (a hundred, once).
         final boolean scroll = "1".equals(list);
+        // "2", or "0o": a level, and "o" when the site has been found to need
+        // nothing kept out (its pages come only with everything let in).
+        String asked = String.valueOf(patience).trim();
+        boolean open = asked.endsWith("o");
+        if (open) asked = asked.substring(0, asked.length() - 1);
         int level = 0;
         try {
-            level = Math.max(0, Math.min(3, Integer.parseInt(String.valueOf(patience).trim())));
+            level = Math.max(0, Math.min(3, Integer.parseInt(asked)));
         } catch (NumberFormatException ignored) {
             // Not a number: the usual patience.
         }
         final long quietMs = RENDER_QUIET_MS + level * RENDER_QUIET_STEP_MS;
         // Other sites' adverts and trackers kept out, until a page that came
         // back without its chapter is asked for patiently: then nothing is.
-        final boolean ownSiteOnly = level < 2;
+        final boolean ownSiteOnly = level < 2 && !open;
         final long maxMs = RENDER_MAX_MS + level * RENDER_MAX_STEP_MS;
         renderer.execute(() -> {
             String safeId = id == null ? "x" : id.replaceAll("[^A-Za-z0-9_-]", "_");

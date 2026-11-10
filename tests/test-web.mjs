@@ -1224,7 +1224,7 @@ ${Array.from({ length: 30 }, (_, i) => `<a href="https://ads${i}.example/">광�
     release() {},
   };
   const found = await web.findLinks([base], { listGap: 0 });
-  assert.deepEqual(levels, ['0', '1', '2']);
+  assert.deepEqual(levels, ['0', '1', '2o']);   // the third with nothing kept out
   // Its five rows, and the chapter the "첫화부터 정주행" button leads to.
   assert.equal(found.links.filter((l) => /\/novel\/47997\/\d+$/.test(l.url)).length, 6);
   delete window.GrimoireWeb;
@@ -1414,7 +1414,7 @@ ${Array.from({ length: 30 }, (_, i) => `<a href="https://ads${i}.example/">광�
   };
   // Pressed twice already: rendered at 2 from the start, and once more at 3 -- never past it.
   const found = await web.findLinks(['https://more.example/novel/47997'], { listGap: 0, patience: 2 });
-  assert.deepEqual(levels, ['2', '3']);
+  assert.deepEqual(levels, ['2o', '3o']);
   assert.ok(found.links.filter((l) => /\/novel\/47997\/\d+$/.test(l.url)).length >= 5);
   delete window.GrimoireWeb;
   // On the website screen, beside Find links; and Build's notification switch.
@@ -1448,7 +1448,7 @@ await t('the renderer cannot take the app down, and keeps a page light', async (
   // A renderer Android reclaims is let go, not left to take the app with it.
   assert.match(java, /public boolean onRenderProcessGone\(WebView v, RenderProcessGoneDetail detail\) \{[\s\S]{0,900}return true;/);
   // Other sites' adverts and trackers kept out, until a page is asked for patiently.
-  assert.match(java, /final boolean ownSiteOnly = level < 2;/);
+  assert.match(java, /final boolean ownSiteOnly = level < 2 && !open;/);
   assert.match(java, /if \(!job\.ownSiteOnly \|\| request\.isForMainFrame\(\)\) return null;/);
   // One browser, used page after page and emptied between them, replaced
   // every so many pages and closed once idle -- not one made per page.
@@ -1787,6 +1787,44 @@ await t('a spinner left going once the chapter is there holds nothing; waiting a
   });
   assert.ok(notes.some((n) => /^waiting \d+ s \(your delay\) before No\. 2…$/.test(n)), notes.join('\n'));
   assert.ok(notes.some((n) => /^trying No\. 2 again \(2 of 3\) — last time the site took too long to answer…$/.test(n)), notes.join('\n'));
+});
+
+await t('a site whose chapters come only with nothing kept out is opened that way from then on', async () => {
+  const asks = [];
+  const send = (id, address, body) => {
+    const path = `data:text/html;base64,${Buffer.from(body, 'utf8').toString('base64')}`;
+    setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type: 'text/html', path, rendered: true })), 0);
+  };
+  const empty = '<!doctype html><html><body><header><a href="/">홈</a></header><main><p>불러오는 중…</p></main></body></html>';
+  window.GrimoireWeb = {
+    // What the site sends as it is: the frame its script fills.
+    fetch: (id, address) => {
+      const path = `data:text/html;base64,${Buffer.from(SHELL, 'utf8').toString('base64')}`;
+      setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type: 'text/html', path })), 0);
+    },
+    // The chapter's text comes from a server of another name: only with nothing kept out.
+    render: (id, address, ask) => {
+      asks.push(`${new URL(address).pathname} ${ask}`);
+      send(id, address, ask.endsWith('o') ? chapterPage(Number(address.slice(-1))) : empty);
+    },
+    release() {},
+  };
+  // Known to need rendering already (as after its contents page).
+  await web.download('https://open.example/novel/47997/1').catch(() => {});
+  asks.length = 0;
+  const parsed = await web.readPages([1, 2, 3].map((n) => ({ url: `https://open.example/novel/47997/${n}`, text: `${n}화` })), {
+    gap: 0, pictures: false, patience: { retry: 0, refresh: [0], backoff: [0, 0] },
+  });
+  assert.equal(parsed.chapters.length, 3);
+  // Until it has been learned, three tries (two chapters may be under way
+  // then); every chapter begun after, once, with nothing kept out.
+  const learned = asks.findIndex((ask) => ask.endsWith('2o'));
+  assert.ok(learned >= 0, asks.join(', '));
+  assert.deepEqual(asks.filter((ask) => ask.startsWith('/novel/47997/3 ')), ['/novel/47997/3 0o']);
+  assert.ok(asks.length <= 7, asks.join(', '));
+  assert.deepEqual(web.siteNeedsOf('https://open.example/x'), { open: true, level: 0 });
+  delete window.GrimoireWeb;
+  assert.match(read('app/src/main/java/com/grimoire/ereader/WebBridge.java'), /final boolean ownSiteOnly = level < 2 && !open;/);
 });
 
 console.log(`\n${pass} assertions passed`);

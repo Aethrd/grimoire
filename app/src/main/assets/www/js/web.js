@@ -126,7 +126,44 @@ const BOT_CHECK = /bot check|only lets a browser/i;
 /* How patiently the renderer waits on a page: more each time the same page
  * came back without its story, up to the most it allows (3). */
 const patience = new Map();
-const patienceFor = (url) => patience.get(url) || 0;
+/* What a site has been found to need, so its next page is asked for that
+ * way from the first try instead of after two that fail. A site whose
+ * chapters came only once nothing was kept out (its text from a server of
+ * another name) is opened that way from then on; one whose pages came only
+ * with a longer wait is given it. Two failed tries, each after the reader's
+ * delay, made every chapter of a site three minutes. For this sitting. */
+const siteNeeds = new Map();   // host -> { open, level }
+const hostOf = (url) => {
+  try { return new URL(url).host; } catch { return ''; }
+};
+const patienceFor = (url) => Math.max(patience.get(url) || 0, siteNeeds.get(hostOf(url))?.level || 0);
+/** Patience as the renderer is told it: a level, and "o" for nothing kept out. */
+const renderAsk = (url) => {
+  const level = patienceFor(url);
+  const open = !!siteNeeds.get(hostOf(url))?.open;
+  // Whether this page's first try already let everything in: only then
+  // does its needing a longer wait say the site needs one.
+  if (!openFromStart.has(url)) openFromStart.set(url, open);
+  return `${level}${level >= 2 || open ? 'o' : ''}`;
+};
+const openFromStart = new Map();
+/** A rendered page came at this level: what the site needs, learned. */
+function learnSite(url, level) {
+  const host = hostOf(url);
+  if (!level || !host) return;
+  const known = siteNeeds.get(host) || { open: false, level: 0 };
+  const fromStart = openFromStart.get(url);
+  openFromStart.delete(url);
+  // It took everything let in (level 2 is the first that does): so it is,
+  // from now on, at the usual patience. A longer wait is learned only from
+  // a page that had everything let in from its first try -- not from one
+  // that was mid-retry when the site was learned.
+  if (level >= 2 && !known.open) known.open = true;
+  else if (level === 1 || fromStart) known.level = Math.max(known.level, Math.min(3, level));
+  siteNeeds.set(host, known);
+}
+/** What has been learned of a site (for the tests and the curious). */
+export const siteNeedsOf = (url) => ({ open: false, level: 0, ...siteNeeds.get(hostOf(url)) });
 
 /** A rendered page whose story had not arrived: ask more patiently next time.
  *  What the page did hold goes into the message -- a sign-in, an age check,
@@ -258,7 +295,7 @@ function fetchNative(method, url, { timeout = 90000, list = false } = {}) {
     try {
       // A contents page may be scrolled for more of its list; a chapter
       // never is (some readers add the next chapter under it at the end).
-      if (method === 'render') window.GrimoireWeb.render(id, url, String(patienceFor(url)), list ? '1' : '0');
+      if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url), list ? '1' : '0');
       else window.GrimoireWeb.fetch(id, url);
     } catch (error) {
       pending.delete(id);
@@ -1048,12 +1085,15 @@ export async function findLinks(addresses, {
         /* A contents page built in script, caught before its list arrived:
          * the site's menus and not one chapter. Asked for again, more
          * patiently each time, as a chapter caught early is. */
+        let used = patienceFor(next);
         for (let more = 1; page.rendered && more <= 2 && level + more <= 3 && !listsChapters(found, page.url); more += 1) {
           patience.set(next, level + more);
           patience.set(page.url, level + more);
+          used = patienceFor(next);
           page = await fetchPage(next, { list: true });
           found = linksOf(decodePage(await bytesOf(page.blob), page.type), page.url);
         }
+        if (page.rendered && listsChapters(found, page.url)) learnSite(next, used);
         patience.delete(next);
         patience.delete(page.url);
         visited.add(page.url);
@@ -1295,6 +1335,8 @@ export async function readPage(link, index, {
       });
     }
   }
+  // It came: at the patience it took, which is what the site needs.
+  if (page.rendered) learnSite(link.url, patienceFor(link.url));
   patience.delete(link.url);
 
   /* The rest of a chapter split across pages, joined on, in order. Many
