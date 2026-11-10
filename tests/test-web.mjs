@@ -1071,7 +1071,11 @@ await t('an ordinary page is fetched once, and an app without the renderer only 
   delete window.GrimoireWeb;
   // The renderer is native and kept to http(s), its own browser, never the reader's.
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
-  assert.match(java, /public void render\(final String id, final String address, final String patience\)/);
+  assert.match(java, /public void render\(final String id, final String address, final String patience, final String list\)/);
+  // A chapter is never scrolled (a reader that adds the next chapter at the
+  // end made one "chapter" of a hundred), and a page is decoded off the main thread.
+  assert.match(java, /scroll \? SCROLL \+ SHAPE : SHAPE/);
+  assert.match(java, /Object text = new JSONTokener\(job\.raw/);
   // Ready only once the page's own requests are back, counted from before its first script.
   assert.match(java, /WebViewCompat\.addDocumentStartJavaScript\(view, TRACKER/);
   assert.match(java, /pending <= 0 && still >= quietMs/);
@@ -1318,6 +1322,71 @@ await t('a paused book carried on is one book, its chapters in order and unlabel
   assert.match(app, /data-resume>Resume from/);
   assert.match(app, /data-begin>Start from the beginning/);
   assert.match(read('app/src/main/assets/www/index.html'), /id="web-resume"/);
+});
+
+await t('a contents page may be scrolled for more; a chapter never is', async () => {
+  const seen = [];
+  const send = (id, address, body, rendered) => {
+    const path = `data:text/html;base64,${Buffer.from(body, 'utf8').toString('base64')}`;
+    setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type: 'text/html', path, rendered })), 0);
+  };
+  window.GrimoireWeb = {
+    fetch: (id, address) => send(id, address, SHELL, false),
+    render: (id, address, level, list) => { seen.push(`${new URL(address).pathname} ${list}`); send(id, address, address.endsWith('/1') ? chapterPage(1) : maruPage(1, 1), true); },
+    release() {},
+  };
+  await web.findLinks(['https://scroll.example/novel/47997'], { listGap: 0 });
+  await web.readPage({ url: 'https://scroll.example/novel/47997/1', text: '1화' }, 0, { pictures: false });
+  assert.deepEqual(seen, ['/novel/47997 1', '/novel/47997/1 0']);
+  delete window.GrimoireWeb;
+});
+
+await t('with pictures off, a chapter of nothing but adverts is a chapter not yet loaded', async () => {
+  const ads = `<!doctype html><html><body><header><a href="/">홈</a></header><div class="view">
+${Array.from({ length: 23 }, (_, i) => `<span><a href="https://casino${i}.example/"><img src="/ad${i}.gif"></a></span>`).join('')}
+</div></body></html>`;
+  window.GrimoireWeb = {
+    fetch() {},
+    render: (id, address) => {
+      const path = `data:text/html;base64,${Buffer.from(ads, 'utf8').toString('base64')}`;
+      setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type: 'text/html', path, rendered: true })), 0);
+    },
+    release() {},
+  };
+  await assert.rejects(web.readPage({ url: 'https://maru.example/novel/47997/9', text: '9화' }, 0, { pictures: false }),
+    /had not finished loading/);
+  delete window.GrimoireWeb;
+  // Build says a website part is text only.
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  build.clear();
+  build.addWeb({ name: 'Text', links: [{ url: `${SITE}chapter-1`, text: 'One' }], sources: [SITE], pictures: false });
+  assert.match(build.describe(build.contents()[0]), /text only, no pictures/);
+  build.clear();
+  // The choice is remembered for every site.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /store\.saveSettings\(\{ webPictures: webState\.pictures \}\)/);
+  assert.match(app, /if \(typeof settings\.webPictures === 'boolean'\) webState\.pictures = settings\.webPictures;/);
+});
+
+await t('a rendered page that holds another chapter than the one asked for is not kept', async () => {
+  const prose = (n) => `<!doctype html><html><body><div class="view"><p>${n}화 정하연</p>`
+    + `${Array.from({ length: 12 }, () => '<p>첫 번째 전투에서 적진에 가장 먼저 달려들었다. 고블린들이 뒤를 따랐다.</p>').join('')}</div></body></html>`;
+  const answers = [prose(6), prose(5)];   // the site mixed two requests up, then answered right
+  window.GrimoireWeb = {
+    fetch() {},
+    render: (id, address) => {
+      const path = `data:text/html;base64,${Buffer.from(answers.shift(), 'utf8').toString('base64')}`;
+      setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type: 'text/html', path, rendered: true })), 0);
+    },
+    release() {},
+  };
+  const link = { url: 'https://maru.example/novel/47997/2136166', text: '5화 정하연' };
+  await assert.rejects(web.readPage(link, 4, { pictures: false }), /the site gave another chapter for 5화 정하연/);
+  const got = await web.readPage(link, 4, { pictures: false });
+  assert.match(got.chapter.html, /5화 정하연/);
+  delete window.GrimoireWeb;
+  // One page is rendered at a time.
+  assert.match(read('app/src/main/java/com/grimoire/ereader/WebBridge.java'), /renderer = Executors\.newSingleThreadExecutor\(\)/);
 });
 
 console.log(`\n${pass} assertions passed`);

@@ -333,7 +333,8 @@ export function describe(part) {
     const count = part.web.links.length;
     const spread = part.web.jitter > 0 ? ` ± ${part.web.jitter}` : '';
     const rate = Number.isFinite(part.web.gap) ? ` · ${part.web.gap}${spread} ms apart` : '';
-    return `From the web · ${count} page${count === 1 ? '' : 's'}, downloaded when built${site}${rate}`;
+    const pictures = part.web.pictures === false ? ' · text only, no pictures' : '';
+    return `From the web · ${count} page${count === 1 ? '' : 's'}, downloaded when built${site}${rate}${pictures}`;
   }
   if (part.pictures) {
     const size = part.size ? ` · ${(part.size / 1048576).toFixed(1)}MB` : '';

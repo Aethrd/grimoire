@@ -172,7 +172,7 @@ export function scriptBuilt(html) {
   return tidy(body.textContent).length < 400 && body.querySelectorAll('a[href]').length < 8;
 }
 
-function fetchNative(method, url, { timeout = 90000 } = {}) {
+function fetchNative(method, url, { timeout = 90000, list = false } = {}) {
   return new Promise((resolve, reject) => {
     if (!available()) {
       reject(new Error('Downloading needs the app: this copy of the reader cannot reach the web.'));
@@ -217,7 +217,9 @@ function fetchNative(method, url, { timeout = 90000 } = {}) {
       },
     });
     try {
-      if (method === 'render') window.GrimoireWeb.render(id, url, String(patienceFor(url)));
+      // A contents page may be scrolled for more of its list; a chapter
+      // never is (some readers add the next chapter under it at the end).
+      if (method === 'render') window.GrimoireWeb.render(id, url, String(patienceFor(url)), list ? '1' : '0');
       else window.GrimoireWeb.fetch(id, url);
     } catch (error) {
       pending.delete(id);
@@ -989,7 +991,7 @@ export async function findLinks(addresses, {
       pages += 1;
       onProgress?.(at / addresses.length, next, pages, numbered ? total : 0);
       try {
-        let page = await fetchPage(next);
+        let page = await fetchPage(next, { list: true });
         let found = linksOf(decodePage(await bytesOf(page.blob), page.type), page.url);
         /* A contents page built in script, caught before its list arrived:
          * the site's menus and not one chapter. Asked for again, more
@@ -997,7 +999,7 @@ export async function findLinks(addresses, {
         for (let more = 1; page.rendered && more <= 2 && !listsChapters(found, page.url); more += 1) {
           patience.set(next, more);
           patience.set(page.url, more);
-          page = await fetchPage(next);
+          page = await fetchPage(next, { list: true });
           found = linksOf(decodePage(await bytesOf(page.blob), page.type), page.url);
         }
         patience.delete(next);
@@ -1219,8 +1221,24 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
    * arrived, the page all there but the story. Nothing so short is a
    * chapter, so it is asked for again, more patiently each time, and the
    * download stops there if it never comes -- never a blank chapter kept. */
-  if (page.rendered && tidy(story?.textContent).length < MIN_RENDERED_STORY && !story?.querySelector('img')) {
+  // A picture counts as the chapter only where pictures are wanted: on a
+  // site whose every page carries a row of adverts, an empty chapter has
+  // pictures too.
+  if (page.rendered && tidy(story?.textContent).length < MIN_RENDERED_STORY && (!pictures || !story?.querySelector('img'))) {
     throw notLoadedYet(link.url, heldText);
+  }
+  /* A rendered page that opens with another chapter than the one asked for
+   * -- the link says 5화, the page begins "6화 …" -- is not kept: the site
+   * mixed up two requests. Asked for again, as one not yet loaded is. */
+  if (page.rendered) {
+    const asked = markedNumber(link.text || '');
+    const opening = tidy(story?.textContent).slice(0, 120);
+    const given = rowName(opening) ? markedNumber(opening) : null;
+    if (asked !== null && given !== null && Number.isInteger(asked) && Number.isInteger(given) && asked !== given) {
+      throw Object.assign(notLoadedYet(link.url, heldText), {
+        message: `the site gave another chapter for ${link.text} (the page began “${opening.slice(0, 40)}”)`,
+      });
+    }
   }
   patience.delete(link.url);
 

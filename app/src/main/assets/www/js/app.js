@@ -7975,6 +7975,7 @@ function renderWeb() {
   el('web-foot').hidden = !webState.links.length;
   el('web-reverse').setAttribute('aria-pressed', String(webState.reversed));
   el('web-pictures').setAttribute('aria-pressed', String(webState.pictures));
+  el('web-pictures').textContent = webState.pictures ? 'Pictures: on' : 'Pictures: off';
   if (!webState.titleTouched) el('web-title').value = webState.title;
   el('web-eyebrow').textContent = (el('web-title').value || '').trim() || 'Chapters from a website, for Build';
   paintWebCount();
@@ -8305,7 +8306,9 @@ function wireWeb() {
   store.settings().then((settings) => {
     if (Number.isFinite(settings.webDelay)) el('web-delay').value = String(settings.webDelay);
     if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
+    if (typeof settings.webPictures === 'boolean') webState.pictures = settings.webPictures;
     paintWebRange();
+    renderWeb();
   }).catch(() => {});
   el('web-delay').addEventListener('change', () => {
     const value = webDelay();
@@ -8357,9 +8360,16 @@ function wireWeb() {
     webState.manualOrder = true;
     drawWebList();
   };
+  /* Remembered, for every site: on many sites every picture on a chapter
+   * page is an advert, and downloading them is the larger part of the
+   * book -- hundreds of megabytes of them, for a book of text. */
   el('web-pictures').onclick = () => {
     webState.pictures = !webState.pictures;
+    store.saveSettings({ webPictures: webState.pictures }).catch(() => {});
     renderWeb();
+    toast(webState.pictures
+      ? 'Pictures on — the pictures on each page are downloaded too'
+      : 'Pictures off — text only, from every site, until you turn them on again');
   };
 
   /* A tap ticks one; a hold and a drag ticks a run.

@@ -82,9 +82,10 @@ public class WebBridge {
     /** Two at a time: quick enough, and gentle on a site being read. */
     private final ExecutorService io = Executors.newFixedThreadPool(2);
     private final java.net.CookieManager cookies = new java.net.CookieManager(null, CookiePolicy.ACCEPT_ALL);
-    /** Two pages rendered at a time, as two are fetched: each is a whole
-     *  browser while it runs, so no more than that. */
-    private final ExecutorService renderer = Executors.newFixedThreadPool(2);
+    /** One page rendered at a time. Two at once share the site's cookies,
+     *  and a site that keeps "the chapter being read" with them handed each
+     *  the other's chapter (5화 came back as 6화, and 6화 as 5화). */
+    private final ExecutorService renderer = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     /** How long a page may take to settle, and how long it must stay still
      *  to count as settled -- each longer at every level of patience the page
@@ -161,8 +162,8 @@ public class WebBridge {
      * plain request gets nothing to read. The page is loaded in a WebView of
      * its own, never the reader's, with scripts on and nothing of the app
      * reachable from it. It counts as ready once its text and links have
-     * stopped changing for a moment (scrolled to the end on the way, for a
-     * list that loads more as it is scrolled), or at the latest after
+     * stopped changing for a moment (a contents page scrolled to the end on
+     * the way, for a list that loads more as it is scrolled), or at the latest after
      * RENDER_MAX_MS, and the browser is thrown away after each page.
      *
      * Cookies: the reader keeps none, but a bot check is passed by a cookie,
@@ -170,7 +171,12 @@ public class WebBridge {
      * fetches of the same site too. They are cleared when the app next opens.
      */
     @JavascriptInterface
-    public void render(final String id, final String address, final String patience) {
+    public void render(final String id, final String address, final String patience, final String list) {
+        // Scrolled to the end only for a contents page, for a list that loads
+        // more as it is scrolled. Never a chapter: a reader that puts the
+        // next chapter under this one when the end is reached would go on
+        // adding chapters for as long as it was scrolled (a hundred, once).
+        final boolean scroll = "1".equals(list);
         int level = 0;
         try {
             level = Math.max(0, Math.min(3, Integer.parseInt(String.valueOf(patience).trim())));
@@ -188,14 +194,20 @@ public class WebBridge {
                 if (!scheme.equals("http") && !scheme.equals("https")) {
                     throw new IOException("only web addresses can be downloaded");
                 }
-                Rendering job = new Rendering(address, quietMs, maxMs);
+                Rendering job = new Rendering(address, quietMs, maxMs, scroll);
                 main.post(job::start);
                 if (!job.done.await(maxMs + 20000, TimeUnit.MILLISECONDS)) {
                     main.post(job::finish);
                     throw new IOException("the site took too long to answer");
                 }
                 if (job.error != null) throw new IOException(job.error);
-                byte[] bytes = job.html.getBytes(StandardCharsets.UTF_8);
+                // Decoded here, not on the main thread: a page can run to
+                // megabytes, and the app would stop answering meanwhile.
+                Object text = new JSONTokener(job.raw == null ? "null" : job.raw).nextValue();
+                if (!(text instanceof String) || ((String) text).isEmpty()) {
+                    throw new IOException("the page came back empty");
+                }
+                byte[] bytes = ((String) text).getBytes(StandardCharsets.UTF_8);
                 try (OutputStream out = new FileOutputStream(target)) {
                     out.write(bytes);
                 }
@@ -241,8 +253,10 @@ public class WebBridge {
         final String address;
         final long quietMs;
         final long maxMs;
+        final boolean scroll;
         final CountDownLatch done = new CountDownLatch(1);
-        volatile String html;
+        /** The page as evaluateJavascript gave it: a JSON string, decoded off the main thread. */
+        volatile String raw;
         volatile String error;
         volatile String finalUrl;
         private WebView view;
@@ -253,10 +267,11 @@ public class WebBridge {
         private long startedAt;
         private boolean tracked;
 
-        Rendering(String address, long quietMs, long maxMs) {
+        Rendering(String address, long quietMs, long maxMs, boolean scroll) {
             this.address = address;
             this.quietMs = quietMs;
             this.maxMs = maxMs;
+            this.scroll = scroll;
             this.finalUrl = address;
         }
 
@@ -343,7 +358,7 @@ public class WebBridge {
         /** Still changing? Scroll on, and look again shortly. */
         private void poll() {
             if (view == null) return;
-            view.evaluateJavascript(SHAPE, (value) -> {
+            view.evaluateJavascript(scroll ? SCROLL + SHAPE : SHAPE, (value) -> {
                 if (view == null) return;
                 String reply = value == null ? "" : value;
                 // "pending|text|links|checking|resources|title": all but the
@@ -383,24 +398,17 @@ public class WebBridge {
                 return;
             }
             view.evaluateJavascript("'<!DOCTYPE html>'+document.documentElement.outerHTML", (value) -> {
-                try {
-                    Object text = new JSONTokener(value == null ? "null" : value).nextValue();
-                    if (!(text instanceof String) || ((String) text).isEmpty()) {
-                        error = "the page came back empty";
-                    } else if (lastShape.contains("|checking|")) {
-                        error = "the site only lets a browser in (it is behind a bot check), and its check did not finish";
-                    } else {
-                        html = (String) text;
-                    }
-                } catch (JSONException e) {
-                    error = "the page could not be read";
+                if (lastShape.contains("|checking|")) {
+                    error = "the site only lets a browser in (it is behind a bot check), and its check did not finish";
+                } else {
+                    raw = value;
                 }
                 finish();
             });
         }
 
         private void fail(String why) {
-            if (error == null && html == null) error = why;
+            if (error == null && raw == null) error = why;
             finish();
         }
 
@@ -435,8 +443,8 @@ public class WebBridge {
 
     /** What is still on its way, then the page's shape -- text length, link count, a bot check at
      *  work, resources loaded, title -- which changes while it is still being built. */
+    private static final String SCROLL = "try{if(document.body)window.scrollTo(0,document.body.scrollHeight);}catch(e){}";
     private static final String SHAPE = "(function(){try{var b=document.body;"
-            + "if(b)window.scrollTo(0,b.scrollHeight);"
             + "var t=document.title||'';"
             + "var c=/just a moment|checking your browser|잠시만 기다|請稍候|请稍候|attention required/i.test(t+' '+(b?b.innerText.slice(0,300):''));"
             + "var r=(window.performance&&performance.getEntriesByType)?performance.getEntriesByType('resource').length:0;"
