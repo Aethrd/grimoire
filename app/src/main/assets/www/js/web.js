@@ -1003,6 +1003,8 @@ export async function findLinks(addresses, {
   // "Search for more": how patiently each page is rendered from the start
   // (0 as usual, up to 3, the longest the renderer waits).
   patience: startPatience = 0,
+  // A newer search has begun: this one asks for no further page.
+  shouldStop = null,
 } = {}) {
   const links = [];
   const seen = new Map();
@@ -1015,8 +1017,9 @@ export async function findLinks(addresses, {
   let newestFirstList = false;
   const visited = new Set();
   let shut = false;   // a site that blocked the connection: nothing more is asked of it
+  const stopped = () => typeof shouldStop === 'function' && !!shouldStop();
   for (const [at, address] of addresses.entries()) {
-    if (shut) break;
+    if (shut || stopped()) break;
     /* A WordPress list of posts goes on, a page at a time, to the oldest
      * post: each page's "older posts" is followed, so the whole serial is
      * listed from its contents page alone rather than its newest ten. */
@@ -1026,7 +1029,7 @@ export async function findLinks(addresses, {
     const queue = [];
     let numbered = false;
     let total = 0;
-    while (next && pages < maxPages) {
+    while (next && pages < maxPages && !stopped()) {
       // Already read (a numbered page that was also the next "older"): on.
       if (visited.has(next)) { next = nextOf(queue); continue; }
       visited.add(next);

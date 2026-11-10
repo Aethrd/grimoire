@@ -8380,6 +8380,20 @@ const shownWebLinks = () => [...el('web-list').children]
   .filter((row) => !row.hidden)
   .map((row) => webState.links[Number(row.dataset.at)]);
 
+/* One search of a site's list at a time. A second -- Search for more, or
+ * Open the site's search again, pressed while one ran -- ran beside the
+ * first: twice the requests to the site, and two counts written over each
+ * other ("page 18", then "page 13"). Each search has a number; a newer one
+ * stops the older at its next page, and only the newest may say anything
+ * or change the list. The buttons are held while one runs. */
+let webSearch = 0;
+function holdSearch(on) {
+  for (const id of ['web-find', 'web-more', 'web-open']) {
+    const button = el(id);
+    if (button) button.disabled = on;
+  }
+}
+
 async function findWebLinks() {
   const addresses = web.addressesIn(el('web-address').value);
   if (!addresses.length) {
@@ -8392,7 +8406,9 @@ async function findWebLinks() {
   }
 
   const button = el('web-find');
-  button.disabled = true;
+  const mine = ++webSearch;
+  const current = () => mine === webSearch;
+  holdSearch(true);
   try {
     let links;
     let title = '';
@@ -8408,12 +8424,14 @@ async function findWebLinks() {
       const found = await web.findLinks(addresses, {
         // The pages of a long list are asked for at the same pace as chapters.
         listGap: webDelay(), listJitter: webJitter(),
+        shouldStop: () => !current(),
         onProgress: (fraction, address, page, pages) => {
-          if (address) {
+          if (address && current()) {
             webNote(page > 1 ? `Reading page ${page}${pages ? ` of ${pages}` : ''} of the list…` : `Reading ${webWhere(address)}…`);
           }
         },
       });
+      if (!current()) return;   // a newer search has it
       lastFindFailed = !found.links.length;
       if (!found.links.length) {
         webState.sources = addresses;
@@ -8473,11 +8491,15 @@ async function findWebLinks() {
     drawWebList();
     paintResume();
   } catch (error) {
+    if (!current()) return;
     lastFindFailed = true;
     webNote(error.message || 'Those links could not be found.', true);
   } finally {
-    button.disabled = false;
-    button.textContent = 'Find links';
+    if (current()) {
+      holdSearch(false);
+      button.textContent = 'Find links';
+      paintMore();
+    }
   }
 }
 
@@ -8580,22 +8602,24 @@ async function searchMore() {
   const level = Math.min(3, (webState.searches || 0) + 1);
   webState.searches = level;
   const button = el('web-more');
-  const find = el('web-find');
-  button.disabled = true;
-  find.disabled = true;
+  const mine = ++webSearch;
+  const current = () => mine === webSearch;
+  holdSearch(true);
   button.textContent = 'Searching…';
   const before = new Map(webState.links.map((link) => [link.url, link]));
   try {
     const found = await web.findLinks(addresses, {
       patience: level, listGap: webDelay(), listJitter: webJitter(),
+      shouldStop: () => !current(),
       onProgress: (fraction, address, page, pages) => {
-        if (address) {
+        if (address && current()) {
           webNote(page > 1
             ? `Searching again, waiting longer — page ${page}${pages ? ` of ${pages}` : ''} of the list…`
             : `Searching ${webWhere(address)} again, waiting longer…`);
         }
       },
     });
+    if (!current()) return;   // a newer search has it
     // What this look found, as it found it, and anything the last look had
     // that this one did not.
     const merged = found.links.map((link) => (before.has(link.url)
@@ -8627,11 +8651,12 @@ async function searchMore() {
     drawWebList();
     paintResume();
   } catch (error) {
-    webNote(error.message || 'That page could not be searched again.', true);
+    if (current()) webNote(error.message || 'That page could not be searched again.', true);
   } finally {
-    button.disabled = false;
-    find.disabled = false;
-    paintMore();
+    if (current()) {
+      holdSearch(false);
+      paintMore();
+    }
   }
 }
 

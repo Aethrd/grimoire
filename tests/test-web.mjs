@@ -1676,4 +1676,22 @@ await t('a site that has blocked the connection is asked nothing more', async ()
   assert.match(read('app/src/main/assets/www/js/app.js'), /if \(kept && web\.blocked\(kept\.reason \|\| failed\[0\]\?\.reason\)\) \{\s+endOvernight\(\);/);
 });
 
+await t('one search of a list at a time: a newer one stops the older at its next page', async () => {
+  const base = 'https://maru.example/novel/47997';
+  const asked = [];
+  let newer = false;
+  const site = async (url) => {
+    asked.push(url);
+    if (asked.length === 2) newer = true;   // Search for more pressed while page 2 came
+    const page = Number(new URL(url).searchParams.get('page')) || 1;
+    return { url, status: 200, type: 'text/html', blob: new Blob([maruPage(page, 5)], { type: 'text/html' }) };
+  };
+  await web.findLinks([base], { fetchPage: site, listGap: 0, shouldStop: () => newer });
+  assert.equal(asked.length, 2, `the older search went on: ${asked.join(', ')}`);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /for \(const id of \['web-find', 'web-more', 'web-open'\]\)/);
+  assert.equal((app.match(/shouldStop: \(\) => !current\(\),/g) || []).length, 2);
+  assert.equal((app.match(/if \(!current\(\)\) return;   \/\/ a newer search has it/g) || []).length, 2);
+});
+
 console.log(`\n${pass} assertions passed`);
