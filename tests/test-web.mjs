@@ -1097,7 +1097,9 @@ await t('a rendered chapter caught before its story arrived is asked for again, 
     release() {},
   };
   const link = { url, text: '그린 스킨 2화' };
-  await assert.rejects(web.readPage(link, 1, { pictures: false }), /had not finished loading/);
+  // What the page held is said: here, the site's "loading…".
+  await assert.rejects(web.readPage(link, 1, { pictures: false }),
+    /had not finished loading on the site \(the page held \d+ characters: "홈 업데이트 불러오는 중…"\)/);
   const got = await web.readPage(link, 1, { pictures: false });
   assert.match(got.chapter.html, /lit the lamp/);
   assert.deepEqual(calls, ['0', '1']);   // the second time, more patiently

@@ -82,15 +82,16 @@ public class WebBridge {
     /** Two at a time: quick enough, and gentle on a site being read. */
     private final ExecutorService io = Executors.newFixedThreadPool(2);
     private final java.net.CookieManager cookies = new java.net.CookieManager(null, CookiePolicy.ACCEPT_ALL);
-    /** One page rendered at a time: each is a whole browser while it runs. */
-    private final ExecutorService renderer = Executors.newSingleThreadExecutor();
+    /** Two pages rendered at a time, as two are fetched: each is a whole
+     *  browser while it runs, so no more than that. */
+    private final ExecutorService renderer = Executors.newFixedThreadPool(2);
     private final Handler main = new Handler(Looper.getMainLooper());
     /** How long a page may take to settle, and how long it must stay still
      *  to count as settled -- each longer at every level of patience the page
      *  asks for (a chapter that came back empty is asked for more patiently). */
     private static final long RENDER_MAX_MS = 40000;
     private static final long RENDER_MAX_STEP_MS = 10000;
-    private static final long RENDER_QUIET_MS = 2100;
+    private static final long RENDER_QUIET_MS = 1500;
     private static final long RENDER_QUIET_STEP_MS = 2000;
     private static final long RENDER_POLL_MS = 700;
     /** A page still waiting on a request this many quiet spells on has one

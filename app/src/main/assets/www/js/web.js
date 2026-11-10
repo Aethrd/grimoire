@@ -123,10 +123,15 @@ const BOT_CHECK = /bot check|only lets a browser/i;
 const patience = new Map();
 const patienceFor = (url) => patience.get(url) || 0;
 
-/** A rendered page whose story had not arrived: ask more patiently next time. */
-export function notLoadedYet(url) {
+/** A rendered page whose story had not arrived: ask more patiently next time.
+ *  What the page did hold goes into the message -- a sign-in, an age check,
+ *  a "loading…" -- since that is what says why. */
+export function notLoadedYet(url, held = '') {
   patience.set(url, Math.min(3, patienceFor(url) + 1));
-  return new Error('the chapter had not finished loading on the site');
+  const text = tidy(held);
+  const sample = text.length > 140 ? `${text.slice(0, 140)}…` : text;
+  return Object.assign(new Error(`the chapter had not finished loading on the site (the page held ${text.length} characters${sample ? `: "${sample}"` : ''})`),
+    { notLoaded: true });
 }
 
 /** Whether this build of the app has the renderer. */
@@ -1151,6 +1156,20 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
   const html = decodePage(await bytesOf(page.blob), page.type);
   const doc = parseHtml(html);
   const lang = doc.documentElement.getAttribute('lang') || null;
+  // What a reader would see on it, before anything is taken out: said if
+  // the chapter turns out not to be there.
+  let heldText = '';
+  if (page.rendered) {
+    const copy = doc.body?.cloneNode(true);
+    for (const node of copy?.querySelectorAll('script, style, noscript, template') || []) node.remove();
+    if (copy) {
+      // Piece by piece, so neighbouring links do not run together.
+      const walker = doc.createTreeWalker(copy, 0x4);
+      const words = [];
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) words.push(node.nodeValue);
+      heldText = words.join(' ');
+    }
+  }
   // On WordPress, the post's own title, which the theme marks as such.
   const wordpress = isWordPress(doc, html);
   const postTitle = wordpress
@@ -1165,7 +1184,7 @@ export async function readPage(link, index, { pictures = true, fetchPage = downl
    * chapter, so it is asked for again, more patiently each time, and the
    * download stops there if it never comes -- never a blank chapter kept. */
   if (page.rendered && tidy(story?.textContent).length < MIN_RENDERED_STORY && !story?.querySelector('img')) {
-    throw notLoadedYet(link.url);
+    throw notLoadedYet(link.url, heldText);
   }
   patience.delete(link.url);
 
@@ -1545,7 +1564,10 @@ export async function readPages(links, {
         // Failed while the app was away: asked again once it is back.
         if (interruptions !== before && uncounted < 20) { uncounted += 1; continue; }
         if (!waits) {
-          waits = gone(error) ? [wait.retry]
+          // A chapter that had not loaded: twice more, more patiently each
+          // time -- not the minute and more a refusing site is given.
+          waits = error?.notLoaded ? wait.backoff.slice(0, 2)
+            : gone(error) ? [wait.retry]
             : tooMany(error) ? [...wait.refresh, ...wait.backoff]
             : [...wait.backoff];
         }
