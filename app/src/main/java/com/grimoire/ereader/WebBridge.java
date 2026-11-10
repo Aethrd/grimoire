@@ -10,6 +10,7 @@ import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -31,7 +32,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.regex.Pattern;
 import java.net.CookiePolicy;
 import java.net.HttpCookie;
 import java.net.HttpURLConnection;
@@ -184,6 +187,9 @@ public class WebBridge {
             // Not a number: the usual patience.
         }
         final long quietMs = RENDER_QUIET_MS + level * RENDER_QUIET_STEP_MS;
+        // Other sites' adverts and trackers kept out, until a page that came
+        // back without its chapter is asked for patiently: then nothing is.
+        final boolean ownSiteOnly = level < 2;
         final long maxMs = RENDER_MAX_MS + level * RENDER_MAX_STEP_MS;
         renderer.execute(() -> {
             String safeId = id == null ? "x" : id.replaceAll("[^A-Za-z0-9_-]", "_");
@@ -194,7 +200,7 @@ public class WebBridge {
                 if (!scheme.equals("http") && !scheme.equals("https")) {
                     throw new IOException("only web addresses can be downloaded");
                 }
-                Rendering job = new Rendering(address, quietMs, maxMs, scroll);
+                Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly);
                 main.post(job::start);
                 if (!job.done.await(maxMs + 20000, TimeUnit.MILLISECONDS)) {
                     main.post(job::finish);
@@ -207,7 +213,16 @@ public class WebBridge {
                 if (!(text instanceof String) || ((String) text).isEmpty()) {
                     throw new IOException("the page came back empty");
                 }
-                byte[] bytes = ((String) text).getBytes(StandardCharsets.UTF_8);
+                // Its scripts, styles, frames and icons out before the reader
+                // parses it: it needs the words and the links, and a page of
+                // adverts is mostly the rest -- parsed on the app's own thread.
+                String lean;
+                try {
+                    lean = LEAN.matcher((String) text).replaceAll("");
+                } catch (Throwable tooMuch) {
+                    lean = (String) text;   // the whole page, then: slower, not lost
+                }
+                byte[] bytes = lean.getBytes(StandardCharsets.UTF_8);
                 try (OutputStream out = new FileOutputStream(target)) {
                     out.write(bytes);
                 }
@@ -254,6 +269,9 @@ public class WebBridge {
         final long quietMs;
         final long maxMs;
         final boolean scroll;
+        final boolean ownSiteOnly;
+        /** The site the page is on, for telling its own requests from others'. */
+        volatile String site;
         final CountDownLatch done = new CountDownLatch(1);
         /** The page as evaluateJavascript gave it: a JSON string, decoded off the main thread. */
         volatile String raw;
@@ -267,11 +285,13 @@ public class WebBridge {
         private long startedAt;
         private boolean tracked;
 
-        Rendering(String address, long quietMs, long maxMs, boolean scroll) {
+        Rendering(String address, long quietMs, long maxMs, boolean scroll, boolean ownSiteOnly) {
             this.address = address;
             this.quietMs = quietMs;
             this.maxMs = maxMs;
             this.scroll = scroll;
+            this.ownSiteOnly = ownSiteOnly;
+            this.site = siteOf(Uri.parse(address).getHost());
             this.finalUrl = address;
         }
 
@@ -302,9 +322,46 @@ public class WebBridge {
                         return s == null || !(s.equalsIgnoreCase("http") || s.equalsIgnoreCase("https"));
                     }
 
+                    /* Every web page in the app shares one renderer. If Android
+                     * reclaims it, each view is told, and one that does not
+                     * answer takes the whole app down: this page is given up,
+                     * and the reader's own view rebuilds itself. */
+                    @Override
+                    public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail detail) {
+                        if (v == view) view = null;
+                        try {
+                            ViewGroup parent = (ViewGroup) v.getParent();
+                            if (parent != null) parent.removeView(v);
+                            v.destroy();
+                        } catch (Exception ignored) {
+                            // Gone either way.
+                        }
+                        fail("Android stopped the page's browser to free memory");
+                        return true;
+                    }
+
+                    /* Another site's adverts, trackers and frames: kept out, so
+                     * the page costs the phone a fraction of what it would. Its
+                     * own site, the common script libraries and Cloudflare's
+                     * check still load. */
+                    @Override
+                    public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest request) {
+                        if (!ownSiteOnly || request.isForMainFrame()) return null;
+                        String host = request.getUrl().getHost();
+                        if (host == null || ALLOWED_ELSEWHERE.contains(host.toLowerCase(Locale.ROOT))) return null;
+                        String own = site;
+                        if (own != null && own.equals(siteOf(host))) return null;
+                        return new WebResourceResponse("text/plain", "utf-8",
+                                new ByteArrayInputStream(new byte[0]));
+                    }
+
                     @Override
                     public void onPageStarted(WebView v, String url, Bitmap favicon) {
-                        if (url != null) finalUrl = url;
+                        if (url != null) {
+                            finalUrl = url;
+                            String moved = siteOf(Uri.parse(url).getHost());
+                            if (moved != null) site = moved;
+                        }
                         // Without the document-start hook (an old WebView), as
                         // early as can be: later requests are still counted.
                         if (!tracked && v != null) v.evaluateJavascript(TRACKER, null);
@@ -443,12 +500,41 @@ public class WebBridge {
 
     /** What is still on its way, then the page's shape -- text length, link count, a bot check at
      *  work, resources loaded, title -- which changes while it is still being built. */
+    /** What a page parsed by the reader can do without. */
+    private static final Pattern LEAN = Pattern.compile(
+            "<(script|style|iframe|svg|template|noscript)\\b[^>]*>.*?</\\1\\s*>",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+
+    /** Hosts a page from anywhere may need: script libraries and a bot check. */
+    private static final java.util.Set<String> ALLOWED_ELSEWHERE = new java.util.HashSet<>(java.util.Arrays.asList(
+            "challenges.cloudflare.com", "cdnjs.cloudflare.com", "cdn.jsdelivr.net", "unpkg.com",
+            "ajax.googleapis.com", "code.jquery.com", "cdn.tailwindcss.com"));
+
+    /** The site a host belongs to: example.com for www.example.com, and
+     *  example.co.kr for img.example.co.kr. */
+    static String siteOf(String host) {
+        if (host == null || host.isEmpty()) return null;
+        String[] labels = host.toLowerCase(Locale.ROOT).split("\\.");
+        int n = labels.length;
+        if (n <= 2) return host.toLowerCase(Locale.ROOT);
+        boolean twoPart = labels[n - 1].length() == 2
+                && java.util.Arrays.asList("co", "com", "net", "org", "or", "ne", "go", "ac", "gov", "edu")
+                        .contains(labels[n - 2]);
+        int keep = twoPart ? 3 : 2;
+        StringBuilder out = new StringBuilder();
+        for (int i = n - keep; i < n; i++) {
+            if (out.length() > 0) out.append('.');
+            out.append(labels[i]);
+        }
+        return out.toString();
+    }
+
     private static final String SCROLL = "try{if(document.body)window.scrollTo(0,document.body.scrollHeight);}catch(e){}";
     private static final String SHAPE = "(function(){try{var b=document.body;"
             + "var t=document.title||'';"
-            + "var c=/just a moment|checking your browser|잠시만 기다|請稍候|请稍候|attention required/i.test(t+' '+(b?b.innerText.slice(0,300):''));"
+            + "var c=/just a moment|checking your browser|잠시만 기다|請稍候|请稍候|attention required/i.test(t+' '+(b?b.textContent.slice(0,300):''));"
             + "var r=(window.performance&&performance.getEntriesByType)?performance.getEntriesByType('resource').length:0;"
-            + "return (window.__grimoirePending||0)+'|'+(b?b.innerText.length:0)+'|'+document.links.length+'|'+(c?'checking':'')+'|'+r+'|'+t;"
+            + "return (window.__grimoirePending||0)+'|'+(b?b.textContent.length:0)+'|'+document.links.length+'|'+(c?'checking':'')+'|'+r+'|'+t;"
             + "}catch(e){return '0|0|0||0|';}})()";
 
     /** The page has read what was fetched; the file can go. */

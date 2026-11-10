@@ -6488,6 +6488,7 @@ function wireWorkshop() {
      * book on with later. */
     buildRun = { online, pausing: false, status: 'Starting…', finish };
     paintBuildFoot();
+    try { window.GrimoireNative?.buildRunning?.(true); } catch { /* not in the app */ }
     try {
       const { book, failed } = await build.build({
         shouldPause: () => !!buildRun?.pausing,
@@ -6560,6 +6561,7 @@ function wireWorkshop() {
     } finally {
       finish();
       buildRun = null;
+      try { window.GrimoireNative?.buildRunning?.(false); } catch { /* not in the app */ }
       renderWorkshop();
       // Let go again, unless a book is open to read.
       if (online && current !== 'reader') {

@@ -1434,4 +1434,21 @@ await t('Pause & keep is on Build\'s footer; the progress panel takes no taps', 
   assert.match(app, /shouldPause: \(\) => !!buildRun\?\.pausing/);
 });
 
+await t('the renderer cannot take the app down, and keeps a page light', async () => {
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  // A renderer Android reclaims is let go, not left to take the app with it.
+  assert.match(java, /public boolean onRenderProcessGone\(WebView v, RenderProcessGoneDetail detail\) \{[\s\S]{0,900}return true;/);
+  // Other sites' adverts and trackers kept out, until a page is asked for patiently.
+  assert.match(java, /final boolean ownSiteOnly = level < 2;/);
+  assert.match(java, /if \(!ownSiteOnly \|\| request\.isForMainFrame\(\)\) return null;/);
+  assert.match(java, /"challenges\.cloudflare\.com"/);
+  // Scripts, styles, frames and icons out before the reader parses it; and
+  // looking at a page asks no layout of it.
+  assert.match(java, /LEAN\.matcher\(\(String\) text\)\.replaceAll\(""\)/);
+  assert.ok(!/innerText/.test(java), 'the shape check lays the page out again');
+  // A build cut off by Android is said to have been.
+  assert.match(read('app/src/main/java/com/grimoire/ereader/MainActivity.java'), /pendingNotice = GrimoireBridge\.building/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /window\.GrimoireNative\?\.buildRunning\?\.\(true\)/);
+});
+
 console.log(`\n${pass} assertions passed`);

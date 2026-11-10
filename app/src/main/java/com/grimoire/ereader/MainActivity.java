@@ -292,9 +292,14 @@ public class MainActivity extends AppCompatActivity {
 
                 // Said on the way back in, because by then there is something
                 // to say it in.
-                pendingNotice = crashed
+                // A build under way lived in that renderer, and went with it.
+                pendingNotice = GrimoireBridge.building
+                        ? "Android reclaimed the app's memory during a build, which stopped it. "
+                          + "Build again: where a website got to is not kept from a build that was cut off."
+                        : crashed
                         ? "The reader ran out of room and restarted. Nothing was lost."
                         : "Android reclaimed the reader's memory. Nothing was lost.";
+                GrimoireBridge.building = false;
                 rebuildWebView();
                 return true;
             }

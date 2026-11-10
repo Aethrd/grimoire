@@ -423,6 +423,15 @@ public class GrimoireBridge {
         });
     }
 
+    /** Whether a build is under way: if Android reclaims the reader's memory
+     *  meanwhile, the build goes with it, and that is what is said after. */
+    static volatile boolean building = false;
+
+    @JavascriptInterface
+    public void buildRunning(final boolean running) {
+        building = running;
+    }
+
     /** One notification for a build's end; a newer one takes its place. */
     @JavascriptInterface
     public void notify(final String title, final String text) {
