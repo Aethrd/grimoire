@@ -6059,14 +6059,17 @@ function paintBuildFoot() {
   if (run.status) el('build-count').textContent = run.status;
 }
 
-/** Pause & keep: the chapters under way finish, the book is made of what
- *  came, and the rest is kept to carry it on. */
+/** Pause & keep: the download stops now -- a chapter half-come is dropped,
+ *  and is where it carries on -- the book is made of what came, and the
+ *  rest is kept to carry it on. */
 function pauseBuild() {
   const run = buildRun;
   if (!run || !run.online || run.pausing) return;
   run.pausing = true;
-  run.status = 'Pausing — finishing the chapters under way…';
-  run.finish?.say('Pausing — finishing the chapters under way, then making the book…');
+  run.status = 'Pausing — making the book…';
+  run.finish?.say('Paused — making the book of the chapters that have come…');
+  // Stopped now: what is on its way is dropped, and is where it carries on.
+  web.stopAll();
   paintBuildFoot();
 }
 

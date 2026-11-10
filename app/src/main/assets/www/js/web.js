@@ -1381,7 +1381,9 @@ export async function readPage(link, index, {
         href: picture.href, blob: got.blob, order: index * 1000 + n, chapterIndex: index,
         part: picture.part, animated: kind === 'image/gif', width: 0, height: 0,
       });
-    } catch {
+    } catch (error) {
+      // Paused: the chapter is dropped with it, not kept short its pictures.
+      if (error?.paused) throw error;
       // A picture that will not come costs its place, not the chapter.
       const piece = read[picture.part];
       if (piece) piece.html = piece.html.split(`<img data-img="${picture.href}">`).join('');
@@ -1525,6 +1527,32 @@ const escapeHtml = (text) => String(text).replace(/[&<>"]/g,
 /* ── the whole book ──────────────────────────────────────────────────── */
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A pause cut short the moment `stop` says so (Pause & keep). */
+async function napUnless(ms, stop) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (stop()) return;
+    await pause(Math.min(200, end - Date.now()));
+  }
+}
+
+/**
+ * Everything asked of the app and not yet answered, given up now: each is
+ * answered "paused", and the renderer leaves the page it is on. Pause &
+ * keep stops the download here -- not after the chapters under way have
+ * come, which could be a minute and more.
+ */
+export function stopAll() {
+  for (const [id, entry] of [...pending]) {
+    if (id.startsWith('s')) continue;   // a site shown to the reader is theirs to close
+    pending.delete(id);
+    clearInterval(entry.timer);
+    entry.reject(Object.assign(new Error(PAUSED_REASON), { paused: true, tries: 1 }));
+    try { window.GrimoireWeb?.release?.(id); } catch { /* left for the next run to clear */ }
+  }
+  try { window.GrimoireWeb?.stopAll?.(); } catch { /* an older build: its answers are ignored */ }
+}
 
 /**
  * Download the chosen pages into a new book.
@@ -1758,7 +1786,7 @@ export async function readPages(links, {
     const now = Date.now();
     const wait = Math.max(0, nextAt - now);
     nextAt = Math.max(now, nextAt) + spacing(gap, jitter);
-    if (wait) await pause(wait);
+    if (wait) await napUnless(wait, pausing);
   };
 
   /* Asked again before it is given up on -- patiently.
@@ -1817,7 +1845,7 @@ export async function readPages(links, {
         if (tries >= waits.length) break;
         onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
           `${nameOf(link, at)}: ${error?.message || 'could not be read'} — trying again`);
-        await pause(waits[tries]);
+        await napUnless(waits[tries], pausing);
         tries += 1;
       }
     }

@@ -394,6 +394,16 @@ public class WebBridge {
         return true;
     }
 
+    /** Pause & keep: the page the renderer is on is left now, not waited out.
+     *  (Its answer, and any plain fetch's still on its way, are ignored.) */
+    @JavascriptInterface
+    public void stopAll() {
+        main.post(() -> {
+            Rendering job = current;
+            if (job != null) job.fail("paused");
+        });
+    }
+
     /** What the renderer's browser was given, kept for plain fetches too. */
     private void keepRenderedCookies(String address) {
         try {

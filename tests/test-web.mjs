@@ -261,7 +261,8 @@ await t('the native side fetches only web addresses, and only when asked', () =>
   // sent, or rendered for a page its script builds.
   const entries = [...java.matchAll(/@JavascriptInterface\s+public \w+ (\w+)\(/g)].map((m) => m[1]);
   // (And shown, over the app, for a check the reader passes there.)
-  assert.deepEqual(entries.sort(), ['fetch', 'release', 'render', 'showSite']);
+  // (And Pause & keep's: leave the page the renderer is on.)
+  assert.deepEqual(entries.sort(), ['fetch', 'release', 'render', 'showSite', 'stopAll']);
   assert.equal(java.match(/if \(!scheme\.equals\("http"\) && !scheme\.equals\("https"\)\)/g).length, 3);
   // And no cookies kept past the app being closed.
   assert.ok(!/SharedPreferences|getSharedPreferences/.test(java));
@@ -1692,6 +1693,37 @@ await t('one search of a list at a time: a newer one stops the older at its next
   assert.match(app, /for \(const id of \['web-find', 'web-more', 'web-open'\]\)/);
   assert.equal((app.match(/shouldStop: \(\) => !current\(\),/g) || []).length, 2);
   assert.equal((app.match(/if \(!current\(\)\) return;   \/\/ a newer search has it/g) || []).length, 2);
+});
+
+await t('Pause & keep stops now: a chapter on its way is dropped, not waited for', async () => {
+  let paused = false;
+  let stoppedNative = 0;
+  window.GrimoireWeb = {
+    // Chapter 1 comes; chapter 2 never would.
+    fetch: (id, url) => {
+      if (!url.endsWith('chapter-1')) return;
+      const path = `data:text/html;base64,${Buffer.from(chapterPage(1), 'utf8').toString('base64')}`;
+      setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url, status: 200, type: 'text/html', path })), 0);
+    },
+    stopAll: () => { stoppedNative += 1; },
+    release() {},
+  };
+  const started = Date.now();
+  const parsed = await web.readPages([1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` })), {
+    gap: 5000,   // the reader's long pause: cut short too
+    pictures: false,
+    shouldStop: () => paused,
+    onProgress: (fraction, done) => {
+      if (done >= 1 && !paused) { paused = true; web.stopAll(); }
+    },
+  });
+  assert.ok(Date.now() - started < 4000, `it waited ${Date.now() - started} ms after the pause`);
+  assert.deepEqual(parsed.chapters.map((c) => c.title), ['No. 1']);
+  assert.equal(parsed.failed[0].reason, web.PAUSED_REASON);
+  assert.deepEqual(parsed.rest.map((l) => l.text), ['No. 2', 'No. 3']);
+  assert.equal(stoppedNative, 1);
+  delete window.GrimoireWeb;
+  assert.match(read('app/src/main/assets/www/js/app.js'), /\/\/ Stopped now: what is on its way is dropped, and is where it carries on\.\s+web\.stopAll\(\);/);
 });
 
 console.log(`\n${pass} assertions passed`);
