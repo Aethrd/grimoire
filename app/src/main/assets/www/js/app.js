@@ -6503,6 +6503,19 @@ function paintLeftovers(parts) {
         : '<button class="btn primary" data-retry>Download as another book</button>')
       + '</div>';
     box.querySelector('[data-look]').disabled = busy;
+    // Stopped at a site's browser check: shown, passed, and carried on.
+    if (web.wantsCheck(left.reason) && web.canOpenSite() && left.links[0]?.url) {
+      const pass = document.createElement('button');
+      pass.className = 'btn ghost';
+      pass.textContent = 'Open the site';
+      pass.disabled = busy;
+      pass.onclick = async () => {
+        try { await web.openSite(left.links[0].url); } catch (error) { toast(error.message, 6000); return; }
+        if (left.bookId != null) await carryOnLeftover(left);
+        else leftoverAsBook(left);
+      };
+      box.querySelector('.web-row').prepend(pass);
+    }
     const carry = box.querySelector('[data-carry]');
     if (carry) {
       carry.disabled = busy;
@@ -8393,12 +8406,15 @@ async function findWebLinks() {
           }
         },
       });
+      lastFindFailed = !found.links.length;
       if (!found.links.length) {
         webState.sources = addresses;
         webState.searches = 0;
         paintMore();
         webNote(found.failed.length
-          ? `That page could not be downloaded: ${found.failed[0].reason}. Search for more tries again, waiting longer.`
+          ? (web.wantsCheck(found.failed[0].reason)
+            ? `${new URL(addresses[0]).host} put up a browser check the downloader could not pass. Tap Open the site, let the check pass there (tap it if it asks), then Done — the list is read again.`
+            : `That page could not be downloaded: ${found.failed[0].reason}. Search for more tries again, waiting longer.`)
           : 'No links were found on that page. If the site was still loading, Search for more looks again and waits longer. Otherwise try the site\'s plain contents page, or paste the chapter addresses themselves and tick "These are the chapters".', true);
         return;
       }
@@ -8449,6 +8465,7 @@ async function findWebLinks() {
     drawWebList();
     paintResume();
   } catch (error) {
+    lastFindFailed = true;
     webNote(error.message || 'Those links could not be found.', true);
   } finally {
     button.disabled = false;
@@ -8505,6 +8522,33 @@ async function markWhatTheBookHas(links) {
 }
 const tidyName = (text) => String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
+/* ── Open the site ─────────────────────────────────────────────────────
+ *
+ * A site that puts up a check ("Just a moment…", "잠시만 기다리십시오") the
+ * unseen browser cannot pass -- it is not shown, and some checks want to
+ * be seen or ticked. Shown here, over the app, the check passes as it does
+ * in the phone's browser, and what it leaves lets the downloader in after.
+ */
+let lastFindFailed = false;
+
+async function openSiteToPass() {
+  const address = web.addressesIn(el('web-address').value)[0];
+  if (!address) return;
+  try {
+    await web.openSite(address);
+  } catch (error) {
+    toast(error.message || 'The site could not be shown', 6000);
+    return;
+  }
+  // Back from it: what failed before is asked again.
+  if (lastFindFailed || !webState.links.some((link) => link.likely)) {
+    toast('Searching again…');
+    await findWebLinks();
+  } else {
+    toast('Done — Search for more or Find links to read the list again');
+  }
+}
+
 /* ── Search for more ───────────────────────────────────────────────────
  *
  * A site that builds its contents page in script can be read before its
@@ -8514,6 +8558,8 @@ const tidyName = (text) => String(text || '').replace(/\s+/g, ' ').trim().toLowe
  * list -- what was ticked or unticked stays as it was.
  */
 function paintMore() {
+  const open = el('web-open');
+  if (open) open.hidden = !web.canOpenSite() || !web.addressesIn(el('web-address').value).length;
   const button = el('web-more');
   if (!button) return;
   button.hidden = !webState.sources.length || el('web-direct').checked || !web.available();
@@ -8733,6 +8779,8 @@ function clearWeb() {
 function wireWeb() {
   el('web-find').onclick = findWebLinks;
   el('web-more').onclick = searchMore;
+  el('web-open').onclick = openSiteToPass;
+  el('web-address').addEventListener('input', paintMore);
   el('web-go').onclick = addWebToBuild;
   // Remembered: a site that wants a slower pace wants it every time.
   store.settings().then((settings) => {

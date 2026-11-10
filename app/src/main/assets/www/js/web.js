@@ -144,6 +144,43 @@ function renderedHere(url) {
   try { return renderedHosts.has(new URL(url).host); } catch { return false; }
 }
 
+/* ── the site, shown ─────────────────────────────────────────────────── */
+
+/** Whether this build can show a site, to pass its check by hand. */
+export const canOpenSite = () => typeof window.GrimoireWeb?.showSite === 'function';
+
+/** An error that is a site's browser check, which showing the site can pass. */
+export const wantsCheck = (error) => /bot check|browser check|only lets a browser/i
+  .test(String(error?.message || error || ''));
+
+/**
+ * The site shown over the app, in a browser like the unseen one and with
+ * its cookies, until Done (or back): a check passed there -- by itself, or
+ * by a tap -- lets the unseen browser in after. Resolves when it is closed.
+ */
+export function openSite(url) {
+  return new Promise((resolve, reject) => {
+    if (!canOpenSite()) {
+      reject(new Error('This copy of the app cannot show a site.'));
+      return;
+    }
+    const id = `s${Date.now().toString(36)}${++counter}`;
+    pending.set(id, {
+      timer: null,
+      reject,
+      resolve: (payload) => {
+        try { resolve(JSON.parse(payload || '{}')); } catch { resolve({}); }
+      },
+    });
+    try {
+      window.GrimoireWeb.showSite(id, url);
+    } catch (error) {
+      pending.delete(id);
+      reject(error);
+    }
+  });
+}
+
 /** Whether this build of the app has the renderer. */
 export const canRender = () => typeof window.GrimoireWeb?.render === 'function';
 

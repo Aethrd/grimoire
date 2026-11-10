@@ -126,13 +126,20 @@ public class WebBridge {
         File[] old = dir().listFiles();
         if (old != null) for (File file : old) //noinspection ResultOfMethodCallIgnored
             file.delete();
-        // Nor are the cookies the renderer was given last time (see render).
-        try {
-            CookieManager.getInstance().removeAllCookies(null);
-        } catch (Exception ignored) {
-            // No WebView provider yet: then there are none to clear either.
+        // Nor are the cookies the renderer was given last time (see render) --
+        // once a launch, not each time the reader's view is rebuilt: a check
+        // passed an hour ago is what lets the renderer in still.
+        if (!cookiesCleared) {
+            cookiesCleared = true;
+            try {
+                CookieManager.getInstance().removeAllCookies(null);
+            } catch (Exception ignored) {
+                // No WebView provider yet: then there are none to clear either.
+            }
         }
     }
+
+    private static boolean cookiesCleared;
 
     private File dir() {
         File dir = new File(MainActivity.handoffDir(activity), "web");
@@ -251,6 +258,142 @@ public class WebBridge {
         });
     }
 
+    /* ── the site, shown ───────────────────────────────────────────────────
+     *
+     * A site behind a check -- Cloudflare's "Just a moment", "잠시만
+     * 기다리십시오" -- that the unseen browser cannot pass: it is not shown,
+     * and some checks want to be seen, or a box ticked. So the site is shown
+     * instead, over the app, in a browser of the same kind with the same
+     * cookies: the check is passed there, by itself or by a tap, and what it
+     * leaves (its cookie) lets the unseen browser in after. Done, at the
+     * foot, closes it. Also what to open to see a site as the downloader does.
+     */
+    private View shown;
+    private String shownId;
+    private WebView shownView;
+
+    @SuppressLint("SetJavaScriptEnabled")
+    @JavascriptInterface
+    public void showSite(final String id, final String address) {
+        main.post(() -> {
+            try {
+                Uri uri = Uri.parse(address);
+                String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+                if (!scheme.equals("http") && !scheme.equals("https")) {
+                    settle(id, false, "only web addresses can be opened");
+                    return;
+                }
+                finishShown();
+                final WebView view = new WebView(activity);
+                WebSettings settings = view.getSettings();
+                settings.setJavaScriptEnabled(true);
+                settings.setDomStorageEnabled(true);
+                settings.setUserAgentString(userAgent);
+                settings.setAllowFileAccess(false);
+                settings.setAllowContentAccess(false);
+                settings.setSupportMultipleWindows(false);
+                CookieManager manager = CookieManager.getInstance();
+                manager.setAcceptCookie(true);
+                manager.setAcceptThirdPartyCookies(view, true);
+                view.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
+                        String s = request.getUrl().getScheme();
+                        return s == null || !(s.equalsIgnoreCase("http") || s.equalsIgnoreCase("https"));
+                    }
+
+                    @Override
+                    public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail detail) {
+                        closeShown();
+                        settle(id, false, "Android stopped the page's browser to free memory");
+                        return true;
+                    }
+                });
+
+                android.widget.LinearLayout column = new android.widget.LinearLayout(activity);
+                column.setOrientation(android.widget.LinearLayout.VERTICAL);
+                column.setBackgroundColor(0xFF15131A);
+                column.setFitsSystemWindows(true);
+                column.setClickable(true);   // nothing under it is touched meanwhile
+                column.addView(view, new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+                android.widget.LinearLayout bar = new android.widget.LinearLayout(activity);
+                bar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+                bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                int pad = Math.round(12 * activity.getResources().getDisplayMetrics().density);
+                bar.setPadding(pad, pad / 2, pad, pad / 2);
+                android.widget.TextView note = new android.widget.TextView(activity);
+                note.setText("Let the site's check pass (tap it if it asks), then Done.");
+                note.setTextColor(0xFFE6E1EA);
+                note.setTextSize(13);
+                bar.addView(note, new android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                android.widget.Button done = new android.widget.Button(activity);
+                done.setText("Done");
+                done.setAllCaps(false);
+                done.setOnClickListener((b) -> finishShown());
+                bar.addView(done);
+                column.addView(bar, new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+                ViewGroup root = activity.findViewById(android.R.id.content);
+                if (root == null) {
+                    settle(id, false, "the site could not be shown");
+                    return;
+                }
+                root.addView(column, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                shown = column;
+                shownId = id;
+                shownView = view;
+                view.loadUrl(address);
+            } catch (Exception e) {
+                settle(id, false, describe(e));
+            }
+        });
+    }
+
+    /** Done (or back): what the site left kept, the site closed, the page told. */
+    private void finishShown() {
+        String id = shownId;
+        WebView view = shownView;
+        String at = view != null && view.getUrl() != null ? view.getUrl() : null;
+        if (at != null) keepRenderedCookies(at);
+        closeShown();
+        if (id == null) return;
+        JSONObject result = new JSONObject();
+        try { result.put("url", at); } catch (JSONException ignored) { /* none */ }
+        settle(id, true, result.toString());
+    }
+
+    /** The shown site, closed: its browser destroyed with it. */
+    private void closeShown() {
+        View gone = shown;
+        shown = null;
+        shownId = null;
+        shownView = null;
+        if (gone == null) return;
+        try {
+            ViewGroup parent = (ViewGroup) gone.getParent();
+            if (parent != null) parent.removeView(gone);
+            if (gone instanceof ViewGroup) {
+                ViewGroup group = (ViewGroup) gone;
+                for (int i = 0; i < group.getChildCount(); i++) {
+                    if (group.getChildAt(i) instanceof WebView) ((WebView) group.getChildAt(i)).destroy();
+                }
+            }
+        } catch (Exception ignored) {
+            // Gone either way.
+        }
+    }
+
+    /** Whether the shown site is up (the back gesture closes it first). */
+    boolean closeShownIfOpen() {
+        if (shown == null) return false;
+        finishShown();
+        return true;
+    }
+
     /** What the renderer's browser was given, kept for plain fetches too. */
     private void keepRenderedCookies(String address) {
         try {
@@ -317,7 +460,6 @@ public class WebBridge {
             settings.setDomStorageEnabled(true);
             settings.setUserAgentString(userAgent);
             settings.setLoadsImagesAutomatically(false); // pictures are fetched later, as files
-            settings.setBlockNetworkImage(true);
             settings.setAllowFileAccess(false);
             settings.setAllowContentAccess(false);
             settings.setJavaScriptCanOpenWindowsAutomatically(false);
@@ -499,6 +641,9 @@ public class WebBridge {
             try {
                 startedAt = System.currentTimeMillis();
                 view = browserFor(this);
+                // The reader's view turns cookies off whenever it is set up;
+                // a check passed is a cookie, so they are on for every page.
+                CookieManager.getInstance().setAcceptCookie(true);
                 view.loadUrl(address);
                 main.postDelayed(() -> { if (!loaded && view != null) { loaded = true; poll(); } }, maxMs / 2);
             } catch (Exception e) {
@@ -582,7 +727,7 @@ public class WebBridge {
             }
             view.evaluateJavascript("'<!DOCTYPE html>'+document.documentElement.outerHTML", (value) -> {
                 if (lastShape.contains("|checking|") && !there) {
-                    error = "the site only lets a browser in (it is behind a bot check), and its check did not finish";
+                    error = "the site wants its browser check passed (a bot check) — tap Open the site, let the check pass there, then Done";
                 } else {
                     raw = value;
                 }

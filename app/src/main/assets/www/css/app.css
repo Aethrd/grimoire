@@ -2480,6 +2480,8 @@ body.in-book .import-progress .jobs-summary { display: block; }
 /* Under Find links, on a line of its own, at the same edge. */
 .web-row #web-more { flex-basis: 100%; max-width: max-content; margin-left: auto; }
 .web-row #web-more[hidden] { display: none; }
+.web-row #web-open { flex-basis: 100%; max-width: max-content; margin-left: auto; }
+.web-row #web-open[hidden] { display: none; }
 .web-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
              color: var(--muted); min-height: 40px; }
 .web-check input { accent-color: var(--accent); width: 18px; height: 18px; }

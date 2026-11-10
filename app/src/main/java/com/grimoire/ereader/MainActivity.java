@@ -49,6 +49,8 @@ public class MainActivity extends AppCompatActivity {
 
     /** A file handed over before the page was ready to take it. */
     private GrimoireBridge bridge;
+    /** The downloader's: its shown site is closed by the back gesture first. */
+    private WebBridge webBridge;
     private String pendingUri;
     private final java.util.concurrent.ExecutorService staging =
             java.util.concurrent.Executors.newSingleThreadExecutor();
@@ -223,7 +225,8 @@ public class MainActivity extends AppCompatActivity {
         webView.addJavascriptInterface(new TranslateBridge(this, webView), "GrimoireTranslate");
         // The downloader's, kept apart for the same reason: it reaches the
         // network, and only for an address the reader was given.
-        webView.addJavascriptInterface(new WebBridge(this, webView), "GrimoireWeb");
+        webBridge = new WebBridge(this, webView);
+        webView.addJavascriptInterface(webBridge, "GrimoireWeb");
         // Reading text out of pictures, on the phone: nothing leaves it.
         webView.addJavascriptInterface(new OcrBridge(this, webView), "GrimoireOcr");
         CookieManager.getInstance().setAcceptCookie(false);
@@ -702,6 +705,8 @@ public class MainActivity extends AppCompatActivity {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
+                // A site shown to pass its check: back is Done.
+                if (webBridge != null && webBridge.closeShownIfOpen()) return;
                 // Give the reader first refusal: it may want to close a menu or
                 // exit a chapter rather than leave the app.
                 webView.evaluateJavascript(

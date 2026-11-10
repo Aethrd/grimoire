@@ -260,8 +260,9 @@ await t('the native side fetches only web addresses, and only when asked', () =>
   // Two ways in, both a call from the page with an address: fetched as
   // sent, or rendered for a page its script builds.
   const entries = [...java.matchAll(/@JavascriptInterface\s+public \w+ (\w+)\(/g)].map((m) => m[1]);
-  assert.deepEqual(entries.sort(), ['fetch', 'release', 'render']);
-  assert.equal(java.match(/if \(!scheme\.equals\("http"\) && !scheme\.equals\("https"\)\)/g).length, 2);
+  // (And shown, over the app, for a check the reader passes there.)
+  assert.deepEqual(entries.sort(), ['fetch', 'release', 'render', 'showSite']);
+  assert.equal(java.match(/if \(!scheme\.equals\("http"\) && !scheme\.equals\("https"\)\)/g).length, 3);
   // And no cookies kept past the app being closed.
   assert.ok(!/SharedPreferences|getSharedPreferences/.test(java));
 });
@@ -1453,7 +1454,8 @@ await t('the renderer cannot take the app down, and keeps a page light', async (
   assert.match(java, /private static final int BROWSER_USES = 25;/);
   assert.match(java, /view\.loadUrl\("about:blank"\);\s+view\.clearHistory\(\);/);
   assert.match(java, /main\.postDelayed\(closeBrowser, BROWSER_IDLE_MS\);/);
-  assert.equal((java.match(/new WebView\(activity\)/g) || []).length, 1, 'a WebView is made somewhere else too');
+  // Two kinds only: the unseen browser, and the site shown to pass a check.
+  assert.equal((java.match(/new WebView\(activity\)/g) || []).length, 2, 'a WebView is made somewhere else too');
   // The blank page between pages is no one's: its events reach no page.
   assert.match(java, /if \(url != null && url\.startsWith\("about:"\)\) return null;/);
   assert.match(java, /"challenges\.cloudflare\.com"/);
@@ -1615,6 +1617,35 @@ await t('a chapter whose page still shows "loading" is waited for', async () => 
   assert.match(java, /boolean busy = pending > 0 \|\| \(!scroll && loading\);/);
   // Never for ever: a page still for long enough is taken all the same.
   assert.match(java, /\(\(!busy && still >= need\) \|\| still >= quietMs \* RENDER_STUCK_SPELLS\)/);
+});
+
+await t('a site\'s browser check can be passed by showing the site', async () => {
+  // Shown, then closed with Done: the promise settles, and the page carries on.
+  const calls = [];
+  window.GrimoireWeb = {
+    showSite: (id, url) => { calls.push(url); setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url })), 0); },
+    fetch() {}, release() {},
+  };
+  assert.equal(web.canOpenSite(), true);
+  const back = await web.openSite('https://marumaru109.com/novel/47997');
+  assert.equal(back.url, 'https://marumaru109.com/novel/47997');
+  assert.deepEqual(calls, ['https://marumaru109.com/novel/47997']);
+  delete window.GrimoireWeb;
+  assert.equal(web.canOpenSite(), false);
+  assert.ok(web.wantsCheck(new Error('the site wants its browser check passed (a bot check) — tap Open the site')));
+  assert.ok(!web.wantsCheck(new Error('that page does not exist (404)')));
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  // Same identity and cookies as the unseen browser; Done or back closes it.
+  assert.match(java, /public void showSite\(final String id, final String address\)/);
+  assert.match(java, /done\.setOnClickListener\(\(b\) -> finishShown\(\)\);/);
+  assert.match(read('app/src/main/java/com/grimoire/ereader/MainActivity.java'), /if \(webBridge != null && webBridge\.closeShownIfOpen\(\)\) return;/);
+  // A passed check survives the reader's view being rebuilt, and cookies are on for every page.
+  assert.match(java, /if \(!cookiesCleared\) \{/);
+  assert.match(java, /CookieManager\.getInstance\(\)\.setAcceptCookie\(true\);/);
+  assert.ok(!/setBlockNetworkImage\(true\)/.test(java), 'images are blocked outright again');
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /el\('web-open'\)\.onclick = openSiteToPass;/);
+  assert.match(app, /if \(web\.wantsCheck\(left\.reason\) && web\.canOpenSite\(\)/);
 });
 
 console.log(`\n${pass} assertions passed`);
