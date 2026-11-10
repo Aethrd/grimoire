@@ -1569,4 +1569,26 @@ await t('a book remembers its website and each chapter\'s link, and can be check
   assert.match(app, /const update = await markWhatTheBookHas\(webState\.links\);/);
 });
 
+await t('Overnight: a build that stops is carried on every 15 minutes until it is done', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const html = read('app/src/main/assets/www/index.html');
+  assert.match(html, /id="build-overnight"> Overnight: if it stops, carry on every 15 minutes until it's done/);
+  assert.match(html, /id="build-overnight-note" hidden/);
+  assert.match(app, /const OVERNIGHT_MS = 15 \* 60 \* 1000;/);
+  assert.match(app, /store\.saveSettings\(\{ buildOvernight: overnight \}\)/);
+  // Not after Pause & keep; carried on as Carry on does; a gone chapter passed over;
+  // the same chapter five times running ends it.
+  assert.match(app, /if \(paused\) \{ endOvernight\(\); return false; \}/);
+  assert.match(app, /return scheduleOvernight\(\(\) => carryOnLeftover\(left\)/);
+  assert.match(app, /if \(web\.gone\(kept\.reason\) && kept\.links\.length > 1\)/);
+  assert.match(app, /if \(night\.sameStops >= OVERNIGHT_SAME_STOPS\)/);
+  // The shorter book each carry leaves is binned; the screen kept on meanwhile.
+  assert.match(app, /await library\.binBooks\(superseded\)/);
+  assert.match(app, /keepAwake\(true\);\s+paintOvernight\(\);/);
+  // A build cut off by the app closing is carried on too.
+  assert.match(app, /if \(settings\.buildOvernight === true && left\) \{/);
+  // One notification for the night, not one a try.
+  assert.match(app, /const again = overnightAfter\(\{ book, failed, kept, paused \}\);\s+if \(!again\) notifyBuild/);
+});
+
 console.log(`\n${pass} assertions passed`);

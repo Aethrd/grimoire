@@ -6070,6 +6070,128 @@ function pauseBuild() {
   paintBuildFoot();
 }
 
+/* ── overnight ─────────────────────────────────────────────────────────
+ *
+ * A website of six hundred chapters, left to build overnight with the phone
+ * on. A site that turns requests away, a page that will not load, the app
+ * cut off: any of them stops it, and nobody is awake to carry it on. With
+ * Overnight ticked, a build that stops on its own (not by Pause & keep) is
+ * carried on every 15 minutes -- the book it got to and the rest after it,
+ * as Carry on does -- until it is all there. A chapter the site says is
+ * gone (404) is passed over and said in the morning; the same chapter
+ * stopping it five times running ends the night, and says so. The shorter
+ * books each carry leaves behind go to the Bin, so the morning has one.
+ */
+const OVERNIGHT_MS = 15 * 60 * 1000;
+const OVERNIGHT_SAME_STOPS = 5;
+let overnight = false;
+const night = { timer: null, at: 0, run: null, why: '', lastStop: '', sameStops: 0, made: new Set(), skipped: [] };
+store.settings().then((settings) => {
+  overnight = settings.buildOvernight === true;
+  const box = el('build-overnight');
+  if (box) box.checked = overnight;
+}).catch(() => {});
+
+function keepAwake(on) {
+  try { window.GrimoireNative?.keepScreenOn?.(on); } catch { /* not in the app */ }
+}
+
+/** Carry it on in 15 minutes; false when the night is over instead. */
+function scheduleOvernight(run, why, stopAt = '') {
+  if (stopAt && stopAt === night.lastStop) night.sameStops += 1;
+  else { night.lastStop = stopAt; night.sameStops = 1; }
+  if (night.sameStops >= OVERNIGHT_SAME_STOPS) {
+    endOvernight();
+    const text = `It stopped at the same chapter ${OVERNIGHT_SAME_STOPS} times running — ${why}. What came is on the shelf, and the rest is in Build.`;
+    toast(`Overnight build gave up. ${text}`, 12000);
+    notifyBuild({ title: 'Overnight build gave up', text });
+    return false;
+  }
+  clearTimeout(night.timer);
+  night.at = Date.now() + OVERNIGHT_MS;
+  night.run = run;
+  night.why = why;
+  night.timer = setTimeout(() => {
+    const go = night.run;
+    night.timer = null;
+    night.run = null;
+    paintOvernight();
+    Promise.resolve(go?.()).catch(() => {});
+  }, OVERNIGHT_MS);
+  keepAwake(true);
+  paintOvernight();
+  return true;
+}
+
+function endOvernight() {
+  clearTimeout(night.timer);
+  night.timer = null;
+  night.run = null;
+  night.lastStop = '';
+  night.sameStops = 0;
+  if (!buildRun) keepAwake(false);
+  paintOvernight();
+}
+
+function paintOvernight() {
+  const note = el('build-overnight-note');
+  if (!note) return;
+  if (!night.timer) { note.hidden = true; note.replaceChildren(); return; }
+  const at = new Date(night.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  note.innerHTML = `<p><b>Overnight: carrying on at ${escapeText(at)}</b> — it stopped: ${escapeText(night.why)}.`
+    + '<small>Keep the app open and the phone on. Tap Stop trying to leave it as it is.</small></p>'
+    + '<div class="web-row"><button class="btn ghost" data-stop>Stop trying</button>'
+    + '<button class="btn primary" data-now>Try now</button></div>';
+  note.querySelector('[data-stop]').onclick = () => { endOvernight(); toast('Overnight stopped — what is left stays in Build'); };
+  note.querySelector('[data-now]').onclick = () => {
+    const go = night.run;
+    clearTimeout(night.timer);
+    night.timer = null;
+    night.run = null;
+    paintOvernight();
+    Promise.resolve(go?.()).catch(() => {});
+  };
+  note.hidden = false;
+}
+
+/** After a build, with Overnight on: carry it on later, or the night is done. */
+function overnightAfter({ book, failed, kept, paused }) {
+  if (!overnight) return false;
+  if (book) night.made.add(book.id);
+  if (paused) { endOvernight(); return false; }
+  if (!kept) {
+    // All there: the night's work is done.
+    const skipped = night.skipped.splice(0);
+    endOvernight();
+    if (skipped.length && book) {
+      toast(`Overnight: “${book.title}” is done. Passed over, gone from the site: ${skipped.slice(0, 5).join(', ')}${skipped.length > 5 ? ` and ${skipped.length - 5} more` : ''}.`, 15000);
+    }
+    return false;
+  }
+  // A chapter the site says is gone will never come: passed over, said in the morning.
+  let left = kept;
+  if (web.gone(kept.reason) && kept.links.length > 1) {
+    night.skipped.push(kept.links[0].text || kept.links[0].url);
+    left = { ...kept, links: kept.links.slice(1) };
+    webLeftovers = webLeftovers.map((each) => (each.id === kept.id ? left : each));
+    saveLeftovers();
+  }
+  return scheduleOvernight(() => carryOnLeftover(left), failed[0]?.reason || 'it stopped', kept.links[0]?.url || '');
+}
+
+function wireBuildOvernight() {
+  const box = el('build-overnight');
+  if (!box) return;
+  box.onchange = () => {
+    overnight = box.checked;
+    store.saveSettings({ buildOvernight: overnight }).catch(() => {});
+    if (!overnight) endOvernight();
+    toast(overnight
+      ? 'Overnight on — a website build that stops is carried on every 15 minutes until it is done. Keep the app open and the phone on.'
+      : 'Overnight off');
+  };
+}
+
 /* ── a notification when a build ends ─────────────────────────────────
  *
  * "Notify me when it's built or stops", in Build: a website of six hundred
@@ -6161,6 +6283,8 @@ function renderWorkshop() {
   // Only where the app can notify at all (not in a plain browser).
   const notifyRow = el('build-notify-row');
   if (notifyRow) notifyRow.hidden = parts.length === 0 || typeof window.GrimoireNative?.notify !== 'function';
+  const overnightRow = el('build-overnight-row');
+  if (overnightRow) overnightRow.hidden = !parts.some((part) => part.web) && !night.timer;
   // Where it will be filed, said before it is built: the folder the shelf is
   // open at is two tabs away from here.
   el('build-count').textContent = parts.length
@@ -6303,12 +6427,14 @@ async function rescueCutBuilds() {
   const settings = await store.settings();
   webLeftovers = Array.isArray(settings.webLeftovers) ? settings.webLeftovers : [];
   webStops = Array.isArray(settings.webStops) ? settings.webStops : [];
-  for (const { book, rest } of saved) {
+  for (const entry of saved) {
+    const { book, rest } = entry;
     const reason = 'cut off when the app closed';
     const failed = rest.map((part) => ({ name: part.name, reason, web: { ...part, reason } }));
     // The leftovers that build was carrying on are settled by it.
-    keepLeftovers(failed, rest.map((part) => part.leftover).filter(Boolean), book);
+    const left = keepLeftovers(failed, rest.map((part) => part.leftover).filter(Boolean), book);
     rememberStops(rest.map((part) => part.sources?.[0]).filter(Boolean), failed, book);
+    entry.left = left;
   }
   return saved;
 }
@@ -6380,31 +6506,7 @@ function paintLeftovers(parts) {
     const carry = box.querySelector('[data-carry]');
     if (carry) {
       carry.disabled = busy;
-      /* The book it stopped short of, and the rest after it: one book
-       * again, as Build onto makes one. The shorter one stays on the shelf
-       * until you are happy with the whole. */
-      carry.onclick = async () => {
-        if (build.contents().length) return;
-        const book = await store.get('books', left.bookId);
-        if (!book) {
-          toast(`“${left.bookTitle || 'That book'}” is no longer on the shelf — downloading the rest as another book`, 6000);
-          box.querySelector('[data-retry]').click();
-          return;
-        }
-        build.addBook(book);
-        build.addWeb({
-          name: left.name, links: left.links, pictures: left.pictures,
-          author: left.author, sources: left.sources, leftover: left.id,
-          gap: Number.isFinite(left.gap) ? left.gap : webDelay(),
-          jitter: Number.isFinite(left.jitter) ? left.jitter : webJitter(),
-        });
-        for (const part of build.contents()) part.seamless = true;
-        el('build-title').value = library.displayTitle(book);
-        buildTitleTouched = true;
-        if (book.author || left.author) el('build-author').value = book.author || left.author;
-        renderWorkshop();
-        el('build-go').click();
-      };
+      carry.onclick = () => carryOnLeftover(left);
     }
     box.querySelector('[data-look]').onclick = () => {
       showLeftoverInWeb(left);
@@ -6416,23 +6518,56 @@ function paintLeftovers(parts) {
       saveLeftovers();
       renderWorkshop();
     };
-    box.querySelector('[data-retry]').onclick = () => {
-      if (build.contents().length) return;
-      build.addWeb({
-        name: left.name, links: left.links, pictures: left.pictures,
-        author: left.author, sources: left.sources, leftover: left.id,
-        gap: Number.isFinite(left.gap) ? left.gap : webDelay(),
-        jitter: Number.isFinite(left.jitter) ? left.jitter : webJitter(),
-      });
-      el('build-title').value = left.name;
-      buildTitleTouched = true;
-      if (left.author) el('build-author').value = left.author;
-      renderWorkshop();
-      // Straight on: a book of its own is what was asked for.
-      el('build-go').click();
-    };
+    box.querySelector('[data-retry]').onclick = () => leftoverAsBook(left);
     host.appendChild(box);
   }
+}
+
+/** Left over pages, downloaded as a book of their own. False if Build is busy. */
+function leftoverAsBook(left) {
+  if (build.contents().length || buildRun) return false;
+  build.addWeb({
+    name: left.name, links: left.links, pictures: left.pictures,
+    author: left.author, sources: left.sources, leftover: left.id,
+    gap: Number.isFinite(left.gap) ? left.gap : webDelay(),
+    jitter: Number.isFinite(left.jitter) ? left.jitter : webJitter(),
+  });
+  el('build-title').value = left.name;
+  buildTitleTouched = true;
+  if (left.author) el('build-author').value = left.author;
+  renderWorkshop();
+  // Straight on: a book of its own is what was asked for.
+  el('build-go').click();
+  return true;
+}
+
+/**
+ * The book left over pages stopped short of, and the rest after it: one
+ * book again, as Build onto makes one. The shorter one stays on the shelf
+ * until you are happy with the whole (overnight, it goes to the Bin). With
+ * the book gone, the rest is downloaded as a book of its own.
+ */
+async function carryOnLeftover(left) {
+  if (build.contents().length || buildRun) return false;
+  const book = left.bookId != null ? await store.get('books', left.bookId) : null;
+  if (!book || book.binnedAt) {
+    toast(`“${left.bookTitle || 'That book'}” is no longer on the shelf — downloading the rest as another book`, 6000);
+    return leftoverAsBook(left);
+  }
+  build.addBook(book);
+  build.addWeb({
+    name: left.name, links: left.links, pictures: left.pictures,
+    author: left.author, sources: left.sources, leftover: left.id,
+    gap: Number.isFinite(left.gap) ? left.gap : webDelay(),
+    jitter: Number.isFinite(left.jitter) ? left.jitter : webJitter(),
+  });
+  for (const part of build.contents()) part.seamless = true;
+  el('build-title').value = library.displayTitle(book);
+  buildTitleTouched = true;
+  if (book.author || left.author) el('build-author').value = book.author || left.author;
+  renderWorkshop();
+  el('build-go').click();
+  return true;
 }
 
 /** The website screen, holding what was left over: its address, and the
@@ -6505,10 +6640,19 @@ function wireWorkshop() {
   };
   wireBuildCover();
   wireBuildNotify();
+  wireBuildOvernight();
 
   el('build-go').onclick = async () => {
     // Pressed again while it runs: that is Pause & keep.
     if (buildRun) { pauseBuild(); return; }
+    // A try of its own: whatever overnight was waiting to do is this.
+    clearTimeout(night.timer);
+    night.timer = null;
+    night.run = null;
+    paintOvernight();
+    // Carrying on a book this night made: the shorter one goes to the Bin after.
+    const superseded = build.contents().filter((part) => part.bookId && part.seamless && night.made.has(part.bookId))
+      .map((part) => part.bookId);
     const finish = progress.start('Building');
     // Leftovers being tried again in this build: settled by it either way.
     const retried = build.contents().map((part) => part.leftover).filter(Boolean);
@@ -6583,24 +6727,33 @@ function wireWorkshop() {
        * go looking for it. */
       /* Only if Build is still what is on screen. Gone off to read, or to
        * the shelf, while it worked, you are not taken out of that. */
-      notifyBuild(paused
+      if (overnight && superseded.length) {
+        await library.binBooks(superseded).catch(() => {});
+        await refreshShelf();
+      }
+      const again = overnightAfter({ book, failed, kept, paused });
+      if (!again) notifyBuild(paused
         ? { title: `Paused — “${book.title}” is on the shelf`, text: `${book.chapters} chapters kept. The other ${left} are in Build, to carry it on.` }
         : failed.length
         ? { title: `Built “${book.title}” — stopped short`, text: `${book.chapters} chapters. ${failed[0].name}: ${failed[0].reason}` }
         : { title: `Built “${book.title}”`, text: `${book.chapters} chapters${filed}, on the shelf.` });
       const made = await store.get('books', book.id);
-      if (made && current === 'workshop') await openBook(made);
+      // Overnight, Build stays up between tries, saying when the next is.
+      if (made && current === 'workshop' && !again) await openBook(made);
     } catch (error) {
       finish.fail();
       whenNotReading(() => toast(error.message || 'That could not be built', 6000, { kind: error.paused ? 'done' : 'failed' }));
-      notifyBuild({ title: error.paused ? 'Build paused' : 'Build stopped', text: error.message || 'That could not be built' });
+      // Overnight, nothing built is tried again as it stands, from Build's list.
+      const again = overnight && online && !error.paused && build.contents().length > 0
+        && scheduleOvernight(() => { if (!buildRun) el('build-go').click(); }, error.message || 'nothing came', `nothing:${webSources[0] || ''}`);
+      if (!again) notifyBuild({ title: error.paused ? 'Build paused' : 'Build stopped', text: error.message || 'That could not be built' });
     } finally {
       finish();
       buildRun = null;
       try { window.GrimoireNative?.buildRunning?.(false); } catch { /* not in the app */ }
       renderWorkshop();
-      // Let go again, unless a book is open to read.
-      if (online && current !== 'reader') {
+      // Let go again, unless a book is open to read or overnight is waiting.
+      if (online && current !== 'reader' && !night.timer) {
         try { window.GrimoireNative?.keepScreenOn?.(false); } catch { /* not in a browser */ }
       }
     }
@@ -9236,8 +9389,14 @@ async function boot() {
    * goes away and whatever launched it comes back -- indistinguishable from
    * it refusing to do anything. The reason is kept and reported here. */
   if (rescued.length) {
-    const { book } = rescued[0];
+    const { book, left } = rescued[0];
     toast(`A build was cut off when the app closed. “${book.title}” is on the shelf with the ${book.chapters} chapter${book.chapters === 1 ? '' : 's'} that had come; the rest is in Build — Carry on picks up from there.`, 12000);
+    // Overnight: carried on, as any build that stopped is.
+    if (settings.buildOvernight === true && left) {
+      overnight = true;
+      night.made.add(book.id);
+      scheduleOvernight(() => carryOnLeftover(left), 'the app was closed', left.links[0]?.url || '');
+    }
   }
   const crash = window.GrimoireNative?.lastCrash?.();
   if (crash) {

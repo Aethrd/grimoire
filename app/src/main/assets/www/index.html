@@ -388,6 +388,8 @@
         </p>
       </div>
 
+      <!-- Overnight: when the next try of a stopped build is, and a way to stop it. -->
+      <div class="build-leftover build-overnight-note" id="build-overnight-note" hidden></div>
       <!-- Chapters a website would not give last time, kept to try again. -->
       <div id="build-leftovers"></div>
 
@@ -401,6 +403,11 @@
            downloading need not be watched. Remembered. -->
       <label class="web-check build-notify" id="build-notify-row" hidden>
         <input type="checkbox" id="build-notify"> Notify me when it's built or stops
+      </label>
+      <!-- Overnight: a website that stops is carried on every 15 minutes,
+           until it is all there. Remembered. -->
+      <label class="web-check build-notify" id="build-overnight-row" hidden>
+        <input type="checkbox" id="build-overnight"> Overnight: if it stops, carry on every 15 minutes until it's done
       </label>
     </div>
 

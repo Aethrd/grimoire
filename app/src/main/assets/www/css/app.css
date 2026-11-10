@@ -2485,6 +2485,7 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .web-check input { accent-color: var(--accent); width: 18px; height: 18px; }
 .build-notify { display: flex; margin: 14px 0 4px; font-size: 13px; }
 .build-notify[hidden] { display: none; }
+.build-notify + .build-notify { margin-top: 2px; }
 .web-note { font-size: 12px; line-height: 1.55; margin: 0 0 14px; }
 .web-note.problem { color: #c0553f; }
 #web-filter { width: 100%; margin: 0 0 4px; }

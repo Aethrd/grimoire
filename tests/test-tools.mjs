@@ -1125,7 +1125,8 @@ await t('what finishes while you read waits for the book to be put down', async 
   assert.match(app, /function viewChanged\(\) \{\s*if \(current === 'reader'\) inBook = true;\s*else if \(!BESIDE_THE_BOOK\.has\(current\)\) inBook = false;/);
   assert.equal((app.match(/viewChanged\(\);/g) || []).length, 2, 'show() and back() both report the change');
   // A finished build opens its book only if Build is still on screen.
-  assert.match(app, /if \(made && current === 'workshop'\) await openBook\(made\);/);
+  // (Overnight, not between tries: Build stays up, saying when the next is.)
+  assert.match(app, /if \(made && current === 'workshop' && !again\) await openBook\(made\);/);
   assert.match(app, /whenNotReading\(\(\) => toast\(paused\s*\?[\s\S]{0,400}?: failed\.length/);
   // An import's report, and the save screen of an export, wait too.
   const importer = app.slice(app.indexOf('async function importNow('), app.indexOf('return results;\n}', app.indexOf('async function importNow(')));
