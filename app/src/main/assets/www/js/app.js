@@ -6159,6 +6159,14 @@ function overnightAfter({ book, failed, kept, paused }) {
   if (!overnight) return false;
   if (book) night.made.add(book.id);
   if (paused) { endOvernight(); return false; }
+  // Blocked outright: coming back every 15 minutes would only keep it blocked.
+  if (kept && web.blocked(kept.reason || failed[0]?.reason)) {
+    endOvernight();
+    const text = 'The site blocked this connection (Cloudflare). Overnight has stopped: wait some hours, then carry on, more slowly.';
+    toast(`Overnight stopped. ${text}`, 15000);
+    notifyBuild({ title: 'Overnight stopped — the site blocked the connection', text });
+    return true;   // said; no other notification
+  }
   if (!kept) {
     // All there: the night's work is done.
     const skipped = night.skipped.splice(0);
@@ -6757,7 +6765,7 @@ function wireWorkshop() {
       finish.fail();
       whenNotReading(() => toast(error.message || 'That could not be built', 6000, { kind: error.paused ? 'done' : 'failed' }));
       // Overnight, nothing built is tried again as it stands, from Build's list.
-      const again = overnight && online && !error.paused && build.contents().length > 0
+      const again = overnight && online && !error.paused && !web.blocked(error) && build.contents().length > 0
         && scheduleOvernight(() => { if (!buildRun) el('build-go').click(); }, error.message || 'nothing came', `nothing:${webSources[0] || ''}`);
       if (!again) notifyBuild({ title: error.paused ? 'Build paused' : 'Build stopped', text: error.message || 'That could not be built' });
     } finally {

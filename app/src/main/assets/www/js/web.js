@@ -1014,7 +1014,9 @@ export async function findLinks(addresses, {
   // A list of posts, newest first: its chapters want turning round.
   let newestFirstList = false;
   const visited = new Set();
+  let shut = false;   // a site that blocked the connection: nothing more is asked of it
   for (const [at, address] of addresses.entries()) {
+    if (shut) break;
     /* A WordPress list of posts goes on, a page at a time, to the oldest
      * post: each page's "older posts" is followed, so the whole serial is
      * listed from its contents page alone rather than its newest ten. */
@@ -1085,6 +1087,8 @@ export async function findLinks(addresses, {
         // WordPress list is the end of what could be listed. A numbered page
         // that fails is passed over, and said.
         if (pages === 1 || numbered) failed.push({ url: next, reason: error.message });
+        // Blocked: the rest of the list is not asked for either.
+        if (blocked(error)) { queue.length = 0; next = null; shut = true; break; }
         next = nextOf(queue);
       }
     }
@@ -1577,8 +1581,8 @@ export async function downloadBook({
           got = await readPage(link, at, { pictures, fetchPage });
         } catch (error) {
           // Once more, after a breath: a site that refused one request of a
-          // hundred usually takes the next.
-          if (stop()) throw error;
+          // hundred usually takes the next. Not one that has blocked us.
+          if (stop() || blocked(error)) throw error;
           await pause(1500);
           got = await readPage(link, at, { pictures, fetchPage });
         }
@@ -1790,6 +1794,8 @@ export async function readPages(links, {
         return await readPage(link, at, { pictures, fetchPage, chapterUrls, listedNumbers });
       } catch (error) {
         if (error?.paused) throw error;
+        // Blocked: not asked again, and the download stops here.
+        if (blocked(error)) throw Object.assign(error, { tries: tries + 1 });
         lastError = error;
         // Paused meanwhile: this page is where it stops, not tried again.
         if (pausing()) throw PAUSED();
@@ -1869,6 +1875,11 @@ export const PATIENCE = {
   refresh: [300, 1000, 2500],           // a site turning requests away: at once
   backoff: [1500, 4000, 8000, 15000, 30000],   // anything else: longer each time
 };
+
+/** A site that has blocked the connection outright (Cloudflare's "Sorry, you
+ *  have been blocked"): every request now only keeps the block up longer, so
+ *  nothing is asked again -- not a retry, not the next page. */
+export const blocked = (error) => /has blocked this connection/i.test(String(error?.message || error || ''));
 
 /** A page that is not there, which no amount of asking will change. */
 export const gone = (error) => /\b(404|410)\b|does not exist|not a web address|only web addresses/i

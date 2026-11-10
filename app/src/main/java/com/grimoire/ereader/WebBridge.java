@@ -686,6 +686,11 @@ public class WebBridge {
                 }
                 String shape = bar < 0 ? reply : reply.substring(bar + 1);
                 long now = System.currentTimeMillis();
+                // Blocked outright: said at once, never waited out or retried.
+                if (shape.contains("|blocked|")) {
+                    fail(BLOCKED);
+                    return;
+                }
                 boolean waiting = shape.contains("|checking|"); // a bot check still at work
                 if (!shape.equals(lastShape) || waiting) {
                     lastShape = shape;
@@ -793,6 +798,10 @@ public class WebBridge {
         return out.toString();
     }
 
+    /** What a site that has blocked the connection is said to have done. */
+    static final String BLOCKED = "the site has blocked this connection (Cloudflare: \u201cSorry, you have been blocked\u201d) "
+            + "\u2014 asking again now only makes it last longer; wait some hours, and go slower";
+
     private static final String SCROLL = "try{if(document.body)window.scrollTo(0,document.body.scrollHeight);}catch(e){}";
     private static final String SHAPE = "(function(){try{var b=document.body;"
             + "var t=document.title||'';"
@@ -814,13 +823,16 @@ public class WebBridge {
             + "||!!window._cf_chl_opt||!!document.querySelector('#challenge-form,#challenge-running,#cf-challenge-running,"
             + ".cf-browser-verification,#cf-please-wait,#turnstile-wrapper');"
             + "var c=sign&&n<1500&&L.length<10;"
+            // Blocked outright -- Cloudflare's "Sorry, you have been blocked":
+            // not a check, and nothing to wait for.
+            + "var blk=n<6000&&/you have been blocked|you are unable to access|access denied|error 1020/i.test(b?b.textContent.slice(0,3000):'');"
             // A loading message or spinner on show -- a site that waits a
             // moment before it puts the chapter up shows one meanwhile.
             // Shown only: a hidden one is a site at rest.
             + "var w=0,B=document.querySelectorAll('[aria-busy=\"true\"],[class*=\"loading\"],[class*=\"spinner\"],[class*=\"loader\"],[id*=\"loading\"],[id*=\"loader\"]');"
             + "for(var q=0;q<B.length&&q<30;q++){var e=B[q],st=getComputedStyle(e);"
             + "if(st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0'&&e.getClientRects().length){w=1;break;}}"
-            + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+t;"
+            + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(blk?'blocked':c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+t;"
             + "}catch(e){return '0|0|0||0|0|0|';}})()";
 
     /** The page has read what was fetched; the file can go. */
@@ -897,12 +909,29 @@ public class WebBridge {
         throw new IOException("the site redirected too many times");
     }
 
+    /** Whether the page sent with a refusal is Cloudflare's "you have been blocked". */
+    private static boolean blockedPage(HttpURLConnection connection) {
+        try (InputStream in = connection.getErrorStream()) {
+            if (in == null) return false;
+            byte[] head = new byte[8192];
+            int got = 0;
+            for (int n; got < head.length && (n = in.read(head, got, head.length - got)) > 0; ) got += n;
+            String text = new String(head, 0, got, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+            return text.contains("you have been blocked") || text.contains("error 1020")
+                    || text.contains("you are unable to access");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** Why a site said no, in words that say what to do about it. */
     private static String refusal(int status, HttpURLConnection connection) {
         String server = String.valueOf(connection.getHeaderField("Server")).toLowerCase(Locale.ROOT);
         boolean guarded = connection.getHeaderField("cf-mitigated") != null
                 || (server.contains("cloudflare") && (status == 403 || status == 503));
         if (guarded) {
+            // Blocked outright, or a check: the page it sent says which.
+            if (blockedPage(connection)) return BLOCKED;
             return "the site only lets a browser in (it is behind a bot check), so it refused the download";
         }
         if (status == 404) return "that page does not exist (404)";

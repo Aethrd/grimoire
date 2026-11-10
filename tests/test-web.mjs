@@ -1648,4 +1648,32 @@ await t('a site\'s browser check can be passed by showing the site', async () =>
   assert.match(app, /if \(web\.wantsCheck\(left\.reason\) && web\.canOpenSite\(\)/);
 });
 
+await t('a site that has blocked the connection is asked nothing more', async () => {
+  const BLOCK = 'the site has blocked this connection (Cloudflare: “Sorry, you have been blocked”) — asking again now only makes it last longer; wait some hours, and go slower';
+  // A download: the chapter is not asked again, and the download stops there.
+  let asked = 0;
+  const shut = async (url, options) => {
+    if (url.endsWith('chapter-2')) { asked += 1; throw new Error(BLOCK); }
+    return fakeFetch(url, options);
+  };
+  const parsed = await web.readPages([1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` })),
+    { fetchPage: shut, gap: 0, patience: { retry: 0, refresh: [0], backoff: [0, 0, 0] } });
+  assert.equal(asked, 1, 'a blocked page was asked for again');
+  assert.deepEqual(parsed.chapters.map((c) => c.title), ['No. 1']);
+  assert.ok(web.blocked(parsed.failed[0].reason));
+  assert.ok(!web.wantsCheck(BLOCK), 'a block is offered as a check to pass');
+  // A list: no page after the one that was blocked.
+  const pages = [];
+  const listShut = async (url) => { pages.push(url); throw new Error(BLOCK); };
+  const found = await web.findLinks(['https://maru.example/novel/1', 'https://maru.example/novel/2'], { fetchPage: listShut, listGap: 0 });
+  assert.deepEqual(pages, ['https://maru.example/novel/1']);
+  assert.ok(web.blocked(found.failed[0].reason));
+  // Known by the page Cloudflare sends; overnight stops for it.
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  assert.match(java, /you have been blocked\|you are unable to access/);
+  assert.match(java, /if \(shape\.contains\("\|blocked\|"\)\) \{\s+fail\(BLOCKED\);/);
+  assert.match(java, /if \(blockedPage\(connection\)\) return BLOCKED;/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /if \(kept && web\.blocked\(kept\.reason \|\| failed\[0\]\?\.reason\)\) \{\s+endOvernight\(\);/);
+});
+
 console.log(`\n${pass} assertions passed`);
