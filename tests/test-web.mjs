@@ -1195,4 +1195,26 @@ await t('a chapter a button above the list also leads to is named and placed by 
   assert.equal(web.chapterKind('1화 프롤로그').number, 1);
 });
 
+await t('a contents page caught before its list arrived is asked for again, more patiently', async () => {
+  const base = 'https://late.example/novel/47997';
+  const menus = `<!doctype html><html><head><title>소설 연재 칸 | 마루마루</title></head><body><header>
+${Array.from({ length: 30 }, (_, i) => `<a href="https://ads${i}.example/">광고 ${i}</a>`).join('')}</header></body></html>`;
+  const answers = [menus, menus, maruPage(1, 1)];
+  const levels = [];
+  const send = (id, address, body, rendered) => {
+    const path = `data:text/html;base64,${Buffer.from(body, 'utf8').toString('base64')}`;
+    setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type: 'text/html', path, rendered })), 0);
+  };
+  window.GrimoireWeb = {
+    fetch: (id, address) => send(id, address, SHELL, false),   // the frame the site sends
+    render: (id, address, level) => { levels.push(level); send(id, address, answers.shift(), true); },
+    release() {},
+  };
+  const found = await web.findLinks([base], { listGap: 0 });
+  assert.deepEqual(levels, ['0', '1', '2']);
+  // Its five rows, and the chapter the "첫화부터 정주행" button leads to.
+  assert.equal(found.links.filter((l) => /\/novel\/47997\/\d+$/.test(l.url)).length, 6);
+  delete window.GrimoireWeb;
+});
+
 console.log(`\n${pass} assertions passed`);

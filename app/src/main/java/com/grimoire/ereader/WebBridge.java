@@ -91,7 +91,7 @@ public class WebBridge {
      *  asks for (a chapter that came back empty is asked for more patiently). */
     private static final long RENDER_MAX_MS = 40000;
     private static final long RENDER_MAX_STEP_MS = 10000;
-    private static final long RENDER_QUIET_MS = 1500;
+    private static final long RENDER_QUIET_MS = 2500;
     private static final long RENDER_QUIET_STEP_MS = 2000;
     private static final long RENDER_POLL_MS = 700;
     /** A page still waiting on a request this many quiet spells on has one

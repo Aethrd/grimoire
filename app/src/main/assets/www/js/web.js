@@ -979,10 +979,20 @@ export async function findLinks(addresses, {
       pages += 1;
       onProgress?.(at / addresses.length, next, pages, numbered ? total : 0);
       try {
-        const page = await fetchPage(next);
+        let page = await fetchPage(next);
+        let found = linksOf(decodePage(await bytesOf(page.blob), page.type), page.url);
+        /* A contents page built in script, caught before its list arrived:
+         * the site's menus and not one chapter. Asked for again, more
+         * patiently each time, as a chapter caught early is. */
+        for (let more = 1; page.rendered && more <= 2 && !listsChapters(found, page.url); more += 1) {
+          patience.set(next, more);
+          patience.set(page.url, more);
+          page = await fetchPage(next);
+          found = linksOf(decodePage(await bytesOf(page.blob), page.type), page.url);
+        }
+        patience.delete(next);
+        patience.delete(page.url);
         visited.add(page.url);
-        const html = decodePage(await bytesOf(page.blob), page.type);
-        const found = linksOf(html, page.url);
         if (!title) title = found.title;
         if (!author) author = found.author;
         if (!cover) cover = found.cover;
@@ -1023,6 +1033,22 @@ export async function findLinks(addresses, {
   const listed = links.filter((link) => !visited.has(link.url));
   onProgress?.(1, '');
   return { links: listed, title, author, cover, failed, wordpress, newestFirstList };
+}
+
+/** Whether a contents page shows any chapters yet: three or more links that
+ *  give a chapter in their name ("14화", "Chapter 3"), or that lie under
+ *  the page's own address (/novel/47997/2136099 under /novel/47997), or a
+ *  row of numbered pages. */
+function listsChapters(found, pageUrl) {
+  if (found.pages?.length || found.list) return true;
+  let base = null;
+  try {
+    const url = new URL(pageUrl);
+    const path = url.pathname.replace(/\/+$/, '');
+    if (path) base = `${url.origin}${path}/`;
+  } catch { /* named ones only */ }
+  const chapters = found.links.filter((link) => markedNumber(link.text) !== null || (base && link.url.startsWith(base)));
+  return chapters.length >= 3;
 }
 
 /** The next of the numbered pages waiting, if any. */
