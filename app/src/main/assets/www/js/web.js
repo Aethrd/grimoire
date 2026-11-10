@@ -134,6 +134,11 @@ export function notLoadedYet(url, held = '') {
     { notLoaded: true });
 }
 
+/** Whether this address's site is one rendered page by page. */
+function renderedHere(url) {
+  try { return renderedHosts.has(new URL(url).host); } catch { return false; }
+}
+
 /** Whether this build of the app has the renderer. */
 export const canRender = () => typeof window.GrimoireWeb?.render === 'function';
 
@@ -1573,6 +1578,8 @@ export async function readPages(links, {
    * app going off screen does not count at all.
    */
   const chapterUrls = new Set(links.map((link) => link.url));
+  const nameOf = (link, at) => link.text || `page ${at + 1}`;
+  onProgress?.(0, 0, links.length);
   const fetchAgain = async (link, at) => {
     let lastError = null;
     let waits = null;
@@ -1584,6 +1591,10 @@ export async function readPages(links, {
       const before = interruptions;
       try {
         if (tries === 0 && uncounted === 0) await myTurn();
+        // Said while it is read: on a site rendered page by page, a chapter
+        // can take a while, and the count only moves once one is done.
+        onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
+          `${tries ? `trying ${nameOf(link, at)} again` : `reading ${nameOf(link, at)}`}…`);
         return await readPage(link, at, { pictures, fetchPage, chapterUrls });
       } catch (error) {
         lastError = error;
@@ -1592,12 +1603,16 @@ export async function readPages(links, {
         if (!waits) {
           // A chapter that had not loaded: twice more, more patiently each
           // time -- not the minute and more a refusing site is given.
-          waits = error?.notLoaded ? wait.backoff.slice(0, 2)
+          // So is a page of a site rendered page by page: each try is a
+          // whole browser's worth of waiting.
+          waits = error?.notLoaded || renderedHere(link.url) ? wait.backoff.slice(0, 2)
             : gone(error) ? [wait.retry]
             : tooMany(error) ? [...wait.refresh, ...wait.backoff]
             : [...wait.backoff];
         }
         if (tries >= waits.length) break;
+        onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
+          `${nameOf(link, at)}: ${error?.message || 'could not be read'} — trying again`);
         await pause(waits[tries]);
         tries += 1;
       }

@@ -452,8 +452,9 @@ export async function build({ title, author, folder = null, cover: chosenCover =
           jitter: part.web.jitter,
           patience: part.web.patience,
           onImage,
-          onProgress: (fraction, done, total) => onProgress?.(
-            `Downloading ${part.name} · ${done} of ${total}`, (at + fraction) / parts.length, at, parts.length),
+          onProgress: (fraction, done, total, note) => onProgress?.(
+            `Downloading ${part.name} · ${done} of ${total}${note ? ` · ${note}` : ''}`,
+            (at + fraction) / parts.length, at, parts.length),
         })
         : part.bookId
         ? await readShelfBook(part)
