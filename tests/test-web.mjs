@@ -1440,7 +1440,15 @@ await t('the renderer cannot take the app down, and keeps a page light', async (
   assert.match(java, /public boolean onRenderProcessGone\(WebView v, RenderProcessGoneDetail detail\) \{[\s\S]{0,900}return true;/);
   // Other sites' adverts and trackers kept out, until a page is asked for patiently.
   assert.match(java, /final boolean ownSiteOnly = level < 2;/);
-  assert.match(java, /if \(!ownSiteOnly \|\| request\.isForMainFrame\(\)\) return null;/);
+  assert.match(java, /if \(!job\.ownSiteOnly \|\| request\.isForMainFrame\(\)\) return null;/);
+  // One browser, used page after page and emptied between them, replaced
+  // every so many pages and closed once idle -- not one made per page.
+  assert.match(java, /private static final int BROWSER_USES = 25;/);
+  assert.match(java, /view\.loadUrl\("about:blank"\);\s+view\.clearHistory\(\);/);
+  assert.match(java, /main\.postDelayed\(closeBrowser, BROWSER_IDLE_MS\);/);
+  assert.equal((java.match(/new WebView\(activity\)/g) || []).length, 1, 'a WebView is made somewhere else too');
+  // The blank page between pages is no one's: its events reach no page.
+  assert.match(java, /if \(url != null && url\.startsWith\("about:"\)\) return null;/);
   assert.match(java, /"challenges\.cloudflare\.com"/);
   // Scripts, styles, frames and icons out before the reader parses it; and
   // looking at a page asks no layout of it.

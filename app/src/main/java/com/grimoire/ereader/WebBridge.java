@@ -263,6 +263,198 @@ public class WebBridge {
         }
     }
 
+    /* ── the unseen browser ───────────────────────────────────────────────
+     *
+     * One, used for page after page, not one made and thrown away for each:
+     * six hundred WebViews made and destroyed in a row leave the renderer
+     * a little more behind each time, and a second long build in the same
+     * sitting ran out of room. Between pages it is emptied (a blank page,
+     * its history cleared) so the last site's scripts stop; every
+     * BROWSER_USES pages it is replaced, and BROWSER_IDLE_MS after the last
+     * page it is closed, so a finished build gives its memory back. All of
+     * it on the main thread.
+     */
+    private static final int BROWSER_USES = 25;
+    private static final long BROWSER_IDLE_MS = 20000;
+    private WebView browser;
+    private int browserUses;
+    private boolean browserTracked;
+    /** The page the browser is reading now; its events go to it, others' nowhere. */
+    private volatile Rendering current;
+    private final Runnable closeBrowser = this::dropBrowser;
+
+    private void dropBrowser() {
+        WebView gone = browser;
+        browser = null;
+        browserUses = 0;
+        if (gone == null) return;
+        try {
+            gone.stopLoading();
+            ViewGroup parent = (ViewGroup) gone.getParent();
+            if (parent != null) parent.removeView(gone);
+            gone.removeAllViews();
+            gone.destroy();
+        } catch (Exception ignored) {
+            // Gone either way.
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private WebView browserFor(Rendering job) {
+        main.removeCallbacks(closeBrowser);
+        if (browser != null && browserUses >= BROWSER_USES) dropBrowser();
+        if (browser == null) {
+            WebView view = new WebView(activity);
+            WebSettings settings = view.getSettings();
+            settings.setJavaScriptEnabled(true);
+            settings.setDomStorageEnabled(true);
+            settings.setUserAgentString(userAgent);
+            settings.setLoadsImagesAutomatically(false); // pictures are fetched later, as files
+            settings.setBlockNetworkImage(true);
+            settings.setAllowFileAccess(false);
+            settings.setAllowContentAccess(false);
+            settings.setJavaScriptCanOpenWindowsAutomatically(false);
+            settings.setSupportMultipleWindows(false);
+            settings.setMediaPlaybackRequiresUserGesture(true);
+            CookieManager manager = CookieManager.getInstance();
+            manager.setAcceptCookie(true);
+            manager.setAcceptThirdPartyCookies(view, true);
+            view.setWebViewClient(new BrowserClient());
+            // Laid out at the screen's size, as the page would be, but under
+            // the reader and fully transparent: never seen or touched.
+            view.setAlpha(0f);
+            view.setFocusable(false);
+            view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+            ViewGroup root = activity.findViewById(android.R.id.content);
+            if (root != null) {
+                root.addView(view, 0, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+            // Counting the page's own requests from before its first script
+            // runs: a chapter fetched after the page opens is only there once
+            // its request has come back. Once, for every page it will load.
+            browserTracked = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT);
+            if (browserTracked) {
+                WebViewCompat.addDocumentStartJavaScript(view, TRACKER, Collections.singleton("*"));
+            }
+            browser = view;
+        }
+        browserUses += 1;
+        current = job;
+        return browser;
+    }
+
+    /** Done with a page: the browser emptied for the next, or closed if none comes. */
+    private void browserDone(Rendering job) {
+        if (current == job) current = null;
+        WebView view = browser;
+        if (view != null) {
+            try {
+                view.stopLoading();
+                view.loadUrl("about:blank");
+                view.clearHistory();
+            } catch (Exception ignored) {
+                dropBrowser();
+            }
+        }
+        main.removeCallbacks(closeBrowser);
+        main.postDelayed(closeBrowser, BROWSER_IDLE_MS);
+    }
+
+    /** The browser's events, passed to the page it is reading; the blank page between is no one's. */
+    private final class BrowserClient extends WebViewClient {
+        private Rendering reading(String url) {
+            if (url != null && url.startsWith("about:")) return null;
+            return current;
+        }
+
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
+            // Redirects within the web are followed; anything that would leave
+            // it (an app link, a store) is not.
+            String s = request.getUrl().getScheme();
+            if ("about".equalsIgnoreCase(s)) return false;
+            return s == null || !(s.equalsIgnoreCase("http") || s.equalsIgnoreCase("https"));
+        }
+
+        /* Every web page in the app shares one renderer. If Android reclaims
+         * it, each view is told, and one that does not answer takes the whole
+         * app down: the browser is let go (a new one is made for the next
+         * page), the page it was reading is tried again, and the reader's own
+         * view rebuilds itself. */
+        @Override
+        public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail detail) {
+            if (v == browser) {
+                browser = null;
+                browserUses = 0;
+            }
+            try {
+                ViewGroup parent = (ViewGroup) v.getParent();
+                if (parent != null) parent.removeView(v);
+                v.destroy();
+            } catch (Exception ignored) {
+                // Gone either way.
+            }
+            Rendering job = current;
+            if (job != null) job.fail("Android stopped the page's browser to free memory");
+            return true;
+        }
+
+        /* Another site's adverts, trackers and frames: kept out, so the page
+         * costs the phone a fraction of what it would. Its own site, the
+         * common script libraries and Cloudflare's check still load. */
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest request) {
+            Rendering job = current;
+            if (job == null) {
+                // Between pages: nothing of the last one may go on loading.
+                String s = request.getUrl().getScheme();
+                return "about".equalsIgnoreCase(s) ? null
+                        : new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
+            }
+            if (!job.ownSiteOnly || request.isForMainFrame()) return null;
+            String host = request.getUrl().getHost();
+            if (host == null || ALLOWED_ELSEWHERE.contains(host.toLowerCase(Locale.ROOT))) return null;
+            String own = job.site;
+            if (own != null && own.equals(siteOf(host))) return null;
+            return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
+        }
+
+        @Override
+        public void onPageStarted(WebView v, String url, Bitmap favicon) {
+            Rendering job = reading(url);
+            if (job == null) return;
+            job.finalUrl = url;
+            String moved = siteOf(Uri.parse(url).getHost());
+            if (moved != null) job.site = moved;
+            // Without the document-start hook (an old WebView), as early as can
+            // be: later requests are still counted.
+            if (!browserTracked) v.evaluateJavascript(TRACKER, null);
+        }
+
+        @Override
+        public void onPageFinished(WebView v, String url) {
+            Rendering job = reading(url);
+            if (job == null) return;
+            job.finalUrl = url;
+            job.pageFinished();
+        }
+
+        @Override
+        public void onReceivedHttpError(WebView v, WebResourceRequest request, WebResourceResponse response) {
+            Rendering job = current;
+            if (job != null && request.isForMainFrame()) job.mainStatus = response.getStatusCode();
+        }
+
+        @Override
+        public void onReceivedError(WebView v, WebResourceRequest request, WebResourceError err) {
+            Rendering job = reading(request.getUrl().toString());
+            if (job != null && request.isForMainFrame()) {
+                job.fail("the page could not be opened: " + err.getDescription());
+            }
+        }
+    }
+
     /** One page in the unseen browser. Everything but the waiting runs on the main thread. */
     private final class Rendering {
         final String address;
@@ -277,13 +469,12 @@ public class WebBridge {
         volatile String raw;
         volatile String error;
         volatile String finalUrl;
+        volatile int mainStatus;
         private WebView view;
         private boolean loaded;
-        private int mainStatus;
         private String lastShape = "";
         private long stillSince;
         private long startedAt;
-        private boolean tracked;
 
         Rendering(String address, long quietMs, long maxMs, boolean scroll, boolean ownSiteOnly) {
             this.address = address;
@@ -295,120 +486,21 @@ public class WebBridge {
             this.finalUrl = address;
         }
 
-        @SuppressLint("SetJavaScriptEnabled")
         void start() {
             try {
                 startedAt = System.currentTimeMillis();
-                view = new WebView(activity);
-                WebSettings settings = view.getSettings();
-                settings.setJavaScriptEnabled(true);
-                settings.setDomStorageEnabled(true);
-                settings.setUserAgentString(userAgent);
-                settings.setLoadsImagesAutomatically(false); // pictures are fetched later, as files
-                settings.setAllowFileAccess(false);
-                settings.setAllowContentAccess(false);
-                settings.setJavaScriptCanOpenWindowsAutomatically(false);
-                settings.setSupportMultipleWindows(false);
-                settings.setMediaPlaybackRequiresUserGesture(true);
-                CookieManager manager = CookieManager.getInstance();
-                manager.setAcceptCookie(true);
-                manager.setAcceptThirdPartyCookies(view, true);
-                view.setWebViewClient(new WebViewClient() {
-                    @Override
-                    public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
-                        // Redirects within the web are followed; anything that
-                        // would leave it (an app link, a store) is not.
-                        String s = request.getUrl().getScheme();
-                        return s == null || !(s.equalsIgnoreCase("http") || s.equalsIgnoreCase("https"));
-                    }
-
-                    /* Every web page in the app shares one renderer. If Android
-                     * reclaims it, each view is told, and one that does not
-                     * answer takes the whole app down: this page is given up,
-                     * and the reader's own view rebuilds itself. */
-                    @Override
-                    public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail detail) {
-                        if (v == view) view = null;
-                        try {
-                            ViewGroup parent = (ViewGroup) v.getParent();
-                            if (parent != null) parent.removeView(v);
-                            v.destroy();
-                        } catch (Exception ignored) {
-                            // Gone either way.
-                        }
-                        fail("Android stopped the page's browser to free memory");
-                        return true;
-                    }
-
-                    /* Another site's adverts, trackers and frames: kept out, so
-                     * the page costs the phone a fraction of what it would. Its
-                     * own site, the common script libraries and Cloudflare's
-                     * check still load. */
-                    @Override
-                    public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest request) {
-                        if (!ownSiteOnly || request.isForMainFrame()) return null;
-                        String host = request.getUrl().getHost();
-                        if (host == null || ALLOWED_ELSEWHERE.contains(host.toLowerCase(Locale.ROOT))) return null;
-                        String own = site;
-                        if (own != null && own.equals(siteOf(host))) return null;
-                        return new WebResourceResponse("text/plain", "utf-8",
-                                new ByteArrayInputStream(new byte[0]));
-                    }
-
-                    @Override
-                    public void onPageStarted(WebView v, String url, Bitmap favicon) {
-                        if (url != null) {
-                            finalUrl = url;
-                            String moved = siteOf(Uri.parse(url).getHost());
-                            if (moved != null) site = moved;
-                        }
-                        // Without the document-start hook (an old WebView), as
-                        // early as can be: later requests are still counted.
-                        if (!tracked && v != null) v.evaluateJavascript(TRACKER, null);
-                    }
-
-                    @Override
-                    public void onPageFinished(WebView v, String url) {
-                        if (url != null) finalUrl = url;
-                        if (!loaded) {
-                            loaded = true;
-                            main.postDelayed(Rendering.this::poll, RENDER_POLL_MS);
-                        }
-                    }
-
-                    @Override
-                    public void onReceivedHttpError(WebView v, WebResourceRequest request, WebResourceResponse response) {
-                        if (request.isForMainFrame()) mainStatus = response.getStatusCode();
-                    }
-
-                    @Override
-                    public void onReceivedError(WebView v, WebResourceRequest request, WebResourceError err) {
-                        if (request.isForMainFrame()) {
-                            fail("the page could not be opened: " + err.getDescription());
-                        }
-                    }
-                });
-                // Laid out at the screen's size, as the page would be, but
-                // under the reader and fully transparent: never seen or touched.
-                view.setAlpha(0f);
-                view.setFocusable(false);
-                view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
-                ViewGroup root = activity.findViewById(android.R.id.content);
-                if (root != null) {
-                    root.addView(view, 0, new FrameLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-                }
-                // Counting the page's own requests from before its first
-                // script runs: a chapter fetched after the page opens is only
-                // there once its request has come back.
-                if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                    WebViewCompat.addDocumentStartJavaScript(view, TRACKER, Collections.singleton("*"));
-                    tracked = true;
-                }
+                view = browserFor(this);
                 view.loadUrl(address);
                 main.postDelayed(() -> { if (!loaded && view != null) { loaded = true; poll(); } }, maxMs / 2);
             } catch (Exception e) {
                 fail(describe(e));
+            }
+        }
+
+        void pageFinished() {
+            if (!loaded && view != null) {
+                loaded = true;
+                main.postDelayed(this::poll, RENDER_POLL_MS);
             }
         }
 
@@ -464,23 +556,16 @@ public class WebBridge {
             });
         }
 
-        private void fail(String why) {
+        void fail(String why) {
             if (error == null && raw == null) error = why;
             finish();
         }
 
         void finish() {
+            if (done.getCount() == 0) return;
             if (view != null) {
-                WebView gone = view;
                 view = null;
-                try {
-                    gone.stopLoading();
-                    ViewGroup parent = (ViewGroup) gone.getParent();
-                    if (parent != null) parent.removeView(gone);
-                    gone.destroy();
-                } catch (Exception ignored) {
-                    // Gone either way.
-                }
+                browserDone(this);
             }
             done.countDown();
         }
