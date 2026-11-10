@@ -541,7 +541,7 @@ export async function build({
           // this moment (waiting out the delay, reading, another try) apart.
           onProgress: (fraction, done, total, note, now) => onProgress?.(
             `Downloading ${part.name} · ${done} of ${total}`,
-            (at + fraction) / parts.length, at, parts.length, now ?? null, { done, total }),
+            (at + fraction) / parts.length, at, parts.length, now, { done, total }),
         })
         : part.bookId
         ? await readShelfBook(part)

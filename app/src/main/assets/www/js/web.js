@@ -1575,7 +1575,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * picture is not a page and is not held back. With no pace set, nothing
  * waits and nothing queues.
  */
-function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = null } = {}) {
+function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = null, onStart = null } = {}) {
   if (!(gap > 0) && !(jitter > 0)) return fetchPage;
   let line = Promise.resolve();
   let lastEnd = 0;
@@ -1593,6 +1593,8 @@ function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = nu
         await napUnless(wait, stop);
       }
       if (stop()) throw Object.assign(new Error(PAUSED_REASON), { paused: true, tries: 1 });
+      // Only now is it being read: not while it waited its turn.
+      onStart?.(url);
       return await fetchPage(url, options);
     } finally {
       lastEnd = Date.now();
@@ -1856,8 +1858,19 @@ export async function readPages(links, {
    * of the requests that run at once. Nought is as fast as the two will go. */
   /* Every page at the reader's pace, through one line (see pacer): the
    * first ask, a retry, a chapter's second page alike. */
+  /* What each page is being asked for as -- a first read, or which try and
+   * why the last failed -- said when its turn comes and it is really read,
+   * not when it joins the line: two chapters are under way at once, and the
+   * one in line said "reading" all through the other's delay. */
+  const asking = new Map();
+  const say = (url) => {
+    const ask = asking.get(url);
+    if (!ask) return;
+    onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length, ask.note, { ...ask.now, since: Date.now() });
+  };
   const paced = pacer(fetchPage, {
     gap, jitter, stop: () => pausing(),
+    onStart: (url) => say(url),
     onWait: (url, ms) => {
       const at = links.findIndex((link) => link.url === url);
       const name = at >= 0 ? nameOf(links[at], at) : 'the next page';
@@ -1906,15 +1919,18 @@ export async function readPages(links, {
         if (!(gap > 0) && !(jitter > 0) && tries === 0 && uncounted === 0) await myTurn();
         if (pausing()) throw PAUSED();
         // Said while it is read: on a site rendered page by page, a chapter
-        // can take a while, and the count only moves once one is done.
-        onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
-          tries
+        // can take a while, and the count only moves once one is done. Paced,
+        // it is said when its turn comes (see `say`); unpaced, now.
+        asking.set(link.url, {
+          note: tries
             // With why the last try failed: "stuck on a chapter" says what at.
             ? `trying ${nameOf(link, at)} again (${tries + 1} of ${(waits?.length || 0) + 1}) — last time ${shortReason(lastError)}…`
             : `reading ${nameOf(link, at)}…`,
-          tries
+          now: tries
             ? { kind: 'retry', name: nameOf(link, at), attempt: tries + 1, of: (waits?.length || 0) + 1, reason: shortReason(lastError) }
-            : { kind: 'read', name: nameOf(link, at) });
+            : { kind: 'read', name: nameOf(link, at) },
+        });
+        if (paced === fetchPage) say(link.url);
         return await readPage(link, at, { pictures, fetchPage: paced, chapterUrls, listedNumbers });
       } catch (error) {
         if (error?.paused) throw error;

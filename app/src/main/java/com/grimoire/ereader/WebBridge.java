@@ -782,14 +782,24 @@ public class WebBridge {
         }
     }
 
-    /** Counts the page's fetch and XMLHttpRequest calls still on their way, in window.__grimoirePending. */
+    /** Counts the page's own fetch and XMLHttpRequest calls still on their way, in
+     *  window.__grimoirePending. Only the site's own: an advert's or a tracker's call that
+     *  never ends (a long poll, a beacon kept open) once said "still loading" for good, so a
+     *  chapter with all its text there waited out the stuck fallback instead of being done. */
     private static final String TRACKER = "(function(){if(window.__grimoirePending!==undefined)return;"
             + "window.__grimoirePending=0;"
-            + "var f=window.fetch;if(f){window.fetch=function(){window.__grimoirePending++;var p;"
+            + "var site=function(h){var p=String(h||'').toLowerCase().split('.');"
+            + "var n=(p.length>2&&p[p.length-1].length==2&&p[p.length-2].length<=3)?3:2;return p.slice(-n).join('.');};"
+            + "var own=function(u){try{var h=new URL(String(u&&u.url||u),location.href).hostname;"
+            + "return site(h)==site(location.hostname);}catch(e){return true;}};"
+            + "var f=window.fetch;if(f){window.fetch=function(r){if(!own(r))return f.apply(this,arguments);"
+            + "window.__grimoirePending++;var p;"
             + "try{p=f.apply(this,arguments);}catch(e){window.__grimoirePending--;throw e;}"
             + "var d=function(){window.__grimoirePending--;};p.then(d,d);return p;};}"
-            + "var X=window.XMLHttpRequest;if(X&&X.prototype){var s=X.prototype.send;"
-            + "X.prototype.send=function(){window.__grimoirePending++;var done=false;"
+            + "var X=window.XMLHttpRequest;if(X&&X.prototype){var o=X.prototype.open,s=X.prototype.send;"
+            + "X.prototype.open=function(m,u){this.__grimoireOwn=own(u);return o.apply(this,arguments);};"
+            + "X.prototype.send=function(){if(this.__grimoireOwn===false)return s.apply(this,arguments);"
+            + "window.__grimoirePending++;var done=false;"
             + "var d=function(){if(!done){done=true;window.__grimoirePending--;}};"
             + "this.addEventListener('loadend',d);try{return s.apply(this,arguments);}catch(e){d();throw e;}};}"
             + "})();";

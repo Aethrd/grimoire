@@ -2353,17 +2353,19 @@ const progress = (() => {
           what.textContent = `${left} s left of your delay, then ${name}`;
         } else if (now.kind === 'retry') {
           tag.textContent = `Try ${now.attempt} of ${now.of}`;
-          what.textContent = `${name}${now.reason ? ` · last time: ${now.reason}` : ''}`;
+          what.textContent = `${name}${took()}${now.reason ? ` · last time: ${now.reason}` : ''}`;
         } else if (now.kind === 'failed') {
           tag.textContent = 'Failed';
           what.textContent = `${name} · ${now.reason || 'it did not come'} — trying again`;
         } else {
           tag.textContent = 'Reading';
-          what.textContent = name;
+          what.textContent = `${name}${took()}`;
         }
       };
+      // How long this read has taken so far: what "reading takes long" is.
+      const took = () => (now.since ? ` · ${Math.max(0, Math.round((Date.now() - now.since) / 1000))} s` : '');
       paint();
-      if (now.kind === 'wait') job.ticker = setInterval(paint, 1000);
+      if (now.kind === 'wait' || now.since) job.ticker = setInterval(paint, 1000);
       line.hidden = false;
     };
 

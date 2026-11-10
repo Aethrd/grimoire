@@ -1847,11 +1847,51 @@ await t('how far it has got and what it is doing now are told apart', async () =
   assert.deepEqual([retry.name, retry.attempt, retry.of], ['No. 2', 2, 3]);
   // Build keeps the count on the bar's line and passes what it is doing apart.
   const build = read('app/src/main/assets/www/js/build.js');
-  assert.match(build, /`Downloading \$\{part\.name\} · \$\{done\} of \$\{total\}`,\s+\(at \+ fraction\) \/ parts\.length, at, parts\.length, now \?\? null, \{ done, total \}\)/);
+  assert.match(build, /`Downloading \$\{part\.name\} · \$\{done\} of \$\{total\}`,\s+\(at \+ fraction\) \/ parts\.length, at, parts\.length, now, \{ done, total \}\)/);
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /<div class="job-activity" hidden><span class="job-tag"><\/span><span class="job-now"><\/span><\/div>/);
   assert.match(app, /what\.textContent = `\$\{left\} s left of your delay, then \$\{name\}`;/);
   assert.match(app, /if \(now !== undefined\) finish\.activity\(now\);/);
+});
+
+await t('a chapter is said to be read only once its delay is over', async () => {
+  // Two chapters are under way at once; the one in line waits out the delay
+  // and only then is "reading" -- never "reading" all through the wait.
+  const said = [];
+  const asked = [];
+  const site = async (url, options) => { asked.push({ url, at: said.length }); return fakeFetch(url, options); };
+  await web.readPages([1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` })), {
+    fetchPage: site, gap: 1600, jitter: 0, pictures: false,
+    onProgress: (fraction, done, total, note, activity) => { if (activity) said.push(activity); },
+  });
+  for (const name of ['No. 2', 'No. 3']) {
+    const waited = said.findIndex((a) => a.kind === 'wait' && a.name === name);
+    const read = said.findIndex((a) => a.kind === 'read' && a.name === name);
+    assert.ok(waited >= 0 && read > waited, `${name}: ${said.map((a) => `${a.kind} ${a.name}`).join(', ')}`);
+    // Its reading is said just before it is asked for, and timed from then.
+    assert.ok(said[read].since > 0);
+  }
+  // Every read said comes right before that page is asked for.
+  const reads = said.filter((a) => a.kind === 'read').length;
+  assert.equal(reads, 3);
+  // A plain settle does not wipe what it is doing: Build passes it as given.
+  assert.doesNotMatch(read('app/src/main/assets/www/js/build.js'), /now \?\? null/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /if \(now\.kind === 'wait' \|\| now\.since\) job\.ticker = setInterval\(paint, 1000\);/);
+});
+
+await t('only the site\'s own requests keep a page "still loading"', async () => {
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  const at = java.indexOf('String TRACKER = ');
+  const code = [...java.slice(at, java.indexOf('})();";', at) + 7).matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1].replace(/\\(.)/g, '$1')).join('');
+  const page = { location: { href: 'https://marumaru109.com/novel/1', hostname: 'marumaru109.com' }, URL, Request };
+  page.window = page;
+  page.fetch = () => new Promise(() => {});
+  page.XMLHttpRequest = class { addEventListener() {} open() {} send() {} };
+  new Function('window', 'location', 'URL', `with (window) { ${code} }`)(page, page.location, URL);
+  page.fetch('https://ads.example.net/x'); page.fetch('/api/chapter'); page.fetch(new Request('https://www.googletagmanager.com/a'));
+  const own = new page.XMLHttpRequest(); own.open('GET', 'https://cdn.marumaru109.com/c'); own.send();
+  const ad = new page.XMLHttpRequest(); ad.open('GET', 'https://tracker.io/b'); ad.send();
+  assert.equal(page.__grimoirePending, 2);
 });
 
 await t('a build says how long it has been and how long it should be yet', async () => {
@@ -1860,7 +1900,7 @@ await t('a build says how long it has been and how long it should be yet', async
   assert.match(app, /`~\$\{span\(\(\(now - run\.partStart\) \/ came\) \* \(run\.total - run\.done\)\)\} left`/);
   assert.match(app, /: 'estimating…';/);
   assert.match(app, /buildRun\.ticker = setInterval\(paintTimes, 1000\);/);
-  assert.match(read('app/src/main/assets/www/js/build.js'), /now \?\? null, \{ done, total \}\)/);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /parts\.length, now, \{ done, total \}\)/);
   // span(): seconds, minutes, hours.
   const body = app.slice(app.indexOf('function span(ms) {'), app.indexOf('function paintTimes()'));
   const span = new Function(`${body}; return span;`)();
