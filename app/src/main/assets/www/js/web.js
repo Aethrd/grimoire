@@ -650,6 +650,7 @@ export function linksOf(html, pageUrl) {
     title: pageTitle(doc), author: pageAuthor(doc), cover: pageCover(doc, base),
     wordpress, list, older: onward,
     pages: paging ? paging.pages : [],
+    firstPage: paging?.firstPage || null,
   };
 }
 
@@ -699,14 +700,25 @@ export function pagesOf(links, pageUrl) {
   const current = Number(here.searchParams.get(key)) || 1;
   const last = Math.min(entry.highest, MAX_LIST_PAGES);
   const pages = [];
-  for (let number = 1; number <= last; number += 1) {
-    if (number === current) continue;
+  const numbered = (number) => {
     const url = new URL(here.href);
     url.searchParams.set(key, String(number));
     url.hash = '';
-    pages.push(url.href);
+    return url.href;
+  };
+  for (let number = 1; number <= last; number += 1) {
+    if (number === current) continue;
+    pages.push(numbered(number));
   }
-  return pages.length ? { pages, links: entry.links } : null;
+  /* Asked for with no page number, it was taken as page 1 -- usually it is.
+   * But some sites' bare address shows only the newest few chapters, and
+   * "page 1" is the first page of the whole list (bookkor: 410 to 401 at the
+   * bare address, 410 to 311 at ?page=1). Said, for findLinks to read too if
+   * other pages turn out to hold more than this one did. */
+  const firstPage = !here.searchParams.has(key) && [...entry.links].some((href) => {
+    try { return Number(new URL(href).searchParams.get(key)) === 1; } catch { return false; }
+  }) ? numbered(1) : null;
+  return pages.length ? { pages, links: entry.links, firstPage } : null;
 }
 
 /**
@@ -1221,6 +1233,11 @@ export async function findLinks(addresses, {
     // The other pages of a contents page split over numbered pages.
     const queue = [];
     let numbered = false;
+    // ?page=1 where the address had no page number (see pagesOf), read only if
+    // the list's other pages hold more chapters than the page first read did.
+    let maybeFirst = null;
+    let firstCount = 0;
+    let mostElsewhere = 0;
     let total = 0;
     while (next && pages < maxPages && !stopped()) {
       // Already read (a numbered page that was also the next "older"): on.
@@ -1290,6 +1307,13 @@ export async function findLinks(addresses, {
           links.push(entry);
         }
         if (pages === 1) for (const page of found.pages || []) if (!visited.has(page)) { queue.push(page); numbered = true; }
+        const chaptersHere = found.links.filter((link) => markedNumber(link.text) !== null).length;
+        if (pages === 1) {
+          firstCount = chaptersHere;
+          maybeFirst = found.firstPage && !visited.has(found.firstPage) ? found.firstPage : null;
+        } else {
+          mostElsewhere = Math.max(mostElsewhere, chaptersHere);
+        }
         if (numbered && !total) total = 1 + queue.length;
         let enough = false;
         if (known) {
@@ -1310,6 +1334,13 @@ export async function findLinks(addresses, {
           stoppedEarly = !!next || queue.length > 0;
           queue.length = 0;
           next = null;
+        }
+        /* The page first read showed fewer chapters than the list's pages do:
+         * a preview of the newest, not page 1. Page 1 is read as well. */
+        // Clearly more -- not a stray "latest chapter" button's worth.
+        if (!next && maybeFirst && mostElsewhere > firstCount * 1.5 + 2 && !visited.has(maybeFirst)) {
+          next = maybeFirst;
+          maybeFirst = null;
         }
         pagesRead += 1;
         pagesTotal = Math.max(pagesTotal, total || pages);

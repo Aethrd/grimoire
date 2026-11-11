@@ -2268,6 +2268,32 @@ await t('a contents page sent without its list (its script fetches it) is read i
   delete window.GrimoireWeb;
 });
 
+await t('a bare address that shows only the newest chapters is not taken for page 1', async () => {
+  // bookkor: the bare address shows 410 to 401; ?page=1 is 410 to 311, ?page=2 310 to 211, ... ?page=5 10 to 1.
+  const asked = [];
+  const base = 'https://kor.example/%EC%95%85';
+  const rows = (from, to) => Array.from({ length: from - to + 1 }, (_, i) => `<li><a href="/%EC%95%85/1-ep-${from - i}">${from - i}화 악은 삶을 바란다</a> 2023-04-08</li>`).join('');
+  const pager = Array.from({ length: 5 }, (_, i) => `<a href="${base}?page=${i + 1}">${i + 1}</a>`).join('');
+  const site = async (url) => {
+    asked.push(url);
+    const page = Number(new URL(url).searchParams.get('page') || 0);
+    const list = page ? rows(410 - (page - 1) * 100, Math.max(1, 410 - page * 100 + 1)) : rows(410, 401);
+    const html = `<html><body><h1>악은 삶을 바란다</h1><p>총 410화</p><ul>${list}</ul><nav>${pager}</nav></body></html>`;
+    return { url, blob: new Blob([html]), type: 'text/html', rendered: false };
+  };
+  const found = await web.findLinks([base], { fetchPage: site, listGap: 0 });
+  const numbers = new Set(found.links.map((l) => Number(/ep-(\d+)$/.exec(l.url)?.[1])).filter(Boolean));
+  assert.equal(numbers.size, 410);
+  assert.ok([311, 350, 400].every((n) => numbers.has(n)));
+  // Page 1 read once it was plain the bare address was a preview: 6 requests, not 5.
+  assert.equal(asked.length, 6);
+  assert.ok(asked.at(-1).endsWith('?page=1'));
+  // Where the bare address is page 1 (as much as the others), no extra request.
+  const plain = [];
+  await web.findLinks(['https://list.example/serial/9'], { fetchPage: listSite(5, true, plain), listGap: 0 });
+  assert.equal(plain.length, 5);
+});
+
 await t('a build says how long it has been and how long it should be yet', async () => {
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /left = 'estimating…';/);
