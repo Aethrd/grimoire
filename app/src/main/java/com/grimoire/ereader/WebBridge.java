@@ -101,13 +101,18 @@ public class WebBridge {
     private static final long RENDER_WAIT_MS = 180000;
     private static final long RENDER_QUIET_MS = 2500;
     private static final long RENDER_QUIET_STEP_MS = 2000;
-    private static final long RENDER_POLL_MS = 400;
+    /** How often the open page is looked at. Looking is on the phone, in the page already
+     *  there -- it asks the site for nothing -- so it can be often. */
+    private static final long RENDER_POLL_MS = 250;
+    /** How long a chapter's story must stop growing to be taken, and longer on a try
+     *  asked for patiently (its last try came back short). */
+    private static final long STORY_STILL_MS = 700;
+    private static final long STORY_STILL_PATIENT_MS = 2000;
     /** How long a page whose content is plainly there -- a list with its
      *  chapters, a chapter with its story -- must stay still. The full quiet
      *  spell is for a page where that cannot be seen. */
     private static final long READY_QUIET_MS = 900;
     private static final long READY_LIST_QUIET_MS = 1200;
-    /** Characters of text that make a page a chapter with its story in it. */
     /** A chapter's story, in one block of text, long enough to be the chapter. */
     private static final int READY_STORY = 1500;
     /** A page still waiting on a request this many quiet spells on has one
@@ -224,7 +229,10 @@ public class WebBridge {
                 if (!scheme.equals("http") && !scheme.equals("https")) {
                     throw new IOException("only web addresses can be downloaded");
                 }
-                Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly);
+                // Pictures, fonts and video are never what the reader takes from a page --
+                // the pictures it keeps are fetched on their own, from their addresses --
+                // so they are not loaded. At the most patient try, everything is.
+                Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly, level < 3);
                 main.post(job::start);
                 if (!job.done.await(RENDER_WAIT_MS + 20000, TimeUnit.MILLISECONDS)) {
                     main.post(job::finish);
@@ -581,9 +589,13 @@ public class WebBridge {
                 return "about".equalsIgnoreCase(s) ? null
                         : new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
             }
-            if (!job.ownSiteOnly || request.isForMainFrame()) return null;
+            if (request.isForMainFrame()) return null;
             String host = request.getUrl().getHost();
             if (host == null || ALLOWED_ELSEWHERE.contains(host.toLowerCase(Locale.ROOT))) return null;
+            if (job.lean && isHeavy(request)) {
+                return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
+            }
+            if (!job.ownSiteOnly) return null;
             String own = job.site;
             if (own != null && own.equals(siteOf(host))) return null;
             return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
@@ -599,6 +611,16 @@ public class WebBridge {
             // Without the document-start hook (an old WebView), as early as can
             // be: later requests are still counted.
             if (!browserTracked) v.evaluateJavascript(TRACKER, null);
+            job.begin();
+        }
+
+        /** The page is on show: its first paint, adverts or no adverts. */
+        @Override
+        public void onPageCommitVisible(WebView v, String url) {
+            Rendering job = reading(url);
+            if (job == null) return;
+            job.shown = true;
+            job.begin();
         }
 
         @Override
@@ -631,6 +653,14 @@ public class WebBridge {
         final long maxMs;
         final boolean scroll;
         final boolean ownSiteOnly;
+        /** Pictures, fonts and video not loaded (see render). */
+        final boolean lean;
+        /** The page has finished loading (or been given long enough to). */
+        private boolean finished;
+        /** The page is on show (see onPageCommitVisible). */
+        boolean shown;
+        private int lastStory = -1;
+        private long storySince;
         /** The site the page is on, for telling its own requests from others'. */
         volatile String site;
         final CountDownLatch done = new CountDownLatch(1);
@@ -647,8 +677,9 @@ public class WebBridge {
         private long stillSince;
         private long startedAt;
 
-        Rendering(String address, long quietMs, long maxMs, boolean scroll, boolean ownSiteOnly) {
+        Rendering(String address, long quietMs, long maxMs, boolean scroll, boolean ownSiteOnly, boolean lean) {
             this.address = address;
+            this.lean = lean;
             this.quietMs = quietMs;
             this.maxMs = maxMs;
             this.scroll = scroll;
@@ -665,13 +696,24 @@ public class WebBridge {
                 // a check passed is a cookie, so they are on for every page.
                 CookieManager.getInstance().setAcceptCookie(true);
                 view.loadUrl(address);
-                main.postDelayed(() -> { if (!loaded && view != null) { loaded = true; poll(); } }, maxMs / 2);
+                main.postDelayed(() -> {
+                    finished = true;
+                    if (!loaded && view != null) { loaded = true; poll(); }
+                }, maxMs / 2);
             } catch (Exception e) {
                 fail(describe(e));
             }
         }
 
         void pageFinished() {
+            finished = true;
+            begin();
+        }
+
+        /* Looked at from the moment the page begins to come, not only once it has
+         * finished loading: "finished" waits on every picture and advert frame, and
+         * the chapter is on show -- what a reader waits for -- well before. */
+        void begin() {
             if (!loaded && view != null) {
                 loaded = true;
                 main.postDelayed(this::poll, RENDER_POLL_MS);
@@ -753,8 +795,29 @@ public class WebBridge {
                  * that held every chapter for the whole three minutes. */
                 boolean holding = !there && (waiting || (!scroll && loading));
                 boolean busy = pending > 0 || holding;
-                boolean settled = !blank && !holding
-                        && ((!busy && still >= need) || still >= quietMs * RENDER_STUCK_SPELLS);
+                /* A chapter is taken once its story is there and has stopped growing --
+                 * whatever the adverts and the rest of the page go on doing, and before
+                 * the page has "finished": that waited on every advert, and the page's
+                 * shape, which every advert loaded changes, kept a chapter that was all
+                 * there waiting out the stuck fallback (sixteen seconds for five). */
+                if (storyLength != lastStory) {
+                    lastStory = storyLength;
+                    storySince = now;
+                }
+                // With nothing more of its own on the way -- or so long still that what is
+                // (a feed kept open) is not more of the chapter.
+                long storyStill = now - storySince;
+                boolean storyDone = !scroll && !waiting && storyLength >= READY_STORY
+                        && storyStill >= (patient ? STORY_STILL_PATIENT_MS : STORY_STILL_MS)
+                        && (pending == 0 || storyStill >= quietMs);
+                /* Otherwise once it is quiet -- given a spell longer while it has not
+                 * "finished", since a page still coming can sit still a moment on a slow
+                 * script. Never waiting on "finished" itself: on a site whose adverts
+                 * never stop, that came only at the twenty-second fallback, and the
+                 * chapter was taken then, mid-change, short. */
+                long settle = finished ? need : need + quietMs;
+                boolean settled = storyDone || ((finished || shown) && !blank && !holding
+                        && ((!busy && still >= settle) || still >= quietMs * RENDER_STUCK_SPELLS));
                 long limit = holding ? RENDER_WAIT_MS : maxMs;
                 if (settled || now - startedAt >= limit) {
                     take();
@@ -827,6 +890,20 @@ public class WebBridge {
     private static final java.util.Set<String> ALLOWED_ELSEWHERE = new java.util.HashSet<>(java.util.Arrays.asList(
             "challenges.cloudflare.com", "cdnjs.cloudflare.com", "cdn.jsdelivr.net", "unpkg.com",
             "ajax.googleapis.com", "code.jquery.com", "cdn.tailwindcss.com"));
+
+    private static final Pattern HEAVY = Pattern.compile(
+            "\\.(jpe?g|png|gif|webp|avif|bmp|ico|svg|woff2?|ttf|otf|eot|mp4|webm|m4v|mov|mp3|m4a|ogg|wav)$",
+            Pattern.CASE_INSENSITIVE);
+
+    /** A picture, a font or a video: by its address, or by what it asks to be sent. */
+    static boolean isHeavy(WebResourceRequest request) {
+        String path = request.getUrl().getPath();
+        if (path != null && HEAVY.matcher(path).find()) return true;
+        String accept = request.getRequestHeaders() == null ? null : request.getRequestHeaders().get("Accept");
+        if (accept == null) return false;
+        String a = accept.toLowerCase(Locale.ROOT);
+        return a.startsWith("image/") || a.startsWith("video/") || a.startsWith("audio/") || a.startsWith("font/");
+    }
 
     /** The site a host belongs to: example.com for www.example.com, and
      *  example.co.kr for img.example.co.kr. */

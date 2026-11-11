@@ -1080,7 +1080,7 @@ await t('an ordinary page is fetched once, and an app without the renderer only 
   assert.match(java, /Object text = new JSONTokener\(job\.raw/);
   // Ready only once the page's own requests are back, counted from before its first script.
   assert.match(java, /WebViewCompat\.addDocumentStartJavaScript\(view, TRACKER/);
-  assert.match(java, /!busy && still >= need/);
+  assert.match(java, /!busy && still >= settle/);
   // Taken as soon as what it was opened for is there -- a list's chapters, a
   // chapter's story -- after a short still moment, not the whole quiet spell;
   // a chapter asked for again patiently gets the whole spell.
@@ -1449,7 +1449,8 @@ await t('the renderer cannot take the app down, and keeps a page light', async (
   assert.match(java, /public boolean onRenderProcessGone\(WebView v, RenderProcessGoneDetail detail\) \{[\s\S]{0,900}return true;/);
   // Other sites' adverts and trackers kept out, until a page is asked for patiently.
   assert.match(java, /final boolean ownSiteOnly = level < 2 && !open;/);
-  assert.match(java, /if \(!job\.ownSiteOnly \|\| request\.isForMainFrame\(\)\) return null;/);
+  assert.match(java, /if \(request\.isForMainFrame\(\)\) return null;/);
+  assert.match(java, /if \(!job\.ownSiteOnly\) return null;/);
   // One browser, used page after page and emptied between them, replaced
   // every so many pages and closed once idle -- not one made per page.
   assert.match(java, /private static final int BROWSER_USES = 25;/);
@@ -1617,7 +1618,7 @@ await t('a chapter whose page still shows "loading" is waited for', async () => 
   assert.match(java, /st\.display!=='none'&&st\.visibility!=='hidden'/);
   assert.match(java, /boolean busy = pending > 0 \|\| holding;/);
   // Never for ever: a page still for long enough is taken all the same.
-  assert.match(java, /\(\(!busy && still >= need\) \|\| still >= quietMs \* RENDER_STUCK_SPELLS\)/);
+  assert.match(java, /\(\(!busy && still >= settle\) \|\| still >= quietMs \* RENDER_STUCK_SPELLS\)/);
 });
 
 await t('a site\'s browser check can be passed by showing the site', async () => {
@@ -1919,6 +1920,25 @@ await t('a chapter is there when its story is, not when the page has a lot of te
   const css = read('app/src/main/assets/www/css/app.css');
   assert.match(css, /\.job-now \{ min-width: 0; overflow-wrap: anywhere; line-height: 1\.4; \}/);
   assert.match(css, /\.import-line span:first-child \{ min-width: 0; overflow-wrap: anywhere; \}/);
+});
+
+await t('a chapter is taken as soon as its story is there and still, not when the page finishes', async () => {
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  // Looked at from the page's start and its first paint, not only once "finished".
+  assert.match(java, /if \(!browserTracked\) v\.evaluateJavascript\(TRACKER, null\);\s+job\.begin\(\);/);
+  assert.match(java, /public void onPageCommitVisible\(WebView v, String url\) \{[\s\S]{0,160}job\.shown = true;\s+job\.begin\(\);/);
+  // The story stopped growing, nothing of the site's own on its way: taken, adverts or no.
+  assert.match(java, /boolean storyDone = !scroll && !waiting && storyLength >= READY_STORY\s+&& storyStill >= \(patient \? STORY_STILL_PATIENT_MS : STORY_STILL_MS\)\s+&& \(pending == 0 \|\| storyStill >= quietMs\);/);
+  assert.match(java, /boolean settled = storyDone \|\| \(\(finished \|\| shown\) && !blank && !holding/);
+  assert.match(java, /long settle = finished \? need : need \+ quietMs;/);
+  assert.match(java, /private static final long RENDER_POLL_MS = 250;/);
+  // Pictures, fonts and video are not loaded by the unseen browser, but at the most patient try.
+  assert.match(java, /new Rendering\(address, quietMs, maxMs, scroll, ownSiteOnly, level < 3\)/);
+  assert.match(java, /if \(job\.lean && isHeavy\(request\)\) \{/);
+  // What a site needs is remembered past the app being closed, for a fortnight.
+  const web = read('app/src/main/assets/www/js/web.js');
+  assert.match(web, /const SITE_NEEDS_DAYS = 14;/);
+  assert.match(web, /known\.at = Date\.now\(\);\s+siteNeeds\.set\(host, known\);\s+keepSiteNeeds\(\);/);
 });
 
 await t('a build says how long it has been and how long it should be yet', async () => {

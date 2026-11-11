@@ -131,8 +131,23 @@ const patience = new Map();
  * chapters came only once nothing was kept out (its text from a server of
  * another name) is opened that way from then on; one whose pages came only
  * with a longer wait is given it. Two failed tries, each after the reader's
- * delay, made every chapter of a site three minutes. For this sitting. */
-const siteNeeds = new Map();   // host -> { open, level }
+ * delay, made every chapter of a site three minutes. Remembered for a
+ * fortnight, across the app being closed -- the first chapter of every
+ * sitting paid for it again -- and then learned afresh, as a site changes. */
+const SITE_NEEDS_KEY = 'grimoire.siteNeeds';
+const SITE_NEEDS_DAYS = 14;
+const siteNeeds = new Map();   // host -> { open, level, at }
+try {
+  const kept = JSON.parse(globalThis.localStorage?.getItem(SITE_NEEDS_KEY) || '{}');
+  for (const [host, need] of Object.entries(kept || {})) {
+    if (need && Date.now() - (need.at || 0) < SITE_NEEDS_DAYS * 86400000) {
+      siteNeeds.set(host, { open: !!need.open, level: Math.max(0, Math.min(3, need.level | 0)), at: need.at });
+    }
+  }
+} catch { /* nothing kept, or no storage: learned this sitting */ }
+const keepSiteNeeds = () => {
+  try { globalThis.localStorage?.setItem(SITE_NEEDS_KEY, JSON.stringify(Object.fromEntries(siteNeeds))); } catch { /* this sitting only */ }
+};
 const hostOf = (url) => {
   try { return new URL(url).host; } catch { return ''; }
 };
@@ -160,10 +175,15 @@ function learnSite(url, level) {
   // that was mid-retry when the site was learned.
   if (level >= 2 && !known.open) known.open = true;
   else if (level === 1 || fromStart) known.level = Math.max(known.level, Math.min(3, level));
+  known.at = Date.now();
   siteNeeds.set(host, known);
+  keepSiteNeeds();
 }
 /** What has been learned of a site (for the tests and the curious). */
-export const siteNeedsOf = (url) => ({ open: false, level: 0, ...siteNeeds.get(hostOf(url)) });
+export const siteNeedsOf = (url) => {
+  const { open = false, level = 0 } = siteNeeds.get(hostOf(url)) || {};
+  return { open, level };
+};
 
 /** A rendered page whose story had not arrived: ask more patiently next time.
  *  What the page did hold goes into the message -- a sign-in, an age check,
