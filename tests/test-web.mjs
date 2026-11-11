@@ -262,10 +262,12 @@ await t('the native side fetches only web addresses, and only when asked', () =>
   const entries = [...java.matchAll(/@JavascriptInterface\s+public \w+ (\w+)\(/g)].map((m) => m[1]);
   // (And shown, over the app, for a check the reader passes there.)
   // (And Pause & keep's: leave the page the renderer is on.)
-  assert.deepEqual(entries.sort(), ['fetch', 'release', 'render', 'showSite', 'stopAll']);
+  // (And a site's cookies forgotten, which only ever clears.)
+  assert.deepEqual(entries.sort(), ['fetch', 'forgetSite', 'release', 'render', 'showSite', 'stopAll']);
   assert.equal(java.match(/if \(!scheme\.equals\("http"\) && !scheme\.equals\("https"\)\)/g).length, 3);
-  // And no cookies kept past the app being closed.
+  // Cookies are the browser's own, kept as it keeps them: nothing of the app's own store.
   assert.ok(!/SharedPreferences|getSharedPreferences/.test(java));
+  assert.doesNotMatch(java, /removeAllCookies/);
 });
 
 await t('the screen is reached from Build, and only from there', () => {
@@ -1648,8 +1650,11 @@ await t('a site\'s browser check can be passed by showing the site', async () =>
   assert.match(java, /public void showSite\(final String id, final String address\)/);
   assert.match(java, /done\.setOnClickListener\(\(b\) -> finishShown\(\)\);/);
   assert.match(read('app/src/main/java/com/grimoire/ereader/MainActivity.java'), /if \(webBridge != null && webBridge\.closeShownIfOpen\(\)\) return;/);
-  // A passed check survives the reader's view being rebuilt, and cookies are on for every page.
-  assert.match(java, /if \(!cookiesCleared\) \{/);
+  // A passed check survives the app being closed, kept at once; and cookies are on for every page.
+  assert.match(java, /if \(at != null\) keepRenderedCookies\(at\);\s+\/\/[^\n]*\n\s+try \{ CookieManager\.getInstance\(\)\.flush\(\); \}/);
+  // A site's own can be forgotten, from the Website screen.
+  assert.match(java, /public void forgetSite\(final String address\)/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /el\('web-forget'\)\.onclick = \(\) => \{/);
   assert.match(java, /CookieManager\.getInstance\(\)\.setAcceptCookie\(true\);/);
   assert.ok(!/setBlockNetworkImage\(true\)/.test(java), 'images are blocked outright again');
   const app = read('app/src/main/assets/www/js/app.js');
@@ -1947,8 +1952,12 @@ await t('a chapter is taken as soon as its story is there and still, not when th
   assert.match(java, /if\(C&&window\.__gObs&&!window\.__gDirty&&now-window\.__gAt<1000\)/);
   // A chapter wanted for its words, with none yet, is watched on the same page up to 30 s,
   // not taken empty and loaded again -- unless the page answered with an error.
-  assert.match(java, /private static final long STORY_WAIT_MS = 30000;/);
-  assert.match(java, /boolean noStoryYet = textOnly && !scroll && storyLength < STORY_SOME && mainStatus < 400\s+&& now - startedAt < STORY_WAIT_MS;/);
+  // Up to 90 s while the page is still doing something; let go once it has been wholly
+  // still -- nothing changing, nothing of its own on the way -- for 20 s.
+  assert.match(java, /private static final long STORY_WAIT_MS = 90000;/);
+  assert.match(java, /private static final long STORY_GIVE_UP_MS = 20000;/);
+  assert.match(java, /boolean deadStill = still >= STORY_GIVE_UP_MS && pending == 0;/);
+  assert.match(java, /boolean noStoryYet = textOnly && !scroll && storyLength < STORY_SOME && mainStatus < 400\s+&& now - startedAt < STORY_WAIT_MS && !deadStill;/);
   assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\) \|\| noStoryYet\);/);
   // Pictures, fonts and video are not loaded by the unseen browser, but at the most patient try.
   assert.match(java, /final boolean skipHeavy = ownSiteOnly;/);
@@ -2040,6 +2049,94 @@ await t('a short chapter is known by its lines, and a comment section is no chap
   const comments = shape(`<div class="comment-list">${lines(80)}</div><div id="댓글">${lines(80)}</div>`);
   assert.equal(comments[7], '0');
   assert.match(java, /\|\| \(storyLength >= SHORT_STORY && storyLines >= SHORT_STORY_LINES\);/);
+});
+
+/* A contents page of N pages, five chapters each, newest first or oldest first. */
+const listPage = (page, last, newestFirst) => {
+  const total = last * 5;
+  const rows = Array.from({ length: 5 }, (_, i) => {
+    const n = newestFirst ? total - (page - 1) * 5 - i : (page - 1) * 5 + i + 1;
+    return `<li><a href="/serial/9/${n}">${n}화 이야기의 한 장</a></li>`;
+  }).join('');
+  return `<!doctype html><html><head><title>목록</title></head><body><header><a href="/">홈</a></header>
+<h1>이야기</h1><p>${'목록 설명 '.repeat(40)}</p><ul class="list">${rows}</ul><nav>
+${Array.from({ length: last }, (_, i) => `<a href="/serial/9?page=${i + 1}">${i + 1}</a>`).join('')}</nav></body></html>`;
+};
+const listSite = (last, newestFirst, asked) => async (url) => {
+  asked.push(url);
+  const page = Number(new URL(url).searchParams.get('page') || 1);
+  const html = listPage(page, last, newestFirst);
+  return { url, blob: new Blob([html]), type: 'text/html', rendered: false };
+};
+
+await t('"Check for new chapters" reads the list only as far as what the book has', async () => {
+  const has = (from, to) => new Set(Array.from({ length: to - from + 1 }, (_, i) => `https://list.example/serial/9/${from + i}`));
+  // Newest first: from the top, to the first page with a chapter the book has.
+  let asked = [];
+  let found = await web.findLinks(['https://list.example/serial/9'], { fetchPage: listSite(5, true, asked), listGap: 0, known: has(1, 20) });
+  assert.equal(asked.length, 2, asked.join(' '));
+  assert.ok(found.stoppedEarly);
+  assert.deepEqual([found.pagesRead, found.pagesTotal], [2, 5]);
+  assert.ok(['21', '25'].every((n) => found.links.some((l) => l.url.endsWith(`/${n}`))));
+  // Oldest first: its first page, then from its last back to one with a chapter the book has.
+  asked = [];
+  found = await web.findLinks(['https://list.example/serial/9'], { fetchPage: listSite(5, false, asked), listGap: 0, known: has(1, 20) });
+  assert.deepEqual(asked.map((u) => new URL(u).searchParams.get('page') || '1'), ['1', '5', '4']);
+  assert.ok(found.links.some((l) => l.url.endsWith('/25')));
+  // Nothing new at all: one page (newest first).
+  asked = [];
+  await web.findLinks(['https://list.example/serial/9'], { fetchPage: listSite(5, true, asked), listGap: 0, known: has(1, 25) });
+  assert.equal(asked.length, 1);
+  // Without it -- or where it cannot be told which way the list runs -- every page.
+  asked = [];
+  await web.findLinks(['https://list.example/serial/9'], { fetchPage: listSite(5, true, asked), listGap: 0 });
+  assert.equal(asked.length, 5);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /webState\.quickCheck = true;\s+await findWebLinks\(\);/);
+  assert.match(app, /known: known\?\.size \? known : null,/);
+});
+
+await t('a list\'s other pages are found as /page/N, or by its "next" link, onward only', () => {
+  const paged = web.pagesOf([
+    { url: 'https://wp.example/novel/x/page/2/', text: '2' }, { url: 'https://wp.example/novel/x/page/3/', text: '3' },
+    { url: 'https://wp.example/novel/x/1', text: 'Chapter 1' },
+  ], 'https://wp.example/novel/x/');
+  assert.deepEqual(paged.pages, ['https://wp.example/novel/x/page/2/', 'https://wp.example/novel/x/page/3/']);
+  // From page 2, page 1 is the bare address.
+  assert.deepEqual(web.pagesOf([{ url: 'https://wp.example/novel/x/page/3/', text: '3' }], 'https://wp.example/novel/x/page/2/').pages,
+    ['https://wp.example/novel/x/', 'https://wp.example/novel/x/page/3/']);
+  const page = (body, at = 'https://n.example/book/7') => web.linksOf(`<html><body>${body}</body></html>`, at);
+  // "다음" to the same page with another query (a cursor, not a page number): followed, and not a chapter.
+  const onward = page('<a href="/book/7/1">1화</a><a href="/book/7?after=ab12">다음</a>');
+  assert.equal(onward.older, 'https://n.example/book/7?after=ab12');
+  assert.ok(!onward.links.some((l) => l.url.endsWith('after=ab12')));
+  // "Next" to another chapter is not the list's next page; nor is a "›" back to page 1.
+  assert.equal(page('<a href="/book/7/2">Next</a>', 'https://n.example/book/7/1').older, null);
+  assert.equal(page('<a href="/book/7?page=1">›</a>', 'https://n.example/book/7?page=1').older, null);
+});
+
+await t('trouble with the connection gets one pause and one more try before the download stops there', async () => {
+  const said = [];
+  let fails = 2;
+  const site = async (url, options) => {
+    if (url.endsWith('chapter-2') && fails > 0) { fails -= 1; throw new Error('the site took too long to answer'); }
+    return fakeFetch(url, options);
+  };
+  const parsed = await web.readPages([1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` })), {
+    fetchPage: site, gap: 0, pictures: false, patience: { retry: 0, refresh: [0], backoff: [0], cool: 30 },
+    onProgress: (fraction, done, total, note, activity) => { if (activity) said.push(activity); },
+  });
+  assert.equal(parsed.chapters.length, 3);
+  assert.ok(said.some((a) => a.kind === 'wait' && a.why === 'connection trouble'));
+  // Not for a page that is not there, nor a site saying no.
+  assert.equal(web.connectionTrouble(new Error('the site took too long to answer')), true);
+  assert.equal(web.connectionTrouble(new Error('the site answered 503')), true);
+  assert.equal(web.connectionTrouble(new Error('that page does not exist (404)')), false);
+  assert.equal(web.connectionTrouble(new Error('the site turned the request away (429, too many requests)')), false);
+  assert.equal(web.connectionTrouble(new Error('the site only lets a browser in (it is behind a bot check), so it refused the download')), false);
+  assert.equal(web.PATIENCE.cool, 180000);
+  // Without the app's bridge, forgetting a site's cookies is said not to have happened.
+  assert.equal(web.forgetSite('https://x.example/'), false);
 });
 
 await t('a build says how long it has been and how long it should be yet', async () => {

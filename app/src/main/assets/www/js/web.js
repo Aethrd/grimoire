@@ -235,6 +235,15 @@ function renderedHere(url) {
 /** Whether this build can show a site, to pass its check by hand. */
 export const canOpenSite = () => typeof window.GrimoireWeb?.showSite === 'function';
 
+/** A site's cookies forgotten (they are otherwise kept from launch to launch,
+ *  as a browser keeps them): it sees someone new, and a check it puts up is
+ *  passed again. False where this copy of the app cannot. */
+export function forgetSite(url) {
+  if (typeof window.GrimoireWeb?.forgetSite !== 'function') return false;
+  window.GrimoireWeb.forgetSite(url);
+  return true;
+}
+
 /** An error that is a site's browser check, which showing the site can pass. */
 export const wantsCheck = (error) => /bot check|browser check|only lets a browser/i
   .test(String(error?.message || error || ''));
@@ -625,10 +634,13 @@ export function linksOf(html, pageUrl) {
   const list = wordpress && isWordPressList(doc, pageUrl);
   // A list that goes on over numbered pages: those pages, not chapters.
   const paging = list ? null : pagesOf(links, pageUrl);
+  // No numbered pages: a "next" to follow, a page at a time, as WordPress's "older".
+  const onward = list ? olderPostsOf(doc, pageUrl) : paging ? null : nextListOf(doc, pageUrl);
   return {
-    links: paging ? links.filter((link) => !paging.links.has(link.url)) : links,
+    links: paging ? links.filter((link) => !paging.links.has(link.url))
+      : onward ? links.filter((link) => link.url !== onward) : links,
     title: pageTitle(doc), author: pageAuthor(doc), cover: pageCover(doc, base),
-    wordpress, list, older: list ? olderPostsOf(doc, pageUrl) : null,
+    wordpress, list, older: onward,
     pages: paging ? paging.pages : [],
   };
 }
@@ -675,7 +687,7 @@ export function pagesOf(links, pageUrl) {
   }
   // The key most of the row uses.
   const [key, entry] = [...found].sort((a, b) => b[1].links.size - a[1].links.size)[0] || [];
-  if (!key) return null;
+  if (!key) return pathPagesOf(links, here);
   const current = Number(here.searchParams.get(key)) || 1;
   const last = Math.min(entry.highest, MAX_LIST_PAGES);
   const pages = [];
@@ -687,6 +699,70 @@ export function pagesOf(links, pageUrl) {
     pages.push(url.href);
   }
   return pages.length ? { pages, links: entry.links } : null;
+}
+
+/**
+ * Numbered pages in the address's path rather than its query -- /novel/x,
+ * /novel/x/page/2/, /novel/x/page/3/ -- as WordPress and many others write
+ * them. As pagesOf.
+ */
+function pathPagesOf(links, here) {
+  const PAGED = /^(.*?)\/page\/(\d+)\/?$/;
+  const base = here.pathname.replace(PAGED, '$1').replace(/\/+$/, '');
+  let highest = 0;
+  const leading = new Set();
+  for (const link of links) {
+    let url;
+    try { url = new URL(link.url); } catch { continue; }
+    if (url.origin !== here.origin) continue;
+    const match = PAGED.exec(url.pathname);
+    if (!match || match[1].replace(/\/+$/, '') !== base) continue;
+    const number = Number(match[2]);
+    if (!Number.isInteger(number) || number < 1) continue;
+    highest = Math.max(highest, number);
+    leading.add(link.url);
+  }
+  if (!highest) return null;
+  const current = Number(PAGED.exec(here.pathname)?.[2]) || 1;
+  const pages = [];
+  for (let number = 1; number <= Math.min(highest, MAX_LIST_PAGES); number += 1) {
+    if (number === current) continue;
+    pages.push(`${here.origin}${base}${number === 1 ? '/' : `/page/${number}/`}${here.search}`);
+  }
+  return pages.length ? { pages, links: leading } : null;
+}
+
+/* The link on a contents page to its next page, where it gives no row of
+ * numbered pages: "다음", "Next", "›", or marked rel="next". Only one that
+ * stays on the same page with another query, or goes to /page/N of it:
+ * "next" on a chapter's page is the next chapter, never this. */
+const NEXT_LIST = /^[\s<«‹]*(다음|다음\s*페이지|다음\s*목록|next|next\s*page|older|older\s*posts|›|»|>|>>)[\s>»›→]*$/i;
+function nextListOf(doc, pageUrl) {
+  let here;
+  try { here = new URL(pageUrl); } catch { return null; }
+  const base = here.pathname.replace(/\/page\/\d+\/?$/, '').replace(/\/+$/, '');
+  const candidates = [...doc.querySelectorAll('link[rel="next"][href], a[rel="next"][href]'),
+    ...[...doc.querySelectorAll('a[href]')].filter((anchor) => NEXT_LIST.test(tidy(anchor.textContent)))];
+  for (const found of candidates) {
+    let url;
+    try { url = new URL(found.getAttribute('href'), pageUrl); } catch { continue; }
+    url.hash = '';
+    if (url.origin !== here.origin || url.href === here.href) continue;
+    const path = url.pathname.replace(/\/page\/\d+\/?$/, '').replace(/\/+$/, '');
+    if (path !== base) continue;
+    // Onward only: a "›" on the last page that leads to itself, or to page 1, is not.
+    const there = pageNumberOf(url);
+    if (there !== null && there <= (pageNumberOf(here) ?? 1)) continue;
+    return url.href;
+  }
+  return null;
+}
+
+/** The page number an address of a list gives, in its query or as /page/N; null if none. */
+function pageNumberOf(url) {
+  const key = [...url.searchParams.keys()].find((name) => PAGE_KEYS.includes(name.toLowerCase()));
+  const number = Number(key ? url.searchParams.get(key) : /\/page\/(\d+)\/?$/.exec(url.pathname)?.[1]);
+  return Number.isInteger(number) && number > 0 ? number : null;
 }
 
 /** Who wrote it, where the page says so in a way meant to be read by
@@ -1094,6 +1170,12 @@ export async function findLinks(addresses, {
   patience: startPatience = 0,
   // A newer search has begun: this one asks for no further page.
   shouldStop = null,
+  /* "Check for new chapters": the addresses of the chapters the book has.
+   * The list is read only as far as it must be: newest first, to the first
+   * page that shows one of them; oldest first, from its last page back to
+   * one that does. Where it cannot be told which way the list runs, every
+   * page is read. */
+  known = null,
 } = {}) {
   const links = [];
   const seen = new Map();
@@ -1110,6 +1192,9 @@ export async function findLinks(addresses, {
   const visited = new Set();
   let shut = false;   // a site that blocked the connection: nothing more is asked of it
   const stopped = () => typeof shouldStop === 'function' && !!shouldStop();
+  let stoppedEarly = false;
+  let pagesRead = 0;
+  let pagesTotal = 0;
   for (const [at, address] of addresses.entries()) {
     if (shut || stopped()) break;
     /* A WordPress list of posts goes on, a page at a time, to the oldest
@@ -1173,7 +1258,28 @@ export async function findLinks(addresses, {
         }
         if (pages === 1) for (const page of found.pages || []) if (!visited.has(page)) { queue.push(page); numbered = true; }
         if (numbered && !total) total = 1 + queue.length;
-        next = found.list ? found.older : nextOf(queue);
+        let enough = false;
+        if (known) {
+          const has = found.links.some((link) => known.has(link.url));
+          if (pages === 1) {
+            const named = found.links.filter((link) => !link.chrome && numberIn(link.text) !== null);
+            const newest = found.list ? true : named.length >= 3 ? newestFirst(named) : null;
+            if (newest === null) known = null;     // which way it runs is not to be told
+            else if (newest) enough = has;
+            else queue.reverse();                  // its newest at the end: from there back
+          } else {
+            enough = has;
+          }
+        }
+        // Numbered pages first; with none, a "next" followed a page at a time.
+        next = found.list ? found.older : (nextOf(queue) || (numbered ? null : found.older));
+        if (enough) {
+          stoppedEarly = !!next || queue.length > 0;
+          queue.length = 0;
+          next = null;
+        }
+        pagesRead += 1;
+        pagesTotal = Math.max(pagesTotal, total || pages);
         // (The pause before the next is the pacer's.)
       } catch (error) {
         // The first page failing is the address failing; a later one of a
@@ -1189,7 +1295,7 @@ export async function findLinks(addresses, {
   // The pages of the list themselves are not chapters.
   const listed = links.filter((link) => !visited.has(link.url));
   onProgress?.(1, '');
-  return { links: listed, title, author, cover, failed, wordpress, newestFirstList };
+  return { links: listed, title, author, cover, failed, wordpress, newestFirstList, stoppedEarly, pagesRead, pagesTotal };
 }
 
 /** Whether a contents page shows any chapters yet: three or more links that
@@ -1966,6 +2072,7 @@ export async function readPages(links, {
     let waits = null;
     let tries = 0;
     let uncounted = 0;
+    let cooled = false;
     while (true) {
       if (at > stopAt) throw new Error('stopped');
       await whenOnScreen();
@@ -2008,7 +2115,20 @@ export async function readPages(links, {
             : tooMany(error) ? [...wait.refresh]
             : [...wait.backoff];
         }
-        if (tries >= waits.length) break;
+        if (tries >= waits.length) {
+          /* Its tries spent on trouble with the connection: before the
+           * download stops here, a pause of a few minutes and one more try --
+           * the same chapter, nothing skipped. Not for a site saying no. */
+          if (cooled || !connectionTrouble(error)) break;
+          cooled = true;
+          const cool = Number(wait.cool) || 0;
+          onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
+            `connection trouble — one more try at ${nameOf(link, at)} after a pause…`,
+            { kind: 'wait', name: nameOf(link, at), until: Date.now() + cool, why: 'connection trouble' });
+          await napUnless(cool, pausing);
+          if (pausing()) throw PAUSED();
+          waits.push(0);
+        }
         onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
           `${nameOf(link, at)}: ${error?.message || 'could not be read'} — trying again`,
           { kind: 'failed', name: nameOf(link, at), reason: shortReason(error) });
@@ -2090,7 +2210,16 @@ export const PATIENCE = {
   retry: 1000,                          // a page that is not there: once more
   refresh: [60000, 180000, 600000],     // a site saying "too many requests": slowed right down
   backoff: [1500, 4000, 8000, 15000, 30000],   // anything else: longer each time
+  cool: 180000,                         // the connection, once its tries are spent: one more after this
 };
+
+/** Trouble on the way to the site -- the phone offline a moment, the site's
+ *  server down or slow -- rather than the site saying no, or a page not
+ *  there: what a pause and one more try can mend. */
+export const connectionTrouble = (error) => !error?.notLoaded && !blocked(error) && !tooMany(error) && !gone(error)
+  && !wantsCheck(error)
+  && /took too long|could not be found|is the phone online|could not be opened|connection|network|timed? ?out|unreachable|reset|refused to connect|answered 5\d\d|\b50[0-4]\b/i
+    .test(String(error?.message || error || ''));
 
 /** A site that has blocked the connection outright (Cloudflare's "Sorry, you
  *  have been blocked"): every request now only keeps the block up longer, so

@@ -110,8 +110,11 @@ public class WebBridge {
     /** Characters of story below which a text-only chapter is taken to have none yet. */
     private static final int STORY_SOME = 200;
     /** How long a text-only chapter with no story yet is watched, on the same page, before
-     *  it is let go -- and only then asked for again: a reload is a request, and a delay. */
-    private static final long STORY_WAIT_MS = 30000;
+     *  it is let go -- and only then asked for again: a reload is a request, and a delay.
+     *  Watched while the page is still doing something; let go sooner once it has gone
+     *  wholly still (STORY_GIVE_UP_MS), when nothing more is coming of it. */
+    private static final long STORY_WAIT_MS = 90000;
+    private static final long STORY_GIVE_UP_MS = 20000;
     private static final long STORY_STILL_PATIENT_MS = 2000;
     /** How long a page whose content is plainly there -- a list with its
      *  chapters, a chapter with its story -- must stay still. The full quiet
@@ -144,20 +147,13 @@ public class WebBridge {
         File[] old = dir().listFiles();
         if (old != null) for (File file : old) //noinspection ResultOfMethodCallIgnored
             file.delete();
-        // Nor are the cookies the renderer was given last time (see render) --
-        // once a launch, not each time the reader's view is rebuilt: a check
-        // passed an hour ago is what lets the renderer in still.
-        if (!cookiesCleared) {
-            cookiesCleared = true;
-            try {
-                CookieManager.getInstance().removeAllCookies(null);
-            } catch (Exception ignored) {
-                // No WebView provider yet: then there are none to clear either.
-            }
-        }
+        /* The sites' cookies are kept from one launch to the next, as a phone's
+         * browser keeps them: a check the reader passed is passed still, until
+         * the site says it has run out, and the site sees the reader it saw
+         * before rather than someone new each time the app is opened. Cleared
+         * for a site with forgetSite. */
     }
 
-    private static boolean cookiesCleared;
 
     private File dir() {
         File dir = new File(MainActivity.handoffDir(activity), "web");
@@ -393,6 +389,8 @@ public class WebBridge {
         WebView view = shownView;
         String at = view != null && view.getUrl() != null ? view.getUrl() : null;
         if (at != null) keepRenderedCookies(at);
+        // Kept now, not whenever the browser next saves: the app may be closed first.
+        try { CookieManager.getInstance().flush(); } catch (Exception ignored) { /* kept later */ }
         closeShown();
         if (id == null) return;
         JSONObject result = new JSONObject();
@@ -435,6 +433,44 @@ public class WebBridge {
         main.post(() -> {
             Rendering job = current;
             if (job != null) job.fail("paused");
+        });
+    }
+
+    /** A site's cookies forgotten -- the browser's and the plain fetches' -- so it sees
+     *  someone new: for a site stuck on a check, or one the reader would rather. */
+    @JavascriptInterface
+    public void forgetSite(final String address) {
+        main.post(() -> {
+            try {
+                URI uri = new URI(address);
+                String host = uri.getHost();
+                if (host == null) return;
+                CookieManager manager = CookieManager.getInstance();
+                String site = siteOf(host);
+                for (String place : new String[]{host, site}) {
+                    String header = manager.getCookie("https://" + place);
+                    if (header == null) continue;
+                    for (String part : header.split(";\\s*")) {
+                        int eq = part.indexOf('=');
+                        if (eq <= 0) continue;
+                        String name = part.substring(0, eq).trim();
+                        for (String scheme : new String[]{"https://", "http://"}) {
+                            manager.setCookie(scheme + place, name + "=; Max-Age=0; Path=/");
+                            manager.setCookie(scheme + place, name + "=; Max-Age=0; Path=/; Domain=." + site);
+                        }
+                    }
+                }
+                manager.flush();
+                // And the plain fetches' copies, kept by the address they came with.
+                java.net.CookieStore store = cookies.getCookieStore();
+                for (URI kept : store.getURIs().toArray(new URI[0])) {
+                    String keptHost = kept.getHost();
+                    if (keptHost == null || !keptHost.endsWith(site)) continue;
+                    for (HttpCookie cookie : store.get(kept).toArray(new HttpCookie[0])) store.remove(kept, cookie);
+                }
+            } catch (Exception ignored) {
+                // Nothing to forget, or nothing that would be.
+            }
         });
     }
 
@@ -839,8 +875,10 @@ public class WebBridge {
                  * loaded again -- which asks the site again, after the whole delay. Not a
                  * page that answered with an error: that has nothing coming. A chapter
                  * with pictures wanted may be all pictures, and is not held so. */
+                // Gone wholly still -- nothing changing, nothing of its own on the way: given up.
+                boolean deadStill = still >= STORY_GIVE_UP_MS && pending == 0;
                 boolean noStoryYet = textOnly && !scroll && storyLength < STORY_SOME && mainStatus < 400
-                        && now - startedAt < STORY_WAIT_MS;
+                        && now - startedAt < STORY_WAIT_MS && !deadStill;
                 boolean holding = !there && (waiting || (!scroll && loading) || noStoryYet);
                 boolean busy = pending > 0 || holding;
                 /* A chapter is taken once its story is there and has stopped growing --

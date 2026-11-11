@@ -8572,6 +8572,12 @@ async function findWebLinks() {
   }
 
   const button = el('web-find');
+  const quick = webState.quickCheck;
+  webState.quickCheck = false;
+  const known = quick && webState.updating != null
+    ? new Set((await store.byIndex('chapters', 'bookId', webState.updating)).map((chapter) => chapter.from).filter(Boolean))
+    : null;
+  let readPart = null;   // { read, of } when the list was read only so far
   const mine = ++webSearch;
   const current = () => mine === webSearch;
   holdSearch(true);
@@ -8591,6 +8597,7 @@ async function findWebLinks() {
         // The pages of a long list are asked for at the same pace as chapters.
         listGap: webDelay(), listJitter: webJitter(),
         shouldStop: () => !current(),
+        known: known?.size ? known : null,
         onProgress: (fraction, address, page, pages) => {
           if (address && current()) {
             webNote(page > 1 ? `Reading page ${page}${pages ? ` of ${pages}` : ''} of the list…` : `Reading ${webWhere(address)}…`);
@@ -8619,6 +8626,7 @@ async function findWebLinks() {
       if (found.failed.length) {
         toast(`${found.failed.length} of those pages could not be read: ${found.failed[0].reason}`, 6000);
       }
+      if (found.stoppedEarly) readPart = { read: found.pagesRead, of: found.pagesTotal };
     }
 
     const likely = web.likelyChapters(links, addresses[0]);
@@ -8650,9 +8658,15 @@ async function findWebLinks() {
     el('web-filter').value = '';
     const update = await markWhatTheBookHas(webState.links);
     if (update) {
-      webNote(update.fresh
+      // Read only as far as it took: said, with how to read the rest.
+      const part = readPart
+        ? ` Only ${readPart.read}${readPart.of > readPart.read ? ` of ${readPart.of}` : ''} page${readPart.read === 1 ? '' : 's'} of the list ${readPart.read === 1 ? 'was' : 'were'} read, as far as the chapters it already has. Tap Find links to read every page.`
+        : '';
+      webNote((update.fresh
         ? `${update.fresh} chapter${update.fresh === 1 ? '' : 's'} not in “${library.displayTitle(update.book)}” yet, ticked to add to its end. The ${update.had} it has are marked “in book”.`
-        : `“${library.displayTitle(update.book)}” has every chapter listed (${update.had}). If it should have more, Search for more.`);
+        : readPart
+          ? `No new chapters for “${library.displayTitle(update.book)}”.`
+          : `“${library.displayTitle(update.book)}” has every chapter listed (${update.had}). If it should have more, Search for more.`) + part);
     }
     drawWebList();
     paintResume();
@@ -8690,6 +8704,9 @@ async function checkNewChapters(book) {
     return;
   }
   el('web-address').value = book.webSources.join('\n');
+  // Only as much of the list as it takes to reach what the book has (see
+  // findLinks' known); Find links again reads every page.
+  webState.quickCheck = true;
   await findWebLinks();
 }
 
@@ -8756,6 +8773,8 @@ async function openSiteToPass() {
 function paintMore() {
   const open = el('web-open');
   if (open) open.hidden = !web.canOpenSite() || !web.addressesIn(el('web-address').value).length;
+  const forget = el('web-forget');
+  if (forget) forget.hidden = !open || open.hidden;
   const button = el('web-more');
   if (!button) return;
   button.hidden = !webState.sources.length || el('web-direct').checked || !web.available();
@@ -8979,6 +8998,11 @@ function wireWeb() {
   el('web-find').onclick = findWebLinks;
   el('web-more').onclick = searchMore;
   el('web-open').onclick = openSiteToPass;
+  el('web-forget').onclick = () => {
+    const address = web.addressesIn(el('web-address').value)[0];
+    if (!address || !web.forgetSite(address)) return;
+    toast(`Forgot ${new URL(address).host}'s cookies. A check it puts up will need passing again.`, 5000);
+  };
   el('web-address').addEventListener('input', paintMore);
   el('web-go').onclick = addWebToBuild;
   // Remembered: a site that wants a slower pace wants it every time.
