@@ -164,6 +164,18 @@ await t('done, the queue says so and lets the screen go', async () => {
   assert.equal(document.getElementById('build-queue-go').disabled, true);
 });
 
+await t("a queued book's line is said again in place, not the list drawn anew, while one downloads", async () => {
+  const app = (await import('node:fs')).readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  const track = app.slice(app.indexOf('function trackJob('), app.indexOf('function paintJobLine('));
+  assert.ok(!/paintQueue\(\)/.test(track), 'the list is drawn anew at every step of a download');
+  assert.match(track, /paintJobLine\(job\);/);
+  // The whole row is the tap; a book under way says why it does not open.
+  assert.match(app, /row\.onclick = \(event\) => \{\s+if \(event\.target\.closest\('button'\)\) return;/);
+  assert.match(app, /toast\('Downloading now — once it is done, change its name or cover on the shelf\.'\)/);
+  // A slip in showing progress never stops a download.
+  assert.match(app, /try \{ trackJob\(job, under, message, at, now, counts\); \} catch/);
+});
+
 await t('two settings saved at once both stay saved', async () => {
   await Promise.all([store.saveSettings({ testOne: 1 }), store.saveSettings({ testTwo: 2 }), store.saveSettings({ testThree: 3 })]);
   const kept = await store.get('settings', 'app');

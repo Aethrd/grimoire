@@ -6641,7 +6641,10 @@ async function runJob(job) {
     const { book, failed } = await build.build({
       parts, tag: job.id, title: before ? library.displayTitle(before) : job.name,
       author: job.author || undefined, cover: null, shouldPause: () => under.pausing,
-      onProgress: (message, fraction, at, total, now, counts) => trackJob(job, under, message, at, now, counts),
+      // Shown, never in the way: a slip in showing it does not stop the download.
+      onProgress: (message, fraction, at, total, now, counts) => {
+        try { trackJob(job, under, message, at, now, counts); } catch (error) { console.warn('queue progress', error); }
+      },
     });
     // The book so far, carried on: the shorter one goes to the Bin.
     if (before && before.id !== book.id) await library.binBooks([before.id]).catch(() => {});
@@ -6736,7 +6739,18 @@ function trackJob(job, under, message, at, now, counts) {
   const count = Number.isFinite(run.total) ? `${run.done} of ${run.total}${left}` : '';
   finish.say(`Queue · ${job.name}`, chapters && Number.isInteger(at) ? Math.min(1, (before + (run.delays[at] ? counts?.done ?? 0 : 0)) / chapters) : null, count);
   job.progress = count;
-  paintQueue();
+  /* Its own line, said again in place: the list is not drawn anew at every
+   * step of a download -- a tap that landed on a row just replaced went
+   * nowhere, and with a book downloading the list could hardly be tapped. */
+  paintJobLine(job);
+}
+
+/** One queued book's line, said again where it is; and the queue's heading. */
+function paintJobLine(job) {
+  const row = [...(el('build-queue-list')?.children || [])].find((each) => each.dataset.job === job.id);
+  const line = row?.querySelector('small');
+  if (line) line.textContent = jobState(job);
+  paintQueueHead();
 }
 
 /** How long the queue has yet to go: each book's chapters at its site's pace, sites side by side up to "at once". */
@@ -6781,11 +6795,10 @@ function jobState(job) {
   }
 }
 
-/** The queue on Build's index: each book and what it is doing, the settings all share, start or pause. */
-function paintQueue() {
+/** The queue's heading: how its books stand, the time to go, and start or pause. */
+function paintQueueHead() {
   const box = el('build-queue');
   if (!box) return;
-  box.hidden = !webQueue.length;
   const count = (status) => webQueue.filter((job) => job.status === status).length;
   const running = count('running');
   const waiting = count('queued') + count('retry');
@@ -6805,6 +6818,15 @@ function paintQueue() {
   const go = el('build-queue-go');
   go.textContent = queueState.running ? 'Pause all' : (count('paused') ? 'Resume' : 'Start queue');
   go.disabled = !queueState.running && !webQueue.some((job) => ['queued', 'retry', 'paused'].includes(job.status));
+}
+
+/** The queue on Build's index: each book and what it is doing, the settings all share, start or pause. */
+function paintQueue() {
+  const box = el('build-queue');
+  if (!box) return;
+  box.hidden = !webQueue.length;
+  paintQueueHead();
+  const count = (status) => webQueue.filter((job) => job.status === status).length;
   // At once: 1, 2 or 3 books side by side.
   const once = el('build-queue-once');
   if (once) {
@@ -6850,15 +6872,19 @@ function paintQueue() {
   webQueue.forEach((job, at) => {
     const row = document.createElement('li');
     row.dataset.status = job.status;
+    row.dataset.job = job.id;
     row.innerHTML = `<span class="col"><b>${escapeText(shortenMiddle(job.name))}</b>`
       + `<small class="muted">${escapeText(jobState(job))}</small></span>`;
-    // Not yet started: tapped, it opens -- title, author, cover, chapters.
-    if (!job.bookId && job.status !== 'running' && job.status !== 'done') {
-      const col = row.querySelector('.col');
-      col.classList.add('editable');
-      col.setAttribute('role', 'button');
-      col.onclick = () => openJobEdit(job.id);
-    }
+    /* Not yet started: tapped anywhere but its buttons, it opens -- title,
+     * author, cover, chapters. Started, it is a book on the shelf: said so. */
+    const editable = !job.bookId && job.status !== 'running' && job.status !== 'done';
+    if (editable) row.querySelector('.col').classList.add('editable');
+    row.onclick = (event) => {
+      if (event.target.closest('button')) return;
+      if (editable) openJobEdit(job.id);
+      else if (job.status === 'running') toast('Downloading now — once it is done, change its name or cover on the shelf.');
+      else if (job.bookId) toast('Begun already — its book is on the shelf, to change there.');
+    };
     const move = (by) => () => { webQueue.splice(at + by, 0, ...webQueue.splice(at, 1)); saveQueue(); renderWorkshop(); };
     if (job.status === 'running') {
       row.appendChild(word('Pause', () => { const under = queueJobs.get(job.id); if (under) under.pausing = true; }));
@@ -7129,7 +7155,10 @@ function renderWorkshop() {
   if (!buildTitleTouched) el('build-title').value = suggested;
   el('build-eyebrow').textContent = parts.length
     ? (el('build-title').value || suggested) : 'Join files into one';
-  if (buildIndex) el('build-eyebrow').textContent = 'Every novel: building and queued';
+  if (buildIndex) {
+    const editing = editingJob && webQueue.find((job) => job.id === editingJob);
+    el('build-eyebrow').textContent = editing ? `Queued · ${editing.name}` : 'Every novel: building and queued';
+  }
   // Follows the first part as parts are added and moved.
   paintBuildCover();
 
