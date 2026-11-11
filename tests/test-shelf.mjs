@@ -1232,9 +1232,12 @@ t('the strip offers no share and no text-to-speech', () => {
 });
 
 
-t('back on the shelf with a build under way, books are picked for it in order', () => {
-  // Arriving from Build with something in it starts picking; leaving ends it.
-  assert.match(app, /if \(name === 'library' && cameFrom === 'workshop' && !build\.isEmpty\(\)\) startPicking\(\);/);
+t('books are picked for a build on the shelf, in order, only when asked for', () => {
+  // Build's "Add books from the shelf…" starts picking; the Shelf tab alone never does.
+  assert.match(app, /if \(name === 'library' && pickNext\) \{ pickNext = false; startPicking\(\); \}/);
+  assert.match(app, /el\('build-from-shelf'\)\.onclick = \(\) => \{ pickNext = true; show\('library'\); \};/);
+  assert.doesNotMatch(app, /cameFrom === 'workshop' && !build\.isEmpty\(\)\) startPicking/);
+  assert.equal((app.match(/startPicking\(\)/g) || []).length, 2);
   assert.match(app, /else if \(name !== 'library'\) endPicking\(\);/);
   // A tap, or a press, picks rather than opens.
   assert.match(app, /function onTileTap\(book\) \{\n  if \(buildPicks\) \{ pickTile\(book\); return; \}/);

@@ -126,9 +126,11 @@ async function show(name, { replace = false } = {}) {
   // Leaving the library ends selection: the bar refers to books you can no
   // longer see.
   if (name !== 'library') clearSelection();
-  /* Back to the shelf from a build with something in it: the shelf becomes
-   * the place to pick what goes next. Anywhere else, picking is over. */
-  if (name === 'library' && cameFrom === 'workshop' && !build.isEmpty()) startPicking();
+  /* The shelf becomes the place to pick what goes in Build only when asked
+   * for, with Build's "Add books from the shelf…": going back to the shelf
+   * with a build in it -- mid-download, say, to read -- is going to the shelf.
+   * Anywhere else, picking is over. */
+  if (name === 'library' && pickNext) { pickNext = false; startPicking(); }
   else if (name !== 'library') endPicking();
   // The tab bar is app furniture; it has no business over a page of prose.
   document.body.dataset.view = name;
@@ -613,6 +615,7 @@ function onTileHold(book) {
  * again takes it out, and the numbers after it close up.
  */
 let buildPicks = null;   // { ids: [] } while books are being picked
+let pickNext = false;    // Build's "Add books from the shelf…" was tapped
 
 function startPicking() {
   if (buildPicks) return;
@@ -6082,6 +6085,9 @@ function liftProgress() {
 
 function paintBuildFoot() {
   liftProgress();
+  // Not while it builds: what it is building is settled.
+  const fromShelf = el('build-from-shelf');
+  if (fromShelf) fromShelf.hidden = !!buildRun;
   const go = el('build-go');
   const clear = el('build-clear');
   if (!go || !clear) return;
@@ -9171,6 +9177,7 @@ function wireWeb() {
 
   // Reached from Build, and only from there: what is chosen becomes a part.
   el('build-web').onclick = () => show('web');
+  el('build-from-shelf').onclick = () => { pickNext = true; show('library'); };
 }
 
 /* ── global wiring ────────────────────────────────────────────────────── */

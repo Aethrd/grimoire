@@ -2649,3 +2649,7 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .glossary-row .glossary-remove { flex: none; min-width: 36px; min-height: 36px; border-radius: 50%; color: var(--muted); }
 .glossary-row.fresh { background: var(--surface); }
 .glossary-empty { padding: 16px 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+/* Below the parts: books from the shelf, picked there. */
+.build-from-shelf { display: block; margin: 12px 0 4px; }
+.build-from-shelf[hidden] { display: none; }
