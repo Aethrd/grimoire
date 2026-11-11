@@ -391,6 +391,8 @@
             </span>
           </div>
         </div>
+        <!-- Where it is filed once built: the folder the shelf was open at when it was queued, or another. -->
+        <div id="job-folder"></div>
         <div class="field"><span>Chapters</span>
           <p class="muted job-chapters" id="job-chapters"></p>
           <button class="btn ghost" id="job-chapters-edit">Change chapters…</button>
@@ -533,6 +535,17 @@
         <label class="field"><span>Title</span>
           <input class="query" id="web-title" type="text" autocomplete="off" placeholder="What the book will be called">
         </label>
+        <div class="field build-cover-field" id="web-cover-field">
+          <span>Cover</span>
+          <div class="details-head">
+            <span class="details-cover empty" id="web-cover"><span>No cover yet</span></span>
+            <span class="col">
+              <button class="btn ghost" id="web-cover-site" aria-pressed="true">The site's cover</button>
+              <button class="btn ghost" id="web-cover-pick" aria-pressed="false">Choose a picture…</button>
+              <small class="muted" id="web-cover-note"></small>
+            </span>
+          </div>
+        </div>
         <input class="query" id="web-filter" type="search" autocomplete="off"
                placeholder="Show only links containing…">
         <label class="web-rate"><span>Delay between pages</span>

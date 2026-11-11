@@ -102,6 +102,14 @@ await t('a queued book not yet started opens to be named, as a book in Build is'
   title.dispatchEvent(new window.Event('input'));
   await new Promise((r) => setTimeout(r, 50));
   assert.equal((await store.settings()).webQueue[3].name, 'C, renamed');
+  // Its folder, picked as a book's is: a new one, typed.
+  const folders = document.getElementById('job-folder');
+  [...folders.querySelectorAll('.chip')].find((chip) => /New folder/.test(chip.textContent)).click();
+  const named = folders.querySelector('input');
+  named.value = 'Novels/Korean';
+  named.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal((await store.settings()).webQueue[3].folder, 'Novels/Korean');
   // Its chapters on the Website screen, Queue the button; saved back to it, in its place.
   document.getElementById('job-chapters-edit').click();
   await new Promise((r) => setTimeout(r, 50));
@@ -109,11 +117,30 @@ await t('a queued book not yet started opens to be named, as a book in Build is'
   assert.equal(document.getElementById('web-go').hidden, true);
   assert.match(document.getElementById('web-queue').textContent, /^Queue 4$/);
   assert.equal(document.getElementById('web-list').children.length, 4);
+  // Its cover, chosen here too: a picture of the reader's own goes with it to the queue.
+  assert.equal(document.getElementById('web-cover-field').closest('[hidden]'), null);
+  assert.match(document.getElementById('web-cover-note').textContent, /gave no picture/);
+  const image = window.Image;
+  window.Image = globalThis.Image = class { set src(v) { this.naturalWidth = 60; this.naturalHeight = 90; setTimeout(() => this.onload?.(), 0); } };
+  const click = window.HTMLInputElement.prototype.click;
+  window.HTMLInputElement.prototype.click = function pick() {
+    if (this.type !== 'file') return click.call(this);
+    Object.defineProperty(this, 'files', { value: [new window.File([new Uint8Array(3000).fill(7)], 'c.png', { type: 'image/png' })] });
+    this.onchange();
+  };
+  document.getElementById('web-cover-pick').click();
+  await new Promise((r) => setTimeout(r, 80));
+  window.HTMLInputElement.prototype.click = click;
+  window.Image = globalThis.Image = image;
+  assert.ok(document.querySelector('#web-cover img'), 'the picture chosen is not shown');
+  assert.equal(document.getElementById('web-cover-pick').getAttribute('aria-pressed'), 'true');
+  assert.match(document.getElementById('web-cover-note').textContent, /Your own picture/);
   document.getElementById('web-queue').click();
   await new Promise((r) => setTimeout(r, 80));
   const kept = (await store.settings()).webQueue;
   assert.equal(kept.length, 4, 'changed in its place, not queued again');
   assert.deepEqual([kept[3].name, kept[3].links.length, kept[3].status], ['C, renamed', 4, 'queued']);
+  assert.match(kept[3].coverData || '', /^data:image\/png;base64,/);
   openC();
   // Back, top left: every novel again.
   document.getElementById('build-minimise').click();
@@ -144,6 +171,9 @@ await t('started, it builds every book: two at once, never two from one site', a
     assert.ok(book, `no book ${name}`);
     assert.equal(book.chapters, name === 'B' ? 3 : 4);
   }
+  // Each filed where it was asked to be: C in its folder, the rest as they were queued.
+  assert.equal(books.find((each) => each.title === 'C, renamed').folder, 'Novels/Korean');
+  assert.equal(books.find((each) => each.title === 'A').folder || '', '');
   // marumaru109 and marumaru110 are one site: its requests never overlap, and
   // each starts no sooner than the delay after the one before it ended.
   const maru = asked.filter((each) => each.site === 'maru').sort((a, b) => a.start - b.start);

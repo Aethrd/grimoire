@@ -1404,8 +1404,14 @@ await t('a rendered page that holds another chapter than the one asked for is no
   const got = await web.readPage(link, 4, { pictures: false });
   assert.match(got.chapter.html, /5화 정하연/);
   delete window.GrimoireWeb;
-  // One page is rendered at a time.
-  assert.match(read('app/src/main/java/com/grimoire/ereader/WebBridge.java'), /renderer = Executors\.newSingleThreadExecutor\(\)/);
+  // One page of a site is rendered at a time (pages of different sites side by side, each in a browser of its own).
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  assert.match(java, /renderer = Executors\.newFixedThreadPool\(RENDER_BROWSERS\)/);
+  assert.match(java, /while \(renderingSites\.contains\(siteKey\)\) renderingSites\.wait\(\);/);
+  assert.match(java, /renderingSites\.remove\(siteKey\);\s+renderingSites\.notifyAll\(\);/);
+  // A browser reading a page is not given another; its events go to its own page.
+  assert.match(java, /if \(each\.current != null\) continue;/);
+  assert.match(java, /view\.setWebViewClient\(new BrowserClient\(b\)\);/);
 });
 
 await t('Search for more reads the list again, waiting longer, and merges what turns up', async () => {
@@ -1465,7 +1471,7 @@ await t('the renderer cannot take the app down, and keeps a page light', async (
   // every so many pages and closed once idle -- not one made per page.
   assert.match(java, /private static final int BROWSER_USES = 25;/);
   assert.match(java, /view\.loadUrl\("about:blank"\);\s+view\.clearHistory\(\);/);
-  assert.match(java, /main\.postDelayed\(closeBrowser, BROWSER_IDLE_MS\);/);
+  assert.match(java, /main\.postDelayed\(b\.close, BROWSER_IDLE_MS\);/);
   // Two kinds only: the unseen browser, and the site shown to pass a check.
   assert.equal((java.match(/new WebView\(activity\)/g) || []).length, 2, 'a WebView is made somewhere else too');
   // The blank page between pages is no one's: its events reach no page.
@@ -1737,7 +1743,7 @@ await t('Pause & keep stops now: a chapter on its way is dropped, not waited for
   assert.deepEqual(parsed.rest.map((l) => l.text), ['No. 2', 'No. 3']);
   assert.equal(stoppedNative, 1);
   delete window.GrimoireWeb;
-  assert.match(read('app/src/main/assets/www/js/app.js'), /\/\/ Stopped now: what is on its way is dropped, and is where it carries on\.\s+web\.stopAll\(\);/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /\/\/ Stopped now: what is on its way is dropped, and is where it carries on\.\s+\/\/ The queue's books downloading beside it are not stopped with it\.\s+if \(!queueJobs\.size\) web\.stopAll\(\);/);
 });
 
 await t('the delay is kept for every page -- retries too -- from when the last one came', async () => {
@@ -1944,7 +1950,7 @@ await t('a chapter is there when its story is, not when the page has a lot of te
 await t('a chapter is taken as soon as its story is there and still, not when the page finishes', async () => {
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   // Looked at from the page's start and its first paint, not only once "finished".
-  assert.match(java, /if \(!browserTracked\) v\.evaluateJavascript\(TRACKER, null\);\s+job\.begin\(\);/);
+  assert.match(java, /if \(!b\.tracked\) v\.evaluateJavascript\(TRACKER, null\);\s+job\.begin\(\);/);
   assert.match(java, /public void onPageCommitVisible\(WebView v, String url\) \{[\s\S]{0,160}job\.visible = true;\s+job\.begin\(\);/);
   // The story stopped growing, nothing of the site's own on its way: taken, adverts or no.
   assert.match(java, /boolean storyDone = !scroll && !waiting && storyThere\s+&& storyStill >= \(patient \? STORY_STILL_PATIENT_MS : STORY_STILL_MS\)\s+&& \(pending == 0 \|\| storyStill >= quietMs\);/);

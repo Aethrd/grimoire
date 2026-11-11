@@ -82,13 +82,19 @@ public class WebBridge {
 
     private final Activity activity;
     private final WebView webView;
-    /** Two at a time: quick enough, and gentle on a site being read. */
-    private final ExecutorService io = Executors.newFixedThreadPool(2);
+    /** A few at a time -- books from different sites side by side. Each site is
+     *  still asked no faster than its delay allows (web.js, pacer): this is only
+     *  how many requests, to all sites together, may be on their way at once. */
+    private final ExecutorService io = Executors.newFixedThreadPool(4);
     private final java.net.CookieManager cookies = new java.net.CookieManager(null, CookiePolicy.ACCEPT_ALL);
-    /** One page rendered at a time. Two at once share the site's cookies,
-     *  and a site that keeps "the chapter being read" with them handed each
-     *  the other's chapter (5화 came back as 6화, and 6화 as 5화). */
-    private final ExecutorService renderer = Executors.newSingleThreadExecutor();
+    /** A few pages rendered at once -- each in a browser of its own -- but never
+     *  two of one site: those share the site's cookies, and a site that keeps
+     *  "the chapter being read" with them handed each the other's chapter (5화
+     *  came back as 6화, and 6화 as 5화). Books from different sites downloaded
+     *  side by side no longer wait on one another's pages. */
+    private static final int RENDER_BROWSERS = 3;
+    private final ExecutorService renderer = Executors.newFixedThreadPool(RENDER_BROWSERS);
+    private final java.util.Set<String> renderingSites = new java.util.HashSet<>();
     private final Handler main = new Handler(Looper.getMainLooper());
     /** How long a page may take to settle, and how long it must stay still
      *  to count as settled -- each longer at every level of patience the page
@@ -268,10 +274,23 @@ public class WebBridge {
                 Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly, skipHeavy, textOnly);
                 job.pressGap = pressGap;
                 job.pressJitter = pressJitter;
-                main.post(job::start);
-                if (!job.done.await((pressGap >= 0 ? PRESS_MAX_MS : RENDER_WAIT_MS) + 20000, TimeUnit.MILLISECONDS)) {
-                    main.post(job::finish);
-                    throw new IOException("the site took too long to answer");
+                // One page of a site at a time: another of its pages waits its turn here.
+                String siteKey = job.site == null ? address : job.site;
+                synchronized (renderingSites) {
+                    while (renderingSites.contains(siteKey)) renderingSites.wait();
+                    renderingSites.add(siteKey);
+                }
+                try {
+                    main.post(job::start);
+                    if (!job.done.await((pressGap >= 0 ? PRESS_MAX_MS : RENDER_WAIT_MS) + 20000, TimeUnit.MILLISECONDS)) {
+                        main.post(job::finish);
+                        throw new IOException("the site took too long to answer");
+                    }
+                } finally {
+                    synchronized (renderingSites) {
+                        renderingSites.remove(siteKey);
+                        renderingSites.notifyAll();
+                    }
                 }
                 if (job.error != null) throw new IOException(job.error);
                 // Decoded here, not on the main thread: a page can run to
@@ -666,8 +685,10 @@ public class WebBridge {
     @JavascriptInterface
     public void stopAll() {
         main.post(() -> {
-            Rendering job = current;
-            if (job != null) job.fail("paused");
+            for (Browser each : browsers) {
+                Rendering job = each.current;
+                if (job != null) job.fail("paused");
+            }
         });
     }
 
@@ -730,7 +751,8 @@ public class WebBridge {
 
     /* ── the unseen browser ───────────────────────────────────────────────
      *
-     * One, used for page after page, not one made and thrown away for each:
+     * A few (one for each page rendered at once), each used for page after
+     * page, not one made and thrown away for each:
      * six hundred WebViews made and destroyed in a row leave the renderer
      * a little more behind each time, and a second long build in the same
      * sitting ran out of room. Between pages it is emptied (a blank page,
@@ -741,34 +763,50 @@ public class WebBridge {
      */
     private static final int BROWSER_USES = 25;
     private static final long BROWSER_IDLE_MS = 20000;
-    private WebView browser;
-    private int browserUses;
-    private boolean browserTracked;
-    /** The page the browser is reading now; its events go to it, others' nowhere. */
-    private volatile Rendering current;
-    private final Runnable closeBrowser = this::dropBrowser;
+    /** The unseen browsers: as many as pages rendered at once (RENDER_BROWSERS). Main thread only. */
+    private final List<Browser> browsers = new java.util.ArrayList<>();
 
-    private void dropBrowser() {
-        WebView gone = browser;
-        browser = null;
-        browserUses = 0;
-        if (gone == null) return;
-        try {
-            gone.stopLoading();
-            ViewGroup parent = (ViewGroup) gone.getParent();
-            if (parent != null) parent.removeView(gone);
-            gone.removeAllViews();
-            gone.destroy();
-        } catch (Exception ignored) {
-            // Gone either way.
+    /** One unseen browser, and the page it is reading now: its events go to that page, others' nowhere. */
+    private final class Browser {
+        WebView view;
+        int uses;
+        boolean tracked;
+        volatile Rendering current;
+        final Runnable close = this::drop;
+
+        void drop() {
+            WebView gone = view;
+            view = null;
+            uses = 0;
+            if (gone == null) return;
+            try {
+                gone.stopLoading();
+                ViewGroup parent = (ViewGroup) gone.getParent();
+                if (parent != null) parent.removeView(gone);
+                gone.removeAllViews();
+                gone.destroy();
+            } catch (Exception ignored) {
+                // Gone either way.
+            }
         }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     private WebView browserFor(Rendering job) {
-        main.removeCallbacks(closeBrowser);
-        if (browser != null && browserUses >= BROWSER_USES) dropBrowser();
-        if (browser == null) {
+        // A browser not reading a page -- one already made, if there is one.
+        Browser free = null;
+        for (Browser each : browsers) {
+            if (each.current != null) continue;
+            if (free == null || (free.view == null && each.view != null)) free = each;
+        }
+        if (free == null) {
+            free = new Browser();
+            browsers.add(free);
+        }
+        final Browser b = free;
+        main.removeCallbacks(b.close);
+        if (b.view != null && b.uses >= BROWSER_USES) b.drop();
+        if (b.view == null) {
             WebView view = new WebView(activity);
             WebSettings settings = view.getSettings();
             settings.setJavaScriptEnabled(true);
@@ -783,7 +821,7 @@ public class WebBridge {
             CookieManager manager = CookieManager.getInstance();
             manager.setAcceptCookie(true);
             manager.setAcceptThirdPartyCookies(view, true);
-            view.setWebViewClient(new BrowserClient());
+            view.setWebViewClient(new BrowserClient(b));
             // Laid out at the screen's size, as the page would be, but under
             // the reader and fully transparent: never seen or touched.
             view.setAlpha(0f);
@@ -797,39 +835,48 @@ public class WebBridge {
             // Counting the page's own requests from before its first script
             // runs: a chapter fetched after the page opens is only there once
             // its request has come back. Once, for every page it will load.
-            browserTracked = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT);
-            if (browserTracked) {
+            b.tracked = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT);
+            if (b.tracked) {
                 WebViewCompat.addDocumentStartJavaScript(view, TRACKER, Collections.singleton("*"));
             }
-            browser = view;
+            b.view = view;
         }
-        browserUses += 1;
-        current = job;
-        return browser;
+        b.uses += 1;
+        b.current = job;
+        job.browser = b;
+        return b.view;
     }
 
-    /** Done with a page: the browser emptied for the next, or closed if none comes. */
+    /** Done with a page: its browser emptied for the next, or closed if none comes. */
     private void browserDone(Rendering job) {
-        if (current == job) current = null;
-        WebView view = browser;
+        Browser b = job.browser;
+        if (b == null) return;
+        if (b.current == job) b.current = null;
+        WebView view = b.view;
         if (view != null) {
             try {
                 view.stopLoading();
                 view.loadUrl("about:blank");
                 view.clearHistory();
             } catch (Exception ignored) {
-                dropBrowser();
+                b.drop();
             }
         }
-        main.removeCallbacks(closeBrowser);
-        main.postDelayed(closeBrowser, BROWSER_IDLE_MS);
+        main.removeCallbacks(b.close);
+        main.postDelayed(b.close, BROWSER_IDLE_MS);
     }
 
-    /** The browser's events, passed to the page it is reading; the blank page between is no one's. */
+    /** A browser's events, passed to the page it is reading; the blank page between is no one's. */
     private final class BrowserClient extends WebViewClient {
+        private final Browser b;
+
+        BrowserClient(Browser b) {
+            this.b = b;
+        }
+
         private Rendering reading(String url) {
             if (url != null && url.startsWith("about:")) return null;
-            return current;
+            return b.current;
         }
 
         @Override
@@ -848,9 +895,9 @@ public class WebBridge {
          * view rebuilds itself. */
         @Override
         public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail detail) {
-            if (v == browser) {
-                browser = null;
-                browserUses = 0;
+            if (v == b.view) {
+                b.view = null;
+                b.uses = 0;
             }
             try {
                 ViewGroup parent = (ViewGroup) v.getParent();
@@ -859,7 +906,7 @@ public class WebBridge {
             } catch (Exception ignored) {
                 // Gone either way.
             }
-            Rendering job = current;
+            Rendering job = b.current;
             if (job != null) job.fail("Android stopped the page's browser to free memory");
             return true;
         }
@@ -869,7 +916,7 @@ public class WebBridge {
          * common script libraries and Cloudflare's check still load. */
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest request) {
-            Rendering job = current;
+            Rendering job = b.current;
             if (job == null) {
                 // Between pages: nothing of the last one may go on loading.
                 String s = request.getUrl().getScheme();
@@ -897,7 +944,7 @@ public class WebBridge {
             if (moved != null) job.site = moved;
             // Without the document-start hook (an old WebView), as early as can
             // be: later requests are still counted.
-            if (!browserTracked) v.evaluateJavascript(TRACKER, null);
+            if (!b.tracked) v.evaluateJavascript(TRACKER, null);
             job.begin();
         }
 
@@ -920,7 +967,7 @@ public class WebBridge {
 
         @Override
         public void onReceivedHttpError(WebView v, WebResourceRequest request, WebResourceResponse response) {
-            Rendering job = current;
+            Rendering job = b.current;
             if (job != null && request.isForMainFrame()) {
                 job.mainStatus = response.getStatusCode();
                 Map<String, String> headers = response.getResponseHeaders();
@@ -986,6 +1033,8 @@ public class WebBridge {
         /** What a site that said "too many requests" asked to be given (Retry-After). */
         volatile String retryAfter;
         private WebView view;
+        /** The browser it is read in (see browserFor). */
+        Browser browser;
         private boolean loaded;
         private String lastShape = "";
         /** What it was opened for is plainly on the page: then it is kept. */

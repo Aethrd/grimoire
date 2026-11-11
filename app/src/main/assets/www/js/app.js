@@ -6286,7 +6286,8 @@ function pauseBuild() {
   run.status = 'Pausing — making the book…';
   run.finish?.say('Paused — making the book of the chapters that have come…');
   // Stopped now: what is on its way is dropped, and is where it carries on.
-  web.stopAll();
+  // The queue's books downloading beside it are not stopped with it.
+  if (!queueJobs.size) web.stopAll();
   paintBuildFoot();
 }
 
@@ -6355,9 +6356,31 @@ const jobCovers = new Map();   // job id -> object URL of the site's cover, as s
 
 function openJobEdit(id) {
   editingJob = id;
+  if (el('job-folder')) delete el('job-folder').dataset.job;   // drawn afresh: folders may have come and gone
   buildIndex = true;
   renderWorkshop();
   el('build-body')?.scrollTo?.({ top: 0 });
+}
+
+/* Its folder, picked as a book's is in its details: drawn once a book opened,
+ * and kept as it is picked. A book carrying another on, not filed here, goes
+ * where that book is. */
+async function paintJobFolder(job) {
+  const box = el('job-folder');
+  if (!box || box.dataset.job === job.id) return;
+  box.dataset.job = job.id;
+  box.replaceChildren();
+  const picked = await folderPicker(box, job.folder || '');
+  const keep = () => setTimeout(() => {
+    const it = webQueue.find((each) => each.id === box.dataset.job);
+    if (!it || picked.value === undefined) return;
+    const folder = String(picked.value || '').trim().replace(/^\/+|\/+$/g, '');
+    if ((it.folder || '') === folder) return;
+    if (folder) it.folder = folder; else delete it.folder;
+    saveQueue();
+  }, 0);
+  box.addEventListener('click', keep);
+  box.addEventListener('input', keep);
 }
 
 async function paintJobEdit(job) {
@@ -6367,6 +6390,7 @@ async function paintJobEdit(job) {
   const last = job.links.at(-1)?.text || '';
   el('job-chapters').textContent = `${job.links.length} chapter${job.links.length === 1 ? '' : 's'}`
     + `${first ? `: ${first}${job.links.length > 1 ? ` … ${last}` : ''}` : ''} · ${siteOfJob(job) || 'the web'}`;
+  paintJobFolder(job);
   el('job-cover-site').setAttribute('aria-pressed', String(!job.coverData));
   el('job-cover-pick').setAttribute('aria-pressed', String(!!job.coverData));
   const box = el('job-cover');
@@ -6439,7 +6463,7 @@ function wireJobEdit() {
     Object.assign(webState, { intent: 'queue', editing: it.id });
     el('web-address').value = (it.sources || []).join('\n');
     webState.links = it.links.map(({ url, text }) => ({ url, text, chrome: false, kind: null, likely: true, picked: true }));
-    Object.assign(webState, { sources: it.sources || [], title: it.name, author: it.author || '', cover: it.cover || '' });
+    Object.assign(webState, { sources: it.sources || [], title: it.name, author: it.author || '', cover: it.cover || '', coverData: it.coverData || '' });
     el('web-title').value = it.name;
     webNote(`The ${it.links.length} chapters queued for “${it.name}”. Untick any to leave out, or Find links to read the site's list again; Queue saves them.`);
     drawWebList();
@@ -6500,7 +6524,7 @@ function loadQueue(settings) {
     status: 'queued', total: job.links.length, done: 0, stops: 0, ...job,
     ...(job.status === 'running' ? { status: 'queued' } : {}),
   }));
-  if ([1, 2, 3].includes(settings.queueAtOnce)) queueState.atOnce = settings.queueAtOnce;
+  if ([1, 2, 3, 4, 5, 6].includes(settings.queueAtOnce)) queueState.atOnce = settings.queueAtOnce;
   if (settings.queueRunning && webQueue.some((job) => ['queued', 'retry'].includes(job.status))) {
     setTimeout(() => toast('The queue was running when the app closed — Start queue on Build carries on.', 7000), 1500);
   }
@@ -6525,6 +6549,8 @@ function queueWeb() {
       cover: webState.cover || editing.cover || '', links: chosen.map(({ url, text }) => ({ url, text })),
       total: chosen.length, status: 'queued', stops: 0, note: '',
     });
+    if (webState.coverData) editing.coverData = webState.coverData;
+    else delete editing.coverData;
     saveQueue();
     clearWeb();
     toast(`“${name}” changed — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}.`, 4000);
@@ -6535,11 +6561,14 @@ function queueWeb() {
     id: `q-${Date.now()}`, name, author: webState.author || '', sources: webState.sources || [],
     cover: webState.cover || '', links: chosen.map(({ url, text }) => ({ url, text })),
     total: chosen.length, done: 0, status: 'queued', stops: 0,
+    ...(webState.coverData ? { coverData: webState.coverData } : {}),
+    // Filed, once built, where the shelf was open when it was queued -- as Build files.
+    ...(activeFolder ? { folder: activeFolder } : {}),
   });
   saveQueue();
   clearWeb();
   const waiting = webQueue.filter((job) => job.status !== 'done').length;
-  toast(`“${name}” queued — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}. ${waiting} in the queue, on Build.`, 5000);
+  toast(`“${name}” queued — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}${activeFolder ? `, into “${activeFolder}”` : ''}. ${waiting} in the queue, on Build.`, 5000);
   if (queueState.running) pumpQueue();
   back();
 }
@@ -6649,6 +6678,7 @@ async function runJob(job) {
     const { book, failed } = await build.build({
       parts, tag: job.id, title: before ? library.displayTitle(before) : job.name,
       author: job.author || undefined, cover: null, shouldPause: () => under.pausing,
+      folder: job.folder || null,
       // Shown, never in the way: a slip in showing it does not stop the download.
       onProgress: (message, fraction, at, total, now, counts) => {
         try { trackJob(job, under, message, at, now, counts); } catch (error) { console.warn('queue progress', error); }
@@ -6835,7 +6865,8 @@ function paintQueue() {
   box.hidden = !webQueue.length;
   paintQueueHead();
   const count = (status) => webQueue.filter((job) => job.status === status).length;
-  // At once: 1, 2 or 3 books side by side.
+  /* At once: up to six books side by side -- each from a site of its own, each
+   * site asked no faster than its delay, so more at once asks no one site more. */
   const once = el('build-queue-once');
   if (once) {
     once.replaceChildren();
@@ -6843,7 +6874,7 @@ function paintQueue() {
     label.className = 'muted';
     label.textContent = 'At once';
     once.appendChild(label);
-    for (const n of [1, 2, 3]) {
+    for (const n of [1, 2, 3, 4, 5, 6]) {
       const chip = document.createElement('button');
       chip.className = 'chip';
       chip.textContent = String(n);
@@ -9210,6 +9241,7 @@ const webState = {
   title: '',
   author: '',
   cover: '',          // the site's picture of the book, from its link preview
+  coverData: '',      // a picture of the reader's own, chosen here, as a data URL
   sources: [],
   reversed: false,
   pictures: true,
@@ -9236,8 +9268,50 @@ function renderWeb() {
   el('web-pictures').textContent = webState.pictures ? 'Pictures: on' : 'Pictures: off';
   if (!webState.titleTouched) el('web-title').value = webState.title;
   el('web-eyebrow').textContent = (el('web-title').value || '').trim() || 'Chapters from a website, for Build';
+  if (webState.links.length) paintWebCover();
   paintWebCount();
 }
+
+/* The site's cover, fetched once to be shown -- never while that site is being
+ * downloaded from (a picture asked for beside its chapters is one request more
+ * than the delay allows); then it waits to be fetched when the book is built. */
+const webCovers = new Map();   // the site's cover address -> { url, blob } once fetched
+async function paintWebCover() {
+  const own = webState.coverData;
+  el('web-cover-site').setAttribute('aria-pressed', String(!own));
+  el('web-cover-pick').setAttribute('aria-pressed', String(!!own));
+  const address = webState.cover;
+  const held = address ? webCovers.get(address) : undefined;   // 'fetching', { url, blob }, or null: none to be had
+  if (!own && address && held === undefined) {
+    let busy = true;
+    try { busy = sitesInUse().has(siteKey(new URL(address).hostname)); } catch { /* not to be fetched */ }
+    if (!busy) {
+      webCovers.set(address, 'fetching');
+      paintWebCover();
+      const blob = await web.fetchCover(address).catch(() => null);
+      webCovers.set(address, blob ? { url: URL.createObjectURL(blob), blob } : null);
+      if (webState.cover === address) paintWebCover();
+      return;
+    }
+  }
+  const url = own || held?.url || '';
+  const box = el('web-cover');
+  box.classList.toggle('empty', !url);
+  box.innerHTML = url ? `<img src="${url}" alt="">` : `<span>${held === 'fetching' ? 'Fetching…' : 'No cover yet'}</span>`;
+  el('web-cover-note').textContent = own ? 'Your own picture. It goes into the book as its cover.'
+    : url ? 'The site\'s picture of the book.'
+      : !address ? 'The site gave no picture of the book.'
+        : held === null ? 'The site\'s picture could not be fetched — choose one of your own, or it is tried again when built.'
+          : 'The site\'s picture, fetched when it is built.';
+}
+
+/** A picture, as a data URL: kept with a queued book, it survives the app closing. */
+const dataUrlOf = (blob) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = () => reject(reader.error);
+  reader.readAsDataURL(blob);
+});
 
 /** Chapters missing from the numbers of those ticked, and any ticked twice: said above the list. */
 function paintWebGaps() {
@@ -9760,7 +9834,10 @@ async function addWebToBuild() {
       el('build-title').value = library.displayTitle(carried);
       buildTitleTouched = true;
     }
-    const cover = await web.fetchCover(webState.cover);
+    // The reader's own picture, or the site's -- fetched already if it was shown.
+    const cover = webState.coverData
+      ? await fetch(webState.coverData).then((response) => response.blob()).catch(() => null)
+      : webCovers.get(webState.cover)?.blob || await web.fetchCover(webState.cover);
     build.addWeb({
       name, links: chosen, pictures: webState.pictures, cover,
       author: webState.author, sources: webState.sources, gap: webDelay(), jitter: webJitter(),
@@ -9824,7 +9901,7 @@ function webDelay() {
 
 function clearWeb() {
   Object.assign(webState, {
-    links: [], title: '', author: '', cover: '', sources: [], reversed: false, titleTouched: false, leftover: null,
+    links: [], title: '', author: '', cover: '', coverData: '', sources: [], reversed: false, titleTouched: false, leftover: null,
     manualOrder: false, carryOn: null, searches: 0, updating: null,
   });
   const resume = el('web-resume');
@@ -9915,6 +9992,26 @@ function wireWeb() {
     renderWeb();
   });
   el('web-filter').addEventListener('input', filterWebList);
+  el('web-cover-site').onclick = () => {
+    webState.coverData = '';
+    paintWebCover();
+  };
+  el('web-cover-pick').onclick = () => {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = blobs.COVER_ACCEPT;
+    picker.onchange = async () => {
+      const file = picker.files?.[0];
+      if (!file) return;
+      try {
+        webState.coverData = await dataUrlOf(await blobs.normaliseCover(file));
+        paintWebCover();
+      } catch (error) {
+        toast(error.message, 6000);
+      }
+    };
+    picker.click();
+  };
 
   el('web-likely').onclick = () => {
     for (const link of webState.links) link.picked = link.likely;
