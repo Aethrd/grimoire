@@ -85,6 +85,9 @@ export async function download(url, options = {}) {
   /* A site already found to build its pages in script is rendered from the
    * start: asking it twice for every chapter would be twice the load. */
   if (host && renderedHosts.has(host)) return fetchNative('render', url, options);
+  /* Asked for in the browser: a contents page whose list its script puts in
+   * after the page has come (findLinks) -- and that site's other list pages. */
+  if (options.render || (options.list && host && listRenderedHosts.has(host))) return fetchNative('render', url, options);
   let page;
   try {
     page = await fetchNative('fetch', url, options);
@@ -117,6 +120,11 @@ export async function download(url, options = {}) {
  * and hands back the page as it then stands.
  */
 const renderedHosts = new Set();
+/* Sites whose contents page is sent without its list -- its script fetches
+ * the list after the page has come (WordPress's Madara theme, for one) --
+ * though their chapters come whole: their lists are read in the browser,
+ * their chapters as sent. */
+const listRenderedHosts = new Set();
 /* An address that names a file, not a page. */
 const FILE_ADDRESS = /\.(?:jpe?g|png|gif|webp|avif|bmp|svg|ico|css|js|mjs|json|xml|woff2?|ttf|otf|mp[34]|webm|zip|pdf|epub)(?:[?#]|$)/i;
 /** Fewer characters than this, and no picture, is a chapter not yet loaded. */
@@ -1228,7 +1236,24 @@ export async function findLinks(addresses, {
           trying.set(next, { open: known.open || level >= 2, wait: Math.max(known.wait, level) });
         }
         let page = await fetchPage(next, { list: true });
-        let found = linksOf(decodePage(await bytesOf(page.blob), page.type), page.url);
+        let sent = decodePage(await bytesOf(page.blob), page.type);
+        let found = linksOf(sent, page.url);
+        /* Sent without its list: a page of a series with a synopsis and a
+         * sidebar of other series, and the chapters fetched by its script once
+         * it has come. Read again in the browser, which runs that script --
+         * once, and its other list pages there from the start. */
+        if (!page.rendered && canRender() && sentWithoutList(sent, found, page.url)) {
+          try {
+            const host = new URL(next).host;
+            if (host) listRenderedHosts.add(host);
+          } catch { /* no host: asked as it is */ }
+          const again = await fetchPage(next, { list: true, render: true });
+          const there = linksOf(decodePage(await bytesOf(again.blob), again.type), again.url);
+          if (there.links.length >= found.links.length || listsChapters(there, again.url)) {
+            page = again;
+            found = there;
+          }
+        }
         /* A contents page built in script, caught before its list arrived:
          * the site's menus and not one chapter. Asked for again with one
          * need more each time, as a chapter caught early is. */
@@ -1334,6 +1359,36 @@ function listsChapters(found, pageUrl) {
   } catch { /* named ones only */ }
   const chapters = found.links.filter((link) => markedNumber(link.text) !== null || (base && link.url.startsWith(base)));
   return chapters.length >= 3;
+}
+
+/**
+ * A contents page sent without its list: fewer than three links to chapters
+ * of its own (a sidebar's "popular" two, say), and either a place for the
+ * chapters standing empty -- an element named for chapters or episodes with
+ * no link in it, as WordPress's Madara theme sends -- or hardly a numbered
+ * link anywhere. Chapter-like links from other series in a sidebar do not
+ * make it a list.
+ */
+function sentWithoutList(html, found, pageUrl) {
+  if (found.pages?.length || found.list) return false;
+  let base = null;
+  try {
+    const url = new URL(pageUrl);
+    const path = url.pathname.replace(/\/+$/, '');
+    if (path) base = `${url.origin}${path}/`;
+  } catch { return false; }
+  if (base && found.links.filter((link) => link.url.startsWith(base)).length >= 3) return false;
+  const numbered = found.links.filter((link) => markedNumber(link.text) !== null).length;
+  if (numbered < 3) return true;
+  try {
+    const doc = parseHtml(html);
+    const places = doc.querySelectorAll('[id*="chapter" i], [class*="chapter" i], [id*="episode" i], [class*="episode" i], [id*="chap" i]');
+    for (const place of places) {
+      if (/^(A|H[1-6]|BUTTON|SPAN|LABEL|META|LINK|SCRIPT|STYLE)$/.test(place.tagName)) continue;
+      if (!place.querySelector('a') && tidy(place.textContent).length < 80) return true;
+    }
+  } catch { /* not to be told */ }
+  return false;
 }
 
 /** The next of the numbered pages waiting, if any. */

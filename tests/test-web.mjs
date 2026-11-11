@@ -2238,6 +2238,36 @@ await t('a queue of websites: a book each, in turn, all at the same settings, ea
   assert.match(app, /if \(!build\.isEmpty\(\)\) \{\s+toast\('Build has parts in it/);
 });
 
+await t('a contents page sent without its list (its script fetches it) is read in the browser', async () => {
+  const asked = [];
+  const series = 'https://madara.example/series/the-mother/';
+  const shell = `<!doctype html><html><head><title>The Mother</title><meta name="generator" content="Madara"></head><body>
+<header><a href="/">Home</a><a href="/series/">Series</a></header><h1>The Mother</h1><div class="summary">${'A long synopsis of the story. '.repeat(40)}</div>
+<div id="manga-chapters-holder" data-id="77"></div><aside><h3>Popular</h3>
+<a href="${series}chapter-285/">Chapter 285</a><a href="${series}chapter-284/">Chapter 284</a>
+<a href="https://madara.example/series/other/chapter-9/">Chapter 9</a></aside></body></html>`;
+  const listed = shell.replace('<div id="manga-chapters-holder" data-id="77"></div>',
+    `<ul class="version-chap">${Array.from({ length: 30 }, (_, i) => `<li class="wp-manga-chapter"><a href="${series}chapter-${285 - i}/">Chapter ${285 - i}</a></li>`).join('')}</ul>`);
+  const send = (id, address, body, rendered) => {
+    const path = `data:text/html;base64,${Buffer.from(body, 'utf8').toString('base64')}`;
+    setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type: 'text/html', path, rendered })), 0);
+  };
+  window.GrimoireWeb = {
+    fetch: (id, address) => { asked.push(`fetch ${address}`); send(id, address, shell, false); },
+    render: (id, address) => { asked.push(`render ${address}`); send(id, address, listed, true); },
+    release() {},
+  };
+  const found = await web.findLinks([series], { listGap: 0 });
+  // Sent as it is first (most sites list their chapters so), then once in the browser.
+  assert.deepEqual(asked, [`fetch ${series}`, `render ${series}`]);
+  assert.ok(found.links.filter((l) => /chapter-\d+\/$/.test(l.url) && l.url.startsWith(series)).length >= 30);
+  // Its chapters are still read as sent: only its lists go to the browser.
+  asked.length = 0;
+  await web.download(`${series}chapter-284/`).catch(() => {});
+  assert.deepEqual(asked, [`fetch ${series}chapter-284/`]);
+  delete window.GrimoireWeb;
+});
+
 await t('a build says how long it has been and how long it should be yet', async () => {
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /left = 'estimating…';/);
