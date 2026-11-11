@@ -1862,7 +1862,11 @@ await t('how far it has got and what it is doing now are told apart', async () =
   assert.deepEqual([retry.name, retry.attempt, retry.of], ['No. 2', 2, 3]);
   // Build keeps the count on the bar's line and passes what it is doing apart.
   const build = read('app/src/main/assets/www/js/build.js');
-  assert.match(build, /`Downloading \$\{part\.name\} · \$\{done\} of \$\{total\}`,\s+\(at \+ fraction\) \/ parts\.length, at, parts\.length, now, \{ done, total, stats: partStats \}\)/);
+  assert.match(build, /`Downloading \$\{part\.name\}\$\{parts\.length > 1 \? ` · part \$\{at \+ 1\} of \$\{parts\.length\}` : ''\}`,\s+\(at \+ fraction\) \/ parts\.length, at, parts\.length, now, \{ done, total, stats: partStats \}\)/);
+  // The bar goes by chapters downloaded across the build's websites, not by parts; the count is chapters.
+  const appText = read('app/src/main/assets/www/js/app.js');
+  assert.match(appText, /bar = Math\.min\(1, \(before \+ \(web\[at\] \? counts\?\.done \?\? 0 : 0\)\) \/ chapters\);\s+\}\s+finish\.say\(message, bar\);/);
+  assert.match(appText, /const count = Number\.isFinite\(run\.total\) && Number\.isFinite\(run\.done\) \? `\$\{run\.done\} of \$\{run\.total\} · `/);
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /<div class="job-activity" hidden><span class="job-tag"><\/span><span class="job-now"><\/span><\/div>/);
   assert.match(app, /what\.textContent = `\$\{left\} s left \$\{now\.why \? `· \$\{now\.why\}` : 'of your delay'\}, then \$\{name\}`;/);

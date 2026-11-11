@@ -6255,8 +6255,10 @@ function paintTimes() {
       left = `~${span(run.shown)} left${band}`;
     }
   }
-  const parts = run.parts > 1 ? `${run.at + 1} of ${run.parts} · ` : '';
-  run.finish?.say(null, null, `${parts}${elapsed}${left ? ` · ${left}` : ''}`);
+  // Chapters, while a website downloads ("120 of 453"); otherwise which part of how many.
+  const count = Number.isFinite(run.total) && Number.isFinite(run.done) ? `${run.done} of ${run.total} · `
+    : run.parts > 1 ? `part ${run.at + 1} of ${run.parts} · ` : '';
+  run.finish?.say(null, null, `${count}${elapsed}${left ? ` · ${left}` : ''}`);
   if (!run.pausing && Number.isFinite(run.total)) {
     run.status = `${run.done} of ${run.total}${left ? ` · ${left}` : ''}`;
     paintBuildFoot();
@@ -6911,14 +6913,24 @@ function wireWorkshop() {
         folder: activeFolder || null,
         cover: buildCover,
         onProgress: (message, fraction, at, total, now, counts) => {
-          finish.say(message, fraction);
+          /* The bar goes by chapters downloaded, where there are websites in
+           * the build -- they are where the hours go -- not by parts: a book
+           * from the shelf and a website of 450 chapters are not halves. */
+          const web = buildRun?.delays || [];
+          const chapters = web.reduce((sum, part) => sum + (part?.chapters || 0), 0);
+          let bar = fraction;
+          if (chapters && Number.isInteger(at)) {
+            const before = web.slice(0, at).reduce((sum, part) => sum + (part?.chapters || 0), 0);
+            bar = Math.min(1, (before + (web[at] ? counts?.done ?? 0 : 0)) / chapters);
+          }
+          finish.say(message, bar);
           // What it is doing this moment, on its own line under the bar.
           if (now !== undefined) finish.activity(now);
           // The pages of this part so far, for how long it has been and is to be.
           if (buildRun) {
             const nowMs = Date.now();
             if (buildRun.at !== at) {
-              Object.assign(buildRun, { at, partStart: nowMs, partFrom: counts?.done || 0, lastCame: nowMs, samples: [], shown: null, done: undefined });
+              Object.assign(buildRun, { at, partStart: nowMs, partFrom: counts?.done || 0, lastCame: nowMs, samples: [], shown: null, done: undefined, total: undefined });
             }
             buildRun.parts = total;
             if (counts) {

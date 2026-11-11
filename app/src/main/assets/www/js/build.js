@@ -543,7 +543,8 @@ export async function build({
           // How far it has got, on the line with the bar; what it is doing
           // this moment (waiting out the delay, reading, another try) apart.
           onProgress: (fraction, done, total, note, now) => onProgress?.(
-            `Downloading ${part.name} · ${done} of ${total}`,
+            // The chapters are counted beside it (app.js, paintTimes); which part this is, here.
+            `Downloading ${part.name}${parts.length > 1 ? ` · part ${at + 1} of ${parts.length}` : ''}`,
             (at + fraction) / parts.length, at, parts.length, now, { done, total, stats: partStats }),
         })
         : part.bookId
