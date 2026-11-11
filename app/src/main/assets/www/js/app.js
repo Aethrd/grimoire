@@ -8852,6 +8852,20 @@ async function findWebLinks() {
     if (el('web-direct').checked) {
       // Given the chapters themselves: nothing to look for.
       links = addresses.map((url) => ({ url, text: '', chrome: false, kind: null }));
+    } else if (el('web-pick')?.checked && web.canPickSite()) {
+      /* Picked by hand: the site shown, the chapters selected there by a
+       * long-press and a drag (or a tap on the first and the last). One page
+       * of a list at a time -- for lists all on one page. */
+      button.textContent = 'Picking…';
+      const picked = await web.pickSite(addresses[0]);
+      if (!current()) return;
+      if (!picked.links.length) {
+        webNote('Nothing was picked. In the site, long-press a chapter and drag over the rest — or tap the first chapter, then the last — then Use selected.', true);
+        return;
+      }
+      links = picked.links.map((link) => ({ url: link.url, text: link.text, chrome: false, kind: null }));
+      // The page's title, less the site's name after it ("Book - Site").
+      title = picked.title.split(/\s+[|\-–—·]\s+/)[0] || picked.title;
     } else {
       button.textContent = 'Finding…';
       const found = await web.findLinks(addresses, {
@@ -9288,11 +9302,18 @@ function wireWeb() {
   el('web-address').addEventListener('input', paintMore);
   el('web-go').onclick = addWebToBuild;
   el('web-queue').onclick = queueWeb;
+  // Pick in the browser: only where the app can show a site; remembered.
+  if (web.canPickSite()) el('web-pick-row').hidden = false;
+  el('web-pick').addEventListener('change', () => {
+    store.saveSettings({ webPick: el('web-pick').checked });
+    if (el('web-pick').checked && el('web-direct').checked) el('web-direct').checked = false;
+  });
   // Remembered: a site that wants a slower pace wants it every time.
   store.settings().then((settings) => {
     if (Number.isFinite(settings.webDelay)) el('web-delay').value = String(settings.webDelay);
     if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
     if (typeof settings.webPictures === 'boolean') webState.pictures = settings.webPictures;
+    if (el('web-pick')) el('web-pick').checked = settings.webPick === true;
     if (Array.isArray(settings.webQueue)) { webQueue = settings.webQueue; paintQueue(); }
     if (Number.isFinite(settings.webListDelay)) el('web-list-delay').value = String(settings.webListDelay);
     if (Number.isFinite(settings.webListJitter)) el('web-list-jitter').value = String(settings.webListJitter);

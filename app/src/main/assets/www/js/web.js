@@ -284,6 +284,43 @@ export function openSite(url) {
   });
 }
 
+/** Whether this copy of the app can show a site to pick chapters from by hand. */
+export const canPickSite = () => typeof window.GrimoireWeb?.pickFromSite === 'function';
+
+/**
+ * The site shown to pick its chapters by hand -- long-press one and drag over
+ * the rest, or tap the first and then the last -- answered with the links
+ * selected, in the page's order: { url, title, links: [{ url, text }] }.
+ * Back leaves without: no links.
+ */
+export function pickSite(url) {
+  return new Promise((resolve, reject) => {
+    if (!canPickSite()) {
+      reject(new Error('This copy of the app cannot show a site to pick from.'));
+      return;
+    }
+    const id = `p${Date.now().toString(36)}${++counter}`;
+    pending.set(id, {
+      timer: null,
+      reject,
+      resolve: (payload) => {
+        let answer = {};
+        try { answer = JSON.parse(payload || '{}'); } catch { /* nothing picked */ }
+        const links = (Array.isArray(answer.links) ? answer.links : [])
+          .filter((link) => /^https?:/i.test(String(link?.url || '')))
+          .map((link) => ({ url: String(link.url).replace(/#.*$/, ''), text: tidy(String(link.text || '')) }));
+        resolve({ url: answer.url || url, title: tidy(String(answer.title || '')), links });
+      },
+    });
+    try {
+      window.GrimoireWeb.pickFromSite(id, url);
+    } catch (error) {
+      pending.delete(id);
+      reject(error);
+    }
+  });
+}
+
 /** Whether this build of the app has the renderer. */
 export const canRender = () => typeof window.GrimoireWeb?.render === 'function';
 

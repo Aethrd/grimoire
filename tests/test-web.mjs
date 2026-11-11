@@ -263,7 +263,8 @@ await t('the native side fetches only web addresses, and only when asked', () =>
   // (And shown, over the app, for a check the reader passes there.)
   // (And Pause & keep's: leave the page the renderer is on.)
   // (And a site's cookies forgotten, which only ever clears.)
-  assert.deepEqual(entries.sort(), ['fetch', 'forgetSite', 'release', 'render', 'showSite', 'stopAll']);
+  // (And the site shown to pick chapters from by hand.)
+  assert.deepEqual(entries.sort(), ['fetch', 'forgetSite', 'pickFromSite', 'release', 'render', 'showSite', 'stopAll']);
   assert.equal(java.match(/if \(!scheme\.equals\("http"\) && !scheme\.equals\("https"\)\)/g).length, 3);
   // Cookies are the browser's own, kept as it keeps them: nothing of the app's own store.
   assert.ok(!/SharedPreferences|getSharedPreferences/.test(java));
@@ -2292,6 +2293,46 @@ await t('a bare address that shows only the newest chapters is not taken for pag
   const plain = [];
   await web.findLinks(['https://list.example/serial/9'], { fetchPage: listSite(5, true, plain), listGap: 0 });
   assert.equal(plain.length, 5);
+});
+
+await t('chapters picked by hand in the site: tap the first and the last (or select), and the links between are taken', async () => {
+  const { JSDOM } = await import('jsdom');
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  const script = (name) => {
+    const at = java.indexOf(`String ${name} = `);
+    const end = java.indexOf(';\n', java.indexOf('})()', at));
+    return [...java.slice(at, end).split('\n').filter((l) => /^\s*(\+ |(private static final )?String )/.test(l)).join('\n')
+      .matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`)).join('');
+  };
+  const page = new JSDOM(`<html><head></head><body><nav><a href="/">홈</a></nav><ul>
+${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${410 - i}">${410 - i}화 악은 삶을 바란다</a> 2023-04-08</li>`).join('')}
+</ul><a href="/signin">로그인하고 댓글 남기기</a></body></html>`, { runScripts: 'outside-only', url: 'https://k.example/b' });
+  const w = page.window;
+  // A site that stops selecting is overruled; and a link tapped is marked, not followed.
+  w.document.addEventListener('selectstart', (e) => e.preventDefault());
+  w.eval(script('PICKABLE'));
+  const anchors = w.document.querySelectorAll('li a');
+  const tap = (a) => a.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(tap(anchors[2]), false, 'the tap was not followed');
+  assert.ok(anchors[2].classList.contains('__gPickStart'));
+  tap(anchors[6]);
+  const picked = JSON.parse(w.eval(script('PICKED')));
+  assert.deepEqual(picked.map((l) => l.text), ['408화 악은 삶을 바란다', '407화 악은 삶을 바란다', '406화 악은 삶을 바란다', '405화 악은 삶을 바란다', '404화 악은 삶을 바란다']);
+  // The other way round (last tapped first) is the same.
+  tap(anchors[6]); tap(anchors[2]);
+  assert.equal(JSON.parse(w.eval(script('PICKED'))).length, 5);
+  // The app: answered links into the list, the page's title less the site's name; back is nothing picked.
+  window.GrimoireWeb = { pickFromSite: (id) => setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: 'https://k.example/b', title: '악은 삶을 바란다 - BOOKKOR', links: picked })), 0) };
+  const answer = await web.pickSite('https://k.example/b');
+  assert.equal(answer.links.length, 5);
+  assert.equal(answer.title, '악은 삶을 바란다 - BOOKKOR');
+  window.GrimoireWeb = { pickFromSite: (id) => setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: 'https://k.example/b' })), 0) };
+  assert.deepEqual((await web.pickSite('https://k.example/b')).links, []);
+  delete window.GrimoireWeb;
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /\} else if \(el\('web-pick'\)\?\.checked && web\.canPickSite\(\)\) \{/);
+  assert.match(app, /title = picked\.title\.split\(\/\\s\+\[\|\\-–—·\]\\s\+\/\)\[0\] \|\| picked\.title;/);
+  assert.match(java, /boolean closeShownIfOpen\(\) \{\s+if \(shown == null\) return false;\s+\/\/[^\n]*\n\s+shownPicking = false;/);
 });
 
 await t('a build says how long it has been and how long it should be yet', async () => {

@@ -309,9 +309,51 @@ public class WebBridge {
     private String shownId;
     private WebView shownView;
 
-    @SuppressLint("SetJavaScriptEnabled")
     @JavascriptInterface
     public void showSite(final String id, final String address) {
+        openShown(id, address, false);
+    }
+
+    /** The site shown to pick chapters from by hand: long-press one and drag over the
+     *  rest (or tap the first and then the last), then Use selected -- the links in
+     *  the selection, in the page's order, are what is answered. */
+    @JavascriptInterface
+    public void pickFromSite(final String id, final String address) {
+        openShown(id, address, true);
+    }
+
+    /** Whether the shown site is for picking links (see pickFromSite). */
+    private boolean shownPicking;
+
+    /* Into a page shown for picking: its text selectable however it says it is not
+     * (sites stop copying with user-select and selectstart), and a tap on a link
+     * marks it rather than following it: the first tapped and the last, and the
+     * selection is everything between. */
+    private static final String PICKABLE = "(function(){if(window.__gPick)return;window.__gPick={start:null};"
+            + "var st=document.createElement('style');st.textContent='*{-webkit-user-select:text!important;user-select:text!important}"
+            + "a{-webkit-touch-callout:none!important}.__gPickStart{outline:3px solid #d8a7b1!important;outline-offset:2px}';"
+            + "(document.head||document.documentElement).appendChild(st);"
+            + "['selectstart','copy','contextmenu'].forEach(function(t){window.addEventListener(t,function(e){e.stopImmediatePropagation();},true);});"
+            + "document.onselectstart=null;if(document.body)document.body.onselectstart=null;"
+            + "window.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a)return;"
+            + "e.preventDefault();e.stopImmediatePropagation();var p=window.__gPick;"
+            + "if(!p.start){p.start=a;a.classList.add('__gPickStart');return;}"
+            + "var x=p.start,y=a;p.start=null;x.classList.remove('__gPickStart');"
+            + "if(x.compareDocumentPosition(y)&Node.DOCUMENT_POSITION_PRECEDING){var t=x;x=y;y=t;}"
+            + "var r=document.createRange();r.setStartBefore(x);r.setEndAfter(y);var s=window.getSelection();s.removeAllRanges();s.addRange(r);"
+            + "},true);})();";
+
+    /** The links in the page's selection, in the page's order, as [{url, text}]. */
+    private static final String PICKED = "(function(){try{var s=window.getSelection(),out=[],seen={};"
+            + "if(!s||!s.rangeCount)return JSON.stringify(out);"
+            + "var as=document.querySelectorAll('a[href]');for(var i=0;i<as.length;i++){var a=as[i],u=a.href;"
+            + "if(!/^https?:/i.test(u)||seen[u])continue;var hit=false;"
+            + "for(var r=0;r<s.rangeCount&&!hit;r++)hit=s.getRangeAt(r).intersectsNode(a);"
+            + "if(hit){seen[u]=1;out.push({url:u,text:(a.textContent||'').replace(/\\s+/g,' ').trim()});}}"
+            + "return JSON.stringify(out);}catch(e){return '[]';}})()";
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void openShown(final String id, final String address, final boolean pick) {
         main.post(() -> {
             try {
                 Uri uri = Uri.parse(address);
@@ -340,6 +382,16 @@ public class WebBridge {
                     }
 
                     @Override
+                    public void onPageStarted(WebView v, String url, Bitmap favicon) {
+                        if (pick) v.evaluateJavascript(PICKABLE, null);
+                    }
+
+                    @Override
+                    public void onPageFinished(WebView v, String url) {
+                        if (pick) v.evaluateJavascript(PICKABLE, null);
+                    }
+
+                    @Override
                     public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail detail) {
                         closeShown();
                         settle(id, false, "Android stopped the page's browser to free memory");
@@ -361,12 +413,14 @@ public class WebBridge {
                 int pad = Math.round(12 * activity.getResources().getDisplayMetrics().density);
                 bar.setPadding(pad, pad / 2, pad, pad / 2);
                 android.widget.TextView note = new android.widget.TextView(activity);
-                note.setText("Let the site's check pass (tap it if it asks), then Done.");
+                note.setText(pick
+                        ? "Long-press a chapter and drag over the rest - or tap the first, then the last. Then Use selected."
+                        : "Let the site's check pass (tap it if it asks), then Done.");
                 note.setTextColor(0xFFE6E1EA);
                 note.setTextSize(13);
                 bar.addView(note, new android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
                 android.widget.Button done = new android.widget.Button(activity);
-                done.setText("Done");
+                done.setText(pick ? "Use selected" : "Done");
                 done.setAllCaps(false);
                 done.setOnClickListener((b) -> finishShown());
                 bar.addView(done);
@@ -383,6 +437,7 @@ public class WebBridge {
                 shown = column;
                 shownId = id;
                 shownView = view;
+                shownPicking = pick;
                 view.loadUrl(address);
             } catch (Exception e) {
                 settle(id, false, describe(e));
@@ -390,8 +445,20 @@ public class WebBridge {
         });
     }
 
-    /** Done (or back): what the site left kept, the site closed, the page told. */
+    /** Done (or back): what the site left kept, the site closed, the page told. Picking,
+     *  the links selected are read off the page first, and told too. */
     private void finishShown() {
+        WebView view = shownView;
+        if (shownPicking && view != null) {
+            shownPicking = false;
+            final String title = view.getTitle();
+            view.evaluateJavascript(PICKED, (picked) -> finishShown(picked, title));
+            return;
+        }
+        finishShown(null, null);
+    }
+
+    private void finishShown(String picked, String title) {
         String id = shownId;
         WebView view = shownView;
         String at = view != null && view.getUrl() != null ? view.getUrl() : null;
@@ -401,7 +468,16 @@ public class WebBridge {
         closeShown();
         if (id == null) return;
         JSONObject result = new JSONObject();
-        try { result.put("url", at); } catch (JSONException ignored) { /* none */ }
+        try {
+            result.put("url", at);
+            if (picked != null) {
+                // evaluateJavascript answers with the string JSON-quoted: unquoted, then read.
+                String list = picked;
+                if (list.startsWith("\"")) list = new org.json.JSONTokener(list).nextValue().toString();
+                result.put("links", new org.json.JSONArray(list));
+                result.put("title", title == null ? "" : title);
+            }
+        } catch (JSONException ignored) { /* none picked */ }
         settle(id, true, result.toString());
     }
 
@@ -411,6 +487,7 @@ public class WebBridge {
         shown = null;
         shownId = null;
         shownView = null;
+        shownPicking = false;
         if (gone == null) return;
         try {
             ViewGroup parent = (ViewGroup) gone.getParent();
@@ -429,6 +506,8 @@ public class WebBridge {
     /** Whether the shown site is up (the back gesture closes it first). */
     boolean closeShownIfOpen() {
         if (shown == null) return false;
+        // Back, while picking, is leaving without: nothing picked is answered.
+        shownPicking = false;
         finishShown();
         return true;
     }
