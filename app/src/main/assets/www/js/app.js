@@ -6324,11 +6324,120 @@ let shownParts = 0;
 function paintBuildIndex() {
   const index = el('build-index');
   if (!index) return;
-  index.hidden = !buildIndex;
+  const editing = buildIndex && webQueue.find((job) => job.id === editingJob && !job.bookId && job.status !== 'running');
+  if (!editing) editingJob = null;
+  index.hidden = !buildIndex || !!editing;
+  el('build-job-edit').hidden = !editing;
   el('build-detail').hidden = buildIndex;
-  el('build-minimise').hidden = buildIndex;
-  if (buildIndex) el('build-eyebrow').textContent = 'Every novel: building and queued';
+  // Top left: up a level -- from the book to every novel, from a queued one back to them.
+  el('build-minimise').hidden = buildIndex && !editing;
+  if (buildIndex) el('build-eyebrow').textContent = editing ? `Queued · ${editing.name}` : 'Every novel: building and queued';
+  if (editing) paintJobEdit(editing);
   paintIndexCard();
+}
+
+/* ── a queued novel, opened ───────────────────────────────────────────
+ *
+ * Not yet started, it is named, given a cover and its chapters changed as
+ * a book in Build is; kept as it is typed. Once started it is a book on the
+ * shelf, edited there. A picture chosen is kept with it (as a data address,
+ * small); the site's own is fetched once, to be shown. */
+let editingJob = null;
+const jobCovers = new Map();   // job id -> object URL of the site's cover, as shown
+
+function openJobEdit(id) {
+  editingJob = id;
+  buildIndex = true;
+  renderWorkshop();
+  el('build-body')?.scrollTo?.({ top: 0 });
+}
+
+async function paintJobEdit(job) {
+  if (document.activeElement !== el('job-title')) el('job-title').value = job.name;
+  if (document.activeElement !== el('job-author')) el('job-author').value = job.author || '';
+  const first = job.links[0]?.text || '';
+  const last = job.links.at(-1)?.text || '';
+  el('job-chapters').textContent = `${job.links.length} chapter${job.links.length === 1 ? '' : 's'}`
+    + `${first ? `: ${first}${job.links.length > 1 ? ` … ${last}` : ''}` : ''} · ${siteOfJob(job) || 'the web'}`;
+  el('job-cover-site').setAttribute('aria-pressed', String(!job.coverData));
+  el('job-cover-pick').setAttribute('aria-pressed', String(!!job.coverData));
+  const box = el('job-cover');
+  let url = job.coverData || jobCovers.get(job.id) || '';
+  if (!url && job.cover && !jobCovers.has(job.id)) {
+    jobCovers.set(job.id, '');
+    const blob = await web.fetchCover(job.cover).catch(() => null);
+    if (blob) jobCovers.set(job.id, URL.createObjectURL(blob));
+    if (editingJob === job.id) paintJobEdit(job);
+    return;
+  }
+  box.classList.toggle('empty', !url);
+  box.innerHTML = url ? `<img src="${url}" alt="">` : '<span>No cover yet</span>';
+  el('job-cover-note').textContent = job.coverData ? 'Your own picture. It goes into the book as its cover.'
+    : url ? 'The site\'s picture of the book.' : (job.cover ? 'The site\'s picture, fetched when it is built.' : 'The site gave no picture of the book.');
+}
+
+function wireJobEdit() {
+  const job = () => webQueue.find((each) => each.id === editingJob);
+  el('job-title').addEventListener('input', () => {
+    const it = job();
+    if (!it) return;
+    it.name = el('job-title').value.trim() || it.name;
+    el('build-eyebrow').textContent = `Queued · ${it.name}`;
+    saveQueue();
+  });
+  el('job-author').addEventListener('input', () => {
+    const it = job();
+    if (!it) return;
+    it.author = el('job-author').value.trim();
+    saveQueue();
+  });
+  el('job-cover-site').onclick = () => {
+    const it = job();
+    if (!it) return;
+    delete it.coverData;
+    saveQueue();
+    paintJobEdit(it);
+  };
+  el('job-cover-pick').onclick = () => {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = blobs.COVER_ACCEPT;
+    picker.onchange = async () => {
+      const file = picker.files?.[0];
+      const it = job();
+      if (!file || !it) return;
+      try {
+        const blob = await blobs.normaliseCover(file);
+        it.coverData = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(blob);
+        });
+        saveQueue();
+        paintJobEdit(it);
+      } catch (error) {
+        toast(error.message, 6000);
+      }
+    };
+    picker.click();
+  };
+  // Its chapters, on the Website screen: unticked there, or the site's list
+  // read again with Find links; Queue saves them back to it, in its place.
+  el('job-chapters-edit').onclick = () => {
+    const it = job();
+    if (!it) return;
+    clearWeb();
+    Object.assign(webState, { intent: 'queue', editing: it.id });
+    el('web-address').value = (it.sources || []).join('\n');
+    webState.links = it.links.map(({ url, text }) => ({ url, text, chrome: false, kind: null, likely: true, picked: true }));
+    Object.assign(webState, { sources: it.sources || [], title: it.name, author: it.author || '', cover: it.cover || '' });
+    el('web-title').value = it.name;
+    webNote(`The ${it.links.length} chapters queued for “${it.name}”. Untick any to leave out, or Find links to read the site's list again; Queue saves them.`);
+    drawWebList();
+    show('web');
+    paintWebCount();
+  };
 }
 
 /** The novel in Build, on the index: its name and how far it has got. */
@@ -6399,6 +6508,21 @@ function queueWeb() {
   if (!chosen.length) return;
   if (!webState.manualOrder) chosen = web.inReadingOrder(chosen, () => true).links;
   const name = (el('web-title').value || '').trim() || webState.title || 'From the web';
+  // Its chapters changed from its own page: saved back to it, in its place.
+  const editing = webQueue.find((job) => job.id === webState.editing && !job.bookId && job.status !== 'running');
+  webState.editing = null;
+  if (editing) {
+    Object.assign(editing, {
+      name, author: webState.author || editing.author || '', sources: webState.sources?.length ? webState.sources : editing.sources,
+      cover: webState.cover || editing.cover || '', links: chosen.map(({ url, text }) => ({ url, text })),
+      total: chosen.length, status: 'queued', stops: 0, note: '',
+    });
+    saveQueue();
+    clearWeb();
+    toast(`“${name}” changed — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}.`, 4000);
+    back();
+    return;
+  }
   webQueue.push({
     id: `q-${Date.now()}`, name, author: webState.author || '', sources: webState.sources || [],
     cover: webState.cover || '', links: chosen.map(({ url, text }) => ({ url, text })),
@@ -6500,7 +6624,10 @@ async function runJob(job) {
     const parts = [];
     const before = job.bookId != null ? await store.get('books', job.bookId) : null;
     if (before) parts.push({ ...build.bookPart(before), seamless: true });
-    const cover = before ? null : await web.fetchCover(job.cover).catch(() => null);
+    // The picture chosen for it, or the site's.
+    const cover = before ? null : job.coverData
+      ? await fetch(job.coverData).then((response) => response.blob()).catch(() => null)
+      : await web.fetchCover(job.cover).catch(() => null);
     const part = build.webPart({
       name: job.name, links: job.links, pictures: webState.pictures, cover,
       author: job.author, sources: job.sources, gap: webDelay(), jitter: webJitter(),
@@ -6725,6 +6852,13 @@ function paintQueue() {
     row.dataset.status = job.status;
     row.innerHTML = `<span class="col"><b>${escapeText(shortenMiddle(job.name))}</b>`
       + `<small class="muted">${escapeText(jobState(job))}</small></span>`;
+    // Not yet started: tapped, it opens -- title, author, cover, chapters.
+    if (!job.bookId && job.status !== 'running' && job.status !== 'done') {
+      const col = row.querySelector('.col');
+      col.classList.add('editable');
+      col.setAttribute('role', 'button');
+      col.onclick = () => openJobEdit(job.id);
+    }
     const move = (by) => () => { webQueue.splice(at + by, 0, ...webQueue.splice(at, 1)); saveQueue(); renderWorkshop(); };
     if (job.status === 'running') {
       row.appendChild(word('Pause', () => { const under = queueJobs.get(job.id); if (under) under.pausing = true; }));
@@ -9859,12 +9993,17 @@ function wireWeb() {
   });
 
   // Reached from Build, and only from there: what is chosen becomes a part.
-  el('build-web').onclick = () => { webState.intent = null; show('web'); paintWebCount(); };
+  el('build-web').onclick = () => { webState.intent = null; webState.editing = null; show('web'); paintWebCount(); };
   // The book minimised, to the index of every novel; and back into it from its card.
-  el('build-minimise').onclick = () => { buildIndex = true; renderWorkshop(); };
+  el('build-minimise').onclick = () => {
+    if (editingJob) editingJob = null;
+    else buildIndex = true;
+    renderWorkshop();
+  };
+  wireJobEdit();
   el('build-index-current').onclick = () => { buildIndex = false; renderWorkshop(); };
   // Another novel, to queue: the Website screen with Queue as its main button.
-  el('build-index-add').onclick = () => { webState.intent = 'queue'; show('web'); paintWebCount(); };
+  el('build-index-add').onclick = () => { webState.intent = 'queue'; webState.editing = null; show('web'); paintWebCount(); };
   el('build-from-shelf').onclick = () => { pickNext = true; show('library'); };
 }
 

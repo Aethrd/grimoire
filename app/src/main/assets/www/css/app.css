@@ -2664,6 +2664,10 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .build-index-card small { display: block; margin-top: 4px; }
 .build-index-add { display: block; width: 100%; margin: 14px 0 8px; }
 .build-index-note { font-size: 12px; line-height: 1.5; }
+.job-chapters { margin: 4px 0 8px; line-height: 1.5; overflow-wrap: anywhere; }
+/* A queued novel not yet started: tapped to open it. */
+.build-queue-list li .col.editable { cursor: pointer; }
+.build-queue-list li .col.editable b::after { content: ' ›'; opacity: .55; font-weight: 400; }
 /* The queue: websites waiting their turn on Build, one book each. */
 .build-queue-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .build-queue-list { list-style: none; margin: 8px 0 0; padding: 0; }

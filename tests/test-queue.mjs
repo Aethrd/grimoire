@@ -62,6 +62,39 @@ await t('the queue shows on Build, with each book and Start queue', async () => 
   assert.equal(document.getElementById('build-queue-go').textContent, 'Start queue');
 });
 
+await t('a queued book not yet started opens to be named, as a book in Build is', async () => {
+  const openC = () => document.getElementById('build-queue-list').children[2].querySelector('.col').click();
+  openC();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(document.getElementById('build-job-edit').hidden, false);
+  assert.equal(document.getElementById('build-index').hidden, true);
+  assert.equal(document.getElementById('job-title').value, 'C');
+  assert.match(document.getElementById('job-chapters').textContent, /4 chapters: 1화 … 4화 · bookkor/);
+  const title = document.getElementById('job-title');
+  title.value = 'C, renamed';
+  title.dispatchEvent(new window.Event('input'));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal((await store.settings()).webQueue[2].name, 'C, renamed');
+  // Its chapters on the Website screen, Queue the button; saved back to it, in its place.
+  document.getElementById('job-chapters-edit').click();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(document.querySelector('[data-screen="web"]').hasAttribute('data-active'), true);
+  assert.equal(document.getElementById('web-go').hidden, true);
+  assert.match(document.getElementById('web-queue').textContent, /^Queue 4$/);
+  assert.equal(document.getElementById('web-list').children.length, 4);
+  document.getElementById('web-queue').click();
+  await new Promise((r) => setTimeout(r, 80));
+  const kept = (await store.settings()).webQueue;
+  assert.equal(kept.length, 3, 'changed in its place, not queued again');
+  assert.deepEqual([kept[2].name, kept[2].links.length, kept[2].status], ['C, renamed', 4, 'queued']);
+  openC();
+  // Back, top left: every novel again.
+  document.getElementById('build-minimise').click();
+  assert.equal(document.getElementById('build-job-edit').hidden, true);
+  assert.equal(document.getElementById('build-index').hidden, false);
+  assert.match(document.getElementById('build-queue-list').children[2].textContent, /C, renamed/);
+});
+
 await t('started, it builds every book: two at once, never two from one site', async () => {
   document.getElementById('web-delay').value = '150';
   document.getElementById('web-jitter').value = '0';
@@ -76,7 +109,7 @@ await t('started, it builds every book: two at once, never two from one site', a
   assert.deepEqual(jobs.map((each) => each.status), ['done', 'done', 'done'], JSON.stringify(jobs.map((each) => [each.name, each.status, each.note])));
   // A book each, whole.
   const books = (await store.all('books')).filter((book) => !book.importing);
-  for (const name of ['A', 'B', 'C']) {
+  for (const name of ['A', 'B', 'C, renamed']) {
     const book = books.find((each) => each.title === name);
     assert.ok(book, `no book ${name}`);
     assert.equal(book.chapters, name === 'B' ? 3 : 4);

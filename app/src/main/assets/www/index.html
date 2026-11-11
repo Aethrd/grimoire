@@ -365,6 +365,32 @@
     <div class="scroll pad" id="build-body">
       <!-- Every novel at once: the one in Build (tap it to open it), the queue's,
            and another to add -- queued, a book of its own. -->
+      <!-- A queued novel not yet started, opened from the index: named, given a
+           cover and its chapters changed, as a book in Build is. -->
+      <div id="build-job-edit" hidden>
+        <label class="field"><span>Title</span>
+          <input class="query" id="job-title" type="text" autocomplete="off" placeholder="What the book will be called">
+        </label>
+        <label class="field"><span>Author</span>
+          <input class="query" id="job-author" type="text" autocomplete="off" placeholder="Optional">
+        </label>
+        <div class="field build-cover-field">
+          <span>Cover</span>
+          <div class="details-head">
+            <span class="details-cover" id="job-cover"></span>
+            <span class="col">
+              <button class="btn ghost" id="job-cover-site" aria-pressed="true">The site's cover</button>
+              <button class="btn ghost" id="job-cover-pick" aria-pressed="false">Choose a picture…</button>
+              <small class="muted" id="job-cover-note"></small>
+            </span>
+          </div>
+        </div>
+        <div class="field"><span>Chapters</span>
+          <p class="muted job-chapters" id="job-chapters"></p>
+          <button class="btn ghost" id="job-chapters-edit">Change chapters…</button>
+        </div>
+        <p class="muted build-index-note">Kept as you type. Back (top left) to every novel.</p>
+      </div>
       <div id="build-index" hidden>
         <button class="build-index-card" id="build-index-current" hidden>
           <b id="build-index-name"></b><small class="muted" id="build-index-state"></small></button>
