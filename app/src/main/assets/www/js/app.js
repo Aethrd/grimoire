@@ -6117,25 +6117,34 @@ function span(ms) {
 }
 
 /** A guess at reading one page, the delay apart, before any has come. */
-const READ_GUESS_MS = 6000;
-/** How many of the latest chapters the estimate goes by. */
+/** A guess, before any page has come, at a page's time from asking to answer:
+ *  its loading, and the few seconds it is stayed on to confirm its story. */
+const PAGE_GUESS_MS = 9000;
+const STAY_GUESS_MS = 3000;
+/** How many measured pages count for as much as the guess. */
+const GUESS_WEIGHT = 3;
+/** How many of the latest chapters the fallback estimate goes by (no delay set). */
 const RECENT_CHAPTERS = 20;
 /** How many chapters until what they took counts for more than the guess. */
 const TRUST_AFTER = 5;
 
+/** The middle value; and the value a fraction of the way up (0.2, 0.8). */
+const middleOf = (values) => quantileOf(values, 0.5);
+function quantileOf(values, q) {
+  if (!values?.length) return NaN;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+}
+
 /**
- * How long a chapter takes, from the latest ones: each chapter's time, the
- * delay and any retries included -- retries do happen, and cost a delay
- * each -- but one that took more than three times the typical (a long hold,
- * the phone asleep) counted as three, so a single bad one does not make
- * hours of the estimate. Until a few have come, leaning on what the delay
- * says a chapter should take: there is an estimate from the start.
+ * The fallback, where there is no delay to go by (none set): each chapter's
+ * whole time, the latest 20, one more than three times the typical counted
+ * as three.
  */
 function chapterTime(samples, guess) {
   const recent = samples.slice(-RECENT_CHAPTERS);
   if (!recent.length) return guess;
-  const sorted = [...recent].sort((a, b) => a - b);
-  const typical = sorted[Math.floor(sorted.length / 2)];
+  const typical = middleOf(recent);
   const mean = recent.reduce((sum, ms) => sum + Math.min(ms, typical * 3), 0) / recent.length;
   if (!Number.isFinite(guess)) return mean;
   const trust = Math.min(1, recent.length / TRUST_AFTER);
@@ -6143,23 +6152,83 @@ function chapterTime(samples, guess) {
 }
 
 /**
- * The time left: this chapter's rest, the chapters after it at the time one
- * takes, and the websites after this one at what their delays say. Null
- * when nothing says yet (a site with no delay, and no chapter come).
+ * What a chapter of this website costs, taken apart into what is known and
+ * what is measured:
+ *
+ *   the delay   known: the reader set it, and its give-or-take evens out --
+ *               it is not guessed from how the waits happened to fall (times
+ *               how much slower the site has asked it to go);
+ *   a page      measured: the middle of the latest pages' times from asking
+ *               to answer -- the middle, so one long hold does not move it --
+ *               blended from a guess while few have come (no step at the
+ *               fifth); the time stayed to confirm it comes off the delay
+ *               after, so a page costs (time − stay) + the longer of the stay
+ *               and the delay;
+ *   pages each  measured: how many requests a chapter has needed -- second
+ *               pages, retries -- so a three-page chapter counts as three,
+ *               not as a slow one;
+ *   pauses      the pauses taken between tries, spread over the chapters.
+ *
+ * `band` is how wide the likely spread is, a chapter's worth: the pages'
+ * own spread (the 20th to 80th of a hundred), for a range shown beside it.
+ */
+function chapterCost(run, part) {
+  const stats = run.stats;
+  if (!part || !(part.gap > 0 || part.jitter > 0) || !stats) return null;
+  const delay = part.gap * (stats.slower || 1);
+  const n = stats.times.length;
+  const blend = (measured, guess) => (n ? (n * measured + GUESS_WEIGHT * guess) / (n + GUESS_WEIGHT) : guess);
+  const page = blend(middleOf(stats.times), PAGE_GUESS_MS);
+  const stay = Math.min(page, blend(middleOf(stats.dwells), STAY_GUESS_MS));
+  const cycle = (page - stay) + Math.max(stay, delay);
+  const pages = (stats.requests + 2) / (stats.chapters + 2);
+  const pauses = stats.napMs / (stats.chapters + 2);
+  const spread = n >= 5 ? (quantileOf(stats.times, 0.8) - quantileOf(stats.times, 0.2)) / 2 : NaN;
+  return { each: pages * cycle + pauses, band: spread * pages, jitter: (part.jitter || 0) * (stats.slower || 1) };
+}
+
+/**
+ * The time left, and how far either way it may well be (null if not yet
+ * to be said): this chapter's rest, the chapters after it at what one
+ * costs (chapterCost), a wait the site asked for still to run, and the
+ * websites after this one at their delays and the pages measured here.
  */
 function timeLeft(run, now) {
   const left = run.total - run.done;
-  if (!(left > 0)) return 0;
+  if (!(left > 0)) return { ms: 0, band: 0 };
   const part = run.delays?.[run.at];
-  const guess = part ? part.gap + READ_GUESS_MS : NaN;
-  const each = chapterTime(run.samples || [], guess);
+  const cost = chapterCost(run, part);
+  const each = cost ? cost.each : chapterTime(run.samples || [], part ? part.gap + PAGE_GUESS_MS - STAY_GUESS_MS : NaN);
   if (!Number.isFinite(each)) return null;
   const since = now - (run.lastCame || run.partStart || now);
   let ms = Math.max(0, each - since) + each * (left - 1);
+  // Waiting out what the site asked for, or a pause before one more try: known, and beyond the usual.
+  if (run.waitingUntil > now) ms += run.waitingUntil - now;
+  const page = cost && run.stats?.times.length ? middleOf(run.stats.times) : PAGE_GUESS_MS;
   for (const later of (run.delays || []).slice(run.at + 1)) {
-    if (later) ms += later.chapters * (later.gap + READ_GUESS_MS);
+    if (later) ms += later.chapters * (Math.max(0, page - STAY_GUESS_MS) + Math.max(STAY_GUESS_MS, later.gap));
   }
-  return ms;
+  /* How far either way: the pages' spread for every chapter left, and the
+   * delay's give-or-take, which evens out over many (its spread grows as the
+   * square root of how many). */
+  const band = cost && Number.isFinite(cost.band)
+    ? cost.band * left + (cost.jitter / Math.sqrt(3)) * Math.sqrt(left)
+    : NaN;
+  return { ms, band };
+}
+
+/**
+ * What is shown, counting down by the second, against a new estimate: left
+ * as it is while the two are near (within 3%, or half a minute) -- so it does
+ * not wobble with each chapter -- and otherwise moved toward it: quickly when
+ * it is more (the site is slowing: worth knowing), slowly when it is less (a
+ * few quick chapters are no promise).
+ */
+function steady(ticked, target) {
+  if (ticked == null) return target;
+  const off = target - ticked;
+  if (Math.abs(off) <= Math.max(30000, ticked * 0.03)) return ticked;
+  return ticked + off * (off > 0 ? 0.25 : 0.08);
 }
 
 /**
@@ -6175,14 +6244,15 @@ function paintTimes() {
   const elapsed = span(now - run.startedAt);
   let left = '';
   if (Number.isFinite(run.total) && Number.isFinite(run.done) && run.done < run.total) {
-    const target = timeLeft(run, now);
-    if (target === null) {
+    const estimate = timeLeft(run, now);
+    if (estimate === null) {
       left = 'estimating…';
     } else {
-      const ticked = run.shown == null ? target : Math.max(0, run.shown - (now - run.shownAt));
-      run.shown = run.shown == null ? target : ticked + (target - ticked) * 0.15;
+      run.shown = steady(run.shown == null ? null : Math.max(0, run.shown - (now - run.shownAt)), estimate.ms);
       run.shownAt = now;
-      left = `~${span(run.shown)} left`;
+      // A range once there is enough to say one, and when it is worth saying.
+      const band = Number.isFinite(estimate.band) && estimate.band >= 120000 ? ` (± ${span(estimate.band)})` : '';
+      left = `~${span(run.shown)} left${band}`;
     }
   }
   const parts = run.parts > 1 ? `${run.at + 1} of ${run.parts} · ` : '';
@@ -6826,7 +6896,8 @@ function wireWorkshop() {
      * book on with later. */
     // What each website's delay says a chapter should take, for an estimate from the start.
     const delays = build.contents().map((part) => (part.web
-      ? { gap: Math.max(0, Number(part.web.gap) || 0), chapters: part.web.links?.length || 0 } : null));
+      ? { gap: Math.max(0, Number(part.web.gap) || 0), jitter: Math.max(0, Number(part.web.jitter) || 0), chapters: part.web.links?.length || 0 }
+      : null));
     buildRun = { online, pausing: false, status: 'Starting…', finish, startedAt: Date.now(), at: -1, delays, samples: [] };
     buildRun.ticker = setInterval(paintTimes, 1000);
     paintBuildFoot();
@@ -6860,7 +6931,10 @@ function wireWorkshop() {
                 buildRun.lastCame = nowMs;
               }
               Object.assign(buildRun, { done: counts.done, total: counts.total });
+              if (counts.stats) buildRun.stats = counts.stats;
             }
+            // A wait the site asked for, or a pause before one more try: its end, while it lasts.
+            if (now !== undefined) buildRun.waitingUntil = now?.kind === 'wait' && now.why ? now.until : 0;
             paintTimes();
           }
           // Beside the button, briefly: "120 of 669 · ~5 h left", or how far in.

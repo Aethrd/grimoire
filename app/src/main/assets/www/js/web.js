@@ -1757,7 +1757,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * picture is not a page and is not held back. With no pace set, nothing
  * waits and nothing queues.
  */
-export function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = null, onStart = null, scale = () => 1 } = {}) {
+export function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = null, onStart = null, onEnd = null, scale = () => 1 } = {}) {
   if (!(gap > 0) && !(jitter > 0)) return fetchPage;
   let line = Promise.resolve();
   let lastEnd = 0;
@@ -1771,6 +1771,7 @@ export function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWa
     // is taken off the delay after it: a reader's few seconds on the page are
     // part of the wait, not added to it. Never more than the whole delay.
     let dwell = 0;
+    let began = 0;
     try {
       if (lastEnd) {
         const times = Math.max(1, Number(scale()) || 1);
@@ -1782,11 +1783,14 @@ export function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWa
       if (stop()) throw Object.assign(new Error(PAUSED_REASON), { paused: true, tries: 1 });
       // Only now is it being read: not while it waited its turn.
       onStart?.(url);
+      began = Date.now();
       const page = await fetchPage(url, options);
       dwell = Math.max(0, Number(page?.dwell) || 0);
       return page;
     } finally {
       lastEnd = Date.now() - dwell;
+      // How long it took, from asking to answer (a failure too: it took the time).
+      if (began) onEnd?.(url, lastEnd + dwell - began, dwell);
       release();
     }
   };
@@ -1965,8 +1969,15 @@ export async function readPages(links, {
   // from should everything stop now: Build writes it there and then, so a
   // build the app is closed in the middle of keeps what had come.
   onChapter = null,
+  /* Filled in as it goes, for the time-left estimate (app.js, timeLeft): each
+   * request's time and the time stayed on it to confirm (the latest 40),
+   * how many requests have been made and chapters settled, the pauses taken
+   * between tries, and how much slower the site asked it to go. */
+  stats = null,
 } = {}) {
   const wait = { ...PATIENCE, ...patience };
+  if (stats) Object.assign(stats, { requests: 0, times: [], dwells: [], chapters: 0, napMs: 0, slower: 1 });
+  const keepLatest = (list, value) => { list.push(value); if (list.length > 40) list.shift(); };
   const chapters = [];
   const waiting = new Array(links.length);
   let handed = 0;        // the next page to hand on
@@ -2061,6 +2072,12 @@ export async function readPages(links, {
   let slower = 1;
   const paced = pacer(fetchPage, {
     gap, jitter, stop: () => pausing(), scale: () => slower,
+    onEnd: (url, ms, dwell) => {
+      if (!stats) return;
+      stats.requests += 1;
+      keepLatest(stats.times, ms);
+      keepLatest(stats.dwells, dwell);
+    },
     onStart: (url) => say(url),
     onWait: (url, ms) => {
       const at = links.findIndex((link) => link.url === url);
@@ -2153,6 +2170,7 @@ export async function readPages(links, {
           onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
             `connection trouble — one more try at ${nameOf(link, at)} after a pause…`,
             { kind: 'wait', name: nameOf(link, at), until: Date.now() + cool, why: 'connection trouble' });
+          if (stats) stats.napMs += cool;
           await napUnless(cool, pausing);
           if (pausing()) throw PAUSED();
           waits.push(0);
@@ -2168,10 +2186,12 @@ export async function readPages(links, {
            * twice the spacing (up to four times) for the rest of this download. */
           nap = Math.min(15 * 60000, Math.max(nap, askedWait(error)));
           slower = Math.min(4, slower * 2);
+          if (stats) stats.slower = slower;
           onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
             `the site asked to slow down — waiting ${Math.round(nap / 1000)} s before ${nameOf(link, at)}…`,
             { kind: 'wait', name: nameOf(link, at), until: Date.now() + nap, why: 'the site asked to slow down' });
         }
+        if (stats) stats.napMs += nap;
         await napUnless(nap, pausing);
         tries += 1;
       }
@@ -2201,6 +2221,7 @@ export async function readPages(links, {
       // Past the stop, a page that came is left for the rest, not kept.
       waiting[at] = at < stopAt ? got : null;
       settled += 1;
+      if (stats) stats.chapters = settled;
       onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length);
       await handOn();
     }

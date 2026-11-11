@@ -523,9 +523,12 @@ export async function build({
     } : null;
 
     let parsed;
+    // How this website's pages are going, for the time-left estimate.
+    const partStats = {};
     try {
       parsed = part.web
         ? await readPages(part.web.links, {
+          stats: partStats,
           title: part.name,
           author: part.web.author,
           cover: part.coverBlob,
@@ -541,7 +544,7 @@ export async function build({
           // this moment (waiting out the delay, reading, another try) apart.
           onProgress: (fraction, done, total, note, now) => onProgress?.(
             `Downloading ${part.name} · ${done} of ${total}`,
-            (at + fraction) / parts.length, at, parts.length, now, { done, total }),
+            (at + fraction) / parts.length, at, parts.length, now, { done, total, stats: partStats }),
         })
         : part.bookId
         ? await readShelfBook(part)

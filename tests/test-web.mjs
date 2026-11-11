@@ -1862,7 +1862,7 @@ await t('how far it has got and what it is doing now are told apart', async () =
   assert.deepEqual([retry.name, retry.attempt, retry.of], ['No. 2', 2, 3]);
   // Build keeps the count on the bar's line and passes what it is doing apart.
   const build = read('app/src/main/assets/www/js/build.js');
-  assert.match(build, /`Downloading \$\{part\.name\} · \$\{done\} of \$\{total\}`,\s+\(at \+ fraction\) \/ parts\.length, at, parts\.length, now, \{ done, total \}\)/);
+  assert.match(build, /`Downloading \$\{part\.name\} · \$\{done\} of \$\{total\}`,\s+\(at \+ fraction\) \/ parts\.length, at, parts\.length, now, \{ done, total, stats: partStats \}\)/);
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /<div class="job-activity" hidden><span class="job-tag"><\/span><span class="job-now"><\/span><\/div>/);
   assert.match(app, /what\.textContent = `\$\{left\} s left \$\{now\.why \? `· \$\{now\.why\}` : 'of your delay'\}, then \$\{name\}`;/);
@@ -2193,36 +2193,78 @@ await t('a chapter is stayed on a few seconds to confirm it, and that time comes
   assert.ok(Date.now() - at < 100);
 });
 
+await t('a download records what the time-left estimate goes by', async () => {
+  const stats = {};
+  let fails = 1;
+  const site = async (url, options) => {
+    if (url.endsWith('chapter-2') && fails-- > 0) throw new Error('the site answered 500');
+    const page = await fakeFetch(url, options);
+    return { ...page, dwell: 20 };
+  };
+  await web.readPages([1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` })), {
+    fetchPage: site, gap: 30, jitter: 0, pictures: false, stats, patience: { retry: 0, refresh: [0], backoff: [40] },
+  });
+  // Four requests for three chapters (one tried twice), each timed, with its stay; the pause between tries.
+  assert.equal(stats.requests, 4);
+  assert.equal(stats.chapters, 3);
+  assert.equal(stats.times.length, 4);
+  assert.deepEqual(stats.dwells.filter((ms) => ms === 20).length, 3);
+  assert.equal(stats.napMs, 40);
+  assert.equal(stats.slower, 1);
+});
+
 await t('a build says how long it has been and how long it should be yet', async () => {
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /left = 'estimating…';/);
   assert.match(app, /buildRun\.ticker = setInterval\(paintTimes, 1000\);/);
-  assert.match(read('app/src/main/assets/www/js/build.js'), /parts\.length, now, \{ done, total \}\)/);
   // span(): seconds, minutes, hours.
   const body = app.slice(app.indexOf('function span(ms) {'), app.indexOf('function paintTimes()'));
   const span = new Function(`${body}; return span;`)();
   assert.equal(span(45000), '45 s');
   assert.equal(span(12 * 60000), '12 m');
   assert.equal(span(65 * 60000), '1 h 05 m');
-  // The time left: from the delay before any chapter has come, then from what chapters take.
-  const fns = new Function(`${body}; return { chapterTime, timeLeft };`)();
-  const run = { at: 1, done: 0, total: 453, delays: [null, { gap: 30000, chapters: 453 }], samples: [], partStart: 0, lastCame: 0 };
-  assert.equal(Math.round(fns.timeLeft(run, 0) / 60000), Math.round((453 * 36000) / 60000), 'a guess from the start');
-  // Chapters taking 20 s: after a few, that is what it goes by.
-  const quick = Array(10).fill(20000);
-  assert.equal(fns.chapterTime(quick, 36000), 20000);
-  // Halfway to trusting them after 2 or 3.
-  assert.ok(fns.chapterTime([20000, 20000], 36000) > 20000 && fns.chapterTime([20000, 20000], 36000) < 36000);
-  // One that took ten minutes does not make hours of it: counted as three times the typical.
-  assert.equal(Math.round(fns.chapterTime([...quick, 600000], 36000)), Math.round((10 * 20000 + 60000) / 11));
-  // The recent ones count, not the slow start.
-  assert.equal(fns.chapterTime([...Array(30).fill(90000), ...Array(20).fill(20000)], 36000), 20000);
-  // A site with no delay says nothing until a chapter has come.
-  assert.equal(fns.timeLeft({ ...run, delays: [null, { gap: 0, chapters: 3 }], samples: [] }, 0) > 0, true);
-  assert.equal(fns.timeLeft({ ...run, delays: [null, null], samples: [] }, 0), null);
-  // Later websites in the same build are counted too.
-  const two = { ...run, delays: [null, { gap: 30000, chapters: 453 }, { gap: 10000, chapters: 100 }] };
-  assert.equal(fns.timeLeft(two, 0) - fns.timeLeft(run, 0), 100 * 16000);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /now, \{ done, total, stats: partStats \}\)/);
+  const fns = new Function(`${body}; return { chapterTime, timeLeft, steady };`)();
+  const minutes = (ms) => Math.round(ms / 60000);
+  // Within 2%: the guess still counts for a little after 40 pages.
+  const near = (got, want, why = '') => assert.ok(Math.abs(got - want) <= want * 0.02, `${why} ${minutes(got)} m, not ${minutes(want)} m`);
+  const part = { gap: 30000, jitter: 10000, chapters: 453 };
+  const stats = (times, more = {}) => ({ requests: times.length, times, dwells: times.map(() => 3000), chapters: times.length, napMs: 0, slower: 1, ...more });
+  const run = { at: 1, done: 0, total: 453, delays: [null, part], samples: [], partStart: 0, lastCame: 0 };
+  // From the start: the delay, and a guess at a page (its load, the stay coming off the delay).
+  assert.equal(minutes(fns.timeLeft(run, 0).ms), minutes(453 * 36000), 'a guess from the start');
+  assert.equal(minutes(fns.timeLeft({ ...run, stats: stats([]) }, 0).ms), minutes(453 * 36000));
+  // Pages measured at 5 s (2 s loading, 3 s stay): the delay, plus 2 s each.
+  const settledRun = { ...run, done: 50, stats: stats(Array(40).fill(5000)) };
+  near(fns.timeLeft(settledRun, 0).ms, 403 * 32000);
+  // Blended from the guess, not a step at the fifth: after 3 pages, halfway.
+  const three = fns.timeLeft({ ...run, done: 3, stats: stats([5000, 5000, 5000]) }, 0).ms / 450;
+  assert.ok(three > 32000 && three < 36000, `${three}`);
+  // One ten-minute page does not move it: the middle of the pages, not their mean.
+  const slowOne = stats([...Array(39).fill(5000), 600000]);
+  near(fns.timeLeft({ ...settledRun, stats: slowOne }, 0).ms, 403 * 32000, 'one slow page');
+  // Chapters that have needed two requests each (second pages, retries): twice the cost.
+  const twice = stats(Array(40).fill(5000), { requests: 80, chapters: 40 });
+  assert.ok(fns.timeLeft({ ...settledRun, stats: twice }, 0).ms > 1.9 * fns.timeLeft(settledRun, 0).ms);
+  // The site asked to slow down: twice the delay from then on.
+  const slowed = fns.timeLeft({ ...settledRun, stats: stats(Array(40).fill(5000), { slower: 2 }) }, 0).ms;
+  near(slowed, 403 * 62000, 'slowed');
+  // A wait it asked for, still to run, is added as it is.
+  assert.equal(fns.timeLeft({ ...settledRun, waitingUntil: 600000 }, 0).ms - fns.timeLeft(settledRun, 0).ms, 600000);
+  // A likely range: the pages' spread, and the delay's give-or-take evening out.
+  const spread = stats(Array.from({ length: 40 }, (_, i) => 4000 + (i % 5) * 1000));
+  assert.ok(fns.timeLeft({ ...settledRun, stats: spread }, 0).band > 0);
+  assert.ok(Number.isNaN(fns.timeLeft({ ...run, stats: stats([5000]) }, 0).band));
+  // No delay set: from what chapters take (the latest 20), nothing until one has come.
+  assert.equal(fns.chapterTime(Array(10).fill(20000), 36000), 20000);
+  assert.equal(fns.timeLeft({ ...run, delays: [null, null] }, 0), null);
+  // Later websites in the same build: at their delays, and the pages measured here.
+  const two = { ...settledRun, delays: [null, part, { gap: 10000, chapters: 100 }] };
+  near(fns.timeLeft(two, 0).ms - fns.timeLeft(settledRun, 0).ms, 100 * 12000, 'later website');
+  // Shown steadily: near the estimate, left to count down; more, followed quickly; less, slowly.
+  assert.equal(fns.steady(3600000, 3610000), 3600000);
+  assert.ok(fns.steady(3600000, 7200000) - 3600000 > 3 * (3600000 - fns.steady(3600000, 1800000)) * 0.9);
+  assert.equal(fns.steady(null, 5000), 5000);
   // The notification popup shows a line of the title: a few words.
   assert.match(app, /title: 'Build done', text: `“\$\{book\.title\}”: /);
 });
