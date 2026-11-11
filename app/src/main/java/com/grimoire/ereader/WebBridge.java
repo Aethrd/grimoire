@@ -220,6 +220,8 @@ public class WebBridge {
         // back without its chapter is asked for patiently: then nothing is.
         final boolean ownSiteOnly = level < 2 && !open;
         final long maxMs = RENDER_MAX_MS + level * RENDER_MAX_STEP_MS;
+        // Pictures, fonts and video left out but at the most patient try (see Rendering.lean).
+        final boolean lean = level < 3;
         renderer.execute(() -> {
             String safeId = id == null ? "x" : id.replaceAll("[^A-Za-z0-9_-]", "_");
             File target = new File(dir(), safeId);
@@ -232,7 +234,7 @@ public class WebBridge {
                 // Pictures, fonts and video are never what the reader takes from a page --
                 // the pictures it keeps are fetched on their own, from their addresses --
                 // so they are not loaded. At the most patient try, everything is.
-                Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly, level < 3);
+                Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly, lean);
                 main.post(job::start);
                 if (!job.done.await(RENDER_WAIT_MS + 20000, TimeUnit.MILLISECONDS)) {
                     main.post(job::finish);

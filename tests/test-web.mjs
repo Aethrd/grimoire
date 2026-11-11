@@ -1933,7 +1933,8 @@ await t('a chapter is taken as soon as its story is there and still, not when th
   assert.match(java, /long settle = finished \? need : need \+ quietMs;/);
   assert.match(java, /private static final long RENDER_POLL_MS = 250;/);
   // Pictures, fonts and video are not loaded by the unseen browser, but at the most patient try.
-  assert.match(java, /new Rendering\(address, quietMs, maxMs, scroll, ownSiteOnly, level < 3\)/);
+  assert.match(java, /final boolean lean = level < 3;/);
+  assert.match(java, /new Rendering\(address, quietMs, maxMs, scroll, ownSiteOnly, lean\)/);
   assert.match(java, /if \(job\.lean && isHeavy\(request\)\) \{/);
   // What a site needs is remembered past the app being closed, for a fortnight.
   const web = read('app/src/main/assets/www/js/web.js');
