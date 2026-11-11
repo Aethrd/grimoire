@@ -282,7 +282,7 @@ await t('the screen is reached from Build, and only from there', () => {
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /case 'web': return renderWeb\(\);/);
   assert.match(app, /settleWeb: web\.settleWeb/);
-  assert.match(app, /el\('build-web'\)\.onclick = \(\) => \{ webState\.intent = null; show\('web'\); paintWebCount\(\); \};/);
+  assert.match(app, /el\('build-web'\)\.onclick = \(\) => \{ webState\.intent = null; webState\.editing = null; show\('web'\); paintWebCount\(\); \};/);
   assert.match(app, /el\('web-go'\)\.onclick = addWebToBuild;/);
   // Emptied for the next one: on adding, on a build, and on Clear in Build.
   const add = app.slice(app.indexOf('async function addWebToBuild('), app.indexOf('function clearWeb('));
@@ -2274,9 +2274,9 @@ await t('a queue of websites: books of their own, several at once but never two 
   // Each at the settings as they are when its turn comes -- the same for all.
   assert.match(run, /pictures: webState\.pictures, cover,\s+author: job\.author, sources: job\.sources, gap: webDelay\(\), jitter: webJitter\(\),/);
   // Build as the book in it, or the index of every novel; adding a novel from there queues it.
-  assert.match(app, /el\('build-minimise'\)\.onclick = \(\) => \{ buildIndex = true; renderWorkshop\(\); \};/);
+  assert.match(app, /el\('build-minimise'\)\.onclick = \(\) => \{\s+if \(editingJob\) editingJob = null;\s+else buildIndex = true;/);
   assert.match(app, /el\('build-index-current'\)\.onclick = \(\) => \{ buildIndex = false; renderWorkshop\(\); \};/);
-  assert.match(app, /el\('build-index-add'\)\.onclick = \(\) => \{ webState\.intent = 'queue'; show\('web'\); paintWebCount\(\); \};/);
+  assert.match(app, /el\('build-index-add'\)\.onclick = \(\) => \{ webState\.intent = 'queue'; webState\.editing = null; show\('web'\); paintWebCount\(\); \};/);
   assert.match(app, /go\.hidden = queueing;/);
   assert.match(app, /if \(parts\.length > shownParts && !buildRun\) buildIndex = false;/);
   assert.ok(html.indexOf('id="build-queue"') > html.indexOf('id="build-index"') && html.indexOf('id="build-queue"') < html.indexOf('id="build-detail"'));
