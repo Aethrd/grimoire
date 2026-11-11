@@ -9239,7 +9239,24 @@ function renderWeb() {
   paintWebCount();
 }
 
+/** Chapters missing from the numbers of those ticked, and any ticked twice: said above the list. */
+function paintWebGaps() {
+  const box = el('web-gaps');
+  if (!box) return;
+  const { missing, count, twice, from, to } = web.numberGaps(webState.links.filter((link) => link.picked));
+  const shown = (list) => (list.length > 12 ? `${list.slice(0, 12).join(', ')} and ${list.length - 12} more` : list.join(', '));
+  const lines = [];
+  if (count) {
+    lines.push(`${count} chapter${count === 1 ? '' : 's'} missing between ${from} and ${to}: ${shown(missing)}. `
+      + 'Not on the site, or not found yet — Search for more, or Find links again, may bring them.');
+  }
+  if (twice.length) lines.push(`Ticked twice: ${shown(twice.map(String))} — the same chapter number on two links.`);
+  box.hidden = !lines.length;
+  box.textContent = lines.length ? `⚠ ${lines.join(' ')}` : '';
+}
+
 function paintWebCount() {
+  paintWebGaps();
   const picked = webState.links.filter((link) => link.picked).length;
   el('web-count').textContent = webState.links.length
     ? `${picked} of ${webState.links.length}`

@@ -2390,6 +2390,37 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   touch('touchmove', 160);
   await new Promise((r) => setTimeout(r, 520));
   assert.equal(JSON.parse(w.eval(script('PICKED'))).length, 8);
+  // The app's own hold (it notices it before the page): begun where the finger is, dragged, let go.
+  under = anchors[3];
+  assert.equal(w.__gPick.holdAt(50, 300), true);
+  under = anchors[5];
+  w.__gPick.dragTo(50, 500);
+  w.__gPick.release();
+  assert.deepEqual(JSON.parse(w.eval(script('PICKED'))).map((l) => l.text), ['407화 악은 삶을 바란다', '406화 악은 삶을 바란다', '405화 악은 삶을 바란다']);
+  // Not on a link: nothing begun.
+  under = w.document.body;
+  assert.equal(w.__gPick.holdAt(50, 10), false);
+  // What only opens the list out is let through, not marked: 더보기, Show more, a link to nowhere.
+  const more = w.document.createElement('a');
+  more.href = '#';
+  more.textContent = '이전 회차 더보기';
+  w.document.body.appendChild(more);
+  const showMore = w.document.createElement('a');
+  showMore.href = 'https://k.example/b?all=1';
+  showMore.textContent = 'Show more';
+  w.document.body.appendChild(showMore);
+  // (Each reaches the page's own handler, which opens the list out.)
+  const reached = [];
+  for (const opener of [more, showMore]) {
+    opener.addEventListener('click', (e) => { reached.push(opener.textContent); e.preventDefault(); });
+    tap(opener);
+  }
+  assert.deepEqual(reached, ['이전 회차 더보기', 'Show more']);
+  assert.ok(!more.classList.contains('__gPickStart') && !showMore.classList.contains('__gPickStart'));
+  // Begun by the app, the page's own touch handling stands aside.
+  assert.match(java, /private static final String PICKING_STARTS = "window\.__gPickNative=1;" \+ PICKABLE;/);
+  assert.match(java, /WebViewCompat\.addDocumentStartJavaScript\(view, PICKING_STARTS, Collections\.singleton\("\*"\)\);\s+\}\s+holdToPick\(view\);/);
+  assert.match(java, /view\.onTouchEvent\(cancel\);/);
   // The app: answered links into the list, the page's title less the site's name; back is nothing picked.
   window.GrimoireWeb = { pickFromSite: (id) => setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: 'https://k.example/b', title: '악은 삶을 바란다 - BOOKKOR', links: picked })), 0) };
   const answer = await web.pickSite('https://k.example/b');
@@ -2419,6 +2450,20 @@ const cases = [
   ['jsonld', '<head><title>Home | Site</title><script type="application/ld+json">{"@type":"Book","name":"Lord of Mysteries"}</script></head><body>', 'https://site.com/a', 'Lord of Mysteries'],
 ];
   for (const [name, html, url, want] of cases) assert.equal(web.pageTitle(doc(html), url), want, name);
+});
+
+await t('chapters missing from the numbers ticked are said, so nobody combs the list for them', () => {
+  const titled = (numbers) => numbers.map((n) => ({ text: `${n}화 악은 삶을 바란다` }));
+  const all = [...Array(410)].map((_, i) => i + 1);
+  assert.deepEqual(web.numberGaps(titled(all.filter((n) => n <= 310 || n > 400))), { missing: ['311–400'], count: 90, twice: [], from: 1, to: 410 });
+  assert.deepEqual(web.numberGaps(titled([1, 2, 3, 5, 6, 7, 7, 9, 10])), { missing: ['4', '8'], count: 2, twice: [7], from: 1, to: 10 });
+  // The prologue and side stories have numbers of their own; too few numbered, nothing said.
+  assert.equal(web.numberGaps(['Prologue', 'Chapter 1', 'Chapter 2', 'Chapter 3', 'Chapter 4', 'Chapter 5', 'Side Story 1'].map((text) => ({ text }))).count, 0);
+  assert.equal(web.numberGaps(titled([1, 5, 9])).count, 0);
+  // Said above the list, as the ticks change.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /function paintWebCount\(\) \{\s+paintWebGaps\(\);/);
+  assert.match(read('app/src/main/assets/www/index.html'), /<p class="web-gaps" id="web-gaps" hidden><\/p>\s+<ol class="web-list" id="web-list">/);
 });
 
 await t('a build says how long it has been and how long it should be yet', async () => {

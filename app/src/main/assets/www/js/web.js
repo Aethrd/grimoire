@@ -998,6 +998,37 @@ const NUMERAL = '[0-9０-９]+(?:\\.[0-9]+)?|[零〇一二两兩三四五六七�
  *   side      side stories and extras: "番外三", "Side Story 2", "Extra 1"
  *   after     the ending's afterword, 後記, 完結感言
  */
+/**
+ * The chapter numbers missing among some chapters: every main chapter's
+ * number from the lowest ticked to the highest, and which are not there --
+ * as ranges ("311–400"), with how many -- and any listed twice. Side stories,
+ * the prologue and the like have numbers of their own and are left out.
+ * Nothing said for fewer than five numbered chapters: too few to tell a gap
+ * from a choice.
+ */
+export function numberGaps(links) {
+  const counts = new Map();
+  for (const link of links) {
+    const { kind, number } = chapterKind(link.text);
+    if (kind !== 'main' || !Number.isInteger(number) || number < 0) continue;
+    counts.set(number, (counts.get(number) || 0) + 1);
+  }
+  const numbers = [...counts.keys()].sort((a, b) => a - b);
+  if (numbers.length < 5) return { missing: [], count: 0, twice: [], from: null, to: null };
+  const missing = [];
+  let count = 0;
+  for (let i = 1; i < numbers.length; i += 1) {
+    const before = numbers[i - 1];
+    const now = numbers[i];
+    if (now - before > 1) {
+      missing.push(now - before === 2 ? String(before + 1) : `${before + 1}–${now - 1}`);
+      count += now - before - 1;
+    }
+  }
+  const twice = numbers.filter((number) => counts.get(number) > 1);
+  return { missing, count, twice, from: numbers[0], to: numbers.at(-1) };
+}
+
 export function chapterKind(text) {
   const name = String(text || '');
   if (/後記|后记|完結感言|完结感言|作者的話|作者的话|\bafterword\b|\bauthor'?s? note\b/i.test(name)) return { kind: 'after', number: null };

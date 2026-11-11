@@ -325,46 +325,145 @@ public class WebBridge {
     /** Whether the shown site is for picking links (see pickFromSite). */
     private boolean shownPicking;
 
-    /* Into a page shown for picking: links marked by the finger, by the page's own
-     * script -- Android's browser starts no selection on a long-press over a link.
+    /* Into a page shown for picking: links marked by the finger.
      *
-     *   hold a link half a second, then drag: every link from it to the one under
-     *   the finger is marked; near the top or bottom the page scrolls on;
-     *   or tap one link, then another: both and everything between are marked.
+     *   hold a link, then drag: every link from it to the one under the finger
+     *   is marked; near the top or bottom the page scrolls on. The hold is
+     *   noticed by the app, before the page (see openShown's touch listener),
+     *   which tells the page here: holdAt, dragTo, release -- Android's own
+     *   long-press (a selection, a link's menu) or the page starting to scroll
+     *   otherwise took the touch away, and the hold did nothing;
+     *   or tap one chapter, then another: both and everything between marked.
      *
-     * A link tapped is marked, not followed. The page's guards against selecting
-     * and copying (and its long-press menu) are set aside. */
+     * A chapter tapped is marked, not followed. What only opens out the list --
+     * "더보기", "펼치기", "Show more", a link that goes nowhere but the page's own
+     * script -- is let through: some lists are opened out before they can be
+     * picked from. The page's guards against selecting and copying (and its
+     * long-press menu) are set aside. Added before the page's own scripts run. */
     private static final String PICKABLE = "(function(){if(window.__gPick)return;var p=window.__gPick={start:null,from:null,at:0};"
-            + "var st=document.createElement('style');st.textContent='*{-webkit-user-select:text!important;user-select:text!important}"
+            + "var css='*{-webkit-user-select:text!important;user-select:text!important}"
             + ".__gPicked{background:rgba(216,167,177,.38)!important;outline:1px solid #d8a7b1!important}"
             + ".__gPickStart{outline:3px solid #d8a7b1!important;outline-offset:2px}';"
-            + "(document.head||document.documentElement).appendChild(st);"
+            + "var addStyle=function(){if(document.getElementById('__gPickStyle'))return;var st=document.createElement('style');st.id='__gPickStyle';"
+            + "st.textContent=css;(document.head||document.documentElement).appendChild(st);};"
+            + "if(document.documentElement)addStyle();document.addEventListener('DOMContentLoaded',addStyle);"
             + "['selectstart','copy'].forEach(function(t){window.addEventListener(t,function(e){e.stopImmediatePropagation();},true);});"
             + "window.addEventListener('contextmenu',function(e){e.preventDefault();e.stopImmediatePropagation();},true);"
-            + "document.onselectstart=null;if(document.body)document.body.onselectstart=null;"
-            + "var all=function(){return Array.prototype.slice.call(document.querySelectorAll('a[href]'));};"
+            + "var all=function(){return Array.prototype.slice.call(document.querySelectorAll('a[href]')).filter(chapterish);};"
+            /* A link to another page, not one that only opens out the list. */
+            + "var MORE=/^\\s*([+▼▽∨⌄]|(이전|다음)?\\s*(회차|목록)?\\s*(더\\s*보기|펼치기|펼쳐보기|전체\\s*보기|모두\\s*보기)|전체|show\\s*(more|all)|load\\s*more|view\\s*all|see\\s*all|more|expand|all\\s*chapters)\\s*[▼▽+…]*\\s*$/i;"
+            + "var chapterish=function(a){var h=a.getAttribute('href')||'';if(/^\\s*(#|javascript:)/i.test(h))return false;"
+            + "try{var u=new URL(a.href,location.href);if(!/^https?:$/.test(u.protocol))return false;"
+            + "if(u.origin+u.pathname+u.search===location.origin+location.pathname+location.search)return false;}catch(x){return false;}"
+            + "return !MORE.test((a.textContent||'').replace(/\\s+/g,' '));};"
             + "var mark=function(x,y){var l=all(),i=l.indexOf(x),j=l.indexOf(y);if(i<0||j<0)return;if(i>j){var t=i;i=j;j=t;}"
             + "l.forEach(function(a,k){if(k>=i&&k<=j)a.classList.add('__gPicked');else a.classList.remove('__gPicked');});};"
             + "var linkAt=function(x,y){var w=window.innerWidth,xs=[x,w*.25,w*.5,w*.75];for(var i=0;i<xs.length;i++){"
-            + "var e=document.elementFromPoint(xs[i],y),a=e&&e.closest?e.closest('a[href]'):null;if(a)return a;}return null;};"
-            + "var hold=null,down=null,drag=false,fx=0,fy=0,roll=null;"
+            + "var e=document.elementFromPoint(xs[i],y),a=e&&e.closest?e.closest('a[href]'):null;if(a&&chapterish(a))return a;}return null;};"
+            + "var drag=false,fx=0,fy=0,roll=null;"
             + "var follow=function(){var a=linkAt(fx,fy);if(a&&p.from)mark(p.from,a);};"
-            + "window.addEventListener('touchstart',function(e){if(e.touches.length!==1)return;var t=e.touches[0];"
-            + "var a=linkAt(t.clientX,t.clientY);if(!a)return;down={x:t.clientX,y:t.clientY};clearTimeout(hold);"
-            + "hold=setTimeout(function(){drag=true;p.from=a;p.start=null;all().forEach(function(b){b.classList.remove('__gPickStart');});"
-            + "mark(a,a);fx=down.x;fy=down.y;try{navigator.vibrate&&navigator.vibrate(15);}catch(x){}"
-            + "roll=setInterval(function(){var h=window.innerHeight,edge=90;"
+            + "var begin=function(a,x,y){drag=true;p.from=a;p.start=null;"
+            + "Array.prototype.forEach.call(document.querySelectorAll('.__gPickStart'),function(b){b.classList.remove('__gPickStart');});"
+            + "mark(a,a);fx=x;fy=y;clearInterval(roll);roll=setInterval(function(){var h=window.innerHeight,edge=90;"
             + "if(fy>h-edge)window.scrollBy(0,Math.round(6+(fy-(h-edge))/2));else if(fy<edge)window.scrollBy(0,-Math.round(6+(edge-fy)/2));"
-            + "follow();},40);},450);},{capture:true,passive:true});"
-            + "window.addEventListener('touchmove',function(e){var t=e.touches[0];"
-            + "if(!drag){if(down&&(Math.abs(t.clientX-down.x)>10||Math.abs(t.clientY-down.y)>10)){clearTimeout(hold);down=null;}return;}"
+            + "follow();},40);};"
+            + "var end=function(){if(drag){drag=false;clearInterval(roll);p.at=Date.now();}};"
+            /* The app's hold: where the finger is, in the screen's own pixels. */
+            + "var toPage=function(x,y){var v=window.visualViewport,d=window.devicePixelRatio||1,s=v?v.scale:1;"
+            + "return{x:x/(d*s)+(v?v.offsetLeft:0),y:y/(d*s)+(v?v.offsetTop:0)};};"
+            + "p.holdAt=function(x,y){var c=toPage(x,y),a=linkAt(c.x,c.y);if(!a)return false;begin(a,c.x,c.y);return true;};"
+            + "p.dragTo=function(x,y){if(!drag)return;var c=toPage(x,y);fx=c.x;fy=c.y;follow();};"
+            + "p.release=function(){end();};"
+            /* The page's own hold, where the app does not catch it (the tests; an old Android). */
+            + "var hold=null,down=null;"
+            + "window.addEventListener('touchstart',function(e){if(window.__gPickNative||e.touches.length!==1)return;var t=e.touches[0];"
+            + "var a=linkAt(t.clientX,t.clientY);if(!a)return;down={x:t.clientX,y:t.clientY};clearTimeout(hold);"
+            + "hold=setTimeout(function(){begin(a,down.x,down.y);try{navigator.vibrate&&navigator.vibrate(15);}catch(x){}},450);},{capture:true,passive:true});"
+            + "window.addEventListener('touchmove',function(e){if(window.__gPickNative)return;var t=e.touches[0];"
+            + "if(!drag){if(down&&(Math.abs(t.clientX-down.x)>16||Math.abs(t.clientY-down.y)>16)){clearTimeout(hold);down=null;}return;}"
             + "e.preventDefault();fx=t.clientX;fy=t.clientY;follow();},{capture:true,passive:false});"
-            + "var up=function(){clearTimeout(hold);down=null;if(drag){drag=false;clearInterval(roll);p.at=Date.now();}};"
+            + "var up=function(){clearTimeout(hold);down=null;if(!window.__gPickNative)end();};"
             + "window.addEventListener('touchend',up,true);window.addEventListener('touchcancel',up,true);"
-            + "window.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a)return;"
+            + "window.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a||!chapterish(a))return;"
             + "e.preventDefault();e.stopImmediatePropagation();if(Date.now()-p.at<400)return;"
             + "if(!p.start){p.start=a;a.classList.add('__gPickStart');return;}"
             + "var x=p.start;p.start=null;x.classList.remove('__gPickStart');mark(x,a);},true);})();";
+
+    /** The picking script, said to come from the app's own hold (see holdToPick). */
+    private static final String PICKING_STARTS = "window.__gPickNative=1;" + PICKABLE;
+
+    /**
+     * Hold and drag to pick, noticed here, before the page: a finger held still
+     * on the page for a long-press, and the page is told to begin at that
+     * point (__gPick.holdAt); from then the touch is the app's -- the page is
+     * told it was cancelled, so it neither scrolls nor starts a selection or a
+     * link's menu of its own -- and every move is passed on (dragTo) until the
+     * finger lifts (release). A finger that moves first is the page's: a scroll.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private void holdToPick(final WebView view) {
+        final int slop = android.view.ViewConfiguration.get(activity).getScaledTouchSlop();
+        final long hold = android.view.ViewConfiguration.getLongPressTimeout();
+        view.setOnTouchListener(new View.OnTouchListener() {
+            private float downX;
+            private float downY;
+            private long downTime;
+            private boolean dragging;
+            private long lastMove;
+            private final Runnable begin = () -> {
+                dragging = true;
+                view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                android.view.MotionEvent cancel = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(),
+                        android.view.MotionEvent.ACTION_CANCEL, downX, downY, 0);
+                view.onTouchEvent(cancel);
+                cancel.recycle();
+                view.evaluateJavascript("window.__gPick&&__gPick.holdAt(" + downX + "," + downY + ")", (began) -> {
+                    // Not on a chapter: nothing to pick from there.
+                    if (!"true".equals(began)) dragging = false;
+                });
+            };
+
+            @Override
+            public boolean onTouch(View v, android.view.MotionEvent e) {
+                switch (e.getActionMasked()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        downX = e.getX();
+                        downY = e.getY();
+                        downTime = e.getDownTime();
+                        dragging = false;
+                        v.removeCallbacks(begin);
+                        v.postDelayed(begin, hold);
+                        return false;
+                    case android.view.MotionEvent.ACTION_POINTER_DOWN:
+                        v.removeCallbacks(begin);
+                        return dragging;
+                    case android.view.MotionEvent.ACTION_MOVE:
+                        if (dragging) {
+                            long now = android.os.SystemClock.uptimeMillis();
+                            if (now - lastMove >= 30) {
+                                lastMove = now;
+                                view.evaluateJavascript("window.__gPick&&__gPick.dragTo(" + e.getX() + "," + e.getY() + ")", null);
+                            }
+                            return true;
+                        }
+                        if (Math.hypot(e.getX() - downX, e.getY() - downY) > slop) v.removeCallbacks(begin);
+                        return false;
+                    case android.view.MotionEvent.ACTION_UP:
+                    case android.view.MotionEvent.ACTION_CANCEL:
+                        v.removeCallbacks(begin);
+                        if (dragging) {
+                            dragging = false;
+                            view.evaluateJavascript("window.__gPick&&__gPick.dragTo(" + e.getX() + "," + e.getY() + ");"
+                                    + "window.__gPick&&__gPick.release()", null);
+                            return true;
+                        }
+                        return false;
+                    default:
+                        return dragging;
+                }
+            }
+        });
+    }
 
     /** The links marked (or, failing that, in the page's selection), in the page's
      *  order, as [{url, text}]. */
@@ -406,13 +505,13 @@ public class WebBridge {
                     }
 
                     @Override
-                    public void onPageStarted(WebView v, String url, Bitmap favicon) {
-                        if (pick) v.evaluateJavascript(PICKABLE, null);
+                    public void onPageCommitVisible(WebView v, String url) {
+                        if (pick) v.evaluateJavascript(PICKING_STARTS, null);
                     }
 
                     @Override
                     public void onPageFinished(WebView v, String url) {
-                        if (pick) v.evaluateJavascript(PICKABLE, null);
+                        if (pick) v.evaluateJavascript(PICKING_STARTS, null);
                     }
 
                     @Override
@@ -450,6 +549,15 @@ public class WebBridge {
                 bar.addView(done);
                 column.addView(bar, new android.widget.LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+                if (pick) {
+                    // Before the page's own scripts, so a tap never gets past it; and
+                    // again once it shows, where that cannot be done.
+                    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                        WebViewCompat.addDocumentStartJavaScript(view, PICKING_STARTS, Collections.singleton("*"));
+                    }
+                    holdToPick(view);
+                }
 
                 ViewGroup root = activity.findViewById(android.R.id.content);
                 if (root == null) {
