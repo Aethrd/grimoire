@@ -2321,6 +2321,29 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   // The other way round (last tapped first) is the same.
   tap(anchors[6]); tap(anchors[2]);
   assert.equal(JSON.parse(w.eval(script('PICKED'))).length, 5);
+  // Held half a second, then dragged: from the link held to the one under the finger.
+  let under = anchors[1];
+  w.document.elementFromPoint = () => under;
+  const touch = (type, y) => {
+    const event = new w.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : [{ clientX: 50, clientY: y }] });
+    w.dispatchEvent(event);
+    return event;
+  };
+  touch('touchstart', 100);
+  await new Promise((r) => setTimeout(r, 520));
+  under = anchors[8];
+  const moved = touch('touchmove', 400);
+  assert.ok(moved.defaultPrevented, 'the page does not scroll under a drag');
+  touch('touchend', 400);
+  const dragged = JSON.parse(w.eval(script('PICKED')));
+  assert.deepEqual([dragged.length, dragged[0].text, dragged.at(-1).text], [8, '409화 악은 삶을 바란다', '402화 악은 삶을 바란다']);
+  // A finger that moves before the half second is a scroll, not a pick.
+  under = anchors[0];
+  touch('touchstart', 100);
+  touch('touchmove', 160);
+  await new Promise((r) => setTimeout(r, 520));
+  assert.equal(JSON.parse(w.eval(script('PICKED'))).length, 8);
   // The app: answered links into the list, the page's title less the site's name; back is nothing picked.
   window.GrimoireWeb = { pickFromSite: (id) => setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: 'https://k.example/b', title: '악은 삶을 바란다 - BOOKKOR', links: picked })), 0) };
   const answer = await web.pickSite('https://k.example/b');

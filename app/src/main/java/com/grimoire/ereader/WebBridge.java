@@ -325,30 +325,54 @@ public class WebBridge {
     /** Whether the shown site is for picking links (see pickFromSite). */
     private boolean shownPicking;
 
-    /* Into a page shown for picking: its text selectable however it says it is not
-     * (sites stop copying with user-select and selectstart), and a tap on a link
-     * marks it rather than following it: the first tapped and the last, and the
-     * selection is everything between. */
-    private static final String PICKABLE = "(function(){if(window.__gPick)return;window.__gPick={start:null};"
+    /* Into a page shown for picking: links marked by the finger, by the page's own
+     * script -- Android's browser starts no selection on a long-press over a link.
+     *
+     *   hold a link half a second, then drag: every link from it to the one under
+     *   the finger is marked; near the top or bottom the page scrolls on;
+     *   or tap one link, then another: both and everything between are marked.
+     *
+     * A link tapped is marked, not followed. The page's guards against selecting
+     * and copying (and its long-press menu) are set aside. */
+    private static final String PICKABLE = "(function(){if(window.__gPick)return;var p=window.__gPick={start:null,from:null,at:0};"
             + "var st=document.createElement('style');st.textContent='*{-webkit-user-select:text!important;user-select:text!important}"
-            + "a{-webkit-touch-callout:none!important}.__gPickStart{outline:3px solid #d8a7b1!important;outline-offset:2px}';"
+            + ".__gPicked{background:rgba(216,167,177,.38)!important;outline:1px solid #d8a7b1!important}"
+            + ".__gPickStart{outline:3px solid #d8a7b1!important;outline-offset:2px}';"
             + "(document.head||document.documentElement).appendChild(st);"
-            + "['selectstart','copy','contextmenu'].forEach(function(t){window.addEventListener(t,function(e){e.stopImmediatePropagation();},true);});"
+            + "['selectstart','copy'].forEach(function(t){window.addEventListener(t,function(e){e.stopImmediatePropagation();},true);});"
+            + "window.addEventListener('contextmenu',function(e){e.preventDefault();e.stopImmediatePropagation();},true);"
             + "document.onselectstart=null;if(document.body)document.body.onselectstart=null;"
+            + "var all=function(){return Array.prototype.slice.call(document.querySelectorAll('a[href]'));};"
+            + "var mark=function(x,y){var l=all(),i=l.indexOf(x),j=l.indexOf(y);if(i<0||j<0)return;if(i>j){var t=i;i=j;j=t;}"
+            + "l.forEach(function(a,k){if(k>=i&&k<=j)a.classList.add('__gPicked');else a.classList.remove('__gPicked');});};"
+            + "var linkAt=function(x,y){var w=window.innerWidth,xs=[x,w*.25,w*.5,w*.75];for(var i=0;i<xs.length;i++){"
+            + "var e=document.elementFromPoint(xs[i],y),a=e&&e.closest?e.closest('a[href]'):null;if(a)return a;}return null;};"
+            + "var hold=null,down=null,drag=false,fx=0,fy=0,roll=null;"
+            + "var follow=function(){var a=linkAt(fx,fy);if(a&&p.from)mark(p.from,a);};"
+            + "window.addEventListener('touchstart',function(e){if(e.touches.length!==1)return;var t=e.touches[0];"
+            + "var a=linkAt(t.clientX,t.clientY);if(!a)return;down={x:t.clientX,y:t.clientY};clearTimeout(hold);"
+            + "hold=setTimeout(function(){drag=true;p.from=a;p.start=null;all().forEach(function(b){b.classList.remove('__gPickStart');});"
+            + "mark(a,a);fx=down.x;fy=down.y;try{navigator.vibrate&&navigator.vibrate(15);}catch(x){}"
+            + "roll=setInterval(function(){var h=window.innerHeight,edge=90;"
+            + "if(fy>h-edge)window.scrollBy(0,Math.round(6+(fy-(h-edge))/2));else if(fy<edge)window.scrollBy(0,-Math.round(6+(edge-fy)/2));"
+            + "follow();},40);},450);},{capture:true,passive:true});"
+            + "window.addEventListener('touchmove',function(e){var t=e.touches[0];"
+            + "if(!drag){if(down&&(Math.abs(t.clientX-down.x)>10||Math.abs(t.clientY-down.y)>10)){clearTimeout(hold);down=null;}return;}"
+            + "e.preventDefault();fx=t.clientX;fy=t.clientY;follow();},{capture:true,passive:false});"
+            + "var up=function(){clearTimeout(hold);down=null;if(drag){drag=false;clearInterval(roll);p.at=Date.now();}};"
+            + "window.addEventListener('touchend',up,true);window.addEventListener('touchcancel',up,true);"
             + "window.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a)return;"
-            + "e.preventDefault();e.stopImmediatePropagation();var p=window.__gPick;"
+            + "e.preventDefault();e.stopImmediatePropagation();if(Date.now()-p.at<400)return;"
             + "if(!p.start){p.start=a;a.classList.add('__gPickStart');return;}"
-            + "var x=p.start,y=a;p.start=null;x.classList.remove('__gPickStart');"
-            + "if(x.compareDocumentPosition(y)&Node.DOCUMENT_POSITION_PRECEDING){var t=x;x=y;y=t;}"
-            + "var r=document.createRange();r.setStartBefore(x);r.setEndAfter(y);var s=window.getSelection();s.removeAllRanges();s.addRange(r);"
-            + "},true);})();";
+            + "var x=p.start;p.start=null;x.classList.remove('__gPickStart');mark(x,a);},true);})();";
 
-    /** The links in the page's selection, in the page's order, as [{url, text}]. */
-    private static final String PICKED = "(function(){try{var s=window.getSelection(),out=[],seen={};"
-            + "if(!s||!s.rangeCount)return JSON.stringify(out);"
-            + "var as=document.querySelectorAll('a[href]');for(var i=0;i<as.length;i++){var a=as[i],u=a.href;"
-            + "if(!/^https?:/i.test(u)||seen[u])continue;var hit=false;"
-            + "for(var r=0;r<s.rangeCount&&!hit;r++)hit=s.getRangeAt(r).intersectsNode(a);"
+    /** The links marked (or, failing that, in the page's selection), in the page's
+     *  order, as [{url, text}]. */
+    private static final String PICKED = "(function(){try{var out=[],seen={},s=window.getSelection();"
+            + "var as=document.querySelectorAll('a[href]'),marked=document.querySelectorAll('a.__gPicked').length>0;"
+            + "for(var i=0;i<as.length;i++){var a=as[i],u=a.href;if(!/^https?:/i.test(u)||seen[u])continue;var hit=false;"
+            + "if(marked)hit=a.classList.contains('__gPicked');"
+            + "else if(s)for(var r=0;r<s.rangeCount&&!hit;r++)hit=s.getRangeAt(r).intersectsNode(a);"
             + "if(hit){seen[u]=1;out.push({url:u,text:(a.textContent||'').replace(/\\s+/g,' ').trim()});}}"
             + "return JSON.stringify(out);}catch(e){return '[]';}})()";
 
@@ -414,7 +438,7 @@ public class WebBridge {
                 bar.setPadding(pad, pad / 2, pad, pad / 2);
                 android.widget.TextView note = new android.widget.TextView(activity);
                 note.setText(pick
-                        ? "Long-press a chapter and drag over the rest - or tap the first, then the last. Then Use selected."
+                        ? "Hold a chapter, then drag over the rest - or tap the first, then the last. Then Use selected."
                         : "Let the site's check pass (tap it if it asks), then Done.");
                 note.setTextColor(0xFFE6E1EA);
                 note.setTextSize(13);
