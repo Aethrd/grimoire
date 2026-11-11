@@ -2353,7 +2353,7 @@ const progress = (() => {
         if (now.kind === 'wait') {
           const left = Math.max(0, Math.ceil((now.until - Date.now()) / 1000));
           tag.textContent = 'Waiting';
-          what.textContent = `${left} s left of your delay, then ${name}`;
+          what.textContent = `${left} s left ${now.why ? `· ${now.why}` : 'of your delay'}, then ${name}`;
         } else if (now.kind === 'retry') {
           tag.textContent = `Try ${now.attempt} of ${now.of}`;
           what.textContent = `${name}${took()}${now.reason ? ` · last time: ${now.reason}` : ''}`;

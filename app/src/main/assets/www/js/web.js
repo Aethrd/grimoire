@@ -123,80 +123,102 @@ const FILE_ADDRESS = /\.(?:jpe?g|png|gif|webp|avif|bmp|svg|ico|css|js|mjs|json|x
 const MIN_RENDERED_STORY = 200;
 const BOT_CHECK = /bot check|only lets a browser/i;
 
-/* How patiently the renderer waits on a page: more each time the same page
- * came back without its story, up to the most it allows (3). */
-const patience = new Map();
-/* What a site has been found to need, so its next page is asked for that
- * way from the first try instead of after two that fail. A site whose
- * chapters came only once nothing was kept out (its text from a server of
- * another name) is opened that way from then on; one whose pages came only
- * with a longer wait is given it. Two failed tries, each after the reader's
- * delay, made every chapter of a site three minutes. That a site needs
- * everything let in is remembered for a fortnight, across the app being
- * closed -- the first chapter of every sitting paid for it again -- and then
- * learned afresh, as a site changes. A longer wait is for this sitting only:
- * learned wrongly once (a chapter held back for another reason), it made
- * every chapter after it slow, and kept, it would for two weeks. */
-const SITE_NEEDS_KEY = 'grimoire.siteNeeds.v2';
+/* What a page is asked for with, and what a site has been found to need --
+ * each need apart from the others:
+ *
+ *   open  other sites' content let in (adverts, their scripts, pictures):
+ *         some sites put the chapter up only once their adverts have shown,
+ *         or fetch its text from a server of another name;
+ *   wait  how much longer the page is watched before it is taken (0-3).
+ *
+ * A page that comes back without its story is asked for again with one
+ * more of these, not all of them at once: first with everything let in,
+ * then watched longer. One level that raised both together taught a site
+ * that only needed its adverts let in to be waited on longest, every
+ * chapter, for days. And a site's contents pages and its chapters are
+ * learned apart: a slow chapter page says nothing of its list.
+ *
+ * What a page needed is what its site is asked with from then on, so only
+ * its first page pays for the tries -- each a whole delay. That a site needs
+ * everything let in is kept for a fortnight, across the app being closed.
+ * A longer wait is learned only once two pages have needed it -- one slow
+ * page is not the site -- and only for this sitting.
+ */
+const trying = new Map();   // url -> { open, wait }: what this page is being asked with
+const SITE_NEEDS_KEY = 'grimoire.siteNeeds.v3';
 const SITE_NEEDS_DAYS = 14;
-const siteNeeds = new Map();   // host -> { open, level, at }
+const siteNeeds = new Map();   // `${host}|list` or `${host}|chapter` -> { open, wait, waitSeen, at }
+const hostOf = (url) => {
+  try { return new URL(url).host; } catch { return ''; }
+};
+const kindOf = (list) => (list ? 'list' : 'chapter');
+const needKey = (url, list) => `${hostOf(url)}|${kindOf(list)}`;
 try {
+  const fresh = (at) => Date.now() - (at || 0) < SITE_NEEDS_DAYS * 86400000;
   const kept = JSON.parse(globalThis.localStorage?.getItem(SITE_NEEDS_KEY) || '{}');
-  for (const [host, need] of Object.entries(kept || {})) {
-    if (need && Date.now() - (need.at || 0) < SITE_NEEDS_DAYS * 86400000) {
-      if (need.open) siteNeeds.set(host, { open: true, level: 0, at: need.at });
+  for (const [key, need] of Object.entries(kept || {})) {
+    if (need?.open && fresh(need.at)) siteNeeds.set(key, { open: true, wait: 0, waitSeen: 0, at: need.at });
+  }
+  // The last version's, by host alone: learned from its chapters.
+  const before = JSON.parse(globalThis.localStorage?.getItem('grimoire.siteNeeds.v2') || '{}');
+  for (const [host, need] of Object.entries(before || {})) {
+    if (need?.open && fresh(need.at) && !siteNeeds.has(`${host}|chapter`)) {
+      siteNeeds.set(`${host}|chapter`, { open: true, wait: 0, waitSeen: 0, at: need.at });
     }
   }
 } catch { /* nothing kept, or no storage: learned this sitting */ }
 const keepSiteNeeds = () => {
-  const kept = Object.fromEntries([...siteNeeds].filter(([, need]) => need.open).map(([host, need]) => [host, { open: true, at: need.at }]));
+  const kept = Object.fromEntries([...siteNeeds].filter(([, need]) => need.open).map(([key, need]) => [key, { open: true, at: need.at }]));
   try {
     globalThis.localStorage?.setItem(SITE_NEEDS_KEY, JSON.stringify(kept));
-    globalThis.localStorage?.removeItem('grimoire.siteNeeds');   // the last version's, with its waits
+    globalThis.localStorage?.removeItem('grimoire.siteNeeds.v2');
+    globalThis.localStorage?.removeItem('grimoire.siteNeeds');
   } catch { /* this sitting only */ }
 };
-const hostOf = (url) => {
-  try { return new URL(url).host; } catch { return ''; }
+const needsOf = (url, list) => ({ open: false, wait: 0, waitSeen: 0, ...siteNeeds.get(needKey(url, list)) });
+const askingWith = (url, list) => trying.get(url) || needsOf(url, list);
+/** As the renderer is told it: how much longer to wait, and "o" for everything let in. */
+const renderAsk = (url, list = false) => {
+  const { open, wait } = askingWith(url, list);
+  // Kept: its next try is one need more than this, whatever the site has
+  // been learned to need meanwhile from another page.
+  trying.set(url, { open, wait });
+  return `${wait}${open ? 'o' : ''}`;
 };
-const patienceFor = (url) => Math.max(patience.get(url) || 0, siteNeeds.get(hostOf(url))?.level || 0);
-/** Patience as the renderer is told it: a level, and "o" for nothing kept out. */
-const renderAsk = (url) => {
-  const level = patienceFor(url);
-  const open = !!siteNeeds.get(hostOf(url))?.open;
-  // Whether this page's first try already let everything in: only then
-  // does its needing a longer wait say the site needs one.
-  if (!openFromStart.has(url)) openFromStart.set(url, open);
-  return `${level}${level >= 2 || open ? 'o' : ''}`;
-};
-const openFromStart = new Map();
-/** A rendered page came at this level: what the site needs, learned. */
-function learnSite(url, level) {
-  const host = hostOf(url);
-  if (!level || !host) return;
-  const known = siteNeeds.get(host) || { open: false, level: 0 };
-  const fromStart = openFromStart.get(url);
-  openFromStart.delete(url);
-  // It took everything let in (level 2 is the first that does): so it is,
-  // from now on, at the usual patience. A longer wait is learned only from
-  // a page that had everything let in from its first try -- not from one
-  // that was mid-retry when the site was learned.
-  if (level >= 2 && !known.open) known.open = true;
-  else if (level === 1 || fromStart) known.level = Math.max(known.level, Math.min(3, level));
+/** Asked for again with one more need than last time; false when there is none left to add. */
+function askAgain(url, list = false) {
+  const now = askingWith(url, list);
+  if (!now.open) trying.set(url, { open: true, wait: now.wait });
+  else if (now.wait < 3) trying.set(url, { open: true, wait: now.wait + 1 });
+  else return false;
+  return true;
+}
+/** A rendered page came: what it needed beyond what its site was asked with, learned. */
+function learnSite(url, list = false) {
+  const used = trying.get(url);
+  trying.delete(url);
+  if (!used || !hostOf(url)) return;
+  const known = needsOf(url, list);
+  if (used.open && !known.open) known.open = true;
+  if (used.wait > known.wait) {
+    known.waitSeen += 1;
+    if (known.waitSeen >= 2) { known.wait = used.wait; known.waitSeen = 0; }
+  }
   known.at = Date.now();
-  siteNeeds.set(host, known);
+  siteNeeds.set(needKey(url, list), known);
   keepSiteNeeds();
 }
-/** What has been learned of a site (for the tests and the curious). */
-export const siteNeedsOf = (url) => {
-  const { open = false, level = 0 } = siteNeeds.get(hostOf(url)) || {};
-  return { open, level };
+/** What has been learned of a site's chapters (or its lists), for the tests and the curious. */
+export const siteNeedsOf = (url, list = false) => {
+  const { open, wait } = needsOf(url, list);
+  return { open, level: wait };
 };
 
-/** A rendered page whose story had not arrived: ask more patiently next time.
+/** A rendered page whose story had not arrived: asked for again with one need more.
  *  What the page did hold goes into the message -- a sign-in, an age check,
  *  a "loading…" -- since that is what says why. */
 export function notLoadedYet(url, held = '') {
-  patience.set(url, Math.min(3, patienceFor(url) + 1));
+  askAgain(url, false);
   const text = tidy(held);
   const sample = text.length > 140 ? `${text.slice(0, 140)}…` : text;
   return Object.assign(new Error(`the chapter had not finished loading on the site (the page held ${text.length} characters${sample ? `: "${sample}"` : ''})`),
@@ -323,7 +345,7 @@ function fetchNative(method, url, { timeout = 90000, list = false, textOnly = fa
       // A contents page may be scrolled for more of its list; a chapter
       // never is (some readers add the next chapter under it at the end).
       // "t": a chapter wanted for its words alone, watched for them a while (see WebBridge).
-      if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url), list ? '1' : textOnly ? 't' : '0');
+      if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url, list), list ? '1' : textOnly ? 't' : '0');
       else window.GrimoireWeb.fetch(id, url);
     } catch (error) {
       pending.delete(id);
@@ -1106,24 +1128,26 @@ export async function findLinks(addresses, {
       pages += 1;
       onProgress?.(at / addresses.length, next, pages, numbered ? total : 0);
       try {
+        // "Search for more", asked again: as patiently as asked (1, 2, 3).
         const level = Math.max(0, Math.min(3, Math.round(Number(startPatience) || 0)));
-        if (level) patience.set(next, level);
+        if (level) {
+          const known = needsOf(next, true);
+          trying.set(next, { open: known.open || level >= 2, wait: Math.max(known.wait, level) });
+        }
         let page = await fetchPage(next, { list: true });
         let found = linksOf(decodePage(await bytesOf(page.blob), page.type), page.url);
         /* A contents page built in script, caught before its list arrived:
-         * the site's menus and not one chapter. Asked for again, more
-         * patiently each time, as a chapter caught early is. */
-        let used = patienceFor(next);
-        for (let more = 1; page.rendered && more <= 2 && level + more <= 3 && !listsChapters(found, page.url); more += 1) {
-          patience.set(next, level + more);
-          patience.set(page.url, level + more);
-          used = patienceFor(next);
+         * the site's menus and not one chapter. Asked for again with one
+         * need more each time, as a chapter caught early is. */
+        for (let more = 1; page.rendered && more <= 2 && !listsChapters(found, page.url); more += 1) {
+          if (!askAgain(next, true)) break;
+          trying.set(page.url, trying.get(next));
           page = await fetchPage(next, { list: true });
           found = linksOf(decodePage(await bytesOf(page.blob), page.type), page.url);
         }
-        if (page.rendered && listsChapters(found, page.url)) learnSite(next, used);
-        patience.delete(next);
-        patience.delete(page.url);
+        if (page.rendered && listsChapters(found, page.url)) learnSite(next, true);
+        trying.delete(next);
+        trying.delete(page.url);
         visited.add(page.url);
         if (!title) title = found.title;
         if (!author) author = found.author;
@@ -1366,8 +1390,8 @@ export async function readPage(link, index, {
     }
   }
   // It came: at the patience it took, which is what the site needs.
-  if (page.rendered) learnSite(link.url, patienceFor(link.url));
-  patience.delete(link.url);
+  if (page.rendered) learnSite(link.url, false);
+  trying.delete(link.url);
 
   /* The rest of a chapter split across pages, joined on, in order. Many
    * Chinese serial sites give a chapter as two or three pages, each ending
@@ -1605,7 +1629,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * picture is not a page and is not held back. With no pace set, nothing
  * waits and nothing queues.
  */
-function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = null, onStart = null } = {}) {
+function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = null, onStart = null, scale = () => 1 } = {}) {
   if (!(gap > 0) && !(jitter > 0)) return fetchPage;
   let line = Promise.resolve();
   let lastEnd = 0;
@@ -1617,7 +1641,8 @@ function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = nu
     await before;
     try {
       if (lastEnd) {
-        const wait = Math.max(0, lastEnd + spacing(gap, jitter) - Date.now());
+        const times = Math.max(1, Number(scale()) || 1);
+        const wait = Math.max(0, lastEnd + spacing(gap * times, jitter * times) - Date.now());
         // Said, so a minute's pause is not taken for being stuck.
         if (wait >= 1500) onWait?.(url, wait);
         await napUnless(wait, stop);
@@ -1898,8 +1923,10 @@ export async function readPages(links, {
     if (!ask) return;
     onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length, ask.note, { ...ask.now, since: Date.now() });
   };
+  // Raised when the site says "too many requests" (see fetchAgain).
+  let slower = 1;
   const paced = pacer(fetchPage, {
-    gap, jitter, stop: () => pausing(),
+    gap, jitter, stop: () => pausing(), scale: () => slower,
     onStart: (url) => say(url),
     onWait: (url, ms) => {
       const at = links.findIndex((link) => link.url === url);
@@ -1978,14 +2005,26 @@ export async function readPages(links, {
           // whole browser's worth of waiting.
           waits = error?.notLoaded || renderedHere(link.url) ? wait.backoff.slice(0, 2)
             : gone(error) ? [wait.retry]
-            : tooMany(error) ? [...wait.refresh, ...wait.backoff]
+            : tooMany(error) ? [...wait.refresh]
             : [...wait.backoff];
         }
         if (tries >= waits.length) break;
         onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
           `${nameOf(link, at)}: ${error?.message || 'could not be read'} — trying again`,
           { kind: 'failed', name: nameOf(link, at), reason: shortReason(error) });
-        await napUnless(waits[tries], pausing);
+        let nap = waits[tries];
+        if (tooMany(error)) {
+          /* "Too many requests" is the site saying it has noticed: asked
+           * again only after a long pause -- what it asked for, if it said,
+           * and never less than this try's own -- and every page after at
+           * twice the spacing (up to four times) for the rest of this download. */
+          nap = Math.min(15 * 60000, Math.max(nap, askedWait(error)));
+          slower = Math.min(4, slower * 2);
+          onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
+            `the site asked to slow down — waiting ${Math.round(nap / 1000)} s before ${nameOf(link, at)}…`,
+            { kind: 'wait', name: nameOf(link, at), until: Date.now() + nap, why: 'the site asked to slow down' });
+        }
+        await napUnless(nap, pausing);
         tries += 1;
       }
     }
@@ -2049,7 +2088,7 @@ export const PAUSED_REASON = 'paused';
 /** How long to wait between tries of a page, in milliseconds. */
 export const PATIENCE = {
   retry: 1000,                          // a page that is not there: once more
-  refresh: [300, 1000, 2500],           // a site turning requests away: at once
+  refresh: [60000, 180000, 600000],     // a site saying "too many requests": slowed right down
   backoff: [1500, 4000, 8000, 15000, 30000],   // anything else: longer each time
 };
 
@@ -2076,6 +2115,9 @@ export function spacing(gap = 0, jitter = 0, random = Math.random) {
 }
 
 /** A site asking to be asked less often. */
+/** The wait a site asked for with its "too many requests", in milliseconds (0 if none). */
+export const askedWait = (error) => 1000 * Number(/asks for a wait of (\d+) s/.exec(String(error?.message || error || ''))?.[1] || 0);
+
 export const tooMany = (error) => /\b429\b|too many requests/i.test(String(error?.message || error || ''));
 
 /** The site's picture of the book, fetched, or null. */

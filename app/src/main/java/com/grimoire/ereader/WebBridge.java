@@ -120,6 +120,9 @@ public class WebBridge {
     private static final long READY_LIST_QUIET_MS = 1200;
     /** A chapter's story, in one block of text, long enough to be the chapter. */
     private static final int READY_STORY = 1500;
+    /** A short chapter: this much, over at least this many lines. */
+    private static final int SHORT_STORY = 400;
+    private static final int SHORT_STORY_LINES = 8;
     /** A page still waiting on a request this many quiet spells on has one
      *  that never ends (a live feed, an advert): it is taken as it stands. */
     private static final int RENDER_STUCK_SPELLS = 4;
@@ -223,9 +226,10 @@ public class WebBridge {
             // Not a number: the usual patience.
         }
         final long quietMs = RENDER_QUIET_MS + level * RENDER_QUIET_STEP_MS;
-        // Other sites' adverts and trackers kept out, until a page that came
-        // back without its chapter is asked for patiently: then nothing is.
-        final boolean ownSiteOnly = level < 2 && !open;
+        // Other sites' adverts and trackers kept out, unless the page is asked
+        // for with everything let in ("o"): the waiting and the letting in are
+        // asked for apart (see web.js, askAgain).
+        final boolean ownSiteOnly = !open;
         final long maxMs = RENDER_MAX_MS + level * RENDER_MAX_STEP_MS;
         /* Pictures, fonts and video left out only where other sites' adverts are kept
          * out anyway. A site found to need everything let in may be one that holds its
@@ -646,7 +650,15 @@ public class WebBridge {
         @Override
         public void onReceivedHttpError(WebView v, WebResourceRequest request, WebResourceResponse response) {
             Rendering job = current;
-            if (job != null && request.isForMainFrame()) job.mainStatus = response.getStatusCode();
+            if (job != null && request.isForMainFrame()) {
+                job.mainStatus = response.getStatusCode();
+                Map<String, String> headers = response.getResponseHeaders();
+                if (headers != null) {
+                    for (Map.Entry<String, String> header : headers.entrySet()) {
+                        if ("retry-after".equalsIgnoreCase(header.getKey())) job.retryAfter = header.getValue();
+                    }
+                }
+            }
         }
 
         @Override
@@ -683,6 +695,8 @@ public class WebBridge {
         volatile String error;
         volatile String finalUrl;
         volatile int mainStatus;
+        /** What a site that said "too many requests" asked to be given (Retry-After). */
+        volatile String retryAfter;
         private WebView view;
         private boolean loaded;
         private String lastShape = "";
@@ -744,13 +758,15 @@ public class WebBridge {
                 String reply = value == null ? "" : value;
                 // "pending|text|links|checking|resources|chapters|title": all
                 // but the pending count make the page's shape.
-                String[] parts = reply.replace("\"", "").split("\\|", 9);
+                String[] parts = reply.replace("\"", "").split("\\|", 10);
                 int textLength = 0;
                 int chapterLinks = 0;
                 boolean loading = false;
                 int storyLength = 0;
+                int storyLines = 0;
                 try {
                     storyLength = Integer.parseInt(parts[7]);
+                    storyLines = Integer.parseInt(parts[8]);
                 } catch (Exception ignored) {
                     // Unreadable: as though no story were there yet.
                 }
@@ -770,6 +786,12 @@ public class WebBridge {
                 }
                 String shape = bar < 0 ? reply : reply.substring(bar + 1);
                 long now = System.currentTimeMillis();
+                // "Too many requests": said at once -- nothing on the page is coming, and
+                // the download slows down for it (see web.js).
+                if (mainStatus == 429) {
+                    fail(tooMany(retryAfter));
+                    return;
+                }
                 // Blocked outright: said at once, never waited out or retried.
                 if (shape.contains("|blocked|")) {
                     fail(BLOCKED);
@@ -789,9 +811,12 @@ public class WebBridge {
                 // A chapter asked for again (patiently) gets the whole spell:
                 // its text being there did not mean its story was, last time.
                 boolean patient = quietMs > RENDER_QUIET_MS;
-                boolean ready = scroll ? chapterLinks >= 3 : !patient && storyLength >= READY_STORY;
+                // A chapter's story: long, or shorter over many lines.
+                boolean storyThere = storyLength >= READY_STORY
+                        || (storyLength >= SHORT_STORY && storyLines >= SHORT_STORY_LINES);
+                boolean ready = scroll ? chapterLinks >= 3 : !patient && storyThere;
                 // Plainly there, whatever else the page seems to be doing.
-                there = scroll ? chapterLinks >= 3 : storyLength >= READY_STORY;
+                there = scroll ? chapterLinks >= 3 : storyThere;
                 /* A chapter with no story on it yet is given longer to be still: a
                  * site that puts the chapter up a few seconds after the page opens
                  * shows nothing changing meanwhile, and taken then, it was all a
@@ -830,7 +855,7 @@ public class WebBridge {
                 // With nothing more of its own on the way -- or so long still that what is
                 // (a feed kept open) is not more of the chapter.
                 long storyStill = now - storySince;
-                boolean storyDone = !scroll && !waiting && storyLength >= READY_STORY
+                boolean storyDone = !scroll && !waiting && storyThere
                         && storyStill >= (patient ? STORY_STILL_PATIENT_MS : STORY_STILL_MS)
                         && (pending == 0 || storyStill >= quietMs);
                 /* Otherwise once it is quiet -- given a spell longer while it has not
@@ -963,7 +988,7 @@ public class WebBridge {
             + "window.__gObs.observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true});}catch(e){}}"
             + "var now=Date.now(),C=window.__gS;"
             + "if(C&&window.__gObs&&!window.__gDirty&&now-window.__gAt<1000)"
-            + "return (window.__grimoirePending||0)+'|'+C[0]+'|'+C[1]+'|'+C[2]+'|'+r+'|'+C[3]+'|'+C[4]+'|'+C[5]+'|'+t;"
+            + "return (window.__grimoirePending||0)+'|'+C[0]+'|'+C[1]+'|'+C[2]+'|'+r+'|'+C[3]+'|'+C[4]+'|'+C[5]+'|'+C[6]+'|'+t;"
             + "window.__gDirty=0;window.__gAt=now;"
             // Links that look like chapters: under this page's address, or
             // named as one ("14화", "Chapter 3", "第三章").
@@ -1001,17 +1026,24 @@ public class WebBridge {
              * <div>s, counted together -- leaving out links, menus and list items. The whole
              * page's text is no measure: on a site whose menus and comment box come to a few
              * thousand characters, the page was "there" before its chapter had arrived. */
-            + "var s=0;try{var M=new Map(),W=document.createTreeWalker(b,4),nd,cnt=0,"
+            /* And its lines, so a short chapter -- a few hundred characters over many lines --
+             * is known as one too. A comment section is no story, however long. */
+            + "var s=0,sl=0;try{var M=new Map(),N=new Map(),X=new Map(),W=document.createTreeWalker(b,4),nd,cnt=0,"
             + "IN=/^(P|SPAN|B|I|EM|STRONG|FONT|U|S|SMALL|BIG|SUB|SUP|MARK|RUBY|RT|BR|CENTER)$/,"
-            + "NO=/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|A|BUTTON|SELECT|OPTION|LI|NAV|HEADER|FOOTER|ASIDE|TEXTAREA|LABEL)$/;"
+            + "NO=/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|A|BUTTON|SELECT|OPTION|LI|NAV|HEADER|FOOTER|ASIDE|TEXTAREA|LABEL)$/,"
+            + "CM=/comment|reply|\uB313\uAE00|disqus|cmt/i,"
+            + "ex=function(e){if(X.has(e))return X.get(e);var r=false,a=e;"
+            + "for(var d=0;a&&a!==b&&d<6;d++,a=a.parentElement){var cn=a.className;"
+            + "if(CM.test(String(a.id||'')+' '+String(cn&&cn.baseVal!==undefined?cn.baseVal:cn||''))){r=true;break;}}"
+            + "X.set(e,r);return r;},"
+            + "add=function(e,l){var v=(M.get(e)||0)+l,c=(N.get(e)||0)+1;M.set(e,v);N.set(e,c);if(v>s){s=v;sl=c;}};"
             + "while((nd=W.nextNode())&&cnt<30000){cnt++;var l=nd.nodeValue.trim().length;if(!l)continue;"
             + "var p=nd.parentElement,no=false;while(p&&p!==b){if(NO.test(p.tagName)){no=true;break;}"
-            + "if(!IN.test(p.tagName))break;p=p.parentElement;}if(no||!p)continue;"
-            + "var v=(M.get(p)||0)+l;M.set(p,v);if(v>s)s=v;"
-            + "var g=p.parentElement;if(g&&p!==b&&p.tagName==='DIV'){v=(M.get(g)||0)+l;M.set(g,v);if(v>s)s=v;}}}catch(e){}"
-            + "window.__gS=[n,L.length,(blk?'blocked':c?'checking':''),k,w,s];"
-            + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(blk?'blocked':c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+s+'|'+t;"
-            + "}catch(e){return '0|0|0||0|0|0|0|';}})()";
+            + "if(!IN.test(p.tagName))break;p=p.parentElement;}if(no||!p||ex(p))continue;"
+            + "add(p,l);var g=p.parentElement;if(g&&p!==b&&p.tagName==='DIV')add(g,l);}}catch(e){}"
+            + "window.__gS=[n,L.length,(blk?'blocked':c?'checking':''),k,w,s,sl];"
+            + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(blk?'blocked':c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+s+'|'+sl+'|'+t;"
+            + "}catch(e){return '0|0|0||0|0|0|0|0|';}})()";
 
     /** The page has read what was fetched; the file can go. */
     @JavascriptInterface
@@ -1114,8 +1146,20 @@ public class WebBridge {
         }
         if (status == 404) return "that page does not exist (404)";
         if (status == 401 || status == 403) return "the site refused (" + status + ") -- it may need you to be signed in";
-        if (status == 429) return "the site turned the request away (429, too many requests)";
+        if (status == 429) return tooMany(connection.getHeaderField("Retry-After"));
         return "the site answered " + status;
+    }
+
+    /** "Too many requests", with the wait the site asked for when it said one in seconds. */
+    static String tooMany(String retryAfter) {
+        long seconds = -1;
+        try {
+            if (retryAfter != null) seconds = Long.parseLong(retryAfter.trim());
+        } catch (NumberFormatException ignored) {
+            // A date, or nothing usable: the download's own wait stands.
+        }
+        return "the site turned the request away (429, too many requests"
+                + (seconds > 0 ? "; it asks for a wait of " + seconds + " s" : "") + ")";
     }
 
     private void addCookies(HttpURLConnection connection, URL url) {

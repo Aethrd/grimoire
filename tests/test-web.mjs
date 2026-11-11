@@ -1084,7 +1084,7 @@ await t('an ordinary page is fetched once, and an app without the renderer only 
   // Taken as soon as what it was opened for is there -- a list's chapters, a
   // chapter's story -- after a short still moment, not the whole quiet spell;
   // a chapter asked for again patiently gets the whole spell.
-  assert.match(java, /boolean ready = scroll \? chapterLinks >= 3 : !patient && storyLength >= READY_STORY;/);
+  assert.match(java, /boolean ready = scroll \? chapterLinks >= 3 : !patient && storyThere;/);
   assert.match(java, /private static final long READY_QUIET_MS = 900;/);
   // The pause between list pages: the pacer's, after each one came.
   assert.match(read('app/src/main/assets/www/js/web.js'), /fetchPage = pacer\(fetchPage, \{ gap: listGap, jitter: listJitter/);
@@ -1115,7 +1115,8 @@ await t('a rendered chapter caught before its story arrived is asked for again, 
     /had not finished loading on the site \(the page held \d+ characters: "홈 업데이트 불러오는 중…"\)/);
   const got = await web.readPage(link, 1, { pictures: false });
   assert.match(got.chapter.html, /lit the lamp/);
-  assert.deepEqual(calls, ['0', '1']);   // the second time, more patiently
+  // The second time with one need more: first, everything let in (then, longer).
+  assert.deepEqual(calls, ['0', '0o']);
   // Through the whole download: the empty first answer is retried, never kept.
   answers = [early, chapterPage(3)];
   calls.length = 0;
@@ -1224,7 +1225,11 @@ ${Array.from({ length: 30 }, (_, i) => `<a href="https://ads${i}.example/">광�
     release() {},
   };
   const found = await web.findLinks([base], { listGap: 0 });
-  assert.deepEqual(levels, ['0', '1', '2o']);   // the third with nothing kept out
+  // One need more each time: everything let in, then watched longer as well.
+  assert.deepEqual(levels, ['0', '0o', '1o']);
+  // Learned for the site's lists (everything let in), not for its chapters.
+  assert.deepEqual(web.siteNeedsOf(`${base}/1`, true), { open: true, level: 0 });
+  assert.deepEqual(web.siteNeedsOf(`${base}/1`), { open: false, level: 0 });
   // Its five rows, and the chapter the "첫화부터 정주행" button leads to.
   assert.equal(found.links.filter((l) => /\/novel\/47997\/\d+$/.test(l.url)).length, 6);
   delete window.GrimoireWeb;
@@ -1450,7 +1455,7 @@ await t('the renderer cannot take the app down, and keeps a page light', async (
   // A renderer Android reclaims is let go, not left to take the app with it.
   assert.match(java, /public boolean onRenderProcessGone\(WebView v, RenderProcessGoneDetail detail\) \{[\s\S]{0,900}return true;/);
   // Other sites' adverts and trackers kept out, until a page is asked for patiently.
-  assert.match(java, /final boolean ownSiteOnly = level < 2 && !open;/);
+  assert.match(java, /final boolean ownSiteOnly = !open;/);
   assert.match(java, /if \(request\.isForMainFrame\(\)\) return null;/);
   assert.match(java, /if \(!job\.ownSiteOnly\) return null;/);
   // One browser, used page after page and emptied between them, replaced
@@ -1819,15 +1824,17 @@ await t('a site whose chapters come only with nothing kept out is opened that wa
     gap: 0, pictures: false, patience: { retry: 0, refresh: [0], backoff: [0, 0] },
   });
   assert.equal(parsed.chapters.length, 3);
-  // Until it has been learned, three tries (two chapters may be under way
-  // then); every chapter begun after, once, with nothing kept out.
-  const learned = asks.findIndex((ask) => ask.endsWith('2o'));
+  // Until it has been learned, two tries -- the second with everything let
+  // in, not first waited on longer (two chapters may be under way then);
+  // every chapter begun after, once, with nothing kept out.
+  const learned = asks.findIndex((ask) => ask.endsWith(' 0o'));
   assert.ok(learned >= 0, asks.join(', '));
+  assert.ok(!asks.some((ask) => /[123]o?$/.test(ask)), asks.join(', '));
   assert.deepEqual(asks.filter((ask) => ask.startsWith('/novel/47997/3 ')), ['/novel/47997/3 0o']);
-  assert.ok(asks.length <= 7, asks.join(', '));
+  assert.ok(asks.length <= 5, asks.join(', '));
   assert.deepEqual(web.siteNeedsOf('https://open.example/x'), { open: true, level: 0 });
   delete window.GrimoireWeb;
-  assert.match(read('app/src/main/java/com/grimoire/ereader/WebBridge.java'), /final boolean ownSiteOnly = level < 2 && !open;/);
+  assert.match(read('app/src/main/java/com/grimoire/ereader/WebBridge.java'), /final boolean ownSiteOnly = !open;/);
 });
 
 await t('how far it has got and what it is doing now are told apart', async () => {
@@ -1853,7 +1860,7 @@ await t('how far it has got and what it is doing now are told apart', async () =
   assert.match(build, /`Downloading \$\{part\.name\} · \$\{done\} of \$\{total\}`,\s+\(at \+ fraction\) \/ parts\.length, at, parts\.length, now, \{ done, total \}\)/);
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /<div class="job-activity" hidden><span class="job-tag"><\/span><span class="job-now"><\/span><\/div>/);
-  assert.match(app, /what\.textContent = `\$\{left\} s left of your delay, then \$\{name\}`;/);
+  assert.match(app, /what\.textContent = `\$\{left\} s left \$\{now\.why \? `· \$\{now\.why\}` : 'of your delay'\}, then \$\{name\}`;/);
   assert.match(app, /if \(now !== undefined\) finish\.activity\(now\);/);
 });
 
@@ -1915,7 +1922,7 @@ await t('a chapter is there when its story is, not when the page has a lot of te
   for (const body of [lines.map((i) => `<p>${line(i)}</p>`).join(''), lines.map((i) => `${line(i)}<br>`).join(''), lines.map((i) => `<div>${line(i)}</div>`).join('')]) {
     assert.ok(story(chrome + `<div id="v">${body}</div>`) >= 1500);
   }
-  assert.match(java, /there = scroll \? chapterLinks >= 3 : storyLength >= READY_STORY;/);
+  assert.match(java, /there = scroll \? chapterLinks >= 3 : storyThere;/);
   // With no story yet, it is given longer to be still before it is taken.
   assert.match(java, /: \(!scroll && !there \? quietMs \* 2 : quietMs\);/);
   // And the progress panel says it all, over more lines, not cut off with "…".
@@ -1930,7 +1937,7 @@ await t('a chapter is taken as soon as its story is there and still, not when th
   assert.match(java, /if \(!browserTracked\) v\.evaluateJavascript\(TRACKER, null\);\s+job\.begin\(\);/);
   assert.match(java, /public void onPageCommitVisible\(WebView v, String url\) \{[\s\S]{0,160}job\.visible = true;\s+job\.begin\(\);/);
   // The story stopped growing, nothing of the site's own on its way: taken, adverts or no.
-  assert.match(java, /boolean storyDone = !scroll && !waiting && storyLength >= READY_STORY\s+&& storyStill >= \(patient \? STORY_STILL_PATIENT_MS : STORY_STILL_MS\)\s+&& \(pending == 0 \|\| storyStill >= quietMs\);/);
+  assert.match(java, /boolean storyDone = !scroll && !waiting && storyThere\s+&& storyStill >= \(patient \? STORY_STILL_PATIENT_MS : STORY_STILL_MS\)\s+&& \(pending == 0 \|\| storyStill >= quietMs\);/);
   assert.match(java, /boolean settled = storyDone \|\| \(\(finished \|\| visible\) && !blank && !holding/);
   assert.match(java, /long settle = finished \? need : need \+ quietMs;/);
   // Looked at every tenth of a second -- the page on the phone, nothing asked of the site --
@@ -1951,8 +1958,88 @@ await t('a chapter is taken as soon as its story is there and still, not when th
   const web = read('app/src/main/assets/www/js/web.js');
   assert.match(web, /const SITE_NEEDS_DAYS = 14;/);
   // Only that it needs everything let in: a longer wait, learned wrongly, would slow a fortnight.
-  assert.match(web, /if \(need\.open\) siteNeeds\.set\(host, \{ open: true, level: 0, at: need\.at \}\);/);
-  assert.match(web, /known\.at = Date\.now\(\);\s+siteNeeds\.set\(host, known\);\s+keepSiteNeeds\(\);/);
+  assert.match(web, /if \(need\?\.open && fresh\(need\.at\)\) siteNeeds\.set\(key, \{ open: true, wait: 0, waitSeen: 0, at: need\.at \}\);/);
+  assert.match(web, /known\.at = Date\.now\(\);\s+siteNeeds\.set\(needKey\(url, list\), known\);\s+keepSiteNeeds\(\);/);
+});
+
+await t('a site\'s needs are learned one at a time, a longer wait only once two pages need it', async () => {
+  const asks = [];
+  const empty = '<!doctype html><html><body><header><a href="/">홈</a></header><main><p>불러오는 중…</p></main></body></html>';
+  const send = (id, address, body) => {
+    const path = `data:text/html;base64,${Buffer.from(body, 'utf8').toString('base64')}`;
+    setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type: 'text/html', path, rendered: true })), 0);
+  };
+  window.GrimoireWeb = {
+    fetch: (id, address) => send(id, address, SHELL),
+    // Its chapters come only with everything let in AND watched a little longer.
+    render: (id, address, ask) => {
+      asks.push(`${new URL(address).pathname} ${ask}`);
+      send(id, address, ask === '1o' ? chapterPage(Number(address.slice(-1))) : empty);
+    },
+    release() {},
+  };
+  await web.download('https://slowsite.example/novel/1/1').catch(() => {});
+  asks.length = 0;
+  const links = [1, 2, 3, 4, 5, 6].map((n) => ({ url: `https://slowsite.example/novel/1/${n}`, text: `${n}화` }));
+  const parsed = await web.readPages(links, { gap: 0, pictures: false, patience: { retry: 0, refresh: [0], backoff: [0, 0] } });
+  assert.equal(parsed.chapters.length, 6, `${asks.join(', ')} | ${parsed.failed.map((f) => f.reason).join('; ')}`);
+  // Asked with one need more each time: everything let in, then longer as well.
+  assert.deepEqual(asks.filter((ask) => ask.startsWith('/novel/1/1 ')), ['/novel/1/1 0', '/novel/1/1 0o', '/novel/1/1 1o']);
+  // Everything let in was learned at once; the longer wait once two pages had needed it.
+  assert.deepEqual(web.siteNeedsOf('https://slowsite.example/x'), { open: true, level: 1 });
+  assert.deepEqual(asks.filter((ask) => ask.startsWith('/novel/1/6 ')), ['/novel/1/6 1o']);
+  delete window.GrimoireWeb;
+});
+
+await t('"too many requests" slows the download down, as long as the site asks', async () => {
+  const said = [];
+  const starts = [];
+  let refused = false;
+  const site = async (url, options) => {
+    starts.push(Date.now());
+    if (url.endsWith('chapter-2') && !refused) {
+      refused = true;
+      throw new Error('the site turned the request away (429, too many requests; it asks for a wait of 1 s)');
+    }
+    return fakeFetch(url, options);
+  };
+  const begun = Date.now();
+  const parsed = await web.readPages([1, 2, 3].map((n) => ({ url: `${SITE}chapter-${n}`, text: `No. ${n}` })), {
+    fetchPage: site, gap: 200, jitter: 0, pictures: false, patience: { retry: 0, refresh: [10, 10], backoff: [0] },
+    onProgress: (fraction, done, total, note, activity) => { if (activity) said.push(activity); },
+  });
+  assert.equal(parsed.chapters.length, 3, parsed.failed.map((f) => f.reason).join('; '));
+  // Waited what it asked for, not the moment the schedule says, and said why.
+  assert.ok(Date.now() - begun >= 1000);
+  const wait = said.find((a) => a.kind === 'wait' && a.why);
+  assert.equal(wait?.why, 'the site asked to slow down');
+  // Every page after at twice the spacing.
+  const last = starts.at(-1) - starts.at(-2);
+  assert.ok(last >= 380, `the last two pages were ${last} ms apart`);
+  assert.equal(web.askedWait(new Error('… it asks for a wait of 30 s)')), 30000);
+  // Not asked again within seconds, as a refresh would: a minute, then three, then ten.
+  assert.deepEqual(web.PATIENCE.refresh, [60000, 180000, 600000]);
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  assert.match(java, /if \(mainStatus == 429\) \{\s+fail\(tooMany\(retryAfter\)\);/);
+  assert.match(java, /if \(status == 429\) return tooMany\(connection\.getHeaderField\("Retry-After"\)\);/);
+});
+
+await t('a short chapter is known by its lines, and a comment section is no chapter', async () => {
+  const { JSDOM } = await import('jsdom');
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  const at = java.indexOf('String SHAPE = ');
+  const code = [...java.slice(at, java.indexOf('})()";', at) + 6).split('\n')
+    .filter((l) => /^\s*(\+ |String SHAPE)/.test(l)).join('\n').matchAll(/"((?:[^"\\]|\\.)*)"/g)]
+    .map((m) => JSON.parse(`"${m[1]}"`)).join('');
+  const shape = (page) => new JSDOM(`<html><body>${page}</body></html>`, { runScripts: 'outside-only' }).window.eval(code).split('|');
+  const lines = (n) => Array.from({ length: n }, (_, i) => `<p>짧은 장의 한 줄입니다, 그리고 조금 더 이어집니다. ${i}</p>`).join('');
+  // Fourteen short lines: some 430 characters.
+  const short = shape(`<div>${lines(14)}</div>`);
+  assert.ok(Number(short[7]) >= 400 && Number(short[8]) >= 10, short.join('|'));
+  // However long the comments, they are not the story.
+  const comments = shape(`<div class="comment-list">${lines(80)}</div><div id="댓글">${lines(80)}</div>`);
+  assert.equal(comments[7], '0');
+  assert.match(java, /\|\| \(storyLength >= SHORT_STORY && storyLines >= SHORT_STORY_LINES\);/);
 });
 
 await t('a build says how long it has been and how long it should be yet', async () => {
