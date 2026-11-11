@@ -608,7 +608,9 @@
     </header>
     <div class="scroll pad" id="bin-body"></div>
     <footer class="stepper" id="bin-foot" hidden>
-      <button class="btn ghost" id="bin-restore-all">Put all back</button>
+      <!-- Picks every book, or puts the picked back. Never "put all back" at a
+           tap: nobody tips the bin out for one thing. -->
+      <button class="btn ghost" id="bin-restore-all">Select all</button>
       <span class="muted" id="bin-count"></span>
       <button class="btn danger" id="bin-destroy">Delete for good</button>
     </footer>

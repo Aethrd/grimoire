@@ -1657,7 +1657,10 @@ async function renderBin() {
    * There used to be an Empty at the top as well, doing what Delete for good
    * already did with nothing picked -- two buttons for one thing, at opposite
    * ends of the screen. */
-  el('bin-restore-all').textContent = binSelection.size ? 'Put back' : 'Put all back';
+  /* Put back is for what was picked, one book or many -- never everything at
+   * a tap: nobody tips the bin out to get one thing back. With nothing
+   * picked, the same place picks them all, to look over first. */
+  el('bin-restore-all').textContent = binSelection.size ? 'Put back' : 'Select all';
   el('bin-destroy').textContent = binSelection.size ? 'Delete for good' : 'Empty bin';
   el('bin-destroy').disabled = false;
 }
@@ -1679,6 +1682,11 @@ async function binTargets() {
 
 function wireBin() {
   el('bin-restore-all').onclick = async () => {
+    if (!binSelection.size) {
+      for (const book of await library.binnedBooks()) binSelection.add(book.id);
+      await renderBin();
+      return;
+    }
     const books = await binTargets();
     if (!books.length) return;
     const back = await library.restoreBooks(books.map((b) => b.id));
