@@ -108,7 +108,8 @@ public class WebBridge {
     private static final long READY_QUIET_MS = 900;
     private static final long READY_LIST_QUIET_MS = 1200;
     /** Characters of text that make a page a chapter with its story in it. */
-    private static final int READY_TEXT = 3000;
+    /** A chapter's story, in one block of text, long enough to be the chapter. */
+    private static final int READY_STORY = 1500;
     /** A page still waiting on a request this many quiet spells on has one
      *  that never ends (a live feed, an advert): it is taken as it stands. */
     private static final int RENDER_STUCK_SPELLS = 4;
@@ -685,10 +686,16 @@ public class WebBridge {
                 String reply = value == null ? "" : value;
                 // "pending|text|links|checking|resources|chapters|title": all
                 // but the pending count make the page's shape.
-                String[] parts = reply.replace("\"", "").split("\\|", 8);
+                String[] parts = reply.replace("\"", "").split("\\|", 9);
                 int textLength = 0;
                 int chapterLinks = 0;
                 boolean loading = false;
+                int storyLength = 0;
+                try {
+                    storyLength = Integer.parseInt(parts[7]);
+                } catch (Exception ignored) {
+                    // Unreadable: as though no story were there yet.
+                }
                 try {
                     textLength = Integer.parseInt(parts[1]);
                     chapterLinks = Integer.parseInt(parts[5]);
@@ -724,10 +731,15 @@ public class WebBridge {
                 // A chapter asked for again (patiently) gets the whole spell:
                 // its text being there did not mean its story was, last time.
                 boolean patient = quietMs > RENDER_QUIET_MS;
-                boolean ready = scroll ? chapterLinks >= 3 : !patient && textLength >= READY_TEXT;
+                boolean ready = scroll ? chapterLinks >= 3 : !patient && storyLength >= READY_STORY;
                 // Plainly there, whatever else the page seems to be doing.
-                there = scroll ? chapterLinks >= 3 : textLength >= READY_TEXT;
-                long need = ready ? Math.min(quietMs, scroll ? READY_LIST_QUIET_MS : READY_QUIET_MS) : quietMs;
+                there = scroll ? chapterLinks >= 3 : storyLength >= READY_STORY;
+                /* A chapter with no story on it yet is given longer to be still: a
+                 * site that puts the chapter up a few seconds after the page opens
+                 * shows nothing changing meanwhile, and taken then, it was all a
+                 * retry -- a whole delay -- to come back for. */
+                long need = ready ? Math.min(quietMs, scroll ? READY_LIST_QUIET_MS : READY_QUIET_MS)
+                        : (!scroll && !there ? quietMs * 2 : quietMs);
                 // Settled: nothing more on its way and nothing changing -- or
                 // nothing changing for so long that what is still on its way
                 // is not the page.
@@ -875,8 +887,20 @@ public class WebBridge {
             + "var say=tx.length>0&&tx.length<120&&/잠시만|기다려|로딩|불러오는|loading|please wait/i.test(tx);"
             + "if(!sp&&!say)continue;var st=getComputedStyle(e);"
             + "if(st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0'&&e.getClientRects().length){w=1;break;}}"
-            + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(blk?'blocked':c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+t;"
-            + "}catch(e){return '0|0|0||0|0|0|';}})()";
+            /* The story itself: the most text in one block -- its lines, as <p>s or <br>s or
+             * <div>s, counted together -- leaving out links, menus and list items. The whole
+             * page's text is no measure: on a site whose menus and comment box come to a few
+             * thousand characters, the page was "there" before its chapter had arrived. */
+            + "var s=0;try{var M=new Map(),W=document.createTreeWalker(b,4),nd,cnt=0,"
+            + "IN=/^(P|SPAN|B|I|EM|STRONG|FONT|U|S|SMALL|BIG|SUB|SUP|MARK|RUBY|RT|BR|CENTER)$/,"
+            + "NO=/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|A|BUTTON|SELECT|OPTION|LI|NAV|HEADER|FOOTER|ASIDE|TEXTAREA|LABEL)$/;"
+            + "while((nd=W.nextNode())&&cnt<30000){cnt++;var l=nd.nodeValue.trim().length;if(!l)continue;"
+            + "var p=nd.parentElement,no=false;while(p&&p!==b){if(NO.test(p.tagName)){no=true;break;}"
+            + "if(!IN.test(p.tagName))break;p=p.parentElement;}if(no||!p)continue;"
+            + "var v=(M.get(p)||0)+l;M.set(p,v);if(v>s)s=v;"
+            + "var g=p.parentElement;if(g&&p!==b&&p.tagName==='DIV'){v=(M.get(g)||0)+l;M.set(g,v);if(v>s)s=v;}}}catch(e){}"
+            + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(blk?'blocked':c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+s+'|'+t;"
+            + "}catch(e){return '0|0|0||0|0|0|0|';}})()";
 
     /** The page has read what was fetched; the file can go. */
     @JavascriptInterface

@@ -1329,9 +1329,10 @@ body[data-view="reader"] .stepper {
 .job[hidden] { display: none; }
 .import-line { display: flex; justify-content: space-between; gap: 10px;
                font-size: 12px; margin-bottom: 6px; }
-.import-line span:first-child { white-space: nowrap; overflow: hidden;
-                                text-overflow: ellipsis; min-width: 0; }
-.job-count { flex: none; }
+/* Said in full, over as many lines as it takes: a book's whole name and
+   why a page failed are what is being read, and "…" cut off both. */
+.import-line span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.job-count { flex: none; max-width: 45%; text-align: right; }
 
 /* What it is doing right now, apart from how far it has got: under the
    bar, smaller, with a tag that says which -- waiting out the delay,
@@ -1346,7 +1347,7 @@ body[data-view="reader"] .stepper {
                               box-shadow: inset 0 0 0 1px currentColor; }
 .job-activity.retry .job-tag, .job-activity.failed .job-tag { background: transparent; color: var(--text);
                                                             box-shadow: inset 0 0 0 1px currentColor; }
-.job-now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-now { min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
 .job.done .job-activity, .job.failed .job-activity { display: none; }
 
 /* Finished, it stays a moment, marked, rather than vanishing mid-glance. */

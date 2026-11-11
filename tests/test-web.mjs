@@ -1084,7 +1084,7 @@ await t('an ordinary page is fetched once, and an app without the renderer only 
   // Taken as soon as what it was opened for is there -- a list's chapters, a
   // chapter's story -- after a short still moment, not the whole quiet spell;
   // a chapter asked for again patiently gets the whole spell.
-  assert.match(java, /boolean ready = scroll \? chapterLinks >= 3 : !patient && textLength >= READY_TEXT;/);
+  assert.match(java, /boolean ready = scroll \? chapterLinks >= 3 : !patient && storyLength >= READY_STORY;/);
   assert.match(java, /private static final long READY_QUIET_MS = 900;/);
   // The pause between list pages: the pacer's, after each one came.
   assert.match(read('app/src/main/assets/www/js/web.js'), /fetchPage = pacer\(fetchPage, \{ gap: listGap, jitter: listJitter/);
@@ -1892,6 +1892,33 @@ await t('only the site\'s own requests keep a page "still loading"', async () =>
   const own = new page.XMLHttpRequest(); own.open('GET', 'https://cdn.marumaru109.com/c'); own.send();
   const ad = new page.XMLHttpRequest(); ad.open('GET', 'https://tracker.io/b'); ad.send();
   assert.equal(page.__grimoirePending, 2);
+});
+
+await t('a chapter is there when its story is, not when the page has a lot of text', async () => {
+  const { JSDOM } = await import('jsdom');
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  const at = java.indexOf('String SHAPE = ');
+  const code = [...java.slice(at, java.indexOf('})()";', at) + 6).split('\n')
+    .filter((l) => /^\s*(\+ |String SHAPE)/.test(l)).join('\n').matchAll(/"((?:[^"\\]|\\.)*)"/g)]
+    .map((m) => JSON.parse(`"${m[1]}"`)).join('');
+  const story = (page) => Number(new JSDOM(`<html><body>${page}</body></html>`, { runScripts: 'outside-only' }).window.eval(code).split('|')[7]);
+  // Menus, a notice list and a comment box: a lot of text, none of it a chapter.
+  const chrome = '<nav>' + Array.from({ length: 120 }, (_, i) => `<a href="/x/${i}">메뉴 항목 이름 ${i}</a>`).join('') + '</nav><ul>'
+    + Array.from({ length: 90 }, (_, i) => `<li>공지사항 목록 ${i} 입니다</li>`).join('') + '</ul>';
+  assert.equal(story(chrome), 0);
+  const line = (i) => `그는 천천히 고개를 들어 하늘을 바라보았다. 줄 ${i}.`;
+  const lines = Array.from({ length: 60 }, (_, i) => i);
+  // However its lines are laid out.
+  for (const body of [lines.map((i) => `<p>${line(i)}</p>`).join(''), lines.map((i) => `${line(i)}<br>`).join(''), lines.map((i) => `<div>${line(i)}</div>`).join('')]) {
+    assert.ok(story(chrome + `<div id="v">${body}</div>`) >= 1500);
+  }
+  assert.match(java, /there = scroll \? chapterLinks >= 3 : storyLength >= READY_STORY;/);
+  // With no story yet, it is given longer to be still before it is taken.
+  assert.match(java, /: \(!scroll && !there \? quietMs \* 2 : quietMs\);/);
+  // And the progress panel says it all, over more lines, not cut off with "…".
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\.job-now \{ min-width: 0; overflow-wrap: anywhere; line-height: 1\.4; \}/);
+  assert.match(css, /\.import-line span:first-child \{ min-width: 0; overflow-wrap: anywhere; \}/);
 });
 
 await t('a build says how long it has been and how long it should be yet', async () => {
