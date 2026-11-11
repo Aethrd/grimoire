@@ -1176,13 +1176,21 @@ export async function findLinks(addresses, {
    * one that does. Where it cannot be told which way the list runs, every
    * page is read. */
   known = null,
+  // The least pause after "too many requests" (shorter only in the tests).
+  slowDownMs = 60000,
 } = {}) {
   const links = [];
   const seen = new Map();
   const failed = [];
   // Every page of the list at the reader's pace: after the last came,
   // whatever became of it.
-  fetchPage = pacer(fetchPage, { gap: listGap, jitter: listJitter, stop: () => typeof shouldStop === 'function' && !!shouldStop() });
+  // Twice as far apart (up to four times) once the site says "too many requests".
+  let slower = 1;
+  const slowedFor = new Set();
+  fetchPage = pacer(fetchPage, {
+    gap: listGap, jitter: listJitter, scale: () => slower,
+    stop: () => typeof shouldStop === 'function' && !!shouldStop(),
+  });
   let title = '';
   let author = '';
   let cover = '';
@@ -1282,6 +1290,20 @@ export async function findLinks(addresses, {
         pagesTotal = Math.max(pagesTotal, total || pages);
         // (The pause before the next is the pacer's.)
       } catch (error) {
+        /* "Too many requests": as with chapters, a long pause -- what the site
+         * asked, never under a minute -- then this page once more, and the
+         * rest of the list slower. */
+        if (tooMany(error) && !slowedFor.has(next) && !stopped()) {
+          slowedFor.add(next);
+          slower = Math.min(4, slower * 2);
+          const nap = Math.min(15 * 60000, Math.max(slowDownMs, askedWait(error)));
+          onProgress?.(at / addresses.length, next, pages, numbered ? total : 0,
+            `The site asked to slow down — waiting ${Math.round(nap / 1000)} s, then reading the rest of the list more slowly…`);
+          await napUnless(nap, stopped);
+          visited.delete(next);
+          pages -= 1;
+          continue;
+        }
         // The first page failing is the address failing; a later one of a
         // WordPress list is the end of what could be listed. A numbered page
         // that fails is passed over, and said.

@@ -1089,7 +1089,7 @@ await t('an ordinary page is fetched once, and an app without the renderer only 
   assert.match(java, /boolean ready = scroll \? chapterLinks >= 3 : !patient && storyThere;/);
   assert.match(java, /private static final long READY_QUIET_MS = 900;/);
   // The pause between list pages: the pacer's, after each one came.
-  assert.match(read('app/src/main/assets/www/js/web.js'), /fetchPage = pacer\(fetchPage, \{ gap: listGap, jitter: listJitter/);
+  assert.match(read('app/src/main/assets/www/js/web.js'), /fetchPage = pacer\(fetchPage, \{\s+gap: listGap, jitter: listJitter, scale: \(\) => slower,/);
   assert.match(java, /view = new WebView\(activity\)/);
   assert.match(java, /only web addresses can be downloaded/);
 });
@@ -1431,7 +1431,7 @@ ${Array.from({ length: 30 }, (_, i) => `<a href="https://ads${i}.example/">ê´‘ê³
   const html = read('app/src/main/assets/www/index.html');
   assert.match(html, /id="web-more" hidden>Search for more</);
   assert.match(app, /el\('web-more'\)\.onclick = searchMore;/);
-  assert.match(app, /patience: level, listGap: webDelay\(\)/);
+  assert.match(app, /patience: level, listGap: webListDelay\(\)/);
   assert.match(html, /id="build-notify"> Notify me when it's built or stops/);
   assert.match(app, /notifyBuild\(paused/);
   assert.match(app, /notifyAnswer: \(allowed\) => answerNotify\(allowed\)/);
@@ -2094,6 +2094,37 @@ await t('"Check for new chapters" reads the list only as far as what the book ha
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /webState\.quickCheck = true;\s+await findWebLinks\(\);/);
   assert.match(app, /known: known\?\.size \? known : null,/);
+});
+
+await t('a list has its own, shorter pace; "too many requests" on it slows the rest', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /listGap: webListDelay\(\), listJitter: webListJitter\(\),\s+shouldStop/);
+  assert.match(app, /patience: level, listGap: webListDelay\(\), listJitter: webListJitter\(\),/);
+  assert.match(app, /const LIST_DELAY = 4000;\s+const LIST_JITTER = 2000;/);
+  const html = read('app/src/main/assets/www/index.html');
+  // Shown before the list is read, not only once it has been.
+  assert.ok(html.indexOf('id="web-list-delay"') < html.indexOf('id="web-picked"'));
+  const asked = [];
+  let refused = false;
+  const site = listSite(3, true, asked);
+  const notes = [];
+  const found = await web.findLinks(['https://list.example/serial/9'], {
+    listGap: 50, listJitter: 0, slowDownMs: 20,
+    onProgress: (f, address, page, pages, note) => { if (note) notes.push(note); },
+    fetchPage: async (url, options) => {
+      if (url.includes('page=2') && !refused) {
+        refused = true;
+        asked.push(url);
+        throw new Error('the site turned the request away (429, too many requests)');
+      }
+      return site(url, options);
+    },
+  });
+  // Page 2 asked again after the pause; every page listed; said why it waited.
+  assert.equal(asked.filter((u) => u.includes('page=2')).length, 2);
+  assert.equal(found.links.filter((l) => /\/serial\/9\/\d+$/.test(l.url)).length, 15);
+  assert.equal(found.failed.length, 0);
+  assert.match(notes[0], /asked to slow down/);
 });
 
 await t('a list\'s other pages are found as /page/N, or by its "next" link, onward only', () => {

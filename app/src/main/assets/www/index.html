@@ -448,6 +448,16 @@
         <!-- Its cookies, kept from launch to launch, forgotten: for a site stuck on a check. -->
         <button class="btn ghost web-forget" id="web-forget" hidden>Forget this site's cookies</button>
       </div>
+      <!-- The contents list's own pace: paging through a list is quick work for a
+           reader, unlike reading a chapter, so it has its own, shorter delay. -->
+      <div class="web-list-rate">
+        <label class="web-rate"><span>Between list pages</span>
+          <input id="web-list-delay" type="number" inputmode="numeric" min="0" max="60000" step="250" value="4000">
+          <span>ms</span></label>
+        <label class="web-rate"><span>Give or take <small class="muted" id="web-list-range"></small></span>
+          <input id="web-list-jitter" type="number" inputmode="numeric" min="0" max="60000" step="250" value="2000">
+          <span>ms</span></label>
+      </div>
       <p class="muted web-note" id="web-note">
         Paste the address of a book's contents page. Every link on it is listed
         — the chapters, and whatever else the site put there. Untick what is

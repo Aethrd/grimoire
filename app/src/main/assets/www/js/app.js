@@ -8595,10 +8595,11 @@ async function findWebLinks() {
       button.textContent = 'Finding…';
       const found = await web.findLinks(addresses, {
         // The pages of a long list are asked for at the same pace as chapters.
-        listGap: webDelay(), listJitter: webJitter(),
+        listGap: webListDelay(), listJitter: webListJitter(),
         shouldStop: () => !current(),
         known: known?.size ? known : null,
-        onProgress: (fraction, address, page, pages) => {
+        onProgress: (fraction, address, page, pages, note) => {
+          if (note && current()) { webNote(note); return; }
           if (address && current()) {
             webNote(page > 1 ? `Reading page ${page}${pages ? ` of ${pages}` : ''} of the list…` : `Reading ${webWhere(address)}…`);
           }
@@ -8794,7 +8795,7 @@ async function searchMore() {
   const before = new Map(webState.links.map((link) => [link.url, link]));
   try {
     const found = await web.findLinks(addresses, {
-      patience: level, listGap: webDelay(), listJitter: webJitter(),
+      patience: level, listGap: webListDelay(), listJitter: webListJitter(),
       shouldStop: () => !current(),
       onProgress: (fraction, address, page, pages) => {
         if (address && current()) {
@@ -8974,6 +8975,26 @@ function paintWebRange() {
   range.textContent = jitter ? `· ${Math.max(0, delay - jitter)}–${delay + jitter} ms` : '';
 }
 
+/* The list's own pace (see index.html): reading the pages of a contents list,
+ * which a reader flips through in seconds, not a chapter's full delay. */
+const LIST_DELAY = 4000;
+const LIST_JITTER = 2000;
+function webListDelay() {
+  const value = Math.round(Number(el('web-list-delay')?.value));
+  return Number.isFinite(value) ? Math.max(0, Math.min(60000, value)) : LIST_DELAY;
+}
+function webListJitter() {
+  const value = Math.round(Number(el('web-list-jitter')?.value));
+  return Number.isFinite(value) ? Math.max(0, Math.min(60000, value)) : LIST_JITTER;
+}
+function paintWebListRange() {
+  const range = el('web-list-range');
+  if (!range) return;
+  const delay = webListDelay();
+  const jitter = webListJitter();
+  range.textContent = jitter ? `· ${Math.max(0, delay - jitter)}–${delay + jitter} ms` : '';
+}
+
 function webDelay() {
   const value = Math.round(Number(el('web-delay')?.value));
   return Number.isFinite(value) ? Math.max(0, Math.min(60000, value)) : 250;
@@ -9010,7 +9031,10 @@ function wireWeb() {
     if (Number.isFinite(settings.webDelay)) el('web-delay').value = String(settings.webDelay);
     if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
     if (typeof settings.webPictures === 'boolean') webState.pictures = settings.webPictures;
+    if (Number.isFinite(settings.webListDelay)) el('web-list-delay').value = String(settings.webListDelay);
+    if (Number.isFinite(settings.webListJitter)) el('web-list-jitter').value = String(settings.webListJitter);
     paintWebRange();
+    paintWebListRange();
     renderWeb();
   }).catch(() => {});
   el('web-delay').addEventListener('change', () => {
@@ -9027,6 +9051,20 @@ function wireWeb() {
     paintWebRange();
   });
   el('web-jitter').addEventListener('input', paintWebRange);
+  el('web-list-delay').addEventListener('change', () => {
+    const value = webListDelay();
+    el('web-list-delay').value = String(value);
+    store.saveSettings({ webListDelay: value });
+    paintWebListRange();
+  });
+  el('web-list-delay').addEventListener('input', paintWebListRange);
+  el('web-list-jitter').addEventListener('change', () => {
+    const value = webListJitter();
+    el('web-list-jitter').value = String(value);
+    store.saveSettings({ webListJitter: value });
+    paintWebListRange();
+  });
+  el('web-list-jitter').addEventListener('input', paintWebListRange);
   el('web-clear').onclick = clearWeb;
   el('web-paste').onclick = async () => {
     try {

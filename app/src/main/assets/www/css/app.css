@@ -2561,6 +2561,8 @@ body.in-book .import-progress .jobs-summary { display: block; }
 
 /* How gently a site is asked: a pause between one page and the next. */
 .web-rate { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px; font-size: 13px; }
+.web-list-rate { margin: -2px 0 6px; }
+.web-list-rate .web-rate { margin: 4px 0 0; }
 .web-rate span:first-child { flex: 1; color: var(--muted); }
 .web-rate input { width: 92px; padding: 8px 10px; border-radius: var(--radius-md);
   border: 1px solid var(--hairline); background: var(--surface); color: var(--text);
