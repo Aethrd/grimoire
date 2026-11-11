@@ -245,15 +245,20 @@ export async function add(files, onProgress) {
  * if the result is not what was wanted.
  */
 export function addBook(book) {
-  parts = [...parts, {
+  parts = [...parts, bookPart(book)];
+  return parts;
+}
+
+/** A book from the shelf as a part, not put in the workshop (the queue's own builds). */
+export function bookPart(book) {
+  return {
     id: `book-${book.id}-${Date.now()}`,
     name: book.title || 'Book',
     bookId: book.id,
     chapterCount: book.chapters || 0,
     words: book.words || 0,
     fromShelf: true,
-  }];
-  return parts;
+  };
 }
 
 export const hasBook = (bookId) => parts.some((part) => part.bookId === bookId);
@@ -284,19 +289,24 @@ function leftOf(part, pages, reason = '') {
  * @param links  [{ url, text }] in reading order
  * @param cover  the site's picture of the book, already fetched, or null
  */
-export function addWeb({
+export function addWeb(options) {
+  parts = [...parts, webPart(options)];
+  return parts;
+}
+
+/** Chapters from a website as a part, not put in the workshop (the queue's own builds). */
+export function webPart({
   name, links, pictures = true, cover = null, author = '', sources = [], leftover = null, gap = 250, jitter = 0,
 }) {
-  parts = [...parts, {
-    id: `web-${Date.now()}`,
+  return {
+    id: `web-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     // Pages left over from an earlier build, being tried again.
     leftover,
     name: name || 'From the web',
     web: { links: links.map(({ url, text }) => ({ url, text })), pictures, author, sources, gap, jitter },
     coverBlob: cover,
     chapterCount: links.length,
-  }];
-  return parts;
+  };
 }
 
 export function move(id, by) {
@@ -363,7 +373,14 @@ export function describe(part) {
  */
 export async function build({
   title, author, folder = null, cover: chosenCover = null, onProgress, shouldPause = null,
+  /* Built from these rather than the workshop's list: a queued website, built
+   * on its own beside whatever is in Build. */
+  parts: given = null,
+  // Kept on the book while it is built: the queue's job it is, for a cut-off
+  // build to go back to that job rather than to Build's leftovers.
+  tag = null,
 } = {}) {
+  const list = given || parts;
   /* One part is a book too.
    *
    * A zip of a volume's saved pages, or a folder of a chapter's images, is a
@@ -371,9 +388,9 @@ export async function build({
    * case away at the door. Joining several is what the workshop is for, not
    * what it requires.
    */
-  if (!parts.length) throw new Error('Add something to build from.');
+  if (!list.length) throw new Error('Add something to build from.');
 
-  const name = title || suggestedName(parts);
+  const name = title || suggestedName(list);
 
   /* Filed where it was asked for -- the folder the shelf is open at -- or,
    * when it was not, where the book it was built onto is filed. A volume
@@ -382,14 +399,14 @@ export async function build({
    * book it is built onto -- kept on it, as WebToEpub's library keeps a
    * story's address: "Check for new chapters" lists them again. */
   const webSources = [];
-  for (const part of parts) {
+  for (const part of list) {
     const from = part.web ? part.web.sources || [] : part.bookId ? (await store.get('books', part.bookId))?.webSources || [] : [];
     for (const address of from) if (address && !webSources.includes(address)) webSources.push(address);
   }
 
   let filed = folder || '';
   if (!filed) {
-    for (const part of parts) {
+    for (const part of list) {
       if (!part.bookId) continue;
       filed = (await store.get('books', part.bookId))?.folder || '';
       break;
@@ -407,14 +424,15 @@ export async function build({
     addedAt: Date.now(),
     words: 0,
     importing: true,
-    builtFrom: parts.map((p) => (p.bookId ? { name: p.name, bookId: p.bookId } : { name: p.name })),
+    ...(tag ? { queueJob: tag } : {}),
+    builtFrom: list.map((p) => (p.bookId ? { name: p.name, bookId: p.bookId } : { name: p.name })),
     ...(webSources.length ? { webSources } : {}),
     /* What a website part is downloading, kept on the book until it is
      * built: should the app be closed or killed meanwhile, the chapters
      * that had come are a book on the next start, and the rest -- from
      * `building.at.next` -- is kept to carry it on. */
     building: {
-      webParts: parts.map((p, at) => (p.web ? { at, ...leftOf(p, p.web.links).web, leftover: p.leftover || null } : null))
+      webParts: list.map((p, at) => (p.web ? { at, ...leftOf(p, p.web.links).web, leftover: p.leftover || null } : null))
         .filter(Boolean),
       at: null,
     },
@@ -430,7 +448,7 @@ export async function build({
     /* Not where a book is carried on from where its download stopped: the
        parts are one serial, and the seam would be named again at every
        carry -- "Title — Title — 1화". */
-    title: n === 0 && parts.length > 1 && !part.seamless
+    title: n === 0 && list.length > 1 && !part.seamless
       ? `${stripExtension(part.name)} — ${chapter.title}`
       : chapter.title,
     volume,
@@ -464,8 +482,8 @@ export async function build({
    * moments, and a book missing its own volumes is not what was asked for. */
   const pausing = () => typeof shouldPause === 'function' && !!shouldPause();
 
-  for (let at = 0; at < parts.length; at++) {
-    const part = parts[at];
+  for (let at = 0; at < list.length; at++) {
+    const part = list[at];
     if (part.web && pausing()) {
       const count = part.web.links.length;
       failed.push({
@@ -476,7 +494,7 @@ export async function build({
       });
       continue;
     }
-    onProgress?.(`Reading ${part.name}`, at / parts.length, at, parts.length);
+    onProgress?.(`Reading ${part.name}`, at / list.length, at, list.length);
 
     const prefix = `p${at}/`;
     // Where this part's chapters begin in the finished book. Its pictures
@@ -544,8 +562,8 @@ export async function build({
           // this moment (waiting out the delay, reading, another try) apart.
           onProgress: (fraction, done, total, note, now) => onProgress?.(
             // The chapters are counted beside it (app.js, paintTimes); which part this is, here.
-            `Downloading ${part.name}${parts.length > 1 ? ` · part ${at + 1} of ${parts.length}` : ''}`,
-            (at + fraction) / parts.length, at, parts.length, now, { done, total, stats: partStats }),
+            `Downloading ${part.name}${list.length > 1 ? ` · part ${at + 1} of ${list.length}` : ''}`,
+            (at + fraction) / list.length, at, list.length, now, { done, total, stats: partStats }),
         })
         : part.bookId
         ? await readShelfBook(part)
@@ -553,12 +571,12 @@ export async function build({
         ? await readPictures(part)
         : part.pages
         ? await parseChapters(part.pages, (fraction) =>
-          onProgress?.(`Reading ${part.name}`, (at + fraction) / parts.length, at, parts.length),
+          onProgress?.(`Reading ${part.name}`, (at + fraction) / list.length, at, list.length),
           { title: part.name, onImage })
         : await parse(
           part.file || new File([await part.read()], part.name),
           (fraction) =>
-            onProgress?.(`Reading ${part.name}`, (at + fraction) / parts.length, at, parts.length),
+            onProgress?.(`Reading ${part.name}`, (at + fraction) / list.length, at, list.length),
           { prefix: part.prefix ?? null, onImage });
       await flush();
     } catch (error) {

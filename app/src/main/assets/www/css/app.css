@@ -2671,5 +2671,10 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .build-queue-list li .col { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .build-queue-list li small { display: block; }
 .build-queue-list .icon-btn { flex: none; }
+.build-queue-list .chip { flex: none; }
+.build-queue-list li { flex-wrap: wrap; }
+.build-queue-list li[data-status="attention"] small { color: var(--danger, #e08a8a); }
+.build-queue-list li[data-status="done"] { opacity: .7; }
+.build-queue-once { margin: 8px 0 0; align-items: center; gap: 6px; }
 #web-queue[hidden], #web-go[hidden], #build-minimise[hidden] { display: none; }
 .build-from-shelf[hidden] { display: none; }

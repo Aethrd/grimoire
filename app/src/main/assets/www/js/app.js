@@ -6284,19 +6284,38 @@ function pauseBuild() {
 
 /* ── the queue ─────────────────────────────────────────────────────────
  *
- * Several websites, each with its own chapters ticked and its own title,
- * waiting their turn: built one after another, a book each, with the same
- * settings for all -- the Website screen's delay, list delay and pictures,
- * as they are when each one's turn comes. Each goes into Build when its turn
- * comes and is built there as any website is: what does not come is kept as
- * a leftover, as ever, and Overnight carries it on before the queue goes on.
+ * Novels from websites, each with its own chapters ticked and its own
+ * title, built as books of their own -- outside Build, which stays free for
+ * whatever is being put together by hand.
  *
- * It stops, keeping the rest, when Pause & keep is pressed, or when a site
- * itself says stop -- blocked, a check to pass, "too many requests" -- since
- * going on would only ask again. Kept across the app being closed; it starts
- * again only when asked.
+ *   Several at once, never two from the same site: each site is asked at its
+ *   own delay, just as one book alone would ask it, so to any one site
+ *   nothing changes. (Sites that need the unseen browser take turns in it.)
+ *
+ *   A site that says stop -- blocked, a check to pass, "too many requests" --
+ *   holds that book for the reader (Needs you), and every other book from
+ *   that site with it; books from other sites go on.
+ *
+ *   Anything else that stops a book -- a timeout, the site's server failing,
+ *   a chapter that would not come -- is tried again 15 minutes later, from
+ *   where it got to, the book carried on rather than begun again; five stops
+ *   at the same chapter and it waits for the reader.
+ *
+ *   Kept, every job and where it is, across the app being closed: a book cut
+ *   off by Android goes back to its job, not to Build's leftovers.
+ *
+ * A job: { id, name, author, sources, cover, links (still to come), total,
+ *          status, bookId (the book so far), done, note, retryAt, stops,
+ *          lastStop } -- status one of queued, running, retry, attention,
+ *          paused, done.
  */
-let webQueue = [];   // [{ id, name, author, sources, cover, links: [{ url, text }] }]
+let webQueue = [];
+const queueState = { running: false, atOnce: 2, timer: null };
+const QUEUE_RETRY_MS = 15 * 60000;
+const QUEUE_MAX_STOPS = 5;
+const queueJobs = new Map();   // id -> { pausing, finish, run } for the jobs under way
+let runBuild = async () => {};
+
 /* Build seen as the book in it, or as the index of every novel -- that one
  * as a card, the queue's, and another to add (see index.html). */
 let buildIndex = false;
@@ -6321,14 +6340,53 @@ function paintIndexCard() {
   if (card.hidden) return;
   el('build-index-name').textContent = el('build-title').value || build.suggestedName(parts) || 'This book';
   el('build-index-state').textContent = buildRun
-    ? `Building · ${buildRun.status || 'starting…'}`
-    : `${parts.length} part${parts.length === 1 ? '' : 's'} in Build, not built yet · tap to open`;
+    ? `In Build · ${buildRun.status || 'starting…'}`
+    : `In Build · ${parts.length} part${parts.length === 1 ? '' : 's'}, not built yet · tap to open`;
 }
-const queueState = { running: false, built: 0, last: null, stopAfter: false };
-let runBuild = async () => {};
+
+/**
+ * The site a job is from, as one site however it is addressed. Books of one
+ * site sit anywhere in the queue, and are started out of order as sites come
+ * free; one at 013.bookkor.com five places back is the same site as one at
+ * 012.bookkor.com under way, and so is marumaru110.com to marumaru109.com,
+ * or a .net to its .com -- such sites move between numbered addresses. So:
+ * the site's own name, without its subdomains, its number or its ending.
+ * Two sites taken for one only go one after the other; never the other way.
+ */
+function siteOfJob(job) {
+  try {
+    return siteKey(new URL(job.sources?.[0] || job.links?.[0]?.url).hostname);
+  } catch {
+    return '';
+  }
+}
+
+function siteKey(hostname) {
+  const labels = String(hostname || '').toLowerCase().replace(/\.$/, '').split('.').filter(Boolean);
+  if (labels.length < 2) return labels[0] || '';
+  // The name before the ending: "bookkor" of 012.bookkor.com, "site" of www.site.co.kr.
+  const country = labels.length > 2 && labels.at(-1).length === 2 && labels.at(-2).length <= 3;
+  const name = labels.at(country ? -3 : -2) || '';
+  return name.replace(/[-_]?\d+$/, '') || name;
+}
 
 function saveQueue() {
-  store.saveSettings({ webQueue }).catch(() => {});
+  // What is under way is kept as such: on a restart it is queued again (see loadQueue).
+  store.saveSettings({ webQueue, queueRunning: queueState.running, queueAtOnce: queueState.atOnce }).catch(() => {});
+  paintQueue();
+}
+
+/** The queue as kept: jobs from an older version made whole; what was under way when the app closed, queued again. */
+function loadQueue(settings) {
+  const jobs = Array.isArray(settings.webQueue) ? settings.webQueue : [];
+  webQueue = jobs.filter((job) => job && Array.isArray(job.links)).map((job) => ({
+    status: 'queued', total: job.links.length, done: 0, stops: 0, ...job,
+    ...(job.status === 'running' ? { status: 'queued' } : {}),
+  }));
+  if ([1, 2, 3].includes(settings.queueAtOnce)) queueState.atOnce = settings.queueAtOnce;
+  if (settings.queueRunning && webQueue.some((job) => ['queued', 'retry'].includes(job.status))) {
+    setTimeout(() => toast('The queue was running when the app closed — Start queue on Build carries on.', 7000), 1500);
+  }
   paintQueue();
 }
 
@@ -6344,121 +6402,352 @@ function queueWeb() {
   webQueue.push({
     id: `q-${Date.now()}`, name, author: webState.author || '', sources: webState.sources || [],
     cover: webState.cover || '', links: chosen.map(({ url, text }) => ({ url, text })),
+    total: chosen.length, done: 0, status: 'queued', stops: 0,
   });
   saveQueue();
   clearWeb();
-  toast(`“${name}” queued — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}. ${webQueue.length} website${webQueue.length === 1 ? '' : 's'} in the queue, on Build.`, 5000);
+  const waiting = webQueue.filter((job) => job.status !== 'done').length;
+  toast(`“${name}” queued — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}. ${waiting} in the queue, on Build.`, 5000);
+  if (queueState.running) pumpQueue();
   back();
 }
 
-/* Started with a book already in Build: that book first -- building, it is
- * finished; not yet built, it is built -- and the queue after it. */
-async function startQueue() {
-  if (!webQueue.length || queueState.running) return;
-  Object.assign(queueState, { running: true, built: 0, stopAfter: false });
+/** Start queue (and Resume): paused books go back in line, and the queue runs. */
+function startQueue() {
+  for (const job of webQueue) if (job.status === 'paused') job.status = 'queued';
+  queueState.running = true;
   try { window.GrimoireNative?.keepScreenOn?.(true); } catch { /* not in a browser */ }
-  paintQueue();
-  if (buildRun) { toast('The queue goes on once this book is built.'); return; }
-  if (!build.isEmpty()) { await runBuild(); return; }
-  await nextInQueue();
+  saveQueue();
+  pumpQueue();
 }
 
-/** Stopped once the website under way is done (or paused), the rest kept. */
-function stopQueueAfterThis() {
-  queueState.stopAfter = true;
-  paintQueue();
-  toast('The queue stops after this book — the rest stay queued.');
-}
-
-function endQueue(message, title) {
+/** Pause all: the books under way stop now -- each keeps what came, the rest kept to resume -- and none starts. */
+function pauseQueue() {
   queueState.running = false;
-  queueState.stopAfter = false;
-  paintQueue();
-  renderWorkshop();
-  if (current !== 'reader' && !night.timer) {
+  clearTimeout(queueState.timer);
+  for (const [, under] of queueJobs) under.pausing = true;
+  // Stopped at once, not after the page under way -- unless Build is downloading too.
+  if (queueJobs.size && !buildRun) web.stopAll();
+  saveQueue();
+  if (!queueJobs.size) letScreenGo();
+}
+
+function letScreenGo() {
+  if (current !== 'reader' && !buildRun && !night.timer && !queueJobs.size && !queueState.running) {
     try { window.GrimoireNative?.keepScreenOn?.(false); } catch { /* not in a browser */ }
   }
-  if (message) {
-    whenNotReading(() => toast(message, 8000, { kind: 'done' }));
-    notifyBuild({ title, text: message });
+}
+
+/** The sites in use now: the queue's books under way, and a website Build is downloading. */
+function sitesInUse() {
+  const sites = new Set();
+  for (const job of webQueue) if (job.status === 'running') sites.add(siteOfJob(job));
+  if (buildRun) {
+    for (const part of build.contents()) if (part.web) sites.add(siteOfJob({ sources: part.web.sources, links: part.web.links }));
   }
+  return sites;
 }
 
-/** After every build: on to the queue's next website, if it is running and may. */
-function queueAfter(last) {
-  if (!queueState.running) return;
-  const built = `${queueState.built} book${queueState.built === 1 ? '' : 's'} built`;
-  if (last?.paused) { endQueue(`Queue paused — ${built}; ${webQueue.length} still queued. Start queue goes on.`, 'Queue paused'); return; }
-  if (last?.halt) { endQueue(`Queue stopped: the site said to stop — ${built}; ${webQueue.length} still queued.`, 'Queue stopped'); return; }
-  setTimeout(() => { nextInQueue(); }, 1500);
+/** Sites holding their books for the reader: one of them said stop. */
+const sitesHeld = () => new Set(webQueue.filter((job) => job.status === 'attention' && job.halted).map(siteOfJob));
+
+/**
+ * Starts what may start: up to "at once" books, from sites not already in
+ * use and not holding for the reader, in the queue's order; a book waiting
+ * to try again when its time comes. Ends the queue, said, when nothing is
+ * left to do.
+ */
+function pumpQueue() {
+  clearTimeout(queueState.timer);
+  if (!queueState.running) { paintQueue(); return; }
+  const now = Date.now();
+  const busy = sitesInUse();
+  const held = sitesHeld();
+  for (const job of webQueue) {
+    if (queueJobs.size >= queueState.atOnce) break;
+    const due = job.status === 'queued' || (job.status === 'retry' && (job.retryAt || 0) <= now);
+    if (!due) continue;
+    const site = siteOfJob(job);
+    if (busy.has(site) || held.has(site)) continue;
+    busy.add(site);
+    runJob(job);
+  }
+  // The next try that is waiting for its time.
+  const next = webQueue.filter((job) => job.status === 'retry').map((job) => job.retryAt || now).sort((a, b) => a - b)[0];
+  if (next) queueState.timer = setTimeout(pumpQueue, Math.max(1000, next - now + 500));
+  const left = webQueue.some((job) => ['queued', 'retry', 'running'].includes(job.status));
+  if (!left && !queueJobs.size) {
+    queueState.running = false;
+    const done = webQueue.filter((job) => job.status === 'done').length;
+    const waiting = webQueue.filter((job) => job.status === 'attention').length;
+    const message = `Queue done — ${done} book${done === 1 ? '' : 's'} built${waiting ? `; ${waiting} need${waiting === 1 ? 's' : ''} you` : ''}.`;
+    whenNotReading(() => toast(message, 8000, { kind: 'done' }));
+    notifyBuild({ title: 'Queue done', text: message });
+    letScreenGo();
+  }
+  saveQueue();
 }
 
-async function nextInQueue() {
-  if (!queueState.running || buildRun) return;
-  const built = `${queueState.built} book${queueState.built === 1 ? '' : 's'} built`;
-  // Overnight is carrying the last one on: the queue goes on once that is done.
-  if (night.timer) { paintQueue(); return; }
-  if (queueState.stopAfter) { endQueue(`Queue stopped as asked — ${built}; ${webQueue.length} still queued.`, 'Queue stopped'); return; }
-  if (!build.isEmpty()) {
-    endQueue(`Queue stopped — Build has parts in it; ${webQueue.length} still queued.`, 'Queue stopped');
+/** One book of the queue, built on its own: carried on from the book so far, if there is one. */
+async function runJob(job) {
+  const under = { pausing: false, finish: progress.start(job.name), run: null };
+  queueJobs.set(job.id, under);
+  job.status = 'running';
+  job.note = '';
+  saveQueue();
+  let outcome = { rest: job.links, reason: '', paused: false };
+  try {
+    const parts = [];
+    const before = job.bookId != null ? await store.get('books', job.bookId) : null;
+    if (before) parts.push({ ...build.bookPart(before), seamless: true });
+    const cover = before ? null : await web.fetchCover(job.cover).catch(() => null);
+    const part = build.webPart({
+      name: job.name, links: job.links, pictures: webState.pictures, cover,
+      author: job.author, sources: job.sources, gap: webDelay(), jitter: webJitter(),
+    });
+    if (before) part.seamless = true;
+    parts.push(part);
+    under.run = {
+      at: -1, total: undefined, done: undefined, parts: parts.length, samples: [], shown: null, startedAt: Date.now(),
+      delays: parts.map((p) => (p.web ? { gap: p.web.gap, jitter: p.web.jitter, chapters: p.web.links.length } : null)),
+    };
+    const { book, failed } = await build.build({
+      parts, tag: job.id, title: before ? library.displayTitle(before) : job.name,
+      author: job.author || undefined, cover: null, shouldPause: () => under.pausing,
+      onProgress: (message, fraction, at, total, now, counts) => trackJob(job, under, message, at, now, counts),
+    });
+    // The book so far, carried on: the shorter one goes to the Bin.
+    if (before && before.id !== book.id) await library.binBooks([before.id]).catch(() => {});
+    job.bookId = book.id;
+    job.done = book.chapters;
+    const rest = failed.flatMap((each) => each.web?.links || []);
+    outcome = {
+      rest, reason: failed[0]?.reason || '',
+      paused: failed.length > 0 && failed.every((each) => each.paused),
+    };
+  } catch (error) {
+    outcome = { rest: job.links, reason: error.message || 'nothing came', paused: !!error.paused };
+  } finally {
+    under.finish();
+    queueJobs.delete(job.id);
+  }
+  settleJob(job, outcome, under.pausing);
+  await refreshShelf().catch(() => {});
+  saveQueue();
+  if (queueState.running) pumpQueue();
+  else letScreenGo();
+}
+
+/** Where a book of the queue stands after a try: done, paused, held for the reader, or to try again. */
+function settleJob(job, { rest, reason, paused }, byHand) {
+  job.links = rest.map(({ url, text }) => ({ url, text }));
+  job.halted = false;
+  if (!job.links.length) {
+    job.status = 'done';
+    job.note = '';
     return;
   }
-  if (!webQueue.length) { endQueue(`Queue done — ${built}.`, 'Queue done'); return; }
-  const item = webQueue.shift();
-  saveQueue();
-  const cover = item.cover ? await web.fetchCover(item.cover).catch(() => null) : null;
-  build.addWeb({
-    name: item.name, links: item.links, pictures: webState.pictures, cover,
-    author: item.author, sources: item.sources, gap: webDelay(), jitter: webJitter(),
-  });
-  el('build-title').value = item.name;
-  buildTitleTouched = true;
-  el('build-author').value = item.author || '';
-  renderWorkshop();
-  await runBuild();
+  if (paused) {
+    // Paused by hand: kept so. Stopped by Build's own Pause & keep: straight back in line.
+    job.status = byHand ? 'paused' : 'queued';
+    job.note = '';
+    return;
+  }
+  if (queueHalts(reason)) {
+    job.status = 'attention';
+    job.halted = true;
+    job.note = reason;
+    notifyBuild({ title: 'A book needs you', text: `“${job.name}”: ${reason}. Its site's other books wait; the rest go on.` });
+    return;
+  }
+  const at = job.links[0]?.url || '';
+  job.stops = job.lastStop === at ? (job.stops || 0) + 1 : 1;
+  job.lastStop = at;
+  if (job.stops >= QUEUE_MAX_STOPS) {
+    job.status = 'attention';
+    job.note = `stopped ${job.stops} times at ${job.links[0]?.text || 'the same chapter'}: ${reason}`;
+    notifyBuild({ title: 'A book needs you', text: `“${job.name}”: ${job.note}` });
+    return;
+  }
+  job.status = 'retry';
+  job.retryAt = Date.now() + QUEUE_RETRY_MS;
+  job.note = reason;
 }
 
-/** The queue on Build: what is waiting, the settings all share, start or stop. */
+/** A queued book's progress: its own row in the progress panel, and its time left. */
+function trackJob(job, under, message, at, now, counts) {
+  const run = under.run;
+  const finish = under.finish;
+  const chapters = run.delays.reduce((sum, part) => sum + (part?.chapters || 0), 0);
+  const before = run.delays.slice(0, Math.max(0, at)).reduce((sum, part) => sum + (part?.chapters || 0), 0);
+  const nowMs = Date.now();
+  if (run.at !== at) Object.assign(run, { at, partStart: nowMs, lastCame: nowMs, done: undefined, total: undefined, samples: [], shown: null });
+  if (counts) {
+    const came = counts.done - (run.done ?? counts.done);
+    if (came > 0) {
+      const each = (nowMs - run.lastCame) / came;
+      for (let i = 0; i < came; i += 1) run.samples.push(each);
+      run.samples.splice(0, Math.max(0, run.samples.length - RECENT_CHAPTERS));
+      run.lastCame = nowMs;
+    }
+    Object.assign(run, { done: counts.done, total: counts.total });
+    if (counts.stats) run.stats = counts.stats;
+  }
+  if (now !== undefined) {
+    finish.activity(now);
+    run.waitingUntil = now?.kind === 'wait' && now.why ? now.until : 0;
+  }
+  let left = '';
+  if (Number.isFinite(run.total) && Number.isFinite(run.done) && run.done < run.total) {
+    const estimate = timeLeft(run, nowMs);
+    if (estimate) {
+      run.shown = steady(run.shown == null ? null : Math.max(0, run.shown - (nowMs - run.shownAt)), estimate.ms);
+      run.shownAt = nowMs;
+      left = ` · ~${span(run.shown)} left`;
+    }
+  }
+  const count = Number.isFinite(run.total) ? `${run.done} of ${run.total}${left}` : '';
+  finish.say(`Queue · ${job.name}`, chapters && Number.isInteger(at) ? Math.min(1, (before + (run.delays[at] ? counts?.done ?? 0 : 0)) / chapters) : null, count);
+  job.progress = count;
+  paintQueue();
+}
+
+/** How long the queue has yet to go: each book's chapters at its site's pace, sites side by side up to "at once". */
+function queueTimeLeft() {
+  const now = Date.now();
+  const bySite = new Map();
+  let total = 0;
+  for (const job of webQueue) {
+    if (!['queued', 'retry', 'running'].includes(job.status)) continue;
+    const under = queueJobs.get(job.id);
+    const left = under?.run && Number.isFinite(under.run.total)
+      ? timeLeft(under.run, now)?.ms ?? 0
+      : job.links.length * (webDelay() + PAGE_GUESS_MS - STAY_GUESS_MS)
+        + (job.status === 'retry' ? Math.max(0, (job.retryAt || now) - now) : 0);
+    const site = siteOfJob(job);
+    bySite.set(site, (bySite.get(site) || 0) + left);
+    total += left;
+  }
+  if (!total) return 0;
+  // A site's books go one after another; different sites side by side.
+  const lanes = Math.max(1, Math.min(queueState.atOnce, bySite.size));
+  return Math.max(Math.max(...bySite.values()), total / lanes);
+}
+
+/** "07:35": when, by the clock, something is due. */
+const clockAt = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+/** What a queued book is doing, said in a line. */
+function jobState(job) {
+  const host = siteOfJob(job);
+  const chapters = `${job.total || job.links.length} chapters${host ? ` · ${host}` : ''}`;
+  switch (job.status) {
+    case 'running': return `Downloading · ${job.progress || 'starting…'}`;
+    case 'retry': return `Trying again at ${clockAt(job.retryAt || Date.now())} — last time ${web.shortReason(job.note) || job.note || 'it stopped'} · ${job.links.length} left`;
+    case 'attention': return `Needs you: ${job.note || 'it stopped'} · ${job.links.length} left`;
+    case 'paused': return `Paused · ${job.links.length} of ${job.total} left`;
+    case 'done': return `Done · ${job.done || job.total} chapters, on the shelf`;
+    default: {
+      const held = sitesHeld().has(host) ? ' · waiting: its site needs you' : '';
+      return `${job.bookId != null ? `${job.links.length} of ${job.total} left` : chapters}${held}`;
+    }
+  }
+}
+
+/** The queue on Build's index: each book and what it is doing, the settings all share, start or pause. */
 function paintQueue() {
   const box = el('build-queue');
   if (!box) return;
-  box.hidden = !webQueue.length && !queueState.running;
-  const n = webQueue.length;
-  el('build-queue-title').textContent = queueState.running
-    ? `Queue · building, ${n} more waiting`
-    : `Queue · ${n} website${n === 1 ? '' : 's'}`;
+  box.hidden = !webQueue.length;
+  const count = (status) => webQueue.filter((job) => job.status === status).length;
+  const running = count('running');
+  const waiting = count('queued') + count('retry');
+  const parts = [];
+  if (running) parts.push(`${running} downloading`);
+  if (waiting) parts.push(`${waiting} waiting`);
+  if (count('attention')) parts.push(`${count('attention')} need${count('attention') === 1 ? 's' : ''} you`);
+  if (count('paused')) parts.push(`${count('paused')} paused`);
+  if (count('done')) parts.push(`${count('done')} done`);
+  el('build-queue-title').textContent = `Queue · ${parts.join(', ') || 'empty'}`;
+  const ms = queueTimeLeft();
   const jitter = webJitter();
-  el('build-queue-note').textContent = 'Each a book of its own, one after another, all at the Website screen\'s settings: '
-    + `${webDelay()}${jitter ? ` ± ${jitter}` : ''} ms between chapters, list pages ${webListDelay()} ± ${webListJitter()} ms, `
+  el('build-queue-note').textContent = `${ms ? `About ${span(ms)} to go, done by ~${clockAt(Date.now() + ms)}. ` : ''}`
+    + `Each a book of its own; up to ${queueState.atOnce} at once, never two from one site. `
+    + `All at the Website screen's settings: ${webDelay()}${jitter ? ` ± ${jitter}` : ''} ms between chapters, `
     + `pictures ${webState.pictures ? 'on' : 'off'}.`;
   const go = el('build-queue-go');
-  go.textContent = queueState.running ? (queueState.stopAfter ? 'Stopping after this…' : 'Stop after this book') : 'Start queue';
-  go.disabled = queueState.running ? queueState.stopAfter : !n;
+  go.textContent = queueState.running ? 'Pause all' : (count('paused') ? 'Resume' : 'Start queue');
+  go.disabled = !queueState.running && !webQueue.some((job) => ['queued', 'retry', 'paused'].includes(job.status));
+  // At once: 1, 2 or 3 books side by side.
+  const once = el('build-queue-once');
+  if (once) {
+    once.replaceChildren();
+    const label = document.createElement('span');
+    label.className = 'muted';
+    label.textContent = 'At once';
+    once.appendChild(label);
+    for (const n of [1, 2, 3]) {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.textContent = String(n);
+      chip.setAttribute('aria-pressed', String(queueState.atOnce === n));
+      chip.onclick = () => { queueState.atOnce = n; saveQueue(); pumpQueue(); };
+      once.appendChild(chip);
+    }
+    if (count('done')) {
+      const clear = document.createElement('button');
+      clear.className = 'chip';
+      clear.textContent = 'Clear done';
+      clear.onclick = () => { webQueue = webQueue.filter((job) => job.status !== 'done'); saveQueue(); renderWorkshop(); };
+      once.appendChild(clear);
+    }
+  }
   const list = el('build-queue-list');
   list.replaceChildren();
-  webQueue.forEach((item, at) => {
+  const icon = (label, path, onclick, disabled = false) => {
+    const button = document.createElement('button');
+    button.className = 'icon-btn';
+    button.title = label;
+    button.innerHTML = `<svg viewBox="0 0 24 24"><path d="${path}"/></svg>`;
+    button.disabled = disabled;
+    button.onclick = onclick;
+    return button;
+  };
+  const word = (label, onclick) => {
+    const button = document.createElement('button');
+    button.className = 'chip';
+    button.textContent = label;
+    button.onclick = onclick;
+    return button;
+  };
+  webQueue.forEach((job, at) => {
     const row = document.createElement('li');
-    let host = '';
-    try { host = new URL(item.sources?.[0] || item.links[0]?.url).host; } catch { /* no address */ }
-    row.innerHTML = `<span class="col"><b>${escapeText(shortenMiddle(item.name))}</b>`
-      + `<small class="muted">${item.links.length} chapter${item.links.length === 1 ? '' : 's'}${host ? ` · ${escapeText(host)}` : ''}</small></span>`;
-    for (const [by, label, path] of [
-      [-1, 'Move up', 'M12 19V5M5 12l7-7 7 7'],
-      [1, 'Move down', 'M12 5v14M5 12l7 7 7-7'],
-      [0, 'Remove from the queue', 'M6 6l12 12M18 6L6 18'],
-    ]) {
-      const button = document.createElement('button');
-      button.className = 'icon-btn';
-      button.title = label;
-      button.innerHTML = `<svg viewBox="0 0 24 24"><path d="${path}"/></svg>`;
-      button.disabled = by < 0 ? at === 0 : by > 0 ? at === n - 1 : false;
-      button.onclick = () => {
-        if (by === 0) webQueue.splice(at, 1);
-        else webQueue.splice(at + by, 0, ...webQueue.splice(at, 1));
+    row.dataset.status = job.status;
+    row.innerHTML = `<span class="col"><b>${escapeText(shortenMiddle(job.name))}</b>`
+      + `<small class="muted">${escapeText(jobState(job))}</small></span>`;
+    const move = (by) => () => { webQueue.splice(at + by, 0, ...webQueue.splice(at, 1)); saveQueue(); renderWorkshop(); };
+    if (job.status === 'running') {
+      row.appendChild(word('Pause', () => { const under = queueJobs.get(job.id); if (under) under.pausing = true; }));
+    } else {
+      if (job.status === 'attention') {
+        // Past a check in the site itself, then tried again; or just tried again.
+        if (web.wantsCheck(job.note) && web.canOpenSite()) {
+          row.appendChild(word('Open site', async () => { await web.openSite(job.sources?.[0] || job.links[0]?.url).catch(() => {}); }));
+        }
+        row.appendChild(word('Retry', () => { job.status = 'queued'; job.stops = 0; job.halted = false; saveQueue(); if (queueState.running) pumpQueue(); }));
+      } else if (job.status === 'retry') {
+        row.appendChild(word('Now', () => { job.retryAt = 0; saveQueue(); pumpQueue(); }));
+      }
+      if (job.status !== 'done') {
+        row.appendChild(icon('Move up', 'M12 19V5M5 12l7-7 7 7', move(-1), at === 0));
+        row.appendChild(icon('Move down', 'M12 5v14M5 12l7 7 7-7', move(1), at === webQueue.length - 1));
+      }
+      row.appendChild(icon('Remove from the queue', 'M6 6l12 12M18 6L6 18', () => {
+        webQueue.splice(at, 1);
         saveQueue();
         renderWorkshop();
-      };
-      row.appendChild(button);
+        if (queueState.running) pumpQueue();
+      }));
     }
     list.appendChild(row);
   });
@@ -6835,7 +7124,21 @@ async function rescueCutBuilds() {
   const settings = await store.settings();
   webLeftovers = Array.isArray(settings.webLeftovers) ? settings.webLeftovers : [];
   webStops = Array.isArray(settings.webStops) ? settings.webStops : [];
+  /* A queued book cut off: back to its job -- the book so far, and the rest
+   * still to come -- not to Build's leftovers. */
+  const jobs = Array.isArray(settings.webQueue) ? settings.webQueue : [];
   for (const entry of saved) {
+    const job = entry.book.queueJob && jobs.find((each) => each.id === entry.book.queueJob);
+    if (!job) continue;
+    const links = entry.rest.flatMap((part) => part.links || []).map(({ url, text }) => ({ url, text }));
+    // A book it was carrying on is superseded by this one.
+    if (job.bookId != null && job.bookId !== entry.book.id) await library.binBooks([job.bookId]).catch(() => {});
+    Object.assign(job, { bookId: entry.book.id, done: entry.book.chapters, links, status: links.length ? 'queued' : 'done' });
+    entry.queued = true;
+  }
+  if (jobs.length) await store.saveSettings({ webQueue: jobs });
+  for (const entry of saved) {
+    if (entry.queued) continue;
     const { book, rest } = entry;
     const reason = 'cut off when the app closed';
     const failed = rest.map((part) => ({ name: part.name, reason, web: { ...part, reason } }));
@@ -7065,11 +7368,10 @@ function wireWorkshop() {
 
   // Pressed again while it runs: that is Pause & keep.
   el('build-go').onclick = () => (buildRun ? pauseBuild() : runBuild());
-  el('build-queue-go').onclick = () => (queueState.running ? stopQueueAfterThis() : startQueue());
-  /* The build itself: from the Build button, Overnight's next try, or the
-   * queue (see nextInQueue). */
+  el('build-queue-go').onclick = () => (queueState.running ? pauseQueue() : startQueue());
+  /* The build itself: from the Build button, or Overnight's next try. (The
+   * queue builds its books on its own: see runJob.) */
   runBuild = async () => {
-    queueState.last = { paused: false, halt: false };
     // A try of its own: whatever overnight was waiting to do is this.
     clearTimeout(night.timer);
     night.timer = null;
@@ -7183,9 +7485,6 @@ function wireWorkshop() {
       const later = kept ? ' — the rest is kept in Build to download as another book' : '';
       const paused = failed.length > 0 && failed.every((each) => each.paused);
       const left = failed.reduce((sum, each) => sum + (each.web?.links?.length || 0), 0);
-      // For the queue: paused by hand, or stopped by the site itself -- blocked,
-      // a check to pass, "too many requests" -- is no time to go on to the next.
-      queueState.last = { paused, halt: failed.some((each) => queueHalts(each.reason)) };
       whenNotReading(() => toast(paused
         ? `Paused — built “${book.title}” with ${book.chapters} chapters${filed}. The other ${left} are kept in Build: “Carry on” adds them to the end.`
         : failed.length
@@ -7208,13 +7507,10 @@ function wireWorkshop() {
         ? { title: 'Build stopped short', text: `“${book.title}”: ${book.chapters} chapters. Stopped: ${failed[0].reason}` }
         : { title: 'Build done', text: `“${book.title}”: ${book.chapters} chapters${filed}, on the shelf.` });
       const made = await store.get('books', book.id);
-      if (queueState.running && !again) queueState.built += 1;
-      // Overnight, Build stays up between tries, saying when the next is; and
-      // the queue goes on to its next website rather than into this book.
-      if (made && current === 'workshop' && !again && !queueState.running) await openBook(made);
+      // Overnight, Build stays up between tries, saying when the next is.
+      if (made && current === 'workshop' && !again) await openBook(made);
     } catch (error) {
       finish.fail();
-      queueState.last = { paused: !!error.paused, halt: queueHalts(error) };
       whenNotReading(() => toast(error.message || 'That could not be built', 6000, { kind: error.paused ? 'done' : 'failed' }));
       // Overnight, nothing built is tried again as it stands, from Build's list.
       const again = overnight && online && !error.paused && !web.blocked(error) && build.contents().length > 0
@@ -7227,10 +7523,11 @@ function wireWorkshop() {
       try { window.GrimoireNative?.buildRunning?.(false); } catch { /* not in the app */ }
       renderWorkshop();
       // Let go again, unless a book is open to read or overnight is waiting.
-      if (online && current !== 'reader' && !night.timer && !queueState.running) {
+      if (online && current !== 'reader' && !night.timer && !queueState.running && !queueJobs.size) {
         try { window.GrimoireNative?.keepScreenOn?.(false); } catch { /* not in a browser */ }
       }
-      queueAfter(queueState.last);
+      // The site Build was downloading from is free again: a queued book of it may start.
+      if (queueState.running) pumpQueue();
     }
   };
 }
@@ -9354,7 +9651,7 @@ function wireWeb() {
     if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
     if (typeof settings.webPictures === 'boolean') webState.pictures = settings.webPictures;
     if (el('web-pick')) el('web-pick').checked = settings.webPick === true;
-    if (Array.isArray(settings.webQueue)) { webQueue = settings.webQueue; paintQueue(); }
+    loadQueue(settings);
     if (Number.isFinite(settings.webListDelay)) el('web-list-delay').value = String(settings.webListDelay);
     if (Number.isFinite(settings.webListJitter)) el('web-list-jitter').value = String(settings.webListJitter);
     paintWebRange();

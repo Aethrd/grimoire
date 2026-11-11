@@ -1863,7 +1863,7 @@ await t('how far it has got and what it is doing now are told apart', async () =
   assert.deepEqual([retry.name, retry.attempt, retry.of], ['No. 2', 2, 3]);
   // Build keeps the count on the bar's line and passes what it is doing apart.
   const build = read('app/src/main/assets/www/js/build.js');
-  assert.match(build, /`Downloading \$\{part\.name\}\$\{parts\.length > 1 \? ` · part \$\{at \+ 1\} of \$\{parts\.length\}` : ''\}`,\s+\(at \+ fraction\) \/ parts\.length, at, parts\.length, now, \{ done, total, stats: partStats \}\)/);
+  assert.match(build, /`Downloading \$\{part\.name\}\$\{list\.length > 1 \? ` · part \$\{at \+ 1\} of \$\{list\.length\}` : ''\}`,\s+\(at \+ fraction\) \/ list\.length, at, list\.length, now, \{ done, total, stats: partStats \}\)/);
   // The bar goes by chapters downloaded across the build's websites, not by parts; the count is chapters.
   const appText = read('app/src/main/assets/www/js/app.js');
   assert.match(appText, /bar = Math\.min\(1, \(before \+ \(web\[at\] \? counts\?\.done \?\? 0 : 0\)\) \/ chapters\);\s+\}\s+finish\.say\(message, bar\);/);
@@ -2218,35 +2218,71 @@ await t('a download records what the time-left estimate goes by', async () => {
   assert.equal(stats.slower, 1);
 });
 
-await t('a queue of websites: a book each, in turn, all at the same settings, each with its own chapters', () => {
+await t('a queue of websites: books of their own, several at once but never two from one site', async () => {
   const app = read('app/src/main/assets/www/js/app.js');
   const html = read('app/src/main/assets/www/index.html');
+  const fn = (name) => { const at = app.indexOf(`function ${name}(`); return app.slice(at, app.indexOf('\n}\n', at) + 3); };
+  // One site, however it is addressed: subdomains, a numbered mirror, another ending.
+  const siteKey = new Function(`${fn('siteKey')}; return siteKey;`)();
+  assert.equal(siteKey('012.bookkor.com'), siteKey('013.bookkor.com'));
+  assert.equal(siteKey('marumaru109.com'), siteKey('marumaru110.com'));
+  assert.equal(siteKey('www.example.co.kr'), siteKey('example.co.kr'));
+  assert.equal(siteKey('booktoki468.com'), siteKey('booktoki469.net'));
+  assert.notEqual(siteKey('marumaru109.com'), siteKey('bookkor.com'));
+  // Where a book stands after a try.
+  const notified = [];
+  const settle = new Function('web', 'notifyBuild', `const QUEUE_RETRY_MS = 900000; const QUEUE_MAX_STOPS = 5;
+    const queueHalts = (reason) => web.blocked(reason) || web.wantsCheck(reason) || web.tooMany(reason);
+    ${fn('settleJob')}; return settleJob;`)(web, (n) => notified.push(n));
+  const job = () => ({ name: 'N', links: [], total: 10, stops: 0 });
+  const rest = [{ url: 'https://a.example/5', text: '5화' }];
+  let j = job(); settle(j, { rest: [], reason: '' }, false); assert.equal(j.status, 'done');
+  j = job(); settle(j, { rest, reason: '', paused: true }, true); assert.equal(j.status, 'paused');
+  // Stopped by Build's own Pause & keep, not by the queue: straight back in line.
+  j = job(); settle(j, { rest, reason: '', paused: true }, false); assert.equal(j.status, 'queued');
+  // The site said stop: held for the reader, and the site with it; said so.
+  j = job(); settle(j, { rest, reason: 'the site turned the request away (429, too many requests)' }, false);
+  assert.deepEqual([j.status, j.halted], ['attention', true]);
+  assert.equal(notified.at(-1).title, 'A book needs you');
+  // Anything else: tried again in 15 minutes, from where it got to; five stops at one chapter and it waits.
+  j = job();
+  settle(j, { rest, reason: 'the site took too long to answer' }, false);
+  assert.equal(j.status, 'retry');
+  assert.ok(j.retryAt - Date.now() > 14 * 60000);
+  for (let i = 0; i < 4; i += 1) settle(j, { rest, reason: 'the site took too long to answer' }, false);
+  assert.deepEqual([j.status, j.halted], ['attention', false]);
+  // Started only by "at once", never two from one site, nor one whose site holds for the reader.
+  const pump = fn('pumpQueue');
+  assert.match(pump, /if \(queueJobs\.size >= queueState\.atOnce\) break;/);
+  assert.match(pump, /if \(busy\.has\(site\) \|\| held\.has\(site\)\) continue;/);
+  assert.match(fn('sitesInUse'), /if \(buildRun\) \{/);
+  // Built on their own, outside Build; carried on from the book so far, the shorter one binned.
+  const run = app.slice(app.indexOf('async function runJob('), app.indexOf('\nfunction settleJob('));
+  assert.match(run, /if \(before\) parts\.push\(\{ \.\.\.build\.bookPart\(before\), seamless: true \}\);/);
+  assert.match(run, /await build\.build\(\{\s+parts, tag: job\.id,/);
+  assert.match(run, /if \(before && before\.id !== book\.id\) await library\.binBooks\(\[before\.id\]\)/);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /\.\.\.\(tag \? \{ queueJob: tag \} : \{\}\),/);
+  // A queued book cut off when the app closed goes back to its job, not to Build's leftovers.
+  assert.match(app, /const job = entry\.book\.queueJob && jobs\.find\(\(each\) => each\.id === entry\.book\.queueJob\);/);
+  // Kept across the app being closed; what was under way, queued again.
+  assert.match(app, /store\.saveSettings\(\{ webQueue, queueRunning: queueState\.running, queueAtOnce: queueState\.atOnce \}\)/);
+  assert.match(app, /\.\.\.\(job\.status === 'running' \? \{ status: 'queued' \} : \{\}\),/);
   // Queued from the Website screen with its own ticks and title; not for pages carrying a book on.
   assert.match(html, /id="web-queue"/);
   assert.match(app, /el\('web-queue'\)\.onclick = queueWeb;/);
-  assert.match(app, /links: chosen\.map\(\(\{ url, text \}\) => \(\{ url, text \}\)\),/);
   assert.match(app, /queue\.hidden = !queueing && !!\(webState\.leftover \|\| webState\.carryOn != null \|\| webState\.updating != null\);/);
-  // Kept across the app being closed.
-  assert.match(app, /store\.saveSettings\(\{ webQueue \}\)/);
-  assert.match(app, /if \(Array\.isArray\(settings\.webQueue\)\) \{ webQueue = settings\.webQueue; paintQueue\(\); \}/);
   // Each at the settings as they are when its turn comes -- the same for all.
-  assert.match(app, /name: item\.name, links: item\.links, pictures: webState\.pictures, cover,\s+author: item\.author, sources: item\.sources, gap: webDelay\(\), jitter: webJitter\(\),/);
-  // On after every build; stopped by Pause & keep, or by a site saying stop; waits for Overnight.
-  assert.match(app, /queueAfter\(queueState\.last\);/);
-  assert.match(app, /const queueHalts = \(reason\) => web\.blocked\(reason\) \|\| web\.wantsCheck\(reason\) \|\| web\.tooMany\(reason\);/);
-  assert.match(app, /if \(night\.timer\) \{ paintQueue\(\); return; \}/);
-  // Started with a book in Build: that one first (finished, or built), then the queue.
-  assert.match(app, /if \(buildRun\) \{ toast\('The queue goes on once this book is built\.'\); return; \}\s+if \(!build\.isEmpty\(\)\) \{ await runBuild\(\); return; \}/);
-  // Build as the book in it, or the index of every novel: minimised to it, back from its card.
+  assert.match(run, /pictures: webState\.pictures, cover,\s+author: job\.author, sources: job\.sources, gap: webDelay\(\), jitter: webJitter\(\),/);
+  // Build as the book in it, or the index of every novel; adding a novel from there queues it.
   assert.match(app, /el\('build-minimise'\)\.onclick = \(\) => \{ buildIndex = true; renderWorkshop\(\); \};/);
   assert.match(app, /el\('build-index-current'\)\.onclick = \(\) => \{ buildIndex = false; renderWorkshop\(\); \};/);
-  // Adding a novel from the index: the Website screen with Queue as its main button.
   assert.match(app, /el\('build-index-add'\)\.onclick = \(\) => \{ webState\.intent = 'queue'; show\('web'\); paintWebCount\(\); \};/);
   assert.match(app, /go\.hidden = queueing;/);
-  // Something just added is shown, not the index; Build empty with novels queued opens on the index.
   assert.match(app, /if \(parts\.length > shownParts && !buildRun\) buildIndex = false;/);
-  assert.match(app, /if \(name === 'workshop' && build\.isEmpty\(\) && !buildRun && \(webQueue\.length \|\| queueState\.running\)\) buildIndex = true;/);
   assert.ok(html.indexOf('id="build-queue"') > html.indexOf('id="build-index"') && html.indexOf('id="build-queue"') < html.indexOf('id="build-detail"'));
+  // Pause all stops what is under way; Start queue resumes the paused.
+  assert.match(app, /el\('build-queue-go'\)\.onclick = \(\) => \(queueState\.running \? pauseQueue\(\) : startQueue\(\)\);/);
+  assert.match(fn('startQueue'), /if \(job\.status === 'paused'\) job\.status = 'queued';/);
 });
 
 await t('a contents page sent without its list (its script fetches it) is read in the browser', async () => {

@@ -376,13 +376,16 @@
           <button class="btn ghost" id="build-queue-go">Start queue</button>
         </div>
         <small class="muted" id="build-queue-note"></small>
+        <!-- How many books side by side (never two from one site); finished ones cleared. -->
+        <div class="chip-row build-queue-once" id="build-queue-once"></div>
         <ol class="build-queue-list" id="build-queue-list"></ol>
       </div>
         <button class="btn primary build-index-add" id="build-index-add">Add a novel…</button>
         <p class="muted build-index-note">
-          Each novel added here is queued as a book of its own, with its own chapters ticked,
-          and built after the ones before it. Start queue begins; they all use the Website
-          screen's delay and pictures.
+          Each novel added here is queued as a book of its own, with its own chapters ticked.
+          Start queue downloads them, a few at once but never two from the same site, all at the
+          Website screen's delay and pictures. A book whose site says stop waits for you; the
+          others go on. One that stops for any other reason is tried again in 15 minutes.
         </p>
       </div>
       <div id="build-detail">

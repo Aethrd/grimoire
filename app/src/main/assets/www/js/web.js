@@ -2369,7 +2369,7 @@ export async function readPages(links, {
 }
 
 /** A failure, said briefly enough for a progress line. */
-function shortReason(error) {
+export function shortReason(error) {
   const text = String(error?.message || error || 'it failed').replace(/\s+/g, ' ').trim();
   return text.length > 90 ? `${text.slice(0, 89)}…` : text;
 }
