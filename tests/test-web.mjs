@@ -1356,7 +1356,7 @@ await t('a contents page may be scrolled for more; a chapter never is', async ()
   await web.readPage({ url: 'https://scroll.example/novel/47997/1', text: '1화' }, 0, { pictures: false });
   // Never scrolled; and wanted for its words alone ("t"), it is watched for them a while.
   await web.readPage({ url: 'https://scroll.example/novel/47997/1', text: '1화' }, 0, { pictures: true });
-  assert.deepEqual(seen, ['/novel/47997 1', '/novel/47997/1 t', '/novel/47997/1 0']);
+  assert.deepEqual(seen, ['/novel/47997 1:0:0', '/novel/47997/1 t', '/novel/47997/1 0']);
   delete window.GrimoireWeb;
 });
 
@@ -1780,14 +1780,14 @@ await t('the delay is kept for every page -- retries too -- from when the last o
   // A page that says to wait is waited on, there, for up to three minutes.
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /private static final long RENDER_WAIT_MS = 180000;/);
-  assert.match(java, /long limit = holding \? RENDER_WAIT_MS : maxMs;/);
-  assert.match(read('app/src/main/assets/www/js/web.js'), /if \(method === 'render'\) timeout = Math\.max\(timeout, 240000\);/);
+  assert.match(java, /long limit = holding \? RENDER_WAIT_MS : presses > 0 \? PRESS_MAX_MS : maxMs;/);
+  assert.match(read('app/src/main/assets/www/js/web.js'), /if \(method === 'render'\) timeout = Math\.max\(timeout, press \? 16 \* 60000 : 240000\);/);
 });
 
 await t('a spinner left going once the chapter is there holds nothing; waiting and retries are said', async () => {
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\) \|\| noStoryYet\);/);
-  assert.match(java, /long limit = holding \? RENDER_WAIT_MS : maxMs;/);
+  assert.match(java, /long limit = holding \? RENDER_WAIT_MS : presses > 0 \? PRESS_MAX_MS : maxMs;/);
   // The progress line: the delay being waited out, and why a chapter is tried again.
   const notes = [];
   let failed = false;
@@ -2520,6 +2520,70 @@ await t('a build says how long it has been and how long it should be yet', async
   assert.equal(fns.steady(null, 5000), 5000);
   // The notification popup shows a line of the title: a few words.
   assert.match(app, /title: 'Build done', text: `“\$\{book\.title\}”: /);
+});
+
+await t("a list that opens out a press at a time: read in the browser, its \"more\" pressed at the list's pace", async () => {
+  const series = 'https://opens.example/novel/77';
+  const rows = (from, to) => Array.from({ length: from - to + 1 }, (_, i) => `<li><a href="${series}/ep-${from - i}">${from - i}화 펼쳐지는 이야기</a></li>`).join('');
+  const menu = '<header><a href="/">홈</a><button>더보기</button></header>';
+  const sent = `<html><body>${menu}<h1>펼쳐지는 이야기</h1><ul>${rows(120, 101)}</ul><button class="more">이전 회차 더보기</button></body></html>`;
+  // Told by what is sent: a "more" after the chapters is the list's; one in the menu, or a link to another page, is not.
+  const doc = (html) => new window.DOMParser().parseFromString(html, 'text/html');
+  assert.equal(web.showsMore(doc(sent), series), true);
+  assert.equal(web.showsMore(doc(`<html><body>${menu}<ul>${rows(5, 1)}</ul></body></html>`), series), false);
+  assert.equal(web.showsMore(doc(`<html><body><ul>${rows(5, 1)}</ul><a href="${series}?page=2">더보기</a></body></html>`), series), false);
+  assert.equal(web.showsMore(doc(`<html><body><ul>${rows(5, 1)}</ul><a href="#" onclick="more()">Load more</a></body></html>`), series), true);
+  const asked = [];
+  const send = (id, address, body, rendered) => {
+    const path = `data:text/html;base64,${Buffer.from(body, 'utf8').toString('base64')}`;
+    setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: address, status: 200, type: 'text/html', path, rendered })), 0);
+  };
+  window.GrimoireWeb = {
+    fetch: (id, address) => { asked.push(['fetch', address]); send(id, address, sent, false); },
+    render: (id, address, level, list) => { asked.push(['render', address, list]); send(id, address, `<html><body><ul>${rows(120, 1)}</ul></body></html>`, true); },
+    release() {},
+  };
+  const found = await web.findLinks([series], { listGap: 4000, listJitter: 2000 });
+  // Sent first, then once in the browser, pressed as far apart as list pages are.
+  assert.deepEqual(asked, [['fetch', series], ['render', series, '1:4000:2000']]);
+  assert.equal(found.links.filter((l) => /\/ep-\d+$/.test(l.url)).length, 120);
+  // "Search for more": in the browser from the start.
+  asked.length = 0;
+  await web.findLinks(['https://opens2.example/novel/5'], { listGap: 3000, listJitter: 0, patience: 1 });
+  assert.equal(asked[0][0], 'render');
+  assert.equal(asked[0][2], '1:3000:0');
+  delete window.GrimoireWeb;
+});
+
+await t('in the browser, the "more" pressed is the one after the chapters, never a link away', async () => {
+  const { JSDOM } = await import('jsdom');
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  const at = java.indexOf('String SHOW_MORE = ');
+  const end = java.indexOf(';\n', java.indexOf('})()', at));
+  const code = [...java.slice(at, end).split('\n').filter((l) => /^\s*(\+ |(private static final )?String )/.test(l)).join('\n')
+    .matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`)).join('');
+  const page = (body) => {
+    const dom = new JSDOM(`<html><body>${body}</body></html>`, { runScripts: 'outside-only', url: 'https://opens.example/novel/77' });
+    dom.window.Element.prototype.getBoundingClientRect = () => ({ width: 80, height: 20 });
+    dom.window.Element.prototype.scrollIntoView = () => {};
+    return dom.window;
+  };
+  const rows = (from, to) => Array.from({ length: from - to + 1 }, (_, i) => `<li><a href="/novel/77/ep-${from - i}">${from - i}화</a></li>`).join('');
+  const w = page(`<header><button id="menu">더보기</button></header><ul id="list">${rows(120, 101)}</ul><button id="more">이전 회차 더보기</button>`);
+  let menu = 0;
+  w.document.getElementById('menu').onclick = () => { menu += 1; };
+  w.document.getElementById('more').onclick = () => { w.document.getElementById('list').insertAdjacentHTML('beforeend', rows(100, 81)); };
+  assert.equal(w.eval(code), 'pressed');
+  assert.equal(w.document.querySelectorAll('#list a').length, 40);
+  assert.equal(menu, 0, 'the menu\'s "more" was pressed');
+  // A "more" that is a link to another page is not pressed: that page is read as a page.
+  const away = page(`<ul>${rows(10, 1)}</ul><a href="/novel/77?page=2">더보기</a>`);
+  assert.equal(away.eval(code), 'none');
+  // Nothing after any chapter: nothing pressed.
+  assert.equal(page(`<button>Show more</button><p>no list</p>`).eval(code), 'none');
+  // Pressed once a press is due, and judged by every link, not the first nine.
+  assert.match(java, /if \(now < nextPress\) \{[\s\S]{0,400}flat = allLinks > linksAtPress \? 0 : flat \+ 1;/);
+  assert.match(java, /allLinks = Integer\.parseInt\(parts\[2\]\);/);
 });
 
 console.log(`\n${pass} assertions passed`);

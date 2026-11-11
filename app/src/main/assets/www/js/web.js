@@ -349,9 +349,10 @@ export function scriptBuilt(html) {
   return tidy(body.textContent).length < 400 && body.querySelectorAll('a[href]').length < 8;
 }
 
-function fetchNative(method, url, { timeout = 90000, list = false, textOnly = false } = {}) {
-  // A page that says to wait is waited on for up to three minutes, there.
-  if (method === 'render') timeout = Math.max(timeout, 240000);
+function fetchNative(method, url, { timeout = 90000, list = false, textOnly = false, press = null } = {}) {
+  // A page that says to wait is waited on for up to three minutes, there; a
+  // list whose "show more" is pressed, for as long as that takes (WebBridge).
+  if (method === 'render') timeout = Math.max(timeout, press ? 16 * 60000 : 240000);
   return new Promise((resolve, reject) => {
     if (!available()) {
       reject(new Error('Downloading needs the app: this copy of the reader cannot reach the web.'));
@@ -399,7 +400,9 @@ function fetchNative(method, url, { timeout = 90000, list = false, textOnly = fa
       // A contents page may be scrolled for more of its list; a chapter
       // never is (some readers add the next chapter under it at the end).
       // "t": a chapter wanted for its words alone, watched for them a while (see WebBridge).
-      if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url, list), list ? '1' : textOnly ? 't' : '0');
+      // "1:gap:jitter": a list whose "show more" is pressed, that far apart.
+      const listing = list ? (press ? `1:${Math.round(press.gap)}:${Math.round(press.jitter || 0)}` : '1') : null;
+      if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url, list), listing || (textOnly ? 't' : '0'));
       else window.GrimoireWeb.fetch(id, url);
     } catch (error) {
       pending.delete(id);
@@ -1418,7 +1421,12 @@ export async function findLinks(addresses, {
           const known = needsOf(next, true);
           trying.set(next, { open: known.open || level >= 2, wait: Math.max(known.wait, level) });
         }
-        let page = await fetchPage(next, { list: true });
+        /* Its "show more" pressed in the browser, at the list's own pace -- a
+         * list that opens out a few chapters a press. Asked for again ("Search
+         * for more"), read in the browser even where it comes whole as sent:
+         * only there can such a list be opened out. */
+        const press = { gap: listGap, jitter: listJitter };
+        let page = await fetchPage(next, { list: true, press, ...(level && canRender() ? { render: true } : {}) });
         let sent = decodePage(await bytesOf(page.blob), page.type);
         let found = linksOf(sent, page.url);
         /* Sent without its list: a page of a series with a synopsis and a
@@ -1430,7 +1438,7 @@ export async function findLinks(addresses, {
             const host = new URL(next).host;
             if (host) listRenderedHosts.add(host);
           } catch { /* no host: asked as it is */ }
-          const again = await fetchPage(next, { list: true, render: true });
+          const again = await fetchPage(next, { list: true, render: true, press });
           const there = linksOf(decodePage(await bytesOf(again.blob), again.type), again.url);
           if (there.links.length >= found.links.length || listsChapters(there, again.url)) {
             page = again;
@@ -1443,7 +1451,7 @@ export async function findLinks(addresses, {
         for (let more = 1; page.rendered && more <= 2 && !listsChapters(found, page.url); more += 1) {
           if (!askAgain(next, true)) break;
           trying.set(page.url, trying.get(next));
-          page = await fetchPage(next, { list: true });
+          page = await fetchPage(next, { list: true, press });
           found = linksOf(decodePage(await bytesOf(page.blob), page.type), page.url);
         }
         if (page.rendered && listsChapters(found, page.url)) learnSite(next, true);
@@ -1567,6 +1575,10 @@ function listsChapters(found, pageUrl) {
  * make it a list.
  */
 function sentWithoutList(html, found, pageUrl) {
+  // A list that opens out a press at a time: only the browser can press it.
+  try {
+    if (showsMore(parseHtml(html), pageUrl)) return true;
+  } catch { /* not to be told */ }
   if (found.pages?.length || found.list) return false;
   let base = null;
   try {
@@ -1587,6 +1599,35 @@ function sentWithoutList(html, found, pageUrl) {
   } catch { /* not to be told */ }
   return false;
 }
+
+/* A list's "show more" (더보기, 이전 회차 더 보기, 펼치기, Show more, Load more…):
+ * a button, or a link to nowhere but the page's script. As WebBridge's
+ * SHOW_MORE, which presses it. */
+const SHOW_MORE = /^\s*[+▼▽∨⌄]?\s*((이전|다음)\s*)?((회차|목록|화|에피소드)\s*)?(더\s*보기|펼치기|펼쳐\s*보기|전체\s*보기|모두\s*보기|불러오기|더\s*불러오기)|^\s*(show|load|view|see|read)\s+(more|all|older)\b|^\s*more(\s+(chapters|episodes))?\s*[▼▽+…]*\s*$|^\s*older\s+(chapters|episodes)|^\s*expand\b/i;
+export function showsMore(doc, pageUrl = '') {
+  /* After chapters, in the page's order -- the list's own "more", not a "more"
+   * in the menu above it (WebBridge presses the one after the most of them). */
+  let base = '';
+  try {
+    const url = new URL(pageUrl);
+    base = `${url.origin}${url.pathname.replace(/\/+$/, '')}/`;
+  } catch { /* no address: chapters known by their names */ }
+  let chapters = 0;
+  for (const control of doc.querySelectorAll('a, button, [role="button"], [onclick], input[type="button"]')) {
+    const href = control.closest('a[href]')?.getAttribute('href');
+    if (control.tagName === 'A' && href) {
+      let to = '';
+      try { to = new URL(href, pageUrl || undefined).href; } catch { /* as written */ }
+      if ((base && to.startsWith(base)) || CHAPTER_NAMED.test(control.textContent || '')) chapters += 1;
+    }
+    const text = tidy(control.value || control.textContent);
+    if (!chapters || !text || text.length > 30 || !SHOW_MORE.test(text)) continue;
+    if (href && !/^\s*(#|javascript:)/i.test(href)) continue;
+    return true;
+  }
+  return false;
+}
+const CHAPTER_NAMED = /\d+\s*(화|회|장)|chapter\s*\d|episode\s*\d|第/i;
 
 /** The next of the numbered pages waiting, if any. */
 const nextOf = (queue) => queue.shift() || null;

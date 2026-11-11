@@ -213,7 +213,22 @@ public class WebBridge {
         // more as it is scrolled. Never a chapter: a reader that puts the
         // next chapter under this one when the end is reached would go on
         // adding chapters for as long as it was scrolled (a hundred, once).
-        final boolean scroll = "1".equals(list);
+        final boolean scroll = list != null && (list.equals("1") || list.startsWith("1:"));
+        /* "1:gap:jitter": a contents page whose "show more" is pressed, as a reader
+         * would, gap ± jitter apart, for as long as it brings more (see poll). */
+        long gap = -1;
+        long jitter = 0;
+        if (scroll && list.startsWith("1:")) {
+            String[] bits = list.split(":");
+            try {
+                gap = Math.max(0, Long.parseLong(bits[1]));
+                if (bits.length > 2) jitter = Math.max(0, Long.parseLong(bits[2]));
+            } catch (NumberFormatException ignored) {
+                gap = -1;
+            }
+        }
+        final long pressGap = gap;
+        final long pressJitter = jitter;
         // "t": a chapter wanted for its text alone -- one with none is no chapter.
         final boolean textOnly = "t".equals(list);
         // "2", or "0o": a level, and "o" when the site has been found to need
@@ -251,8 +266,10 @@ public class WebBridge {
                 // the pictures it keeps are fetched on their own, from their addresses --
                 // so they are not loaded. At the most patient try, everything is.
                 Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly, skipHeavy, textOnly);
+                job.pressGap = pressGap;
+                job.pressJitter = pressJitter;
                 main.post(job::start);
-                if (!job.done.await(RENDER_WAIT_MS + 20000, TimeUnit.MILLISECONDS)) {
+                if (!job.done.await((pressGap >= 0 ? PRESS_MAX_MS : RENDER_WAIT_MS) + 20000, TimeUnit.MILLISECONDS)) {
                     main.post(job::finish);
                     throw new IOException("the site took too long to answer");
                 }
@@ -940,6 +957,16 @@ public class WebBridge {
         /** The page is on show (see onPageCommitVisible). */
         boolean visible;
         private int lastStory = -1;
+        /* Pressing a list's "show more": how far apart (-1: never), how many times
+         * so far, when next, the list's length at the last press, and how many
+         * presses in a row brought nothing. */
+        long pressGap = -1;
+        long pressJitter;
+        private int presses;
+        private long nextPress;
+        private int linksAtPress = -1;
+        private int flat;
+        private boolean pressedOut;
         private long storySince;
         /** Staying on to confirm the story (see CONFIRM_MS): since when, for how long, at what length. */
         private long confirmBegan;
@@ -1022,6 +1049,9 @@ public class WebBridge {
                 String[] parts = reply.replace("\"", "").split("\\|", 10);
                 int textLength = 0;
                 int chapterLinks = 0;
+                // Every link on the page: what a list's "show more" adds to (the
+                // chapter count above stops at nine -- enough to know a list).
+                int allLinks = 0;
                 boolean loading = false;
                 int storyLength = 0;
                 int storyLines = 0;
@@ -1034,6 +1064,7 @@ public class WebBridge {
                 try {
                     textLength = Integer.parseInt(parts[1]);
                     chapterLinks = Integer.parseInt(parts[5]);
+                    allLinks = Integer.parseInt(parts[2]);
                     loading = "1".equals(parts[6]);
                 } catch (Exception ignored) {
                     // Unreadable: as though nothing were there yet.
@@ -1147,7 +1178,39 @@ public class WebBridge {
                     settled = (finished || visible) && !blank && !holding
                             && ((!busy && still >= settle) || still >= quietMs * RENDER_STUCK_SPELLS);
                 }
-                long limit = holding ? RENDER_WAIT_MS : maxMs;
+                long limit = holding ? RENDER_WAIT_MS : presses > 0 ? PRESS_MAX_MS : maxMs;
+                /* A list settled: its "show more" pressed, if it has one, and the list
+                 * watched again -- until there is none, presses stop bringing more,
+                 * or enough have been pressed. Spaced as the reader's list pages are. */
+                if (settled && scroll && pressGap >= 0 && !pressedOut && now - startedAt < limit) {
+                    if (now < nextPress) {
+                        main.postDelayed(this::poll, RENDER_POLL_MS);
+                        return;
+                    }
+                    // Judged once a press, when the next is due: two in a row that
+                    // brought nothing, and the list is as long as it goes.
+                    if (linksAtPress >= 0) flat = allLinks > linksAtPress ? 0 : flat + 1;
+                    if (flat >= 2 || presses >= PRESS_MAX) {
+                        pressedOut = true;
+                        take();
+                        return;
+                    }
+                    final int before = allLinks;
+                    view.evaluateJavascript(SHOW_MORE, (pressed) -> {
+                        if (view == null || done.getCount() == 0) return;
+                        if ("\"pressed\"".equals(pressed)) {
+                            presses++;
+                            linksAtPress = before;
+                            long spacing = Math.max(1000, pressGap + Math.round((Math.random() * 2 - 1) * pressJitter));
+                            nextPress = System.currentTimeMillis() + spacing;
+                            main.postDelayed(this::poll, RENDER_POLL_MS);
+                        } else {
+                            pressedOut = true;
+                            take();
+                        }
+                    });
+                    return;
+                }
                 if (settled || now - startedAt >= limit) {
                     take();
                 } else {
@@ -1258,6 +1321,34 @@ public class WebBridge {
             + "\u2014 asking again now only makes it last longer; wait some hours, and go slower";
 
     private static final String SCROLL = "try{if(document.body)window.scrollTo(0,document.body.scrollHeight);}catch(e){}";
+
+    /** How many times a list's "show more" is pressed, at most; and for how long. */
+    private static final int PRESS_MAX = 300;
+    private static final long PRESS_MAX_MS = 15 * 60000;
+
+    /* A list's "show more" (더보기, 이전 회차 더 보기, 펼치기, Show more, Load more…),
+     * pressed: one that is on show and opens out this page -- a button, or a link
+     * to nowhere but the page's script -- never a link to another page (those are
+     * the list's pages, read on their own). Answers "pressed" or "none". */
+    private static final String SHOW_MORE = "(function(){try{"
+            + "var MORE=/^\\s*[+▼▽∨⌄]?\\s*((이전|다음)\\s*)?((회차|목록|화|에피소드)\\s*)?(더\\s*보기|펼치기|펼쳐\\s*보기|전체\\s*보기|모두\\s*보기|불러오기|더\\s*불러오기)"
+            + "|^\\s*(show|load|view|see|read)\\s+(more|all|older)\\b|^\\s*more(\\s+(chapters|episodes))?\\s*[▼▽+…]*\\s*$|^\\s*older\\s+(chapters|episodes)|^\\s*expand\\b/i;"
+            + "var CH=/\\d+\\s*(화|회|장)|chapter\\s*\\d|episode\\s*\\d|第/i,u=location.origin+location.pathname.replace(/\\/+$/,'')+'/';"
+            /* In the page's own order: the chapter links met so far counted, so the one
+             * pressed is the one that follows the most of them -- the list's own, not a
+             * "more" in the menu above it. One with no chapters before it is not pressed. */
+            + "var c=document.querySelectorAll('a,button,[role=\"button\"],[onclick],input[type=\"button\"],[class*=\"more\" i],[id*=\"more\" i]'),k=0,best=null,bk=0;"
+            + "for(var i=0;i<c.length;i++){var e=c[i];"
+            + "if(e.tagName==='A'&&e.href&&((e.href.indexOf(u)===0)||CH.test(e.textContent||''))){k++;}"
+            + "if(e.disabled||e.querySelectorAll('a,button').length>2)continue;"
+            + "var t=(e.value||e.textContent||'').replace(/\\s+/g,' ').trim();if(!t||t.length>30||!MORE.test(t))continue;"
+            + "var a=e.closest('a[href]');if(a){var h=a.getAttribute('href')||'';if(h&&!/^\\s*(#|javascript:)/i.test(h)){"
+            + "var v=new URL(a.href,location.href);if(v.origin+v.pathname+v.search!==location.origin+location.pathname+location.search)continue;}}"
+            + "var r=e.getBoundingClientRect(),st=getComputedStyle(e);if(!r.width||!r.height||st.visibility==='hidden'||st.display==='none')continue;"
+            + "if(k>bk){best=e;bk=k;}}"
+            + "if(!best)return 'none';"
+            + "try{best.scrollIntoView({block:'center'});}catch(x){}best.click();return 'pressed';"
+            + "}catch(e){return 'none';}})()";
     private static final String SHAPE = "(function(){try{var b=document.body;"
             + "var t=document.title||'';"
             + "var r=(window.performance&&performance.getEntriesByType)?performance.getEntriesByType('resource').length:0;"
