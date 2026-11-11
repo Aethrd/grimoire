@@ -71,8 +71,11 @@ const waitFor = async (test, ms = 30000) => {
 };
 
 await t("blocked: that book needs the reader, its site's other book waits, the other site goes on", async () => {
+  // The usual delays (no site in the box): every queued site here has none of its own.
   document.getElementById('web-delay').value = '100';
+  document.getElementById('web-delay').dispatchEvent(new window.Event('change'));
   document.getElementById('web-jitter').value = '0';
+  document.getElementById('web-jitter').dispatchEvent(new window.Event('change'));
   document.getElementById('build-queue-go').click();
   const jobs = await waitFor((all) => all[2]?.status === 'done' && all[0]?.status === 'attention');
   assert.deepEqual(jobs.map((each) => each.status), ['attention', 'queued', 'done'], JSON.stringify(jobs.map((each) => [each.name, each.status, each.note])));

@@ -6461,7 +6461,7 @@ function wireJobEdit() {
     if (!it) return;
     clearWeb();
     Object.assign(webState, { intent: 'queue', editing: it.id });
-    el('web-address').value = (it.sources || []).join('\n');
+    setWebAddress((it.sources || []).join('\n'));
     webState.links = it.links.map(({ url, text }) => ({ url, text, chrome: false, kind: null, likely: true, picked: true }));
     Object.assign(webState, { sources: it.sources || [], title: it.name, author: it.author || '', cover: it.cover || '', coverData: it.coverData || '' });
     el('web-title').value = it.name;
@@ -6538,6 +6538,8 @@ const queueHalts = (reason) => web.blocked(reason) || web.wantsCheck(reason) || 
 function queueWeb() {
   let chosen = webState.links.filter((link) => link.picked);
   if (!chosen.length) return;
+  // Its site's delays, as set here: what the queue downloads it at.
+  keepDelays({ site: siteOfJob({ sources: webState.sources, links: chosen }) || delaysShownFor });
   if (!webState.manualOrder) chosen = web.inReadingOrder(chosen, () => true).links;
   const name = (el('web-title').value || '').trim() || webState.title || 'From the web';
   // Its chapters changed from its own page: saved back to it, in its place.
@@ -6667,7 +6669,7 @@ async function runJob(job) {
       : await web.fetchCover(job.cover).catch(() => null);
     const part = build.webPart({
       name: job.name, links: job.links, pictures: webState.pictures, cover,
-      author: job.author, sources: job.sources, gap: webDelay(), jitter: webJitter(),
+      author: job.author, sources: job.sources, gap: delaysFor(siteOfJob(job)).gap, jitter: delaysFor(siteOfJob(job)).jitter,
     });
     if (before) part.seamless = true;
     parts.push(part);
@@ -6801,7 +6803,7 @@ function queueTimeLeft() {
     const under = queueJobs.get(job.id);
     const left = under?.run && Number.isFinite(under.run.total)
       ? timeLeft(under.run, now)?.ms ?? 0
-      : job.links.length * (webDelay() + PAGE_GUESS_MS - STAY_GUESS_MS)
+      : job.links.length * (delaysFor(siteOfJob(job)).gap + PAGE_GUESS_MS - STAY_GUESS_MS)
         + (job.status === 'retry' ? Math.max(0, (job.retryAt || now) - now) : 0);
     const site = siteOfJob(job);
     bySite.set(site, (bySite.get(site) || 0) + left);
@@ -6848,11 +6850,9 @@ function paintQueueHead() {
   if (count('done')) parts.push(`${count('done')} done`);
   el('build-queue-title').textContent = `Queue · ${parts.join(', ') || 'empty'}`;
   const ms = queueTimeLeft();
-  const jitter = webJitter();
   el('build-queue-note').textContent = `${ms ? `About ${span(ms)} to go, done by ~${clockAt(Date.now() + ms)}. ` : ''}`
     + `Each a book of its own; up to ${queueState.atOnce} at once, never two from one site. `
-    + `All at the Website screen's settings: ${webDelay()}${jitter ? ` ± ${jitter}` : ''} ms between chapters, `
-    + `pictures ${webState.pictures ? 'on' : 'off'}.`;
+    + `Each site at its own remembered delay, pictures ${webState.pictures ? 'on' : 'off'}.`;
   const go = el('build-queue-go');
   go.textContent = queueState.running ? 'Pause all' : (count('paused') ? 'Resume' : 'Start queue');
   go.disabled = !queueState.running && !webQueue.some((job) => ['queued', 'retry', 'paused'].includes(job.status));
@@ -7523,10 +7523,11 @@ async function carryOnLeftover(left) {
 function showLeftoverInWeb(left) {
   clearWeb();
   webState.leftover = left.id;
+  setWebAddress(left.sources.join('\n'));
+  // At the pace it was downloading at.
   if (Number.isFinite(left.gap)) el('web-delay').value = String(left.gap);
   if (Number.isFinite(left.jitter)) el('web-jitter').value = String(left.jitter);
   paintWebRange();
-  el('web-address').value = left.sources.join('\n');
   webState.links = left.links.map((link) => ({
     url: link.url, text: link.text, chrome: false, kind: null, likely: true, picked: true,
   }));
@@ -9452,6 +9453,9 @@ async function findWebLinks() {
     webNote('Downloading needs the Android app. This copy of the reader cannot reach websites.', true);
     return;
   }
+  // The site's own delays in the fields, and kept for it as used.
+  applySiteDelays();
+  keepDelays();
 
   const button = el('web-find');
   const quick = webState.quickCheck;
@@ -9600,7 +9604,7 @@ async function checkNewChapters(book) {
     webNote(`Paste the address of “${library.displayTitle(book)}”'s contents page and tap Find links: what it has will be unticked, the rest ticked to add to its end.`);
     return;
   }
-  el('web-address').value = book.webSources.join('\n');
+  setWebAddress(book.webSources.join('\n'));
   // Only as much of the list as it takes to reach what the book has (see
   // findLinks' known); Find links again reads every page.
   webState.quickCheck = true;
@@ -9810,6 +9814,7 @@ function paintResume() {
 async function addWebToBuild() {
   let chosen = webState.links.filter((link) => link.picked);
   if (!chosen.length) return;
+  keepDelays({ site: siteOfJob({ sources: webState.sources, links: chosen }) || delaysShownFor });
   /* Put in reading order again as they go in -- what is ticked can be a
    * different set from what was ordered when the list was found -- unless
    * the order was turned round by hand, which is the reader's say. */
@@ -9894,6 +9899,94 @@ function paintWebListRange() {
   range.textContent = jitter ? `· ${Math.max(0, delay - jitter)}–${delay + jitter} ms` : '';
 }
 
+/* ── each site's delays, remembered ──────────────────────────────────
+ *
+ * The four delays (between chapters, between list pages, and how much each
+ * varies) are kept for each site, under its name (siteKey: marumaru109 and
+ * marumaru110 are one site), as they were last set or used for it. Its
+ * address pasted, they come back; a site not seen before starts from the
+ * usual ones -- what was last set with no site in the box. The queue reads
+ * each book's site's own. */
+let siteDelays = {};                       // site -> { gap, jitter, listGap, listJitter, at }
+let delayDefaults = { gap: 250, jitter: 0, listGap: 4000, listJitter: 2000 };
+let delaysShownFor = '';                   // the site the fields now hold, '' for the usual
+
+const SITE_DELAYS_KEPT = 300;
+
+function siteOfAddress(address) {
+  try { return siteKey(new URL(address).hostname); } catch { return ''; }
+}
+
+/** The site whose address is in the box (its first), or '' for none. */
+function webSiteNow() {
+  const first = web.addressesIn(el('web-address')?.value || '')[0] || webState.sources?.[0] || '';
+  return first ? siteOfAddress(first) : '';
+}
+
+/** A site's delays: its own, or the usual ones. */
+function delaysFor(site) {
+  const kept = site ? siteDelays[site] : null;
+  return { ...delayDefaults, ...(kept || {}) };
+}
+
+function setDelayFields(delays) {
+  el('web-delay').value = String(delays.gap);
+  el('web-jitter').value = String(delays.jitter);
+  el('web-list-delay').value = String(delays.listGap);
+  el('web-list-jitter').value = String(delays.listJitter);
+  paintWebRange();
+  paintWebListRange();
+}
+
+function delayFields() {
+  return { gap: webDelay(), jitter: webJitter(), listGap: webListDelay(), listJitter: webListJitter() };
+}
+
+function paintSiteDelays() {
+  const note = el('web-site-delays');
+  if (!note) return;
+  const site = delaysShownFor;
+  note.hidden = !site;
+  if (site) {
+    note.textContent = siteDelays[site]
+      ? `Delays remembered for ${site} — changed here, they change for it.`
+      : `${site} is new: the usual delays — kept for it once used or changed.`;
+  }
+}
+
+/** The address in the box changed: its site's delays into the fields, if it is another site. */
+function applySiteDelays() {
+  const site = webSiteNow();
+  if (site === delaysShownFor) return;
+  delaysShownFor = site;
+  setDelayFields(delaysFor(site));
+  paintSiteDelays();
+}
+
+/** The delays in the fields, kept: for the site in the box, or as the usual ones. */
+function keepDelays({ site = delaysShownFor } = {}) {
+  const now = delayFields();
+  if (!site) {
+    delayDefaults = now;
+    store.saveSettings({ webDelay: now.gap, webJitter: now.jitter, webListDelay: now.listGap, webListJitter: now.listJitter }).catch(() => {});
+    return;
+  }
+  siteDelays[site] = { ...now, at: Date.now() };
+  const sites = Object.keys(siteDelays);
+  if (sites.length > SITE_DELAYS_KEPT) {
+    sites.sort((a, b) => (siteDelays[a].at || 0) - (siteDelays[b].at || 0));
+    for (const old of sites.slice(0, sites.length - SITE_DELAYS_KEPT)) delete siteDelays[old];
+  }
+  store.saveSettings({ siteDelays }).catch(() => {});
+  paintSiteDelays();
+}
+
+/** The address box given a value by the app (not typed): its site's delays come with it. */
+function setWebAddress(text) {
+  el('web-address').value = text;
+  applySiteDelays();
+}
+
 function webDelay() {
   const value = Math.round(Number(el('web-delay')?.value));
   return Number.isFinite(value) ? Math.max(0, Math.min(60000, value)) : 250;
@@ -9907,7 +10000,7 @@ function clearWeb() {
   const resume = el('web-resume');
   if (resume) { resume.hidden = true; resume.replaceChildren(); }
   el('web-list').replaceChildren();
-  el('web-address').value = '';
+  setWebAddress('');
   el('web-filter').value = '';
   el('web-title').value = '';
   webNote(webIntro || '');
@@ -9924,6 +10017,7 @@ function wireWeb() {
     toast(`Forgot ${new URL(address).host}'s cookies. A check it puts up will need passing again.`, 5000);
   };
   el('web-address').addEventListener('input', paintMore);
+  el('web-address').addEventListener('input', applySiteDelays);
   el('web-go').onclick = addWebToBuild;
   el('web-queue').onclick = queueWeb;
   // Pick in the browser: only where the app can show a site; remembered.
@@ -9936,11 +10030,16 @@ function wireWeb() {
   store.settings().then((settings) => {
     if (Number.isFinite(settings.webDelay)) el('web-delay').value = String(settings.webDelay);
     if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
+    if (settings.siteDelays && typeof settings.siteDelays === 'object') siteDelays = { ...settings.siteDelays, ...siteDelays };
     if (typeof settings.webPictures === 'boolean') webState.pictures = settings.webPictures;
     if (el('web-pick')) el('web-pick').checked = settings.webPick === true;
     loadQueue(settings);
     if (Number.isFinite(settings.webListDelay)) el('web-list-delay').value = String(settings.webListDelay);
     if (Number.isFinite(settings.webListJitter)) el('web-list-jitter').value = String(settings.webListJitter);
+    // What the fields hold now, with no site, are the usual delays.
+    delayDefaults = delayFields();
+    delaysShownFor = '';
+    applySiteDelays();
     paintWebRange();
     paintWebListRange();
     renderWeb();
@@ -9948,28 +10047,28 @@ function wireWeb() {
   el('web-delay').addEventListener('change', () => {
     const value = webDelay();
     el('web-delay').value = String(value);
-    store.saveSettings({ webDelay: value });
+    keepDelays();
     paintWebRange();
   });
   el('web-delay').addEventListener('input', paintWebRange);
   el('web-jitter').addEventListener('change', () => {
     const value = webJitter();
     el('web-jitter').value = String(value);
-    store.saveSettings({ webJitter: value });
+    keepDelays();
     paintWebRange();
   });
   el('web-jitter').addEventListener('input', paintWebRange);
   el('web-list-delay').addEventListener('change', () => {
     const value = webListDelay();
     el('web-list-delay').value = String(value);
-    store.saveSettings({ webListDelay: value });
+    keepDelays();
     paintWebListRange();
   });
   el('web-list-delay').addEventListener('input', paintWebListRange);
   el('web-list-jitter').addEventListener('change', () => {
     const value = webListJitter();
     el('web-list-jitter').value = String(value);
-    store.saveSettings({ webListJitter: value });
+    keepDelays();
     paintWebListRange();
   });
   el('web-list-jitter').addEventListener('input', paintWebListRange);
@@ -9977,7 +10076,7 @@ function wireWeb() {
   el('web-paste').onclick = async () => {
     try {
       const text = await navigator.clipboard.readText();
-      if (text) { el('web-address').value = text.trim(); return; }
+      if (text) { setWebAddress(text.trim()); return; }
     } catch {
       // Not allowed here: the box takes a paste the ordinary way.
     }

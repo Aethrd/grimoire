@@ -446,7 +446,8 @@ await t('the pages are asked for at the rate set, in milliseconds', async () => 
   const html = read('app/src/main/assets/www/index.html');
   assert.match(html, /id="web-delay" type="number"/);
   const app = read('app/src/main/assets/www/js/app.js');
-  assert.match(app, /store\.saveSettings\(\{ webDelay: value \}\)/);
+  assert.match(app, /store\.saveSettings\(\{ webDelay: now\.gap, webJitter: now\.jitter/);
+  assert.match(app, /siteDelays\[site\] = \{ \.\.\.now, at: Date\.now\(\) \};/);
   assert.match(app, /gap: webDelay\(\)/);
   const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
   build.clear();
@@ -969,7 +970,7 @@ await t('the delay varies within the range set: 500 give or take 200 is 300 to 7
   const html = read('app/src/main/assets/www/index.html');
   assert.match(html, /id="web-jitter" type="number"/);
   const app = read('app/src/main/assets/www/js/app.js');
-  assert.match(app, /store\.saveSettings\(\{ webJitter: value \}\)/);
+  assert.match(app, /el\('web-jitter'\)\.addEventListener\('change', \(\) => \{\s+const value = webJitter\(\);\s+el\('web-jitter'\)\.value = String\(value\);\s+keepDelays\(\);/);
   assert.match(app, /gap: webDelay\(\), jitter: webJitter\(\)/);
   const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
   build.clear();
@@ -2278,7 +2279,7 @@ await t('a queue of websites: books of their own, several at once but never two 
   assert.match(app, /el\('web-queue'\)\.onclick = queueWeb;/);
   assert.match(app, /queue\.hidden = !queueing && !!\(webState\.leftover \|\| webState\.carryOn != null \|\| webState\.updating != null\);/);
   // Each at the settings as they are when its turn comes -- the same for all.
-  assert.match(run, /pictures: webState\.pictures, cover,\s+author: job\.author, sources: job\.sources, gap: webDelay\(\), jitter: webJitter\(\),/);
+  assert.match(run, /pictures: webState\.pictures, cover,\s+author: job\.author, sources: job\.sources, gap: delaysFor\(siteOfJob\(job\)\)\.gap, jitter: delaysFor\(siteOfJob\(job\)\)\.jitter,/);
   // Build as the book in it, or the index of every novel; adding a novel from there queues it.
   assert.match(app, /el\('build-minimise'\)\.onclick = \(\) => \{\s+if \(editingJob\) editingJob = null;\s+else buildIndex = true;/);
   assert.match(app, /el\('build-index-current'\)\.onclick = \(\) => \{ buildIndex = false; renderWorkshop\(\); \};/);

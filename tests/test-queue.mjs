@@ -150,8 +150,11 @@ await t('a queued book not yet started opens to be named, as a book in Build is'
 });
 
 await t('started, it builds every book: two at once, never two from one site', async () => {
+  // The usual delays (no site in the box): every queued site here has none of its own.
   document.getElementById('web-delay').value = '150';
+  document.getElementById('web-delay').dispatchEvent(new window.Event('change'));
   document.getElementById('web-jitter').value = '0';
+  document.getElementById('web-jitter').dispatchEvent(new window.Event('change'));
   document.getElementById('build-queue-go').click();
   const until = Date.now() + 30000;
   let jobs = [];
@@ -204,6 +207,39 @@ await t("a queued book's line is said again in place, not the list drawn anew, w
   assert.match(app, /toast\('Downloading now — once it is done, change its name or cover on the shelf\.'\)/);
   // A slip in showing progress never stops a download.
   assert.match(app, /try \{ trackJob\(job, under, message, at, now, counts\); \} catch/);
+});
+
+await t("each site's delays are remembered, and come back with its address", async () => {
+  const address = document.getElementById('web-address');
+  const field = (id) => document.getElementById(id);
+  const type = (id, value) => { field(id).value = value; field(id).dispatchEvent(new window.Event('change')); };
+  const paste = (text) => { address.value = text; address.dispatchEvent(new window.Event('input')); };
+  paste('https://marumaru109.com/novel/1');
+  assert.match(field('web-site-delays').textContent, /marumaru is new/);
+  type('web-delay', '12000');
+  type('web-list-delay', '7000');
+  let kept = (await store.settings()).siteDelays;
+  assert.deepEqual([kept.marumaru.gap, kept.marumaru.listGap], [12000, 7000]);
+  assert.match(field('web-site-delays').textContent, /remembered for marumaru/);
+  // A site not seen before: the usual ones, untouched by marumaru's. One queued
+  // before keeps what it was queued at.
+  paste('https://fresh.example/x');
+  assert.equal(field('web-delay').value, '150');
+  paste('https://012.bookkor.com/c');
+  assert.ok(kept.bookkor || (await store.settings()).siteDelays.bookkor, 'a site queued kept no delays');
+  // A mirror of the first: its delays again.
+  paste('https://marumaru110.com/novel/2');
+  assert.deepEqual([field('web-delay').value, field('web-list-delay').value], ['12000', '7000']);
+  // Nothing in the box: the usual ones, and the usual ones are what is changed.
+  paste('');
+  assert.equal(field('web-delay').value, '150');
+  assert.equal(field('web-site-delays').hidden, true);
+  kept = await store.settings();
+  assert.equal(kept.webDelay, 150);
+  // The queue goes at each site's own.
+  const app = (await import('node:fs')).readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /gap: delaysFor\(siteOfJob\(job\)\)\.gap, jitter: delaysFor\(siteOfJob\(job\)\)\.jitter,/);
+  assert.match(document.getElementById('build-queue-note').textContent, /Each site at its own remembered delay/);
 });
 
 await t('two settings saved at once both stay saved', async () => {

@@ -2513,6 +2513,7 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .build-notify[hidden] { display: none; }
 .build-notify + .build-notify { margin-top: 2px; }
 .web-note { font-size: 12px; line-height: 1.55; margin: 0 0 14px; }
+.web-site-delays { font-size: 12px; line-height: 1.5; margin: -4px 0 12px; }
 .web-note.problem { color: #c0553f; }
 #web-filter { width: 100%; margin: 0 0 4px; }
 .web-tools { padding: 8px 0 4px; margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
