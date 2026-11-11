@@ -6110,12 +6110,57 @@ function span(ms) {
   return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} m`;
 }
 
+/** A guess at reading one page, the delay apart, before any has come. */
+const READ_GUESS_MS = 6000;
+/** How many of the latest chapters the estimate goes by. */
+const RECENT_CHAPTERS = 20;
+/** How many chapters until what they took counts for more than the guess. */
+const TRUST_AFTER = 5;
+
+/**
+ * How long a chapter takes, from the latest ones: each chapter's time, the
+ * delay and any retries included -- retries do happen, and cost a delay
+ * each -- but one that took more than three times the typical (a long hold,
+ * the phone asleep) counted as three, so a single bad one does not make
+ * hours of the estimate. Until a few have come, leaning on what the delay
+ * says a chapter should take: there is an estimate from the start.
+ */
+function chapterTime(samples, guess) {
+  const recent = samples.slice(-RECENT_CHAPTERS);
+  if (!recent.length) return guess;
+  const sorted = [...recent].sort((a, b) => a - b);
+  const typical = sorted[Math.floor(sorted.length / 2)];
+  const mean = recent.reduce((sum, ms) => sum + Math.min(ms, typical * 3), 0) / recent.length;
+  if (!Number.isFinite(guess)) return mean;
+  const trust = Math.min(1, recent.length / TRUST_AFTER);
+  return trust * mean + (1 - trust) * guess;
+}
+
+/**
+ * The time left: this chapter's rest, the chapters after it at the time one
+ * takes, and the websites after this one at what their delays say. Null
+ * when nothing says yet (a site with no delay, and no chapter come).
+ */
+function timeLeft(run, now) {
+  const left = run.total - run.done;
+  if (!(left > 0)) return 0;
+  const part = run.delays?.[run.at];
+  const guess = part ? part.gap + READ_GUESS_MS : NaN;
+  const each = chapterTime(run.samples || [], guess);
+  if (!Number.isFinite(each)) return null;
+  const since = now - (run.lastCame || run.partStart || now);
+  let ms = Math.max(0, each - since) + each * (left - 1);
+  for (const later of (run.delays || []).slice(run.at + 1)) {
+    if (later) ms += later.chapters * (later.gap + READ_GUESS_MS);
+  }
+  return ms;
+}
+
 /**
  * Time so far, and an estimate of the time left -- on the progress row, by
- * the count, and beside Pause & keep. The estimate is from how long this
- * website's pages have taken so far, the delay and any tries included, so
- * it follows the site as it gets slower or quicker; until a page has come
- * it says so.
+ * the count, and beside Pause & keep (see timeLeft). Shown counting down
+ * second by second, and eased toward a new estimate rather than jumping to
+ * it each time a chapter comes.
  */
 function paintTimes() {
   const run = buildRun;
@@ -6123,11 +6168,16 @@ function paintTimes() {
   const now = Date.now();
   const elapsed = span(now - run.startedAt);
   let left = '';
-  if (Number.isFinite(run.total) && Number.isFinite(run.done)) {
-    const came = run.done - (run.partFrom || 0);
-    left = run.done >= run.total ? '' : came > 0
-      ? `~${span(((now - run.partStart) / came) * (run.total - run.done))} left`
-      : 'estimating…';
+  if (Number.isFinite(run.total) && Number.isFinite(run.done) && run.done < run.total) {
+    const target = timeLeft(run, now);
+    if (target === null) {
+      left = 'estimating…';
+    } else {
+      const ticked = run.shown == null ? target : Math.max(0, run.shown - (now - run.shownAt));
+      run.shown = run.shown == null ? target : ticked + (target - ticked) * 0.15;
+      run.shownAt = now;
+      left = `~${span(run.shown)} left`;
+    }
   }
   const parts = run.parts > 1 ? `${run.at + 1} of ${run.parts} · ` : '';
   run.finish?.say(null, null, `${parts}${elapsed}${left ? ` · ${left}` : ''}`);
@@ -6768,7 +6818,10 @@ function wireWorkshop() {
     /* "Pause & keep": stop downloading after the chapters under way and make
      * the book of what has come. The rest is kept in Build, to carry the
      * book on with later. */
-    buildRun = { online, pausing: false, status: 'Starting…', finish, startedAt: Date.now(), at: -1 };
+    // What each website's delay says a chapter should take, for an estimate from the start.
+    const delays = build.contents().map((part) => (part.web
+      ? { gap: Math.max(0, Number(part.web.gap) || 0), chapters: part.web.links?.length || 0 } : null));
+    buildRun = { online, pausing: false, status: 'Starting…', finish, startedAt: Date.now(), at: -1, delays, samples: [] };
     buildRun.ticker = setInterval(paintTimes, 1000);
     paintBuildFoot();
     try { window.GrimoireNative?.buildRunning?.(true); } catch { /* not in the app */ }
@@ -6786,11 +6839,22 @@ function wireWorkshop() {
           if (now !== undefined) finish.activity(now);
           // The pages of this part so far, for how long it has been and is to be.
           if (buildRun) {
+            const nowMs = Date.now();
             if (buildRun.at !== at) {
-              Object.assign(buildRun, { at, partStart: Date.now(), partFrom: counts?.done || 0 });
+              Object.assign(buildRun, { at, partStart: nowMs, partFrom: counts?.done || 0, lastCame: nowMs, samples: [], shown: null, done: undefined });
             }
             buildRun.parts = total;
-            if (counts) Object.assign(buildRun, { done: counts.done, total: counts.total });
+            if (counts) {
+              // What each chapter took, from the one before it: what the estimate goes by.
+              const came = counts.done - (buildRun.done ?? counts.done);
+              if (came > 0) {
+                const each = (nowMs - buildRun.lastCame) / came;
+                for (let i = 0; i < came; i += 1) buildRun.samples.push(each);
+                buildRun.samples.splice(0, Math.max(0, buildRun.samples.length - RECENT_CHAPTERS));
+                buildRun.lastCame = nowMs;
+              }
+              Object.assign(buildRun, { done: counts.done, total: counts.total });
+            }
             paintTimes();
           }
           // Beside the button, briefly: "120 of 669 · ~5 h left", or how far in.
