@@ -684,7 +684,7 @@ export function linksOf(html, pageUrl) {
   return {
     links: paging ? links.filter((link) => !paging.links.has(link.url))
       : onward ? links.filter((link) => link.url !== onward) : links,
-    title: pageTitle(doc), author: pageAuthor(doc), cover: pageCover(doc, base),
+    title: pageTitle(doc, pageUrl), author: pageAuthor(doc), cover: pageCover(doc, base),
     wordpress, list, older: onward,
     pages: paging ? paging.pages : [],
     firstPage: paging?.firstPage || null,
@@ -846,13 +846,111 @@ function pageCover(doc, base) {
   }
 }
 
-/** The name of the book a contents page is for. */
-function pageTitle(doc) {
-  const og = doc.querySelector('meta[property="og:title"]')?.getAttribute('content');
-  const archive = doc.querySelector('.archive-title, .page-title, .wp-block-query-title')?.textContent;
-  // "Category: The Lantern" is the book's name with WordPress's label on it.
-  const named = tidy(og) || tidy(archive) || tidy(titleOf(doc, '')) || '';
-  return named.replace(/^(category|tag|series|archives?)\s*:\s*/i, '').replace(/\s+archives?$/i, '');
+/* ── the book's name ─────────────────────────────────────────────────
+ *
+ * A contents page names its book in several places, none to be trusted
+ * alone: a site whose every page has the same preview title ("소설 연재 칸 |
+ * 마루마루") named every book after its own section and itself. So each
+ * place offers names, and the name most of them agree on is the book's:
+ *
+ *   the book's name as the page states it for machines (JSON-LD)  5
+ *   the page's heading, not a logo or a menu's                    5
+ *   the preview title (og:title), each part of it                  3
+ *   the browser title (<title>), each part of it                   2
+ *   a WordPress archive heading, a breadcrumb's last step          2
+ *
+ * Titles are taken apart at "|", " - ", "–", "—", "·", "::", "»": "Book -
+ * Site" is two offers, and the last part of a title (where sites put their
+ * own name) counts for half. Never a name: the site's own (og:site_name,
+ * the logo, the home link), words every such site uses (소설, 연재, 웹소설,
+ * Novel, Read online, 小说, 目录…), and a chapter's number. Badges and status
+ * marks ("HOT", "[완결]", "(연재중)") are taken off what is left.
+ */
+const SITE_WORDS = /^(?:home|홈|index|main|menu|search|login|sign ?in|novels?|web ?novels?|light ?novels?|webtoons?|manga|manhwa|comics?|read(?:ing)?(?: online)?(?: free)?|online|free|chapters?|chapter list|table of contents|contents|series|library|archive|latest|updates?|completed|ongoing|소설|웹소설|웹 소설|연재|연재\s*칸|소설\s*연재(?:\s*칸)?|무료|무료\s*웹소설|웹툰|만화|보기|다시보기|최신화|최신|목록|회차|회차\s*목록|전체|완결|연재중|장르|판타지|로맨스|무협|小说|小說|免费|在线阅读|全文|最新章节|目录|目錄|小説|無料|一覧|漫画)$/i;
+const STATUS_MARK = /^(?:[\[(【〔「]\s*)?(?:hot|new|up|updated?|completed?|ongoing|완결|연재|연재중|완|무료|신작|독점|19|성인|N|AD)(?:\s*[\])】〕」])?(?=\s|$)\s*/i;
+const CHAPTER_TAIL = /\s*[-–—:|·,]?\s*(?:제?\s*\d+\s*(?:화|회|장|권)|(?:chapter|ch\.?|episode|ep\.?|vol(?:ume)?\.?)\s*\d+|第\s*[0-9０-９零〇一二两三四五六七八九十百千万]+\s*[章话話回节節卷])[\s\S]*$/i;
+const TITLE_PARTS = /\s+[|\-–—·»]\s+|\s*::\s*|\s*[|｜]\s*/;
+
+const plainName = (text) => tidy(text).toLowerCase().replace(/[\s'’"“”.,!?~·:;()[\]{}<>「」『』【】-]+/g, '');
+
+/** The site's own names: what it calls itself, its logo, its home link. */
+function siteNames(doc, pageUrl) {
+  const names = new Set();
+  const add = (text) => { const name = plainName(text); if (name) names.add(name); };
+  for (const meta of doc.querySelectorAll('meta[property="og:site_name"], meta[name="application-name"], meta[name="apple-mobile-web-app-title"]')) add(meta.getAttribute('content'));
+  for (const logo of doc.querySelectorAll('[class*="logo" i] img[alt], img[class*="logo" i][alt], [id*="logo" i] img[alt]')) add(logo.getAttribute('alt'));
+  for (const logo of doc.querySelectorAll('[class*="logo" i], [id*="logo" i], .site-title, .site-name, #site-title, .navbar-brand')) add(logo.textContent);
+  let host = '';
+  try { host = new URL(pageUrl).hostname.replace(/^www\./, ''); } catch { /* no address */ }
+  if (host) {
+    for (const home of doc.querySelectorAll('a[href]')) {
+      try {
+        const url = new URL(home.getAttribute('href'), pageUrl);
+        if (url.hostname.replace(/^www\./, '') === host && (url.pathname === '/' || url.pathname === '') && !url.search) add(home.textContent || home.querySelector('img[alt]')?.getAttribute('alt'));
+      } catch { /* not an address */ }
+    }
+    add(host.split('.').at(-2));
+  }
+  return names;
+}
+
+/** A heading's own words: its badges ("HOT", "NEW") and screen-reader asides left out. */
+function headingText(heading) {
+  const copy = heading.cloneNode(true);
+  for (const extra of copy.querySelectorAll('[class*="badge" i], [class*="label" i], [class*="tag" i], .sr-only, .screen-reader-text, small, sup, script, style')) extra.remove();
+  return tidy(copy.textContent);
+}
+
+/** The name of the book a contents page is for (see above). */
+export function pageTitle(doc, pageUrl = '') {
+  const site = siteNames(doc, pageUrl);
+  const offers = [];
+  const offer = (text, weight) => {
+    let name = tidy(text);
+    for (let i = 0; i < 3; i += 1) name = name.replace(STATUS_MARK, '');
+    name = name.replace(/^(?:category|tag|series|archives?)\s*:\s*/i, '').replace(/\s+archives?$/i, '')
+      .replace(CHAPTER_TAIL, '').replace(/\s*[-–—:|·]\s*$/, '').trim();
+    const plain = plainName(name);
+    if (!plain || name.length > 150 || SITE_WORDS.test(name) || site.has(plain)) return;
+    // A site's name with words on it ("마루마루 소설") is still the site.
+    if ([...site].some((each) => each.length >= 3 && (plain === each || plain.startsWith(each) || plain.endsWith(each)) && plain.length - each.length <= 6)) return;
+    offers.push({ name, plain, weight });
+  };
+  const titled = (text, weight) => {
+    const parts = tidy(text).split(TITLE_PARTS).map(tidy).filter(Boolean);
+    parts.forEach((part, at) => offer(part, parts.length > 1 && at === parts.length - 1 ? weight / 2 : weight));
+    // The whole too, for a name that itself has a dash in it.
+    if (parts.length > 1) offer(text, weight / 2);
+  };
+  for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      const data = JSON.parse(script.textContent);
+      for (const item of [data, ...(Array.isArray(data) ? data : data['@graph'] || [])]) {
+        if (item && /book|novel|creativework|comic/i.test(String(item['@type'] || ''))) offer(item.name, 5);
+      }
+    } catch { /* not readable */ }
+  }
+  // The page's heading -- the first not in its header, menu or footer, and not a link home.
+  const headings = [...doc.querySelectorAll('.post-title h1, .series-title, .novel-title, .book-title, .entry-title, [itemprop="name"], h1, h2')]
+    .filter((heading) => !heading.closest('nav, footer, aside, [class*="logo" i], [class*="sidebar" i], [class*="menu" i]')
+      // The site's header, not an article's own ("entry-header").
+      && !(heading.closest('header') && !heading.closest('article, main, [class*="entry" i], [class*="post" i], [class*="content" i]')));
+  if (headings[0]) offer(headingText(headings[0]), 5);
+  titled(doc.querySelector('meta[property="og:title"]')?.getAttribute('content'), 3);
+  titled(doc.querySelector('meta[name="twitter:title"]')?.getAttribute('content'), 2);
+  titled(doc.querySelector('title')?.textContent, 2);
+  offer(doc.querySelector('.archive-title, .page-title, .wp-block-query-title')?.textContent, 2);
+  const crumbs = doc.querySelectorAll('.breadcrumb li, .breadcrumbs li, [class*="breadcrumb" i] a, [class*="breadcrumb" i] span');
+  if (crumbs.length) offer(crumbs[crumbs.length - 1].textContent, 2);
+  if (!offers.length) return '';
+  // The name most places agree on: an offer counts for every other that is it, or holds it.
+  const scored = offers.map((each) => ({
+    ...each,
+    score: offers.reduce((sum, other) => sum + (other.plain === each.plain ? other.weight
+      : other.plain.includes(each.plain) && each.plain.length >= 2 ? other.weight / 2 : 0), 0),
+  }));
+  scored.sort((a, b) => b.score - a.score || a.name.length - b.name.length);
+  return scored[0].name;
 }
 
 /* ── telling the chapters apart ──────────────────────────────────────── */

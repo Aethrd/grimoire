@@ -2404,6 +2404,23 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   assert.match(java, /boolean closeShownIfOpen\(\) \{\s+if \(shown == null\) return false;\s+\/\/[^\n]*\n\s+shownPicking = false;/);
 });
 
+await t("a book is named by what its page agrees on, never by the site's own name", () => {
+  const doc = (html) => new DOMParser().parseFromString(html, 'text/html');
+const cases = [
+  ['marumaru', '<head><title>소설 연재 칸 | 마루마루</title><meta property="og:title" content="소설 연재 칸 | 마루마루"></head><body><header><a href="/" class="logo">마루마루</a></header><h1>그린 스킨</h1>', 'https://marumaru109.com/novel/47997', '그린 스킨'],
+  ['madara', '<head><title>I&#8217;ll Be the Warrior&#8217;s Mother &#8211; Sleepy Translations</title><meta property="og:site_name" content="Sleepy Translations"><meta property="og:title" content="I&#8217;ll Be the Warrior&#8217;s Mother - Sleepy Translations"></head><body><header class="site-header"><div class="site-title"><a href="/">Sleepy Translations</a></div></header><div class="post-title"><h1><span class="manga-title-badges hot">HOT</span> I’ll Be the Warrior’s Mother</h1></div>', 'https://sleepytranslations.com/series/x/', 'I’ll Be the Warrior’s Mother'],
+  ['bookkor', '<head><title>악은 삶을 바란다 - 북코르</title><meta property="og:title" content="악은 삶을 바란다"></head><body><header><a href="/"><img alt="BOOKKOR" class="logo"></a></header><h1>악은 삶을 바란다</h1><p>소설</p>', 'https://012.bookkor.com/x', '악은 삶을 바란다'],
+  ['logo h1', '<head><title>The Lantern Keeper | Novel Site</title></head><body><header><h1 class="logo"><a href="/">Novel Site</a></h1></header><main><h2>Chapters</h2></main>', 'https://novelsite.com/b', 'The Lantern Keeper'],
+  ['site first', '<head><title>Novel Site - The Lantern Keeper</title><meta property="og:site_name" content="Novel Site"></head><body>', 'https://novelsite.com/b', 'The Lantern Keeper'],
+  ['wp category', '<head><title>Category: The Lantern &#8211; Translations</title></head><body><header class="page-header"><h1 class="page-title">Category: <span>The Lantern</span></h1></header>', 'https://tl.wordpress.com/category/the-lantern/', 'The Lantern'],
+  ['status mark', '<head><title>[완결] 세월의 돌 - 웹소설</title></head><body><h1>[완결] 세월의 돌</h1>', 'https://x.com/a', '세월의 돌'],
+  ['chapter tail', '<head><title>세월의 돌 1화 | 사이트</title></head><body>', 'https://x.com/a', '세월의 돌'],
+  ['dash in name', '<head><title>Re:Zero - Starting Life in Another World - Site</title></head><body><h1>Re:Zero - Starting Life in Another World</h1>', 'https://site.com/a', 'Re:Zero - Starting Life in Another World'],
+  ['jsonld', '<head><title>Home | Site</title><script type="application/ld+json">{"@type":"Book","name":"Lord of Mysteries"}</script></head><body>', 'https://site.com/a', 'Lord of Mysteries'],
+];
+  for (const [name, html, url, want] of cases) assert.equal(web.pageTitle(doc(html), url), want, name);
+});
+
 await t('a build says how long it has been and how long it should be yet', async () => {
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /left = 'estimating…';/);
