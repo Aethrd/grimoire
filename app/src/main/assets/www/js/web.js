@@ -273,7 +273,7 @@ export function scriptBuilt(html) {
   return tidy(body.textContent).length < 400 && body.querySelectorAll('a[href]').length < 8;
 }
 
-function fetchNative(method, url, { timeout = 90000, list = false } = {}) {
+function fetchNative(method, url, { timeout = 90000, list = false, textOnly = false } = {}) {
   // A page that says to wait is waited on for up to three minutes, there.
   if (method === 'render') timeout = Math.max(timeout, 240000);
   return new Promise((resolve, reject) => {
@@ -322,7 +322,8 @@ function fetchNative(method, url, { timeout = 90000, list = false } = {}) {
     try {
       // A contents page may be scrolled for more of its list; a chapter
       // never is (some readers add the next chapter under it at the end).
-      if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url), list ? '1' : '0');
+      // "t": a chapter wanted for its words alone, watched for them a while (see WebBridge).
+      if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url), list ? '1' : textOnly ? 't' : '0');
       else window.GrimoireWeb.fetch(id, url);
     } catch (error) {
       pending.delete(id);
@@ -1299,7 +1300,9 @@ const EXT_OF_TYPE = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif
 export async function readPage(link, index, {
   pictures = true, fetchPage = download, chapterUrls = null, listedNumbers = null,
 } = {}) {
-  const page = await fetchPage(link.url);
+  // Its words alone, when pictures are not wanted: then a page with none yet is
+  // watched for them a while, not taken empty and loaded again.
+  const page = await fetchPage(link.url, pictures ? {} : { textOnly: true });
   const type = String(page.type || '').toLowerCase();
 
   // A picture linked directly is a page with that picture on it.

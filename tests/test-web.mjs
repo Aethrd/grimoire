@@ -1346,7 +1346,9 @@ await t('a contents page may be scrolled for more; a chapter never is', async ()
   };
   await web.findLinks(['https://scroll.example/novel/47997'], { listGap: 0 });
   await web.readPage({ url: 'https://scroll.example/novel/47997/1', text: '1화' }, 0, { pictures: false });
-  assert.deepEqual(seen, ['/novel/47997 1', '/novel/47997/1 0']);
+  // Never scrolled; and wanted for its words alone ("t"), it is watched for them a while.
+  await web.readPage({ url: 'https://scroll.example/novel/47997/1', text: '1화' }, 0, { pictures: true });
+  assert.deepEqual(seen, ['/novel/47997 1', '/novel/47997/1 t', '/novel/47997/1 0']);
   delete window.GrimoireWeb;
 });
 
@@ -1773,7 +1775,7 @@ await t('the delay is kept for every page -- retries too -- from when the last o
 
 await t('a spinner left going once the chapter is there holds nothing; waiting and retries are said', async () => {
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
-  assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\)\);/);
+  assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\) \|\| noStoryYet\);/);
   assert.match(java, /long limit = holding \? RENDER_WAIT_MS : maxMs;/);
   // The progress line: the delay being waited out, and why a chapter is tried again.
   const notes = [];
@@ -1931,10 +1933,19 @@ await t('a chapter is taken as soon as its story is there and still, not when th
   assert.match(java, /boolean storyDone = !scroll && !waiting && storyLength >= READY_STORY\s+&& storyStill >= \(patient \? STORY_STILL_PATIENT_MS : STORY_STILL_MS\)\s+&& \(pending == 0 \|\| storyStill >= quietMs\);/);
   assert.match(java, /boolean settled = storyDone \|\| \(\(finished \|\| visible\) && !blank && !holding/);
   assert.match(java, /long settle = finished \? need : need \+ quietMs;/);
-  assert.match(java, /private static final long RENDER_POLL_MS = 250;/);
+  // Looked at every tenth of a second -- the page on the phone, nothing asked of the site --
+  // and worked out again only when the page has changed (or a second has passed).
+  assert.match(java, /private static final long RENDER_POLL_MS = 100;/);
+  assert.match(java, /private static final long STORY_STILL_MS = 500;/);
+  assert.match(java, /if\(C&&window\.__gObs&&!window\.__gDirty&&now-window\.__gAt<1000\)/);
+  // A chapter wanted for its words, with none yet, is watched on the same page up to 30 s,
+  // not taken empty and loaded again -- unless the page answered with an error.
+  assert.match(java, /private static final long STORY_WAIT_MS = 30000;/);
+  assert.match(java, /boolean noStoryYet = textOnly && !scroll && storyLength < STORY_SOME && mainStatus < 400\s+&& now - startedAt < STORY_WAIT_MS;/);
+  assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\) \|\| noStoryYet\);/);
   // Pictures, fonts and video are not loaded by the unseen browser, but at the most patient try.
   assert.match(java, /final boolean skipHeavy = ownSiteOnly;/);
-  assert.match(java, /new Rendering\(address, quietMs, maxMs, scroll, ownSiteOnly, skipHeavy\)/);
+  assert.match(java, /new Rendering\(address, quietMs, maxMs, scroll, ownSiteOnly, skipHeavy, textOnly\)/);
   assert.match(java, /if \(job\.lean && isHeavy\(request\)\) \{/);
   // What a site needs is remembered past the app being closed, for a fortnight.
   const web = read('app/src/main/assets/www/js/web.js');

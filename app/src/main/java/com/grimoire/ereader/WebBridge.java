@@ -103,10 +103,15 @@ public class WebBridge {
     private static final long RENDER_QUIET_STEP_MS = 2000;
     /** How often the open page is looked at. Looking is on the phone, in the page already
      *  there -- it asks the site for nothing -- so it can be often. */
-    private static final long RENDER_POLL_MS = 250;
+    private static final long RENDER_POLL_MS = 100;
     /** How long a chapter's story must stop growing to be taken, and longer on a try
      *  asked for patiently (its last try came back short). */
-    private static final long STORY_STILL_MS = 700;
+    private static final long STORY_STILL_MS = 500;
+    /** Characters of story below which a text-only chapter is taken to have none yet. */
+    private static final int STORY_SOME = 200;
+    /** How long a text-only chapter with no story yet is watched, on the same page, before
+     *  it is let go -- and only then asked for again: a reload is a request, and a delay. */
+    private static final long STORY_WAIT_MS = 30000;
     private static final long STORY_STILL_PATIENT_MS = 2000;
     /** How long a page whose content is plainly there -- a list with its
      *  chapters, a chapter with its story -- must stay still. The full quiet
@@ -204,6 +209,8 @@ public class WebBridge {
         // next chapter under this one when the end is reached would go on
         // adding chapters for as long as it was scrolled (a hundred, once).
         final boolean scroll = "1".equals(list);
+        // "t": a chapter wanted for its text alone -- one with none is no chapter.
+        final boolean textOnly = "t".equals(list);
         // "2", or "0o": a level, and "o" when the site has been found to need
         // nothing kept out (its pages come only with everything let in).
         String asked = String.valueOf(patience).trim();
@@ -237,7 +244,7 @@ public class WebBridge {
                 // Pictures, fonts and video are never what the reader takes from a page --
                 // the pictures it keeps are fetched on their own, from their addresses --
                 // so they are not loaded. At the most patient try, everything is.
-                Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly, skipHeavy);
+                Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly, skipHeavy, textOnly);
                 main.post(job::start);
                 if (!job.done.await(RENDER_WAIT_MS + 20000, TimeUnit.MILLISECONDS)) {
                     main.post(job::finish);
@@ -660,6 +667,8 @@ public class WebBridge {
         final boolean ownSiteOnly;
         /** Pictures, fonts and video not loaded (see render). */
         final boolean lean;
+        /** A chapter wanted for its text alone (see STORY_WAIT_MS). */
+        final boolean textOnly;
         /** The page has finished loading (or been given long enough to). */
         private boolean finished;
         /** The page is on show (see onPageCommitVisible). */
@@ -682,8 +691,10 @@ public class WebBridge {
         private long stillSince;
         private long startedAt;
 
-        Rendering(String address, long quietMs, long maxMs, boolean scroll, boolean ownSiteOnly, boolean lean) {
+        Rendering(String address, long quietMs, long maxMs, boolean scroll, boolean ownSiteOnly, boolean lean,
+                  boolean textOnly) {
             this.address = address;
+            this.textOnly = textOnly;
             this.lean = lean;
             this.quietMs = quietMs;
             this.maxMs = maxMs;
@@ -798,7 +809,14 @@ public class WebBridge {
                  * RENDER_WAIT_MS. Once the chapter is there, a spinner left
                  * going elsewhere on the page (comments, adverts) holds nothing:
                  * that held every chapter for the whole three minutes. */
-                boolean holding = !there && (waiting || (!scroll && loading));
+                /* A chapter wanted for its text, with none yet: watched on the same page
+                 * for up to STORY_WAIT_MS, however still it is, rather than taken empty and
+                 * loaded again -- which asks the site again, after the whole delay. Not a
+                 * page that answered with an error: that has nothing coming. A chapter
+                 * with pictures wanted may be all pictures, and is not held so. */
+                boolean noStoryYet = textOnly && !scroll && storyLength < STORY_SOME && mainStatus < 400
+                        && now - startedAt < STORY_WAIT_MS;
+                boolean holding = !there && (waiting || (!scroll && loading) || noStoryYet);
                 boolean busy = pending > 0 || holding;
                 /* A chapter is taken once its story is there and has stopped growing --
                  * whatever the adverts and the rest of the page go on doing, and before
@@ -937,6 +955,16 @@ public class WebBridge {
     private static final String SHAPE = "(function(){try{var b=document.body;"
             + "var t=document.title||'';"
             + "var r=(window.performance&&performance.getEntriesByType)?performance.getEntriesByType('resource').length:0;"
+            /* Looked at often, so worked out again only when the page has changed since (a
+             * MutationObserver says so), or a second has passed: otherwise what it was last
+             * time. Looking is in the phone, at the page already there: it asks the site
+             * for nothing, however often. */
+            + "if(window.MutationObserver&&!window.__gObs){try{window.__gObs=new MutationObserver(function(){window.__gDirty=1;});"
+            + "window.__gObs.observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true});}catch(e){}}"
+            + "var now=Date.now(),C=window.__gS;"
+            + "if(C&&window.__gObs&&!window.__gDirty&&now-window.__gAt<1000)"
+            + "return (window.__grimoirePending||0)+'|'+C[0]+'|'+C[1]+'|'+C[2]+'|'+r+'|'+C[3]+'|'+C[4]+'|'+C[5]+'|'+t;"
+            + "window.__gDirty=0;window.__gAt=now;"
             // Links that look like chapters: under this page's address, or
             // named as one ("14화", "Chapter 3", "第三章").
             + "var u=location.origin+location.pathname.replace(/\\/+$/,'')+'/',k=0,L=document.links;"
@@ -981,6 +1009,7 @@ public class WebBridge {
             + "if(!IN.test(p.tagName))break;p=p.parentElement;}if(no||!p)continue;"
             + "var v=(M.get(p)||0)+l;M.set(p,v);if(v>s)s=v;"
             + "var g=p.parentElement;if(g&&p!==b&&p.tagName==='DIV'){v=(M.get(g)||0)+l;M.set(g,v);if(v>s)s=v;}}}catch(e){}"
+            + "window.__gS=[n,L.length,(blk?'blocked':c?'checking':''),k,w,s];"
             + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(blk?'blocked':c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+s+'|'+t;"
             + "}catch(e){return '0|0|0||0|0|0|0|';}})()";
 
