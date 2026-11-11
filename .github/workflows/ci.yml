@@ -104,7 +104,7 @@ jobs:
         with:
           name: grimoire-debug-apk
           path: app/build/outputs/apk/debug/*.apk
-          retention-days: 14
+          retention-days: 3
 
       - name: Report APK size
         run: |
@@ -138,4 +138,4 @@ jobs:
         with:
           name: lint-report
           path: app/build/reports/lint-results-debug.html
-          retention-days: 7
+          retention-days: 3
