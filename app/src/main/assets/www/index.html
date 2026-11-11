@@ -392,6 +392,16 @@
       <div class="build-leftover build-overnight-note" id="build-overnight-note" hidden></div>
       <!-- Chapters a website would not give last time, kept to try again. -->
       <div id="build-leftovers"></div>
+      <!-- Websites waiting their turn, each with its own chapters ticked: built
+           into a book each, one after another, at the Website screen's settings. -->
+      <div class="build-leftover build-queue" id="build-queue" hidden>
+        <div class="build-queue-head">
+          <strong id="build-queue-title">Queue</strong>
+          <button class="btn ghost" id="build-queue-go">Start queue</button>
+        </div>
+        <small class="muted" id="build-queue-note"></small>
+        <ol class="build-queue-list" id="build-queue-list"></ol>
+      </div>
 
       <p class="muted" id="build-empty" style="line-height:1.6">
         Add the parts of a serial — volumes, chapters, image archives, or the
@@ -496,6 +506,8 @@
     <footer class="stepper" id="web-foot" hidden>
       <button class="btn ghost" id="web-clear">Clear</button>
       <span class="muted" id="web-count"></span>
+      <!-- Into the queue instead: a book of its own, built after the ones before it. -->
+      <button class="btn ghost" id="web-queue" title="Built as a book of its own, after the websites queued before it">Queue</button>
       <button class="btn primary" id="web-go">Add to Build</button>
     </footer>
   </section>

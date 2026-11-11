@@ -6279,6 +6279,162 @@ function pauseBuild() {
   paintBuildFoot();
 }
 
+/* ── the queue ─────────────────────────────────────────────────────────
+ *
+ * Several websites, each with its own chapters ticked and its own title,
+ * waiting their turn: built one after another, a book each, with the same
+ * settings for all -- the Website screen's delay, list delay and pictures,
+ * as they are when each one's turn comes. Each goes into Build when its turn
+ * comes and is built there as any website is: what does not come is kept as
+ * a leftover, as ever, and Overnight carries it on before the queue goes on.
+ *
+ * It stops, keeping the rest, when Pause & keep is pressed, or when a site
+ * itself says stop -- blocked, a check to pass, "too many requests" -- since
+ * going on would only ask again. Kept across the app being closed; it starts
+ * again only when asked.
+ */
+let webQueue = [];   // [{ id, name, author, sources, cover, links: [{ url, text }] }]
+const queueState = { running: false, built: 0, last: null, stopAfter: false };
+let runBuild = async () => {};
+
+function saveQueue() {
+  store.saveSettings({ webQueue }).catch(() => {});
+  paintQueue();
+}
+
+/** A failure that means a site wants no more asking for now. */
+const queueHalts = (reason) => web.blocked(reason) || web.wantsCheck(reason) || web.tooMany(reason);
+
+/** The ticked chapters on the Website screen, into the queue as a book of their own. */
+function queueWeb() {
+  let chosen = webState.links.filter((link) => link.picked);
+  if (!chosen.length) return;
+  if (!webState.manualOrder) chosen = web.inReadingOrder(chosen, () => true).links;
+  const name = (el('web-title').value || '').trim() || webState.title || 'From the web';
+  webQueue.push({
+    id: `q-${Date.now()}`, name, author: webState.author || '', sources: webState.sources || [],
+    cover: webState.cover || '', links: chosen.map(({ url, text }) => ({ url, text })),
+  });
+  saveQueue();
+  clearWeb();
+  toast(`“${name}” queued — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}. ${webQueue.length} website${webQueue.length === 1 ? '' : 's'} in the queue, on Build.`, 5000);
+  back();
+}
+
+async function startQueue() {
+  if (!webQueue.length || queueState.running) return;
+  if (buildRun) { toast('Build is busy — the queue can start once it is done.'); return; }
+  if (!build.isEmpty()) {
+    toast('Build has parts in it — build or clear them first; the queue builds each website on its own.', 6000);
+    return;
+  }
+  Object.assign(queueState, { running: true, built: 0, stopAfter: false });
+  try { window.GrimoireNative?.keepScreenOn?.(true); } catch { /* not in a browser */ }
+  paintQueue();
+  await nextInQueue();
+}
+
+/** Stopped once the website under way is done (or paused), the rest kept. */
+function stopQueueAfterThis() {
+  queueState.stopAfter = true;
+  paintQueue();
+  toast('The queue stops after this book — the rest stay queued.');
+}
+
+function endQueue(message, title) {
+  queueState.running = false;
+  queueState.stopAfter = false;
+  paintQueue();
+  renderWorkshop();
+  if (current !== 'reader' && !night.timer) {
+    try { window.GrimoireNative?.keepScreenOn?.(false); } catch { /* not in a browser */ }
+  }
+  if (message) {
+    whenNotReading(() => toast(message, 8000, { kind: 'done' }));
+    notifyBuild({ title, text: message });
+  }
+}
+
+/** After every build: on to the queue's next website, if it is running and may. */
+function queueAfter(last) {
+  if (!queueState.running) return;
+  const built = `${queueState.built} book${queueState.built === 1 ? '' : 's'} built`;
+  if (last?.paused) { endQueue(`Queue paused — ${built}; ${webQueue.length} still queued. Start queue goes on.`, 'Queue paused'); return; }
+  if (last?.halt) { endQueue(`Queue stopped: the site said to stop — ${built}; ${webQueue.length} still queued.`, 'Queue stopped'); return; }
+  setTimeout(() => { nextInQueue(); }, 1500);
+}
+
+async function nextInQueue() {
+  if (!queueState.running || buildRun) return;
+  const built = `${queueState.built} book${queueState.built === 1 ? '' : 's'} built`;
+  // Overnight is carrying the last one on: the queue goes on once that is done.
+  if (night.timer) { paintQueue(); return; }
+  if (queueState.stopAfter) { endQueue(`Queue stopped as asked — ${built}; ${webQueue.length} still queued.`, 'Queue stopped'); return; }
+  if (!build.isEmpty()) {
+    endQueue(`Queue stopped — Build has parts in it; ${webQueue.length} still queued.`, 'Queue stopped');
+    return;
+  }
+  if (!webQueue.length) { endQueue(`Queue done — ${built}.`, 'Queue done'); return; }
+  const item = webQueue.shift();
+  saveQueue();
+  const cover = item.cover ? await web.fetchCover(item.cover).catch(() => null) : null;
+  build.addWeb({
+    name: item.name, links: item.links, pictures: webState.pictures, cover,
+    author: item.author, sources: item.sources, gap: webDelay(), jitter: webJitter(),
+  });
+  el('build-title').value = item.name;
+  buildTitleTouched = true;
+  el('build-author').value = item.author || '';
+  renderWorkshop();
+  await runBuild();
+}
+
+/** The queue on Build: what is waiting, the settings all share, start or stop. */
+function paintQueue() {
+  const box = el('build-queue');
+  if (!box) return;
+  box.hidden = !webQueue.length && !queueState.running;
+  const n = webQueue.length;
+  el('build-queue-title').textContent = queueState.running
+    ? `Queue · building, ${n} more waiting`
+    : `Queue · ${n} website${n === 1 ? '' : 's'}`;
+  const jitter = webJitter();
+  el('build-queue-note').textContent = 'Each a book of its own, one after another, all at the Website screen\'s settings: '
+    + `${webDelay()}${jitter ? ` ± ${jitter}` : ''} ms between chapters, list pages ${webListDelay()} ± ${webListJitter()} ms, `
+    + `pictures ${webState.pictures ? 'on' : 'off'}.`;
+  const go = el('build-queue-go');
+  go.textContent = queueState.running ? (queueState.stopAfter ? 'Stopping after this…' : 'Stop after this book') : 'Start queue';
+  go.disabled = queueState.running ? queueState.stopAfter : (!n || !!buildRun);
+  const list = el('build-queue-list');
+  list.replaceChildren();
+  webQueue.forEach((item, at) => {
+    const row = document.createElement('li');
+    let host = '';
+    try { host = new URL(item.sources?.[0] || item.links[0]?.url).host; } catch { /* no address */ }
+    row.innerHTML = `<span class="col"><b>${escapeText(shortenMiddle(item.name))}</b>`
+      + `<small class="muted">${item.links.length} chapter${item.links.length === 1 ? '' : 's'}${host ? ` · ${escapeText(host)}` : ''}</small></span>`;
+    for (const [by, label, path] of [
+      [-1, 'Move up', 'M12 19V5M5 12l7-7 7 7'],
+      [1, 'Move down', 'M12 5v14M5 12l7 7 7-7'],
+      [0, 'Remove from the queue', 'M6 6l12 12M18 6L6 18'],
+    ]) {
+      const button = document.createElement('button');
+      button.className = 'icon-btn';
+      button.title = label;
+      button.innerHTML = `<svg viewBox="0 0 24 24"><path d="${path}"/></svg>`;
+      button.disabled = by < 0 ? at === 0 : by > 0 ? at === n - 1 : false;
+      button.onclick = () => {
+        if (by === 0) webQueue.splice(at, 1);
+        else webQueue.splice(at + by, 0, ...webQueue.splice(at, 1));
+        saveQueue();
+        renderWorkshop();
+      };
+      row.appendChild(button);
+    }
+    list.appendChild(row);
+  });
+}
+
 /* ── overnight ─────────────────────────────────────────────────────────
  *
  * A website of six hundred chapters, left to build overnight with the phone
@@ -6501,7 +6657,8 @@ function renderWorkshop() {
   const notifyRow = el('build-notify-row');
   if (notifyRow) notifyRow.hidden = parts.length === 0 || typeof window.GrimoireNative?.notify !== 'function';
   const overnightRow = el('build-overnight-row');
-  if (overnightRow) overnightRow.hidden = !parts.some((part) => part.web) && !night.timer;
+  if (overnightRow) overnightRow.hidden = !parts.some((part) => part.web) && !night.timer && !webQueue.length;
+  paintQueue();
   // Where it will be filed, said before it is built: the folder the shelf is
   // open at is two tabs away from here.
   el('build-count').textContent = parts.length
@@ -6872,9 +7029,13 @@ function wireWorkshop() {
   wireBuildNotify();
   wireBuildOvernight();
 
-  el('build-go').onclick = async () => {
-    // Pressed again while it runs: that is Pause & keep.
-    if (buildRun) { pauseBuild(); return; }
+  // Pressed again while it runs: that is Pause & keep.
+  el('build-go').onclick = () => (buildRun ? pauseBuild() : runBuild());
+  el('build-queue-go').onclick = () => (queueState.running ? stopQueueAfterThis() : startQueue());
+  /* The build itself: from the Build button, Overnight's next try, or the
+   * queue (see nextInQueue). */
+  runBuild = async () => {
+    queueState.last = { paused: false, halt: false };
     // A try of its own: whatever overnight was waiting to do is this.
     clearTimeout(night.timer);
     night.timer = null;
@@ -6988,6 +7149,9 @@ function wireWorkshop() {
       const later = kept ? ' — the rest is kept in Build to download as another book' : '';
       const paused = failed.length > 0 && failed.every((each) => each.paused);
       const left = failed.reduce((sum, each) => sum + (each.web?.links?.length || 0), 0);
+      // For the queue: paused by hand, or stopped by the site itself -- blocked,
+      // a check to pass, "too many requests" -- is no time to go on to the next.
+      queueState.last = { paused, halt: failed.some((each) => queueHalts(each.reason)) };
       whenNotReading(() => toast(paused
         ? `Paused — built “${book.title}” with ${book.chapters} chapters${filed}. The other ${left} are kept in Build: “Carry on” adds them to the end.`
         : failed.length
@@ -7010,10 +7174,13 @@ function wireWorkshop() {
         ? { title: 'Build stopped short', text: `“${book.title}”: ${book.chapters} chapters. Stopped: ${failed[0].reason}` }
         : { title: 'Build done', text: `“${book.title}”: ${book.chapters} chapters${filed}, on the shelf.` });
       const made = await store.get('books', book.id);
-      // Overnight, Build stays up between tries, saying when the next is.
-      if (made && current === 'workshop' && !again) await openBook(made);
+      if (queueState.running && !again) queueState.built += 1;
+      // Overnight, Build stays up between tries, saying when the next is; and
+      // the queue goes on to its next website rather than into this book.
+      if (made && current === 'workshop' && !again && !queueState.running) await openBook(made);
     } catch (error) {
       finish.fail();
+      queueState.last = { paused: !!error.paused, halt: queueHalts(error) };
       whenNotReading(() => toast(error.message || 'That could not be built', 6000, { kind: error.paused ? 'done' : 'failed' }));
       // Overnight, nothing built is tried again as it stands, from Build's list.
       const again = overnight && online && !error.paused && !web.blocked(error) && build.contents().length > 0
@@ -7026,9 +7193,10 @@ function wireWorkshop() {
       try { window.GrimoireNative?.buildRunning?.(false); } catch { /* not in the app */ }
       renderWorkshop();
       // Let go again, unless a book is open to read or overnight is waiting.
-      if (online && current !== 'reader' && !night.timer) {
+      if (online && current !== 'reader' && !night.timer && !queueState.running) {
         try { window.GrimoireNative?.keepScreenOn?.(false); } catch { /* not in a browser */ }
       }
+      queueAfter(queueState.last);
     }
   };
 }
@@ -8555,6 +8723,13 @@ function paintWebCount() {
   const go = el('web-go');
   go.textContent = `Add${picked ? ` ${picked}` : ''} to Build`;
   go.disabled = picked === 0;
+  /* Queued as a book of its own -- not for pages carrying on a book, or left
+   * over from one, or new chapters for one: those belong with that book. */
+  const queue = el('web-queue');
+  if (queue) {
+    queue.hidden = !!(webState.leftover || webState.carryOn != null || webState.updating != null);
+    queue.disabled = picked === 0;
+  }
 }
 
 /** Where a link goes, said briefly: the path, not the whole address. */
@@ -9112,11 +9287,13 @@ function wireWeb() {
   };
   el('web-address').addEventListener('input', paintMore);
   el('web-go').onclick = addWebToBuild;
+  el('web-queue').onclick = queueWeb;
   // Remembered: a site that wants a slower pace wants it every time.
   store.settings().then((settings) => {
     if (Number.isFinite(settings.webDelay)) el('web-delay').value = String(settings.webDelay);
     if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
     if (typeof settings.webPictures === 'boolean') webState.pictures = settings.webPictures;
+    if (Array.isArray(settings.webQueue)) { webQueue = settings.webQueue; paintQueue(); }
     if (Number.isFinite(settings.webListDelay)) el('web-list-delay').value = String(settings.webListDelay);
     if (Number.isFinite(settings.webListJitter)) el('web-list-jitter').value = String(settings.webListJitter);
     paintWebRange();

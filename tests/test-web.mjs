@@ -1447,7 +1447,7 @@ await t('Pause & keep is on Build\'s footer; the progress panel takes no taps', 
   assert.ok(!/job-action/.test(app) && !/job-action/.test(css), 'a button is put on the progress panel again');
   assert.match(css, /\.import-progress \{[\s\S]*?pointer-events: none;/);
   // Build's own button is Pause & keep while a website downloads.
-  assert.match(app, /if \(buildRun\) \{ pauseBuild\(\); return; \}/);
+  assert.match(app, /el\('build-go'\)\.onclick = \(\) => \(buildRun \? pauseBuild\(\) : runBuild\(\)\);/);
   assert.match(app, /go\.textContent = run\.pausing \? 'Pausing…' : run\.online \? 'Pause & keep' : 'Building…';/);
   assert.match(app, /shouldPause: \(\) => !!buildRun\?\.pausing/);
 });
@@ -2215,6 +2215,27 @@ await t('a download records what the time-left estimate goes by', async () => {
   assert.deepEqual(stats.dwells.filter((ms) => ms === 20).length, 3);
   assert.equal(stats.napMs, 40);
   assert.equal(stats.slower, 1);
+});
+
+await t('a queue of websites: a book each, in turn, all at the same settings, each with its own chapters', () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const html = read('app/src/main/assets/www/index.html');
+  // Queued from the Website screen with its own ticks and title; not for pages carrying a book on.
+  assert.match(html, /id="web-queue"/);
+  assert.match(app, /el\('web-queue'\)\.onclick = queueWeb;/);
+  assert.match(app, /links: chosen\.map\(\(\{ url, text \}\) => \(\{ url, text \}\)\),/);
+  assert.match(app, /queue\.hidden = !!\(webState\.leftover \|\| webState\.carryOn != null \|\| webState\.updating != null\);/);
+  // Kept across the app being closed.
+  assert.match(app, /store\.saveSettings\(\{ webQueue \}\)/);
+  assert.match(app, /if \(Array\.isArray\(settings\.webQueue\)\) \{ webQueue = settings\.webQueue; paintQueue\(\); \}/);
+  // Each at the settings as they are when its turn comes -- the same for all.
+  assert.match(app, /name: item\.name, links: item\.links, pictures: webState\.pictures, cover,\s+author: item\.author, sources: item\.sources, gap: webDelay\(\), jitter: webJitter\(\),/);
+  // On after every build; stopped by Pause & keep, or by a site saying stop; waits for Overnight.
+  assert.match(app, /queueAfter\(queueState\.last\);/);
+  assert.match(app, /const queueHalts = \(reason\) => web\.blocked\(reason\) \|\| web\.wantsCheck\(reason\) \|\| web\.tooMany\(reason\);/);
+  assert.match(app, /if \(night\.timer\) \{ paintQueue\(\); return; \}/);
+  // Starts only with Build empty: each website is its own book.
+  assert.match(app, /if \(!build\.isEmpty\(\)\) \{\s+toast\('Build has parts in it/);
 });
 
 await t('a build says how long it has been and how long it should be yet', async () => {

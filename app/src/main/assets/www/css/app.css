@@ -2656,4 +2656,12 @@ body.in-book .import-progress .jobs-summary { display: block; }
 
 /* Below the parts: books from the shelf, picked there. */
 .build-from-shelf { display: block; margin: 12px 0 4px; }
+/* The queue: websites waiting their turn on Build, one book each. */
+.build-queue-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.build-queue-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.build-queue-list li { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-top: 1px solid var(--divider); }
+.build-queue-list li .col { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.build-queue-list li small { display: block; }
+.build-queue-list .icon-btn { flex: none; }
+#web-queue[hidden] { display: none; }
 .build-from-shelf[hidden] { display: none; }
