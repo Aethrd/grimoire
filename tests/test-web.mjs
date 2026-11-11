@@ -1926,15 +1926,15 @@ await t('a chapter is taken as soon as its story is there and still, not when th
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   // Looked at from the page's start and its first paint, not only once "finished".
   assert.match(java, /if \(!browserTracked\) v\.evaluateJavascript\(TRACKER, null\);\s+job\.begin\(\);/);
-  assert.match(java, /public void onPageCommitVisible\(WebView v, String url\) \{[\s\S]{0,160}job\.shown = true;\s+job\.begin\(\);/);
+  assert.match(java, /public void onPageCommitVisible\(WebView v, String url\) \{[\s\S]{0,160}job\.visible = true;\s+job\.begin\(\);/);
   // The story stopped growing, nothing of the site's own on its way: taken, adverts or no.
   assert.match(java, /boolean storyDone = !scroll && !waiting && storyLength >= READY_STORY\s+&& storyStill >= \(patient \? STORY_STILL_PATIENT_MS : STORY_STILL_MS\)\s+&& \(pending == 0 \|\| storyStill >= quietMs\);/);
-  assert.match(java, /boolean settled = storyDone \|\| \(\(finished \|\| shown\) && !blank && !holding/);
+  assert.match(java, /boolean settled = storyDone \|\| \(\(finished \|\| visible\) && !blank && !holding/);
   assert.match(java, /long settle = finished \? need : need \+ quietMs;/);
   assert.match(java, /private static final long RENDER_POLL_MS = 250;/);
   // Pictures, fonts and video are not loaded by the unseen browser, but at the most patient try.
-  assert.match(java, /final boolean lean = level < 3;/);
-  assert.match(java, /new Rendering\(address, quietMs, maxMs, scroll, ownSiteOnly, lean\)/);
+  assert.match(java, /final boolean skipHeavy = level < 3;/);
+  assert.match(java, /new Rendering\(address, quietMs, maxMs, scroll, ownSiteOnly, skipHeavy\)/);
   assert.match(java, /if \(job\.lean && isHeavy\(request\)\) \{/);
   // What a site needs is remembered past the app being closed, for a fortnight.
   const web = read('app/src/main/assets/www/js/web.js');

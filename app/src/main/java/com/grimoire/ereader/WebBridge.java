@@ -221,7 +221,7 @@ public class WebBridge {
         final boolean ownSiteOnly = level < 2 && !open;
         final long maxMs = RENDER_MAX_MS + level * RENDER_MAX_STEP_MS;
         // Pictures, fonts and video left out but at the most patient try (see Rendering.lean).
-        final boolean lean = level < 3;
+        final boolean skipHeavy = level < 3;
         renderer.execute(() -> {
             String safeId = id == null ? "x" : id.replaceAll("[^A-Za-z0-9_-]", "_");
             File target = new File(dir(), safeId);
@@ -234,7 +234,7 @@ public class WebBridge {
                 // Pictures, fonts and video are never what the reader takes from a page --
                 // the pictures it keeps are fetched on their own, from their addresses --
                 // so they are not loaded. At the most patient try, everything is.
-                Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly, lean);
+                Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly, skipHeavy);
                 main.post(job::start);
                 if (!job.done.await(RENDER_WAIT_MS + 20000, TimeUnit.MILLISECONDS)) {
                     main.post(job::finish);
@@ -621,7 +621,7 @@ public class WebBridge {
         public void onPageCommitVisible(WebView v, String url) {
             Rendering job = reading(url);
             if (job == null) return;
-            job.shown = true;
+            job.visible = true;
             job.begin();
         }
 
@@ -660,7 +660,7 @@ public class WebBridge {
         /** The page has finished loading (or been given long enough to). */
         private boolean finished;
         /** The page is on show (see onPageCommitVisible). */
-        boolean shown;
+        boolean visible;
         private int lastStory = -1;
         private long storySince;
         /** The site the page is on, for telling its own requests from others'. */
@@ -818,7 +818,7 @@ public class WebBridge {
                  * never stop, that came only at the twenty-second fallback, and the
                  * chapter was taken then, mid-change, short. */
                 long settle = finished ? need : need + quietMs;
-                boolean settled = storyDone || ((finished || shown) && !blank && !holding
+                boolean settled = storyDone || ((finished || visible) && !blank && !holding
                         && ((!busy && still >= settle) || still >= quietMs * RENDER_STUCK_SPELLS));
                 long limit = holding ? RENDER_WAIT_MS : maxMs;
                 if (settled || now - startedAt >= limit) {
