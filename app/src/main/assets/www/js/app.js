@@ -131,6 +131,8 @@ async function show(name, { replace = false } = {}) {
    * with a build in it -- mid-download, say, to read -- is going to the shelf.
    * Anywhere else, picking is over. */
   if (name === 'library' && pickNext) { pickNext = false; startPicking(); }
+  // Build with nothing in it and novels queued: their index, first.
+  if (name === 'workshop' && build.isEmpty() && !buildRun && (webQueue.length || queueState.running)) buildIndex = true;
   else if (name !== 'library') endPicking();
   // The tab bar is app furniture; it has no business over a page of prose.
   document.body.dataset.view = name;
@@ -6085,6 +6087,7 @@ function liftProgress() {
 
 function paintBuildFoot() {
   liftProgress();
+  paintIndexCard();
   // Not while it builds: what it is building is settled.
   const fromShelf = el('build-from-shelf');
   if (fromShelf) fromShelf.hidden = !!buildRun;
@@ -6294,6 +6297,33 @@ function pauseBuild() {
  * again only when asked.
  */
 let webQueue = [];   // [{ id, name, author, sources, cover, links: [{ url, text }] }]
+/* Build seen as the book in it, or as the index of every novel -- that one
+ * as a card, the queue's, and another to add (see index.html). */
+let buildIndex = false;
+let shownParts = 0;
+
+function paintBuildIndex() {
+  const index = el('build-index');
+  if (!index) return;
+  index.hidden = !buildIndex;
+  el('build-detail').hidden = buildIndex;
+  el('build-minimise').hidden = buildIndex;
+  if (buildIndex) el('build-eyebrow').textContent = 'Every novel: building and queued';
+  paintIndexCard();
+}
+
+/** The novel in Build, on the index: its name and how far it has got. */
+function paintIndexCard() {
+  const card = el('build-index-current');
+  if (!card) return;
+  const parts = build.contents();
+  card.hidden = !parts.length && !buildRun;
+  if (card.hidden) return;
+  el('build-index-name').textContent = el('build-title').value || build.suggestedName(parts) || 'This book';
+  el('build-index-state').textContent = buildRun
+    ? `Building · ${buildRun.status || 'starting…'}`
+    : `${parts.length} part${parts.length === 1 ? '' : 's'} in Build, not built yet · tap to open`;
+}
 const queueState = { running: false, built: 0, last: null, stopAfter: false };
 let runBuild = async () => {};
 
@@ -6321,16 +6351,15 @@ function queueWeb() {
   back();
 }
 
+/* Started with a book already in Build: that book first -- building, it is
+ * finished; not yet built, it is built -- and the queue after it. */
 async function startQueue() {
   if (!webQueue.length || queueState.running) return;
-  if (buildRun) { toast('Build is busy — the queue can start once it is done.'); return; }
-  if (!build.isEmpty()) {
-    toast('Build has parts in it — build or clear them first; the queue builds each website on its own.', 6000);
-    return;
-  }
   Object.assign(queueState, { running: true, built: 0, stopAfter: false });
   try { window.GrimoireNative?.keepScreenOn?.(true); } catch { /* not in a browser */ }
   paintQueue();
+  if (buildRun) { toast('The queue goes on once this book is built.'); return; }
+  if (!build.isEmpty()) { await runBuild(); return; }
   await nextInQueue();
 }
 
@@ -6404,7 +6433,7 @@ function paintQueue() {
     + `pictures ${webState.pictures ? 'on' : 'off'}.`;
   const go = el('build-queue-go');
   go.textContent = queueState.running ? (queueState.stopAfter ? 'Stopping after this…' : 'Stop after this book') : 'Start queue';
-  go.disabled = queueState.running ? queueState.stopAfter : (!n || !!buildRun);
+  go.disabled = queueState.running ? queueState.stopAfter : !n;
   const list = el('build-queue-list');
   list.replaceChildren();
   webQueue.forEach((item, at) => {
@@ -6648,6 +6677,10 @@ function wireBuildCover() {
 function renderWorkshop() {
   const list = el('build-list');
   const parts = build.contents();
+  // Something just added (from the Website screen, the shelf, files): shown, not the index.
+  if (parts.length > shownParts && !buildRun) buildIndex = false;
+  shownParts = parts.length;
+  paintBuildIndex();
   paintLeftovers(parts);
 
   el('build-empty').hidden = parts.length > 0;
@@ -6673,6 +6706,7 @@ function renderWorkshop() {
   if (!buildTitleTouched) el('build-title').value = suggested;
   el('build-eyebrow').textContent = parts.length
     ? (el('build-title').value || suggested) : 'Join files into one';
+  if (buildIndex) el('build-eyebrow').textContent = 'Every novel: building and queued';
   // Follows the first part as parts are added and moved.
   paintBuildCover();
 
@@ -8723,12 +8757,18 @@ function paintWebCount() {
   const go = el('web-go');
   go.textContent = `Add${picked ? ` ${picked}` : ''} to Build`;
   go.disabled = picked === 0;
+  // Come from Build's index to add a novel: queued is what is meant, and the main button.
+  const queueing = webState.intent === 'queue';
+  go.hidden = queueing;
   /* Queued as a book of its own -- not for pages carrying on a book, or left
    * over from one, or new chapters for one: those belong with that book. */
   const queue = el('web-queue');
   if (queue) {
-    queue.hidden = !!(webState.leftover || webState.carryOn != null || webState.updating != null);
+    queue.hidden = !queueing && !!(webState.leftover || webState.carryOn != null || webState.updating != null);
     queue.disabled = picked === 0;
+    queue.textContent = queueing ? `Queue${picked ? ` ${picked}` : ''}` : 'Queue';
+    queue.classList.toggle('primary', queueing);
+    queue.classList.toggle('ghost', !queueing);
   }
 }
 
@@ -9522,7 +9562,12 @@ function wireWeb() {
   });
 
   // Reached from Build, and only from there: what is chosen becomes a part.
-  el('build-web').onclick = () => show('web');
+  el('build-web').onclick = () => { webState.intent = null; show('web'); paintWebCount(); };
+  // The book minimised, to the index of every novel; and back into it from its card.
+  el('build-minimise').onclick = () => { buildIndex = true; renderWorkshop(); };
+  el('build-index-current').onclick = () => { buildIndex = false; renderWorkshop(); };
+  // Another novel, to queue: the Website screen with Queue as its main button.
+  el('build-index-add').onclick = () => { webState.intent = 'queue'; show('web'); paintWebCount(); };
   el('build-from-shelf').onclick = () => { pickNext = true; show('library'); };
 }
 

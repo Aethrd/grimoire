@@ -354,12 +354,38 @@
   <!-- The workshop: several files in, one book out. -->
   <section class="screen" data-screen="workshop">
     <header class="app-head">
+      <!-- The book being built, minimised: to the index of every novel, this one and the queue's. -->
+      <button class="icon-btn" id="build-minimise" hidden title="All the novels: this one and the queue">
+        <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
       <div class="app-head-title"><h1>Build a book</h1><p class="eyebrow" id="build-eyebrow">Join files into one</p></div>
       <button class="btn ghost" id="build-web" title="Chapters from a website">Website</button>
       <button class="btn primary" id="build-add">Add files</button>
     </header>
 
     <div class="scroll pad" id="build-body">
+      <!-- Every novel at once: the one in Build (tap it to open it), the queue's,
+           and another to add -- queued, a book of its own. -->
+      <div id="build-index" hidden>
+        <button class="build-index-card" id="build-index-current" hidden>
+          <b id="build-index-name"></b><small class="muted" id="build-index-state"></small></button>
+      <!-- Websites waiting their turn, each with its own chapters ticked: built
+           into a book each, one after another, at the Website screen's settings. -->
+      <div class="build-leftover build-queue" id="build-queue" hidden>
+        <div class="build-queue-head">
+          <strong id="build-queue-title">Queue</strong>
+          <button class="btn ghost" id="build-queue-go">Start queue</button>
+        </div>
+        <small class="muted" id="build-queue-note"></small>
+        <ol class="build-queue-list" id="build-queue-list"></ol>
+      </div>
+        <button class="btn primary build-index-add" id="build-index-add">Add a novel…</button>
+        <p class="muted build-index-note">
+          Each novel added here is queued as a book of its own, with its own chapters ticked,
+          and built after the ones before it. Start queue begins; they all use the Website
+          screen's delay and pictures.
+        </p>
+      </div>
+      <div id="build-detail">
       <div id="build-naming" hidden>
         <label class="field"><span>Title</span>
           <input class="query" id="build-title" type="text" autocomplete="off"
@@ -392,16 +418,6 @@
       <div class="build-leftover build-overnight-note" id="build-overnight-note" hidden></div>
       <!-- Chapters a website would not give last time, kept to try again. -->
       <div id="build-leftovers"></div>
-      <!-- Websites waiting their turn, each with its own chapters ticked: built
-           into a book each, one after another, at the Website screen's settings. -->
-      <div class="build-leftover build-queue" id="build-queue" hidden>
-        <div class="build-queue-head">
-          <strong id="build-queue-title">Queue</strong>
-          <button class="btn ghost" id="build-queue-go">Start queue</button>
-        </div>
-        <small class="muted" id="build-queue-note"></small>
-        <ol class="build-queue-list" id="build-queue-list"></ol>
-      </div>
 
       <p class="muted" id="build-empty" style="line-height:1.6">
         Add the parts of a serial — volumes, chapters, image archives, or the
@@ -422,6 +438,7 @@
       <label class="web-check build-notify" id="build-overnight-row" hidden>
         <input type="checkbox" id="build-overnight"> Overnight: if it stops, carry on every 15 minutes until it's done
       </label>
+      </div>
     </div>
 
     <footer class="stepper" id="build-foot" hidden>

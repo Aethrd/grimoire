@@ -282,7 +282,7 @@ await t('the screen is reached from Build, and only from there', () => {
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /case 'web': return renderWeb\(\);/);
   assert.match(app, /settleWeb: web\.settleWeb/);
-  assert.match(app, /el\('build-web'\)\.onclick = \(\) => show\('web'\);/);
+  assert.match(app, /el\('build-web'\)\.onclick = \(\) => \{ webState\.intent = null; show\('web'\); paintWebCount\(\); \};/);
   assert.match(app, /el\('web-go'\)\.onclick = addWebToBuild;/);
   // Emptied for the next one: on adding, on a build, and on Clear in Build.
   const add = app.slice(app.indexOf('async function addWebToBuild('), app.indexOf('function clearWeb('));
@@ -2225,7 +2225,7 @@ await t('a queue of websites: a book each, in turn, all at the same settings, ea
   assert.match(html, /id="web-queue"/);
   assert.match(app, /el\('web-queue'\)\.onclick = queueWeb;/);
   assert.match(app, /links: chosen\.map\(\(\{ url, text \}\) => \(\{ url, text \}\)\),/);
-  assert.match(app, /queue\.hidden = !!\(webState\.leftover \|\| webState\.carryOn != null \|\| webState\.updating != null\);/);
+  assert.match(app, /queue\.hidden = !queueing && !!\(webState\.leftover \|\| webState\.carryOn != null \|\| webState\.updating != null\);/);
   // Kept across the app being closed.
   assert.match(app, /store\.saveSettings\(\{ webQueue \}\)/);
   assert.match(app, /if \(Array\.isArray\(settings\.webQueue\)\) \{ webQueue = settings\.webQueue; paintQueue\(\); \}/);
@@ -2235,8 +2235,18 @@ await t('a queue of websites: a book each, in turn, all at the same settings, ea
   assert.match(app, /queueAfter\(queueState\.last\);/);
   assert.match(app, /const queueHalts = \(reason\) => web\.blocked\(reason\) \|\| web\.wantsCheck\(reason\) \|\| web\.tooMany\(reason\);/);
   assert.match(app, /if \(night\.timer\) \{ paintQueue\(\); return; \}/);
-  // Starts only with Build empty: each website is its own book.
-  assert.match(app, /if \(!build\.isEmpty\(\)\) \{\s+toast\('Build has parts in it/);
+  // Started with a book in Build: that one first (finished, or built), then the queue.
+  assert.match(app, /if \(buildRun\) \{ toast\('The queue goes on once this book is built\.'\); return; \}\s+if \(!build\.isEmpty\(\)\) \{ await runBuild\(\); return; \}/);
+  // Build as the book in it, or the index of every novel: minimised to it, back from its card.
+  assert.match(app, /el\('build-minimise'\)\.onclick = \(\) => \{ buildIndex = true; renderWorkshop\(\); \};/);
+  assert.match(app, /el\('build-index-current'\)\.onclick = \(\) => \{ buildIndex = false; renderWorkshop\(\); \};/);
+  // Adding a novel from the index: the Website screen with Queue as its main button.
+  assert.match(app, /el\('build-index-add'\)\.onclick = \(\) => \{ webState\.intent = 'queue'; show\('web'\); paintWebCount\(\); \};/);
+  assert.match(app, /go\.hidden = queueing;/);
+  // Something just added is shown, not the index; Build empty with novels queued opens on the index.
+  assert.match(app, /if \(parts\.length > shownParts && !buildRun\) buildIndex = false;/);
+  assert.match(app, /if \(name === 'workshop' && build\.isEmpty\(\) && !buildRun && \(webQueue\.length \|\| queueState\.running\)\) buildIndex = true;/);
+  assert.ok(html.indexOf('id="build-queue"') > html.indexOf('id="build-index"') && html.indexOf('id="build-queue"') < html.indexOf('id="build-detail"'));
 });
 
 await t('a contents page sent without its list (its script fetches it) is read in the browser', async () => {

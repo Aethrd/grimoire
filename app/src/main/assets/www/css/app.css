@@ -2656,6 +2656,14 @@ body.in-book .import-progress .jobs-summary { display: block; }
 
 /* Below the parts: books from the shelf, picked there. */
 .build-from-shelf { display: block; margin: 12px 0 4px; }
+/* Build's index: the novel in Build as a card, the queue, another to add. */
+.build-index-card { display: block; width: 100%; text-align: left; padding: 14px 16px; margin: 4px 0 12px;
+  border: 1px solid var(--hairline); border-radius: 14px; background: transparent; color: inherit; font: inherit; }
+.build-index-card[hidden] { display: none; }
+.build-index-card b { display: block; overflow-wrap: anywhere; }
+.build-index-card small { display: block; margin-top: 4px; }
+.build-index-add { display: block; width: 100%; margin: 14px 0 8px; }
+.build-index-note { font-size: 12px; line-height: 1.5; }
 /* The queue: websites waiting their turn on Build, one book each. */
 .build-queue-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .build-queue-list { list-style: none; margin: 8px 0 0; padding: 0; }
@@ -2663,5 +2671,5 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .build-queue-list li .col { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .build-queue-list li small { display: block; }
 .build-queue-list .icon-btn { flex: none; }
-#web-queue[hidden] { display: none; }
+#web-queue[hidden], #web-go[hidden], #build-minimise[hidden] { display: none; }
 .build-from-shelf[hidden] { display: none; }
