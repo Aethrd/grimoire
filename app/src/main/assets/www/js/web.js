@@ -342,7 +342,7 @@ function fetchNative(method, url, { timeout = 90000, list = false, textOnly = fa
           const bytes = await response.arrayBuffer();
           const type = String(info.type || '').split(';')[0].trim().toLowerCase();
           resolve({ url: info.url || url, status: info.status, type: info.type || '', blob: new Blob([bytes], { type }),
-            rendered: !!info.rendered });
+            rendered: !!info.rendered, dwell: Math.max(0, Number(info.dwell) || 0) });
         } catch (error) {
           reject(error);
         } finally {
@@ -1757,7 +1757,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * picture is not a page and is not held back. With no pace set, nothing
  * waits and nothing queues.
  */
-function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = null, onStart = null, scale = () => 1 } = {}) {
+export function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = null, onStart = null, scale = () => 1 } = {}) {
   if (!(gap > 0) && !(jitter > 0)) return fetchPage;
   let line = Promise.resolve();
   let lastEnd = 0;
@@ -1767,6 +1767,10 @@ function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = nu
     let release;
     line = new Promise((resolve) => { release = resolve; });
     await before;
+    // The time a page was stayed on to confirm its story (WebBridge, CONFIRM_MS)
+    // is taken off the delay after it: a reader's few seconds on the page are
+    // part of the wait, not added to it. Never more than the whole delay.
+    let dwell = 0;
     try {
       if (lastEnd) {
         const times = Math.max(1, Number(scale()) || 1);
@@ -1778,9 +1782,11 @@ function pacer(fetchPage, { gap = 0, jitter = 0, stop = () => false, onWait = nu
       if (stop()) throw Object.assign(new Error(PAUSED_REASON), { paused: true, tries: 1 });
       // Only now is it being read: not while it waited its turn.
       onStart?.(url);
-      return await fetchPage(url, options);
+      const page = await fetchPage(url, options);
+      dwell = Math.max(0, Number(page?.dwell) || 0);
+      return page;
     } finally {
-      lastEnd = Date.now();
+      lastEnd = Date.now() - dwell;
       release();
     }
   };

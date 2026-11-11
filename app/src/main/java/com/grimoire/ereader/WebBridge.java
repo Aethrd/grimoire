@@ -116,6 +116,12 @@ public class WebBridge {
     private static final long STORY_WAIT_MS = 90000;
     private static final long STORY_GIVE_UP_MS = 20000;
     private static final long STORY_STILL_PATIENT_MS = 2000;
+    /** Once a chapter's story is there and still, the page is stayed on a few seconds more,
+     *  as a reader would -- 3 s, give or take 1 -- and taken only if its story has not
+     *  grown meanwhile. The time is taken off the delay before the next page (web.js,
+     *  pacer), so a chapter takes no longer, and pages are no closer together. */
+    private static final long CONFIRM_MS = 3000;
+    private static final long CONFIRM_JITTER_MS = 1000;
     /** How long a page whose content is plainly there -- a list with its
      *  chapters, a chapter with its story -- must stay still. The full quiet
      *  spell is for a page where that cannot be seen. */
@@ -277,6 +283,7 @@ public class WebBridge {
                 result.put("type", "text/html; charset=utf-8");
                 result.put("bytes", bytes.length);
                 result.put("rendered", true);
+                result.put("dwell", job.dwell);
                 result.put("path", ORIGIN + "/handoff/web/" + Uri.encode(safeId));
                 settle(id, true, result.toString());
             } catch (Exception e) {
@@ -723,6 +730,13 @@ public class WebBridge {
         boolean visible;
         private int lastStory = -1;
         private long storySince;
+        /** Staying on to confirm the story (see CONFIRM_MS): since when, for how long, at what length. */
+        private long confirmBegan;
+        private long confirmAt;
+        private long confirmFor;
+        private int confirmStory = -1;
+        /** How long the page was stayed on to confirm it: credited against the next delay. */
+        volatile long dwell;
         /** The site the page is on, for telling its own requests from others'. */
         volatile String site;
         final CountDownLatch done = new CountDownLatch(1);
@@ -902,8 +916,26 @@ public class WebBridge {
                  * never stop, that came only at the twenty-second fallback, and the
                  * chapter was taken then, mid-change, short. */
                 long settle = finished ? need : need + quietMs;
-                boolean settled = storyDone || ((finished || visible) && !blank && !holding
-                        && ((!busy && still >= settle) || still >= quietMs * RENDER_STUCK_SPELLS));
+                if (storyDone && confirmBegan == 0) {
+                    confirmBegan = now;
+                    confirmAt = now;
+                    confirmFor = CONFIRM_MS + Math.round((Math.random() * 2 - 1) * CONFIRM_JITTER_MS);
+                    confirmStory = storyLength;
+                }
+                boolean settled;
+                if (confirmBegan > 0) {
+                    // Confirming: taken once it has stayed as it was the whole time; if
+                    // it grew, it was not done -- watched again, as long, from now.
+                    if (storyLength != confirmStory) {
+                        confirmStory = storyLength;
+                        confirmAt = now;
+                    }
+                    settled = now - confirmAt >= confirmFor;
+                    if (settled) dwell = now - confirmBegan;
+                } else {
+                    settled = (finished || visible) && !blank && !holding
+                            && ((!busy && still >= settle) || still >= quietMs * RENDER_STUCK_SPELLS);
+                }
                 long limit = holding ? RENDER_WAIT_MS : maxMs;
                 if (settled || now - startedAt >= limit) {
                     take();

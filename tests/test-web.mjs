@@ -1943,7 +1943,7 @@ await t('a chapter is taken as soon as its story is there and still, not when th
   assert.match(java, /public void onPageCommitVisible\(WebView v, String url\) \{[\s\S]{0,160}job\.visible = true;\s+job\.begin\(\);/);
   // The story stopped growing, nothing of the site's own on its way: taken, adverts or no.
   assert.match(java, /boolean storyDone = !scroll && !waiting && storyThere\s+&& storyStill >= \(patient \? STORY_STILL_PATIENT_MS : STORY_STILL_MS\)\s+&& \(pending == 0 \|\| storyStill >= quietMs\);/);
-  assert.match(java, /boolean settled = storyDone \|\| \(\(finished \|\| visible\) && !blank && !holding/);
+  assert.match(java, /settled = \(finished \|\| visible\) && !blank && !holding/);
   assert.match(java, /long settle = finished \? need : need \+ quietMs;/);
   // Looked at every tenth of a second -- the page on the phone, nothing asked of the site --
   // and worked out again only when the page has changed (or a second has passed).
@@ -2168,6 +2168,29 @@ await t('trouble with the connection gets one pause and one more try before the 
   assert.equal(web.PATIENCE.cool, 180000);
   // Without the app's bridge, forgetting a site's cookies is said not to have happened.
   assert.equal(web.forgetSite('https://x.example/'), false);
+});
+
+await t('a chapter is stayed on a few seconds to confirm it, and that time comes off the next delay', async () => {
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  assert.match(java, /private static final long CONFIRM_MS = 3000;\s+private static final long CONFIRM_JITTER_MS = 1000;/);
+  // Begun when the story is there and still; taken only once it has not grown the whole time.
+  assert.match(java, /if \(storyDone && confirmBegan == 0\) \{/);
+  assert.match(java, /if \(storyLength != confirmStory\) \{\s+confirmStory = storyLength;\s+confirmAt = now;\s+\}\s+settled = now - confirmAt >= confirmFor;/);
+  assert.match(java, /result\.put\("dwell", job\.dwell\);/);
+  // The pacer takes the stay off the wait after it -- never below nothing.
+  const times = [];
+  const site = async (url) => { times.push({ start: Date.now() }); await new Promise((r) => setTimeout(r, 50)); times.at(-1).end = Date.now(); return { url, dwell: 300 }; };
+  const paced = web.pacer(site, { gap: 600, jitter: 0 });
+  await paced('https://a.example/1');
+  await paced('https://a.example/2');
+  const between = times[1].start - times[0].end;
+  assert.ok(between >= 250 && between < 500, `${between} ms between`);
+  // A stay longer than the delay: the next page simply goes straight after.
+  const long = web.pacer(async (url) => ({ url, dwell: 5000 }), { gap: 300, jitter: 0 });
+  await long('https://a.example/1');
+  const at = Date.now();
+  await long('https://a.example/2');
+  assert.ok(Date.now() - at < 100);
 });
 
 await t('a build says how long it has been and how long it should be yet', async () => {
