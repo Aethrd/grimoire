@@ -1933,12 +1933,14 @@ await t('a chapter is taken as soon as its story is there and still, not when th
   assert.match(java, /long settle = finished \? need : need \+ quietMs;/);
   assert.match(java, /private static final long RENDER_POLL_MS = 250;/);
   // Pictures, fonts and video are not loaded by the unseen browser, but at the most patient try.
-  assert.match(java, /final boolean skipHeavy = level < 3;/);
+  assert.match(java, /final boolean skipHeavy = ownSiteOnly;/);
   assert.match(java, /new Rendering\(address, quietMs, maxMs, scroll, ownSiteOnly, skipHeavy\)/);
   assert.match(java, /if \(job\.lean && isHeavy\(request\)\) \{/);
   // What a site needs is remembered past the app being closed, for a fortnight.
   const web = read('app/src/main/assets/www/js/web.js');
   assert.match(web, /const SITE_NEEDS_DAYS = 14;/);
+  // Only that it needs everything let in: a longer wait, learned wrongly, would slow a fortnight.
+  assert.match(web, /if \(need\.open\) siteNeeds\.set\(host, \{ open: true, level: 0, at: need\.at \}\);/);
   assert.match(web, /known\.at = Date\.now\(\);\s+siteNeeds\.set\(host, known\);\s+keepSiteNeeds\(\);/);
 });
 

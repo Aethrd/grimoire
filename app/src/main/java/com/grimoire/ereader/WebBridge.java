@@ -220,8 +220,11 @@ public class WebBridge {
         // back without its chapter is asked for patiently: then nothing is.
         final boolean ownSiteOnly = level < 2 && !open;
         final long maxMs = RENDER_MAX_MS + level * RENDER_MAX_STEP_MS;
-        // Pictures, fonts and video left out but at the most patient try (see Rendering.lean).
-        final boolean skipHeavy = level < 3;
+        /* Pictures, fonts and video left out only where other sites' adverts are kept
+         * out anyway. A site found to need everything let in may be one that holds its
+         * chapter back until its adverts have shown: leaving out their pictures did that
+         * to every chapter, each then coming only at the third try. */
+        final boolean skipHeavy = ownSiteOnly;
         renderer.execute(() -> {
             String safeId = id == null ? "x" : id.replaceAll("[^A-Za-z0-9_-]", "_");
             File target = new File(dir(), safeId);

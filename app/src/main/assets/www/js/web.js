@@ -131,22 +131,29 @@ const patience = new Map();
  * chapters came only once nothing was kept out (its text from a server of
  * another name) is opened that way from then on; one whose pages came only
  * with a longer wait is given it. Two failed tries, each after the reader's
- * delay, made every chapter of a site three minutes. Remembered for a
- * fortnight, across the app being closed -- the first chapter of every
- * sitting paid for it again -- and then learned afresh, as a site changes. */
-const SITE_NEEDS_KEY = 'grimoire.siteNeeds';
+ * delay, made every chapter of a site three minutes. That a site needs
+ * everything let in is remembered for a fortnight, across the app being
+ * closed -- the first chapter of every sitting paid for it again -- and then
+ * learned afresh, as a site changes. A longer wait is for this sitting only:
+ * learned wrongly once (a chapter held back for another reason), it made
+ * every chapter after it slow, and kept, it would for two weeks. */
+const SITE_NEEDS_KEY = 'grimoire.siteNeeds.v2';
 const SITE_NEEDS_DAYS = 14;
 const siteNeeds = new Map();   // host -> { open, level, at }
 try {
   const kept = JSON.parse(globalThis.localStorage?.getItem(SITE_NEEDS_KEY) || '{}');
   for (const [host, need] of Object.entries(kept || {})) {
     if (need && Date.now() - (need.at || 0) < SITE_NEEDS_DAYS * 86400000) {
-      siteNeeds.set(host, { open: !!need.open, level: Math.max(0, Math.min(3, need.level | 0)), at: need.at });
+      if (need.open) siteNeeds.set(host, { open: true, level: 0, at: need.at });
     }
   }
 } catch { /* nothing kept, or no storage: learned this sitting */ }
 const keepSiteNeeds = () => {
-  try { globalThis.localStorage?.setItem(SITE_NEEDS_KEY, JSON.stringify(Object.fromEntries(siteNeeds))); } catch { /* this sitting only */ }
+  const kept = Object.fromEntries([...siteNeeds].filter(([, need]) => need.open).map(([host, need]) => [host, { open: true, at: need.at }]));
+  try {
+    globalThis.localStorage?.setItem(SITE_NEEDS_KEY, JSON.stringify(kept));
+    globalThis.localStorage?.removeItem('grimoire.siteNeeds');   // the last version's, with its waits
+  } catch { /* this sitting only */ }
 };
 const hostOf = (url) => {
   try { return new URL(url).host; } catch { return ''; }
