@@ -332,10 +332,17 @@ export async function settings() {
   return cache;
 }
 
+/* Each change put onto the settings as they are when it lands, and written in
+ * turn, the newest whole. Two saves at once -- the queue's and the leftovers',
+ * say -- each merged onto the same copy read before either, and whichever
+ * wrote last undid the other. */
+let settingsWrite = Promise.resolve();
 export async function saveSettings(patch) {
-  const current = await settings();
-  cache = Object.assign({}, current, patch);
-  await put('settings', { key: 'app', value: cache });
+  await settings();
+  cache = Object.assign({}, cache, patch);
+  const write = settingsWrite.then(() => put('settings', { key: 'app', value: cache }));
+  settingsWrite = write.catch(() => {});
+  await write;
   return cache;
 }
 

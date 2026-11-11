@@ -6776,7 +6776,7 @@ function jobState(job) {
     case 'done': return `Done · ${job.done || job.total} chapters, on the shelf`;
     default: {
       const held = sitesHeld().has(host) ? ' · waiting: its site needs you' : '';
-      return `${job.bookId != null ? `${job.links.length} of ${job.total} left` : chapters}${held}`;
+      return `${job.bookId != null ? `${job.links.length} chapters to come, carrying its book on${host ? ` · ${host}` : ''}` : chapters}${held}`;
     }
   }
 }
@@ -7316,6 +7316,25 @@ function keepLeftovers(failed, retried = [], book = null) {
   return newest;
 }
 
+/* A book that stopped, into the queue at its head: carried on there as one
+ * book (the queue's own builds carry on from the book so far), or begun as
+ * one if there is none. Settled as a leftover once queued. */
+function leftoverToQueue(left) {
+  const name = String(left.bookTitle || left.name || 'From the web').replace(LEFTOVER_SUFFIX, '').replace(/ — from .*$/, '');
+  webQueue.unshift({
+    id: `q-${Date.now()}`, name, author: left.author || '', sources: left.sources || [], cover: '',
+    links: left.links.map(({ url, text }) => ({ url, text })), total: left.links.length, done: 0,
+    status: 'queued', stops: 0, ...(left.bookId != null ? { bookId: left.bookId } : {}),
+  });
+  webLeftovers = webLeftovers.filter((each) => each.id !== left.id);
+  saveLeftovers();
+  saveQueue();
+  buildIndex = true;
+  renderWorkshop();
+  toast(`“${name}” is first in the queue — ${left.links.length} chapter${left.links.length === 1 ? '' : 's'} to come${left.bookId != null ? ', carrying the book on' : ''}.`, 5000);
+  if (queueState.running) pumpQueue();
+}
+
 function paintLeftovers(parts) {
   const host = el('build-leftovers');
   if (!host) return;
@@ -7346,6 +7365,8 @@ function paintLeftovers(parts) {
       + (left.bookId != null
         ? '<button class="btn ghost" data-retry>As another book</button><button class="btn primary" data-carry>Carry on</button>'
         : '<button class="btn primary" data-retry>Download as another book</button>')
+      // Or carried on by the queue, first in line: Build stays free.
+      + '<button class="btn ghost" data-queue>Add to queue</button>'
       + '</div>';
     box.querySelector('[data-look]').disabled = busy;
     // Stopped at a site's browser check: shown, passed, and carried on.
@@ -7366,6 +7387,7 @@ function paintLeftovers(parts) {
       carry.disabled = busy;
       carry.onclick = () => carryOnLeftover(left);
     }
+    box.querySelector('[data-queue]').onclick = () => leftoverToQueue(left);
     box.querySelector('[data-look]').onclick = () => {
       showLeftoverInWeb(left);
       show('web');

@@ -363,6 +363,12 @@
     </header>
 
     <div class="scroll pad" id="build-body">
+      <!-- Above both views -- the book in Build and every novel -- so a book that
+           stopped (or was cut off by an update) is never out of sight. -->
+      <!-- Overnight: when the next try of a stopped build is, and a way to stop it. -->
+      <div class="build-leftover build-overnight-note" id="build-overnight-note" hidden></div>
+      <!-- Chapters a website would not give last time, kept to try again. -->
+      <div id="build-leftovers"></div>
       <!-- Every novel at once: the one in Build (tap it to open it), the queue's,
            and another to add -- queued, a book of its own. -->
       <!-- A queued novel not yet started, opened from the index: named, given a
@@ -443,10 +449,6 @@
         </p>
       </div>
 
-      <!-- Overnight: when the next try of a stopped build is, and a way to stop it. -->
-      <div class="build-leftover build-overnight-note" id="build-overnight-note" hidden></div>
-      <!-- Chapters a website would not give last time, kept to try again. -->
-      <div id="build-leftovers"></div>
 
       <p class="muted" id="build-empty" style="line-height:1.6">
         Add the parts of a serial — volumes, chapters, image archives, or the
