@@ -85,7 +85,7 @@ public class WebBridge {
     /** A few at a time -- books from different sites side by side. Each site is
      *  still asked no faster than its delay allows (web.js, pacer): this is only
      *  how many requests, to all sites together, may be on their way at once. */
-    private final ExecutorService io = Executors.newFixedThreadPool(8);
+    private final ExecutorService io = Executors.newFixedThreadPool(10);
     private final java.net.CookieManager cookies = new java.net.CookieManager(null, CookiePolicy.ACCEPT_ALL);
     /** A few pages rendered at once -- each in a browser of its own -- but never
      *  two of one site: those share the site's cookies, and a site that keeps
@@ -1122,6 +1122,8 @@ public class WebBridge {
                 // chapter count above stops at nine -- enough to know a list).
                 int allLinks = 0;
                 boolean loading = false;
+                // "Verifying access…" on show: the site has not yet decided to show the chapter.
+                boolean accessCheck = false;
                 int storyLength = 0;
                 int storyLines = 0;
                 try {
@@ -1134,7 +1136,8 @@ public class WebBridge {
                     textLength = Integer.parseInt(parts[1]);
                     chapterLinks = Integer.parseInt(parts[5]);
                     allLinks = Integer.parseInt(parts[2]);
-                    loading = "1".equals(parts[6]);
+                    loading = "1".equals(parts[6]) || "2".equals(parts[6]);
+                    accessCheck = "2".equals(parts[6]);
                 } catch (Exception ignored) {
                     // Unreadable: as though nothing were there yet.
                 }
@@ -1173,8 +1176,8 @@ public class WebBridge {
                 // its text being there did not mean its story was, last time.
                 boolean patient = quietMs > RENDER_QUIET_MS;
                 // A chapter's story: long, or shorter over many lines.
-                boolean storyThere = storyLength >= READY_STORY
-                        || (storyLength >= SHORT_STORY && storyLines >= SHORT_STORY_LINES);
+                boolean storyThere = !accessCheck && (storyLength >= READY_STORY
+                        || (storyLength >= SHORT_STORY && storyLines >= SHORT_STORY_LINES));
                 boolean ready = scroll ? chapterLinks >= 3 : !patient && storyThere;
                 // Plainly there, whatever else the page seems to be doing.
                 there = scroll ? chapterLinks >= 3 : storyThere;
@@ -1522,18 +1525,23 @@ public class WebBridge {
             /* A line on its own saying the chapter is on its way -- "Verifying access…",
              * "Loading chapter…" -- shown where the story will be: waited out, as a
              * spinner is, not taken for a page that is there. */
-            + "var WAIT=/^(verifying( your)? access|checking( your)? access|verifying|authenticating|loading( the)?( chapter| content| story)?|preparing( the)?( chapter| content)?|fetching( the)?( chapter| content)?|decrypting( the)?( chapter| content)?|unlocking( the)? chapter|불러오는 ?중|로딩 ?중|加载中|載入中|正在加载)\\s*(…|\\.{2,})?$/i;"
+            + "var WAIT=/^(loading( the)?( chapter| content| story)?|preparing( the)?( chapter| content)?|fetching( the)?( chapter| content)?|불러오는 ?중|로딩 ?중|加载中|載入中|正在加载)\\s*(…|\\.{2,})?$/i;"
+            /* An access check's line -- "Verifying access…" -- is the site deciding
+             * whether to show the chapter at all: whatever else on the page looks like
+             * a story (a settings panel, the author's note) is not it yet. */
+            + "var ACC=/^(verifying( your)? access|checking( your)? access|verifying|authenticating|decrypting( the)?( chapter| content)?|unlocking( the)? chapter)\\s*(…|\\.{2,})?$/i;"
             /* And inside the page's open shadow sections, where a reader built of web
              * components draws its chapter: shown on screen, but out of the page's own
              * tree -- walked too, or a chapter there never counts as come. */
             /* Only when the page's own tree holds no story yet (on a page of adverts,
              * looking through every element ten times a second is a cost), and only
              * every second or so. */
-            + "var R=[b].concat(window.__gRoots||[]),wt=0;"
+            + "var R=[b].concat(window.__gRoots||[]),wt=0,wa=0;"
             + "for(var ri=0;ri<R.length&&ri<50;ri++){"
             + "W=document.createTreeWalker(R[ri],4);"
             + "while((nd=W.nextNode())&&cnt<30000){cnt++;var l=nd.nodeValue.trim().length;if(!l)continue;"
-            + "if(!wt&&l<40&&WAIT.test(nd.nodeValue.trim())){var wp=nd.parentElement;if(wp&&wp.getClientRects().length){var ws=getComputedStyle(wp);if(ws.visibility!=='hidden'&&ws.opacity!=='0')wt=1;}}"
+            + "if(l<40&&(!wt||!wa)){var wv=nd.nodeValue.trim(),wk=ACC.test(wv)?2:WAIT.test(wv)?1:0;"
+            + "if(wk&&(wk===2?!wa:!wt)){var wp=nd.parentElement;if(wp&&wp.getClientRects().length){var ws=getComputedStyle(wp);if(ws.visibility!=='hidden'&&ws.opacity!=='0'){if(wk===2)wa=1;else wt=1;}}}}"
             + "var p=nd.parentElement,no=false;while(p&&p!==b){if(NO.test(p.tagName)){no=true;break;}"
             + "if(!IN.test(p.tagName))break;p=p.parentElement;}if(no||!p||ex(p))continue;"
             + "add(p,l);var g=p.parentElement;if(g&&p!==b&&p.tagName==='DIV')add(g,l);}"
@@ -1543,8 +1551,10 @@ public class WebBridge {
             + "window.__gRoots=F.slice(1);R=F;}"
             + "}}catch(e){}"
             /* A "Loading…" line holds only while the story is not there yet: one in an
-             * advert or a comment box beside a chapter that has come holds nothing. */
-            + "if(wt&&s<1500)w=1;"
+             * advert or a comment box beside a chapter that has come holds nothing.
+             * An access check's line (2) holds while no full chapter is there: what
+             * looks like a short one beside it is not counted as the chapter. */
+            + "if(wa&&s<1500)w=2;else if(wt&&s<1500)w=1;"
             + "window.__gS=[n,L.length,(blk?'blocked':c?'checking':''),k,w,s,sl];"
             + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(blk?'blocked':c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+s+'|'+sl+'|'+t;"
             + "}catch(e){return '0|0|0||0|0|0|0|0|';}})()";

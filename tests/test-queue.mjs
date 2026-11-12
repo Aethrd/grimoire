@@ -283,7 +283,7 @@ await t("each site's delays are remembered, and come back with its address", asy
 });
 
 await t('per site set to two: two books of one site side by side, and no more', async () => {
-  // Sliders, a row each: At once up to eight, Per site up to three, each with its number beside it.
+  // Sliders, a row each: At once up to ten, Per site up to five, each with its number beside it.
   const slider = (name) => document.querySelector(`#build-queue-once input[type="range"][aria-label="${name}"]`);
   const setSlider = (name, n) => {
     const range = slider(name);
@@ -291,15 +291,15 @@ await t('per site set to two: two books of one site side by side, and no more', 
     range.dispatchEvent(new window.Event('input', { bubbles: true }));
     range.dispatchEvent(new window.Event('change', { bubbles: true }));
   };
-  assert.equal(slider('At once').max, '8');
-  assert.equal(slider('Per site').max, '3');
+  assert.equal(slider('At once').max, '10');
+  assert.equal(slider('Per site').max, '5');
   assert.equal(document.querySelectorAll('#build-queue-once .chip').length <= 1, true, 'number chips left beside the sliders');
   const before = (await store.settings()).queueAtOnce;
-  setSlider('At once', 8);
+  setSlider('At once', 10);
   await new Promise((r) => setTimeout(r, 30));
-  assert.equal((await store.settings()).queueAtOnce, 8);
-  assert.equal(slider('At once').closest('.queue-slider').querySelector('output').textContent, '8');
-  assert.match(document.getElementById('build-queue-note').textContent, /up to 8 at once/);
+  assert.equal((await store.settings()).queueAtOnce, 10);
+  assert.equal(slider('At once').closest('.queue-slider').querySelector('output').textContent, '10');
+  assert.match(document.getElementById('build-queue-note').textContent, /up to 10 at once/);
   setSlider('At once', before);
   await new Promise((r) => setTimeout(r, 30));
   assert.equal((await store.settings()).queueAtOnce, before);

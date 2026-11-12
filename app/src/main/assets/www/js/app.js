@@ -6586,8 +6586,8 @@ function pauseBuild() {
 let webQueue = [];
 const queueState = { running: false, atOnce: 2, perSite: 1, timer: null, locked: false };
 /** The most books downloaded side by side, and of those, from one site. */
-const QUEUE_AT_ONCE_MAX = 8;
-const QUEUE_PER_SITE_MAX = 3;
+const QUEUE_AT_ONCE_MAX = 10;
+const QUEUE_PER_SITE_MAX = 5;
 const QUEUE_RETRY_MS = 15 * 60000;
 const QUEUE_MAX_STOPS = 5;
 const queueJobs = new Map();   // id -> { pausing, finish, run } for the jobs under way
@@ -7260,7 +7260,7 @@ function paintQueue() {
       : '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/></svg>';
   }
   const count = (status) => webQueue.filter((job) => job.status === status).length;
-  /* At once: up to eight books side by side -- each from a site of its own, each
+  /* At once: up to ten books side by side -- each from a site of its own, each
    * site asked no faster than its delay, so more at once asks no one site more.
    * Two sliders, a row each, with what they are set to beside them. */
   const once = el('build-queue-once');
@@ -10167,7 +10167,8 @@ async function shortOf(bookId) {
   const chapters = await store.byIndex('chapters', 'bookId', bookId);
   // How each ends, from its text: one stopped mid-sentence is no uneven split.
   const text = (html) => String(html || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/&[a-z]+;|&#\d+;/gi, '.');
-  return web.shortChapters(chapters.map((chapter) => ({ ...chapter, cut: web.endsCut(text(chapter.html)) })));
+  // And one that is only the site's "Verifying access…": short, whatever is around it.
+  return web.shortChapters(chapters.map((chapter) => ({ ...chapter, cut: web.endsCut(text(chapter.html)), waiting: !!web.waitScreen(chapter.html) })));
 }
 
 async function noteShort(book) {
@@ -10175,7 +10176,11 @@ async function noteShort(book) {
   const short = await shortOf(book.id).catch(() => []);
   if (!short.length) return;
   const name = library.displayTitle(book);
-  const said = `“${name}”: ${short.length} chapter${short.length === 1 ? '' : 's'} came out much shorter than the rest — maybe cut off. `
+  const waits = short.filter((chapter) => chapter.waiting).length;
+  const said = waits === short.length
+    ? `“${name}”: ${short.length} chapter${short.length === 1 ? ' is' : 's are'} only the site's “please wait” page, not the chapter. `
+      + 'Hold its cover and choose Fetch short chapters again.'
+    : `“${name}”: ${short.length} chapter${short.length === 1 ? '' : 's'} came out much shorter than the rest — maybe cut off. `
     + 'Hold its cover and choose Fetch short chapters again.';
   whenNotReading(() => toast(said, 9000));
 }

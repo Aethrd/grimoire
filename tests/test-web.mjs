@@ -2066,7 +2066,7 @@ await t('a short chapter is known by its lines, and a comment section is no chap
   // However long the comments, they are not the story.
   const comments = shape(`<div class="comment-list">${lines(80)}</div><div id="댓글">${lines(80)}</div>`);
   assert.equal(comments[7], '0');
-  assert.match(java, /\|\| \(storyLength >= SHORT_STORY && storyLines >= SHORT_STORY_LINES\);/);
+  assert.match(java, /\|\| \(storyLength >= SHORT_STORY && storyLines >= SHORT_STORY_LINES\)\);/);
   // "Verifying access…" where the story will be (fenrirealm), among a reader's controls: still on its way.
   const shown = (page) => {
     const w = new JSDOM(`<html><body>${page}</body></html>`, { runScripts: 'outside-only' }).window;
@@ -2074,7 +2074,18 @@ await t('a short chapter is known by its lines, and a comment section is no chap
     return w.eval(code).split('|');
   };
   const controls = '<div class="reader-controls"><p>Theme</p><p>Font</p><p>Size</p><p>Line height</p><p>Text width</p></div>';
-  assert.equal(shown(`${controls}<div class="chapter"><p>Verifying access…</p></div>`)[6], '1');
+  // An access check (2) holds, Loading (1) waits only while nothing is there.
+  assert.equal(shown(`${controls}<div class="chapter"><p>Verifying access…</p></div>`)[6], '2');
+  /* As fenrirealm's reader was taken, every chapter: the check on show, and beside it
+   * enough short lines (a settings panel, the author's note) to pass for a short chapter. */
+  const panel = `<div class="settings">${Array.from({ length: 12 }, (_, i) => `<p>Reader setting number ${i}, with its own description here</p>`).join('')}</div>`;
+  const fenrir = shown(`${panel}<div class="chapter"><h1>Chapter 1</h1><p>15 Jan 2026</p><p>Verifying access...</p><p>You can use keyboard arrow key ← or → to navigate between chapters</p></div>`);
+  assert.ok(Number(fenrir[7]) >= 400 && Number(fenrir[8]) >= 8, fenrir.join('|'));
+  assert.equal(fenrir[6], '2');
+  assert.match(java, /boolean storyThere = !accessCheck && \(storyLength >= READY_STORY/);
+  assert.match(java, /accessCheck = "2"\.equals\(parts\[6\]\);/);
+  // A whole chapter come, the check's line left behind somewhere: no longer held by it.
+  assert.equal(shown(`<div class="chapter">${lines(14)}${lines(14)}${lines(14)}${lines(14)}</div><div><p>Verifying access…</p></div>`)[6], '0');
   assert.equal(shown(`${controls}<div class="chapter"><p>Loading chapter...</p></div>`)[6], '1');
   assert.equal(shown(`${controls}<div class="chapter"><p>불러오는 중</p></div>`)[6], '1');
   // A chapter drawn inside an open shadow section (a reader of web components) counts as come.
@@ -2100,6 +2111,37 @@ await t('a short chapter is known by its lines, and a comment section is no chap
   assert.equal(shown(`<div class="chapter">${lines(14)}${lines(14)}${lines(14)}${lines(14)}</div><aside><p>Loading...</p></aside>`)[6], '0');
   // A chapter that only mentions verifying is no wait.
   assert.equal(shown(`<div class="chapter">${lines(14)}<p>He was verifying access to the vault.</p></div>`)[6], '0');
+});
+
+await t('a chapter that is only "Verifying access…" is never kept, and one kept already is fetched again', async () => {
+  const screen = '<h1>Chapter 1</h1><p>15 Jan 2026</p><p>Verifying access...</p><p>You can use keyboard arrow key ← or → to navigate between chapters</p><p>IP</p><p>Meet the author</p><p>IPPO</p>';
+  assert.equal(web.waitScreen(screen), 'Verifying access...');
+  assert.equal(web.waitScreen('<p>Loading&hellip;</p>'), 'Loading…');
+  assert.equal(web.waitScreen('<div>불러오는 중</div><p>메뉴</p>'), '불러오는 중');
+  // A chapter that has come is no wait screen, whatever stray line is in it.
+  const long = `<p>${'He walked on into the night, and the road went with him. '.repeat(40)}</p><p>Loading...</p>`;
+  assert.equal(web.waitScreen(long), '');
+  assert.equal(web.waitScreen('<p>He was verifying access to the vault.</p><p>It took a while.</p>'), '');
+  assert.equal(web.waitScreen('<p>A short chapter, all there.</p>'), '');
+  // Read, it is a chapter not yet come: tried again, patiently -- never kept.
+  const code = read('app/src/main/assets/www/js/web.js');
+  assert.match(code, /const waitLine = waitScreen\(body\);\s+if \(waitLine\) throw Object\.assign\(new Error\([^)]*\), \{ notLoaded: true \}\);/);
+  // Kept already (before this): said, and offered to fetch again -- even when every chapter is one.
+  const book = (n, waitingAt) => Array.from({ length: n }, (_, i) => ({
+    index: i, title: `Chapter ${i + 1}`, from: `https://fenrirealm.example/c/${i + 1}`,
+    words: waitingAt(i) ? 20 : 2000 + (i % 3) * 100, waiting: waitingAt(i),
+  }));
+  const all = web.shortChapters(book(135, () => true));
+  assert.equal(all.length, 135);
+  assert.ok(all.every((each) => each.waiting));
+  const some = web.shortChapters(book(30, (i) => i === 4 || i === 5 || i === 20));
+  assert.deepEqual(some.map((each) => each.index), [4, 5, 20]);
+  // The rest judged as before, the wait screens left out of what is typical.
+  const mixed = book(30, (i) => i === 4);
+  mixed[10].words = 300;
+  assert.deepEqual(web.shortChapters(mixed).map((each) => [each.index, !!each.waiting]), [[4, true], [10, false]]);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /waiting: !!web\.waitScreen\(chapter\.html\)/);
 });
 
 /* A contents page of N pages, five chapters each, newest first or oldest first. */

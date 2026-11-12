@@ -2683,7 +2683,7 @@ body.in-book[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .build-queue-list li[data-status="done"] { opacity: .7; }
 .build-queue-once { margin: 10px 0 0; align-items: center; gap: 4px 6px; flex-wrap: wrap; overflow: visible; padding: 0; }
 /* At once and Per site: a slider a row, the full width, its number beside it. */
-.queue-slider { display: grid; grid-template-columns: 64px 1fr 22px; align-items: center; gap: 12px;
+.queue-slider { display: grid; grid-template-columns: 64px 1fr 24px; align-items: center; gap: 12px;
   flex: 1 1 100%; min-height: 40px; }
 .queue-slider .muted { font-size: 13px; }
 .queue-slider output { font: 700 15px var(--font-ui); color: var(--text); text-align: right;

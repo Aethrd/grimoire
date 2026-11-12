@@ -1154,10 +1154,15 @@ export function mergeSources(links, sites, siteOf) {
  * uneven split from a cut-off second part; how it ends often can. */
 export function shortChapters(chapters, { share = 0.4, whole = 0.75, least = 8, around = 10 } = {}) {
   const web = (chapters || []).filter((chapter) => chapter.from).sort((a, b) => a.index - b.index);
-  if (web.length < least) return [];
+  // A chapter that is only the site's "Verifying access…" is always one, whatever the chapters around it.
+  const waiting = web.filter((chapter) => chapter.waiting)
+    .map((chapter) => ({ index: chapter.index, title: chapter.title, words: chapter.words || 0, from: chapter.from, typical: 0, waiting: true }));
+  // What is typical, from the chapters that are chapters.
+  const real = web.filter((chapter) => !chapter.waiting);
+  if (real.length < least) return waiting;
   const units = [];
   const unitOf = new Map();
-  for (const chapter of web) {
+  for (const chapter of real) {
     const number = numberIn(chapter.title || '');
     const at = Number.isFinite(number) ? Math.floor(number) : null;
     const last = units.at(-1);
@@ -1175,9 +1180,9 @@ export function shortChapters(chapters, { share = 0.4, whole = 0.75, least = 8, 
     return sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : 0;
   };
   const near = (list, at, size) => list.slice(Math.max(0, at - around), at).concat(list.slice(at + 1, at + 1 + around)).map(size);
-  const out = [];
-  web.forEach((chapter, at) => {
-    const typical = lowerMiddle(near(web, at, (other) => other.words || 0));
+  const out = [...waiting];
+  real.forEach((chapter, at) => {
+    const typical = lowerMiddle(near(real, at, (other) => other.words || 0));
     const words = chapter.words || 0;
     if (!(typical > 0) || words >= typical * share) return;
     const unit = unitOf.get(chapter);
@@ -1188,7 +1193,7 @@ export function shortChapters(chapters, { share = 0.4, whole = 0.75, least = 8, 
     }
     out.push({ index: chapter.index, title: chapter.title, words, from: chapter.from, typical });
   });
-  return out;
+  return out.sort((a, b) => a.index - b.index);
 }
 
 /** Whether a chapter's text stops mid-sentence: its last mark no full stop, closing quote or the like. */
@@ -2101,6 +2106,11 @@ export async function readPage(link, index, {
   let { html: body, text } = read[0];
   // Text the site has scrambled is not kept: a book of it would be unreadable.
   if (isScrambled(text)) throw new Error(SCRAMBLED_REASON);
+  /* Taken while it still said to wait -- "Verifying access…" where the chapter
+   * goes: no chapter, and never kept as one. Read again, more patiently; if it
+   * never comes, the download stops there, saying so. */
+  const waitLine = waitScreen(body);
+  if (waitLine) throw Object.assign(new Error(`the page still said “${waitLine}” — its chapter had not come`), { notLoaded: true });
   // The site's own name stamped into the story ("heｔusｈｕ•cｏｍ", "和-图-书"): taken out.
   const marks = siteMarks(page.url, doc);
   if (marks) {
@@ -2793,6 +2803,19 @@ export const connectionTrouble = (error) => !error?.notLoaded && !blocked(error)
  * to stop copying). What comes is unreadable without that font, and the app
  * does not undo it -- the download stops, said, rather than filling a book
  * with gaps. Known by how much of the text is private-use characters. */
+/* A chapter that is only a page saying to wait: a short page (under 1,500
+ * characters) with a line of its own that says the chapter is on its way --
+ * "Verifying access…", "Loading chapter…", "불러오는 중". The line, or ''. The
+ * same lines the renderer waits out (WebBridge, SHAPE). */
+const WAIT_LINE = /^(verifying( your)? access|checking( your)? access|verifying|authenticating|loading( the)?( chapter| content| story)?|preparing( the)?( chapter| content)?|fetching( the)?( chapter| content)?|decrypting( the)?( chapter| content)?|unlocking( the)? chapter|불러오는 ?중|로딩 ?중|加载中|載入中|正在加载)\s*(…|\.{2,})?$/i;
+export function waitScreen(html) {
+  const pieces = String(html || '').split(/<[^>]*>/)
+    .map((piece) => piece.replace(/&nbsp;|&#160;/g, ' ').replace(/&hellip;|&#8230;/g, '…').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  if (pieces.join('').replace(/\s+/g, '').length >= 1500) return '';
+  return pieces.find((piece) => piece.length < 40 && WAIT_LINE.test(piece)) || '';
+}
+
 export const SCRAMBLED_REASON = 'the site scrambles its text (only its own font turns it back into words), so its chapters cannot be read here';
 export function isScrambled(text) {
   const all = String(text || '').replace(/\s+/g, '');
