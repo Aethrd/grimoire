@@ -982,8 +982,31 @@ export function setBuildOrder(order) { buildOrder = order || null; }
 
 /* Books whose download was paused or stopped short, with the rest still to
  * come (a leftover, or a queued book carrying it on): marked on the cover. */
-let unfinished = new Set();
-export function setUnfinished(ids) { unfinished = new Set(ids || []); }
+/* Each with how many chapters are still to come, for its mark to fill by. */
+let unfinished = new Map();   // book id -> chapters still to come
+export function setUnfinished(left) { unfinished = left instanceof Map ? left : new Map((left || []).map((id) => [id, 0])); }
+
+/** How far a book is, by its chapters had and still to come: what its mark's tray fills to. */
+export function unfinishedDone(have, left) {
+  const total = (Number(have) || 0) + (Number(left) || 0);
+  return total > 0 ? Math.min(1, Math.max(0, (Number(have) || 0) / total)) : 0;
+}
+
+/* The download mark: its arrow, and its tray twice -- faint, and over it the
+ * part that fills, left round to right, as the chapters come in. */
+const unfinishedMark = (book) => {
+  // A book being made now: as far as its record says it has got.
+  const making = !unfinished.has(book.id) && book.building;
+  const have = making ? book.building.at?.chapters || 0 : book.chapters || 0;
+  const left = making
+    ? Math.max(0, (book.building.webParts || []).reduce((sum, part) => sum + (part.links?.length || 0), 0) - have)
+    : unfinished.get(book.id);
+  const done = unfinishedDone(have, left);
+  return `<span class="tile-unfinished" role="img" aria-label="Not finished downloading: ${Math.round(done * 100)}%" data-have="${have}" style="--done:${done.toFixed(3)}">`
+    + '<svg viewBox="0 0 24 24"><path d="M12 3.6v11.2M7.4 10.4l4.6 4.6 4.6-4.6"/>'
+    + '<path class="tray" d="M4.4 14.6v4.9h15.2v-4.9"/>'
+    + '<path class="tray-fill" pathLength="100" d="M4.4 14.6v4.9h15.2v-4.9"/></svg></span>';
+};
 
 function tile(book, onOpen, onLongPress, selection, selecting) {
   const coverUrl = coverUrlFor(book);
@@ -1000,7 +1023,7 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
       ${coverUrl
         ? `<img src="${coverUrl}" alt="${escape(book.title)}">`
         : `<span class="tile-title">${escape(displayTitle(book))}</span>`}
-      ${unfinished.has(book.id) ? '<span class="tile-unfinished" role="img" aria-label="Not finished downloading"><svg viewBox="0 0 24 24"><path d="M12 3.6v11.2M7.4 10.4l4.6 4.6 4.6-4.6M4.4 14.6v4.9h15.2v-4.9"/></svg></span>' : ''}
+      ${unfinished.has(book.id) || (book.importing && book.building) ? unfinishedMark(book) : ''}
       <span class="tile-badge">${escape(book.format || '?')}</span>
       ${placed ? `<span class="tile-order${placed.already ? ' already' : ''}">${placed.place}</span>` : ''}
       <span class="tile-bar"><span style="width:${Math.round((book.percent || 0) * 100)}%"></span></span>

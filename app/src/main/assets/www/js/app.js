@@ -7028,8 +7028,14 @@ function settleJob(job, { rest, reason, paused }, byHand) {
 }
 
 /** A queued book's progress: its own row in the progress panel, and its time left. */
+let unfinishedAt = 0;
 function trackJob(job, under, message, at, now, counts) {
   const run = under.run;
+  // Its mark on the shelf, filled as the chapters come: once a second at most.
+  if (counts && Date.now() - unfinishedAt > 1000) {
+    unfinishedAt = Date.now();
+    setTimeout(markUnfinished, 0);
+  }
   const finish = under.finish;
   const chapters = run.delays.reduce((sum, part) => sum + (part?.chapters || 0), 0);
   const before = run.delays.slice(0, Math.max(0, at)).reduce((sum, part) => sum + (part?.chapters || 0), 0);
@@ -7653,15 +7659,31 @@ const saveLeftovers = () => {
  * covers say so (library.js). Redrawn only when which they are changes. */
 let unfinishedKey = '';
 function markUnfinished() {
-  const ids = [
-    ...webLeftovers.map((left) => left.bookId),
-    ...webQueue.filter((job) => job.status !== 'done').map((job) => job.bookId),
-  ].filter((id) => id != null);
-  const key = [...new Set(ids)].sort().join(',');
-  if (key === unfinishedKey) return;
-  unfinishedKey = key;
-  library.setUnfinished(ids);
-  if (current === 'library') refreshShelf().catch(() => {});
+  // Each book, with how many chapters are still to come for it.
+  const left = new Map();
+  const add = (id, count) => { if (id != null) left.set(id, (left.get(id) || 0) + (count || 0)); };
+  for (const each of webLeftovers) add(each.bookId, each.links?.length);
+  for (const job of webQueue) {
+    if (job.status === 'done') continue;
+    const run = queueJobs.get(job.id)?.run;
+    // Under way: what its own count says is still to come; else every link it holds.
+    add(job.bookId, run && Number.isFinite(run.total) ? Math.max(0, run.total - (run.done || 0)) : job.links?.length);
+  }
+  library.setUnfinished(left);
+  const key = [...left.keys()].sort().join(',');
+  if (key !== unfinishedKey) {
+    unfinishedKey = key;
+    if (current === 'library') refreshShelf().catch(() => {});
+    return;
+  }
+  // The same books: each mark's tray filled to where it is now, in place.
+  for (const [id, count] of left) {
+    const mark = document.querySelector(`.tile[data-book="${id}"] .tile-unfinished`);
+    if (!mark) continue;
+    const done = library.unfinishedDone(mark.dataset.have, count);
+    mark.style.setProperty('--done', done.toFixed(3));
+    mark.setAttribute('aria-label', `Not finished downloading: ${Math.round(done * 100)}%`);
+  }
 }
 
 /* ── where a website's download stopped ───────────────────────────────

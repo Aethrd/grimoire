@@ -2900,20 +2900,28 @@ await t('a row that says when its chapter came out (woopread): the time is no pa
 
 await t('a book with more to download is marked on its cover; the strip sits on the tab bar itself', async () => {
   const library = read('app/src/main/assets/www/js/library.js');
-  assert.match(library, /\$\{unfinished\.has\(book\.id\) \? '<span class="tile-unfinished" role="img" aria-label="Not finished downloading"><svg viewBox="0 0 24 24">/);
+  assert.match(library, /\$\{unfinished\.has\(book\.id\) \|\| \(book\.importing && book\.building\) \? unfinishedMark\(book\) : ''\}/);
+  // Its tray fills by the chapters had and still to come.
+  const lib = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  assert.equal(lib.unfinishedDone(30, 70), 0.3);
+  assert.equal(lib.unfinishedDone(0, 0), 0);
+  assert.equal(lib.unfinishedDone(10, 0), 1);
+  assert.match(library, /<path class="tray-fill" pathLength="100"/);
   // Its cover from the start: a book downloading, or paused, is not a blank.
   const build = read('app/src/main/assets/www/js/build.js');
   assert.match(build, /\.\.\.\(early \? \{ coverBlob: early, coverBytes: early\.size \?\? null \} : \{\}\),/);
   assert.match(build, /finished\.coverBlob = chosenCover \|\| cover \|\| early;/);
   const app = read('app/src/main/assets/www/js/app.js');
   // Which: a stopped download's leftover, and a queued book not yet done.
-  assert.match(app, /\.\.\.webLeftovers\.map\(\(left\) => left\.bookId\),\s+\.\.\.webQueue\.filter\(\(job\) => job\.status !== 'done'\)\.map\(\(job\) => job\.bookId\),/);
+  assert.match(app, /for \(const each of webLeftovers\) add\(each\.bookId, each\.links\?\.length\);/);
+  assert.match(app, /add\(job\.bookId, run && Number\.isFinite\(run\.total\) \? Math\.max\(0, run\.total - \(run\.done \|\| 0\)\) : job\.links\?\.length\);/);
   assert.match(app, /const saveLeftovers = \(\) => \{\s+markUnfinished\(\);/);
   assert.match(app, /function saveQueue\(\) \{\s+markUnfinished\(\);/);
   // The wash in the theme's colours, deep to pale; the mark the same, opaque and inverted, 60% of the cover wide.
   const css = read('app/src/main/assets/www/css/app.css');
   assert.match(css, /\.tile-unfinished \{[^}]*linear-gradient\(to bottom,\s*color-mix\(in srgb, var\(--accent-700\) 66%, transparent\),\s*color-mix\(in srgb, var\(--accent-200\) 22%, transparent\)\)/);
   assert.match(css, /\.tile-unfinished svg \{[^}]*width: 60%;[^}]*stroke: var\(--accent-100\);/);
+  assert.match(css, /\.tile-unfinished \.tray-fill \{ stroke-dasharray: 100; stroke-dashoffset: calc\(100 - var\(--done, 0\) \* 100\);/);
   // The strip placed by where the tab bar's top really is.
   assert.match(app, /host\.style\.bottom = !free && shown \? `\$\{Math\.max\(0, Math\.round\(window\.innerHeight - bar\.getBoundingClientRect\(\)\.top\)\)\}px` : '';/);
   assert.match(app, /new ResizeObserver\(seat\)\.observe\(bar\)/);
