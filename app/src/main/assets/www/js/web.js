@@ -656,6 +656,7 @@ function rowName(text) {
 
 /** A chapter number a name gives in so many words, not just a figure. */
 function markedNumber(text) {
+  text = plainNumerals(text);
   const cjk = new RegExp(`第\\s*(${NUMERAL})\\s*[章话話回节節]`).exec(text);
   if (cjk) return cjkNumber(cjk[1]);
   const korean = KOREAN_EPISODE.exec(text);
@@ -1034,7 +1035,7 @@ const LEADING_NUMBER = /^\s*[#№]?\s*\d+(\.\d+)?\s*([:.)\-–—]|$|\s)/;
 const CJK_PARTS = /番外|外[傳传]|特別篇|特别篇|特典|序章|楔子|引子|尾[聲声]|終章|终章|後記|后记|完結感言|完结感言|외전|에필로그|프롤로그|番外編|閑話|閒話|幕間/;
 
 export const looksLikeChapter = (text) =>
-  CHAPTER_WORDS.test(text) || CJK_CHAPTER.test(text) || CJK_PARTS.test(text) || LEADING_NUMBER.test(text);
+  CHAPTER_WORDS.test(text) || CJK_CHAPTER.test(plainNumerals(text)) || CJK_PARTS.test(text) || LEADING_NUMBER.test(text);
 
 /* ── numbers in any script ───────────────────────────────────────────── */
 
@@ -1061,6 +1062,57 @@ export function cjkNumber(text) {
 }
 
 const NUMERAL = '[0-9０-９]+(?:\\.[0-9]+)?|[零〇一二两兩三四五六七八九十百千万萬]+';
+
+/* A chapter number written in odd digits -- "第十⑨章", "第⑫章", "Chapter ❼",
+ * "１２화" -- as sites do now and then, a character here and there, so a copy
+ * of their list reads wrong: read as the plain number it stands for. Only
+ * inside a chapter's own marker (第…章, "Chapter …", "…화"); a ① elsewhere in
+ * a name, a part's mark, is left alone. The name itself is never changed --
+ * this is only how its number is read. */
+const ODD_DIGITS = new Map();
+{
+  const run = (from, values) => values.forEach((value, i) => ODD_DIGITS.set(String.fromCodePoint(from + i), String(value)));
+  const count = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+  run(0x2460, count(1, 20));   // ①-⑳
+  run(0x2474, count(1, 20));   // ⑴-⒇
+  run(0x2488, count(1, 20));   // ⒈-⒛
+  run(0x24EA, [0]);            // ⓪
+  run(0x24EB, count(11, 20));  // ⓫-⓴
+  run(0x24F5, count(1, 10));   // ⓵-⓾
+  run(0x24FF, [0]);            // ⓿
+  run(0x2776, count(1, 10));   // ❶-❿
+  run(0x2780, count(1, 10));   // ➀-➉
+  run(0x278A, count(1, 10));   // ➊-➓
+  run(0x3251, count(21, 35));  // ㉑-㉟
+  run(0x32B1, count(36, 50));  // ㊱-㊿
+  run(0xFF10, count(0, 9));    // ０-９
+  run(0x2070, [0]); run(0x00B9, [1]); run(0x00B2, [2]); run(0x00B3, [3]); run(0x2074, count(4, 9)); // ⁰¹²³⁴-⁹
+  run(0x2080, count(0, 9));    // ₀-₉
+  for (const from of [0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6]) run(from, count(0, 9)); // 𝟎 𝟘 𝟢 𝟬 𝟶
+}
+const ODD = `[${[...ODD_DIGITS.keys()].join('')}]`;
+const CJK_DIGIT_OF = '零一二三四五六七八九';
+const plainDigits = (text) => [...text].map((ch) => ODD_DIGITS.get(ch) ?? ch).join('');
+/** A 第…章's number, its odd digits plain: within Chinese numerals, a lone figure is that numeral ("十⑨" is 十九). */
+function plainCjk(inner) {
+  const plain = plainDigits(inner);
+  if (!/[零〇一二两兩三四五六七八九十百千万萬]/.test(plain) || !/[0-9]/.test(plain)) return plain;
+  // Mixed: each lone figure the numeral it stands for; a run of figures among them is no number read.
+  if (/[0-9]{2}/.test(plain)) return inner;
+  return plain.replace(/[0-9]/g, (d) => CJK_DIGIT_OF[Number(d)]);
+}
+const ODD_CJK = new RegExp(`(第\\s*)([零〇一二两兩三四五六七八九十百千万萬0-9]*${ODD}[零〇一二两兩三四五六七八九十百千万萬0-9${ODD.slice(1, -1)}]*|[零〇一二两兩三四五六七八九十百千万萬]+[0-9][零〇一二两兩三四五六七八九十百千万萬0-9]*|[0-9]+[零〇一二两兩三四五六七八九十百千万萬][零〇一二两兩三四五六七八九十百千万萬0-9]*)(\\s*[章话話回节節卷部篇幕])`, 'gu');
+const ODD_LATIN = new RegExp(`((?:chapters?|chaps?|ch|episodes?|eps?)\\s*\\.?\\s*)(${ODD}+)`, 'giu');
+const ODD_KOREAN = new RegExp(`(${ODD}+)(\\s*(?:화|회|장)(?![가-힣]))`, 'gu');
+/** A name with its chapter marker's number in plain figures, for reading the number only. */
+export function plainNumerals(text) {
+  const name = String(text || '');
+  if (!/[^\u0000-\u00b0]/.test(name)) return name;
+  return name
+    .replace(ODD_CJK, (all, head, inner, tail) => `${head}${plainCjk(inner)}${tail}`)
+    .replace(ODD_LATIN, (all, head, digits) => `${head}${plainDigits(digits)}`)
+    .replace(ODD_KOREAN, (all, digits, tail) => `${plainDigits(digits)}${tail}`);
+}
 
 /* What kind of chapter a name is, and its number among its kind.
  *   prologue  the prologue, 序章, 楔子
@@ -1271,7 +1323,8 @@ export function placeholderChapter(link, index) {
 }
 
 export function chapterKind(text) {
-  const name = String(text || '');
+  // Its number read in plain figures ("第十⑨章" is 19), the name left as it is.
+  const name = plainNumerals(text);
   if (/後記|后记|完結感言|完结感言|作者的話|作者的话|\bafterword\b|\bauthor'?s? note\b/i.test(name)) return { kind: 'after', number: null };
   const side = new RegExp(`(?:番外(?:篇|編)?|外[傳传]|特別篇|特别篇|特典|閑話|閒話|외전|\\bside[ -]?stor(?:y|ies)\\b|\\bextras?\\b|\\bspecial\\b|\\bbonus\\b|\\bSS\\b)\\s*[:：.·・\\-–—]?\\s*(?:第\\s*)?(${NUMERAL})?`, 'i').exec(name);
   if (side) {
@@ -1315,6 +1368,7 @@ export function shapeOf(href) {
  *  as opposed to a part of one ("part 2"), which means nothing without the
  *  chapter it is a part of. */
 function ownNumber(text) {
+  text = plainNumerals(text);
   const korean = KOREAN_EPISODE.exec(text || '');
   if (korean) return parseFloat(korean[1]);
   const match = /(?:chapters?|chaps?|ch|episodes?|eps?|第)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(text)
@@ -2226,9 +2280,9 @@ function chaptersIn(story) {
   const starts = [...story.querySelectorAll('h1, h2, h3, h4, h5, p, div')]
     .filter((node) => {
       const words = tidy(node.textContent);
-      if (!words || words.length > 90 || !CHAPTER_HEADING.test(words)) return false;
+      if (!words || words.length > 90 || !CHAPTER_HEADING.test(plainNumerals(words))) return false;
       // The innermost: a heading inside a <div> is the heading.
-      return ![...node.children].some((child) => CHAPTER_HEADING.test(tidy(child.textContent)) && /^(H\d|P|DIV)$/.test(child.tagName));
+      return ![...node.children].some((child) => CHAPTER_HEADING.test(plainNumerals(tidy(child.textContent))) && /^(H\d|P|DIV)$/.test(child.tagName));
     });
   if (starts.length < 2) return null;
   const doc = story.ownerDocument;

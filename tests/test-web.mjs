@@ -433,6 +433,34 @@ await t('a page turned away is fetched afresh at once, not given up on', async (
   assert.ok(!/wait a few minutes|Waiting a few minutes/i.test(read('app/src/main/assets/www/js/app.js')));
 });
 
+await t('a chapter number in odd digits ("第十⑨章") is read as its number, the name left as the site has it', async () => {
+  const number = (text) => web.chapterKind(text).number;
+  assert.equal(number('第十⑨章 死亡演奏者'), 19);
+  assert.equal(number('第⑫章'), 12);
+  assert.equal(number('第一百②十三章'), 123);
+  assert.equal(number('第１２章'), 12);
+  assert.equal(number('Chapter ❼: The Gate'), 7);
+  assert.equal(number('Ch.⑲'), 19);
+  assert.equal(number('⑲화'), 19);
+  assert.equal(number('제⑫화'), 12);
+  assert.equal(number('Chapter 𝟏𝟐'), 12);
+  // A ① that is a part's mark, outside the chapter's marker, is not read as its number.
+  assert.equal(number('5화 ①'), 5);
+  assert.equal(number('Chapter 5 ①'), 5);
+  // Figures run together among Chinese numerals: no number guessed.
+  assert.equal(number('第十12章'), null);
+  // The name is never changed: only how its number is read.
+  assert.equal(web.plainNumerals('第十⑨章 死亡演奏者'), '第十九章 死亡演奏者');
+  assert.equal(web.plainNumerals('Plain ASCII 12'), 'Plain ASCII 12');
+  // As uukanshu listed them: no chapter said missing, and in order.
+  const links = ['十二', '十三', '十四', '十五', '十六', '十七', '十八', '十⑨', '二十', '二十一']
+    .map((n, i) => ({ url: `https://uukanshu.example/book/4155/${2503563 + i}.html`, text: `第${n}章` }));
+  assert.equal(web.numberGaps(links).count, 0);
+  assert.equal(web.withPlaceholders(links).filter(web.isPlaceholder).length, 0);
+  assert.equal(web.looksLikeChapter('第十⑨章 死亡演奏者'), true);
+  assert.deepEqual(web.inReadingOrder([...links].reverse(), () => true).links.map((l) => l.text), links.map((l) => l.text));
+});
+
 await t('missing chapters get a placeholder each, labelled, and the site is never asked for one', async () => {
   const link = (n) => ({ url: `${SITE}chapter-${n}`, text: `Chapter ${n}` });
   // 1, 2, 3, 6, 7: 4 and 5 kept a place, in order.
