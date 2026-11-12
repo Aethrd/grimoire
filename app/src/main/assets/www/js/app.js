@@ -6695,7 +6695,7 @@ function wireJobEdit() {
     clearWeb();
     Object.assign(webState, { intent: 'queue', editing: it.id });
     setWebAddress((it.sources || []).join('\n'));
-    webState.links = it.links.map(({ url, text }) => ({ url, text, chrome: false, kind: null, likely: true, picked: true }));
+    webState.links = it.links.map((link) => ({ ...keptLink(link), chrome: false, kind: null, likely: true, picked: true }));
     Object.assign(webState, { sources: it.sources || [], title: it.name, author: it.author || '', cover: it.cover || '', coverData: it.coverData || '', folder: it.folder || '' });
     el('web-title').value = it.name;
     webNote(`The ${it.links.length} chapters queued for “${it.name}”. Untick any to leave out, or Find links to read the site's list again; Queue saves them.`);
@@ -6784,7 +6784,7 @@ function queueWeb() {
   if (editing) {
     Object.assign(editing, {
       name, author: webState.author || editing.author || '', sources: webState.sources?.length ? webState.sources : editing.sources,
-      cover: webState.cover || editing.cover || '', links: chosen.map(({ url, text }) => ({ url, text })),
+      cover: webState.cover || editing.cover || '', links: chosen.map(keptLink),
       total: chosen.length, status: 'queued', stops: 0, note: '',
     });
     if (webState.coverData) editing.coverData = webState.coverData;
@@ -6800,7 +6800,7 @@ function queueWeb() {
   const into = webState.folder ?? activeFolder ?? '';
   webQueue.push({
     id: `q-${Date.now()}`, name, author: webState.author || '', sources: webState.sources || [],
-    cover: webState.cover || '', links: chosen.map(({ url, text }) => ({ url, text })),
+    cover: webState.cover || '', links: chosen.map(keptLink),
     total: chosen.length, done: 0, status: 'queued', stops: 0,
     ...(webState.coverData ? { coverData: webState.coverData } : {}),
     // Filed, once built, where it was picked to be (the shelf's open folder unless changed).
@@ -6960,7 +6960,7 @@ async function runJob(job) {
 
 /** Where a book of the queue stands after a try: done, paused, held for the reader, or to try again. */
 function settleJob(job, { rest, reason, paused }, byHand) {
-  job.links = rest.map(({ url, text }) => ({ url, text }));
+  job.links = rest.map(keptLink);
   job.halted = false;
   if (!job.links.length) {
     job.status = 'done';
@@ -7697,7 +7697,7 @@ async function rescueCutBuilds() {
   for (const entry of saved) {
     const job = entry.book.queueJob && jobs.find((each) => each.id === entry.book.queueJob);
     if (!job) continue;
-    const links = entry.rest.flatMap((part) => part.links || []).map(({ url, text }) => ({ url, text }));
+    const links = entry.rest.flatMap((part) => part.links || []).map(keptLink);
     // A book it was carrying on is superseded by this one.
     if (job.bookId != null && job.bookId !== entry.book.id) await library.binBooks([job.bookId]).catch(() => {});
     Object.assign(job, { bookId: entry.book.id, done: entry.book.chapters, links, status: links.length ? 'queued' : 'done' });
@@ -7756,7 +7756,7 @@ function leftoverToQueue(left) {
   const name = String(left.bookTitle || left.name || 'From the web').replace(LEFTOVER_SUFFIX, '').replace(/ — from .*$/, '');
   webQueue.unshift({
     id: `q-${Date.now()}`, name, author: left.author || '', sources: left.sources || [], cover: '',
-    links: left.links.map(({ url, text }) => ({ url, text })), total: left.links.length, done: 0,
+    links: left.links.map(keptLink), total: left.links.length, done: 0,
     status: 'queued', stops: 0, ...(left.bookId != null ? { bookId: left.bookId } : {}),
   });
   webLeftovers = webLeftovers.filter((each) => each.id !== left.id);
@@ -9894,6 +9894,7 @@ async function findWebLinks() {
     : null;
   let readPart = null;   // { read, of } when the list was read only so far
   let pickListed = null; // picked in the site: every chapter its page listed
+  let sourcesNote = '';  // the same book from more than one site: what came from where
   const mine = ++webSearch;
   const current = () => mine === webSearch;
   holdSearch(true);
@@ -9950,6 +9951,19 @@ async function findWebLinks() {
         return;
       }
       links = found.links;
+      /* The same book from more than one site: one list, the first site's,
+       * with what it lacks filled in from the others, and their copies kept
+       * to fall back on. */
+      const sites = [...new Set(addresses.map(siteOfAddress).filter(Boolean))];
+      if (sites.length > 1) {
+        const merged = web.mergeSources(links, sites, siteOfAddress);
+        links = merged.links;
+        sourcesNote = merged.filled || merged.backed
+          ? ` From ${merged.sites.length} sites: ${merged.from[merged.sites[0]]} chapters from ${merged.sites[0]}`
+            + `${merged.filled ? `, ${merged.filled} it lacks filled in from ${merged.sites.slice(1).filter((site) => merged.from[site]).join(', ')}` : ''}`
+            + `${merged.backed ? `; ${merged.backed} with another site to fall back on if one does not come` : ''}.`
+          : '';
+      }
       title = found.title;
       author = found.author;
       cover = found.cover;
@@ -9987,6 +10001,7 @@ async function findWebLinks() {
         + (wordpress && newestFirstList ? ' A WordPress list of posts: every page of it was read.' : '')
         + (order.how === 'reversed' ? ' The site listed them newest first, so the order has been turned round.' : '')
         + (order.how === 'sorted' ? ' The site listed them out of order, so they have been put in chapter order.' : '')
+        + sourcesNote
         + (!el('web-direct').checked && chapters < 3 ? ' No chapters yet? The site may still have been loading — tap Search for more.' : ''));
     el('web-filter').value = '';
     const update = await markWhatTheBookHas(webState.links);
@@ -10346,6 +10361,9 @@ let delayDefaults = { gap: 250, jitter: 0, listGap: 4000, listJitter: 2000 };
 let delaysShownFor = '';                   // the site the fields now hold, '' for the usual
 
 const SITE_DELAYS_KEPT = 300;
+
+/** A chapter's link as kept (in the queue, a leftover): with its other sites' copies, if it has any. */
+const keptLink = ({ url, text, alts }) => ({ url, text, ...(alts?.length ? { alts } : {}) });
 
 function siteOfAddress(address) {
   try { return siteKey(new URL(address).hostname); } catch { return ''; }

@@ -2247,6 +2247,7 @@ await t('a queue of websites: books of their own, several at once but never two 
   const settle = new Function('web', 'notifyBuild', `const QUEUE_RETRY_MS = 900000; const QUEUE_MAX_STOPS = 5;
     const queueHalts = (reason) => web.blocked(reason) || web.wantsCheck(reason) || web.tooMany(reason);
     const webQueue = []; const queueJobs = new Map(); const siteOfJob = () => '';
+    const keptLink = ({ url, text, alts }) => ({ url, text, ...(alts?.length ? { alts } : {}) });
     ${fn('settleJob')}; return settleJob;`)(web, (n) => notified.push(n));
   const job = () => ({ name: 'N', links: [], total: 10, stops: 0 });
   const rest = [{ url: 'https://a.example/5', text: '5화' }];
@@ -2795,6 +2796,63 @@ await t("a site's name stamped into its chapters is taken out; a site read in th
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /web\.setReadInBrowser\(\(host\) => !!browserSites\[siteKey\(host\)\]\);/);
   assert.match(app, /store\.saveSettings\(\{ browserSites \}\)/);
+});
+
+await t('a contents in numbered pages joined by "下一页" (hetushu): every page followed, onward only', async () => {
+  const page = (n, last) => `<html><body><a href="/book/4892/catalog-${n - 1}.html">上一页</a>${n < last ? `<a href="/book/4892/catalog-${n + 1}.html">下一页</a>` : '<span>下一页</span>'}
+<ul>${Array.from({ length: 3 }, (_, i) => `<li><a href="/book/4892/${3626689 + (n - 1) * 3 + i}.html">第${(n - 1) * 3 + i + 1}章 题</a></li>`).join('')}</ul></body></html>`;
+  const doc = (html) => new window.DOMParser().parseFromString(html, 'text/html');
+  assert.equal(web.nextListOf(doc(page(1, 3)), 'https://m.hetushu.com/book/4892/catalog-1.html'), 'https://m.hetushu.com/book/4892/catalog-2.html');
+  assert.equal(web.nextListOf(doc(page(3, 3)), 'https://m.hetushu.com/book/4892/catalog-3.html'), null);
+  assert.equal(web.numberedPage('/book/4892/catalog-2.html', '/book/4892/catalog-1.html'), -1);
+  assert.equal(web.numberedPage('/book/4892/catalog.html', '/book/4892/catalog-2.html'), 1);
+  assert.equal(web.numberedPage('/book/4892/catalog-1.html', '/book/4893/catalog-1.html'), null);
+  // Read through: all three pages' chapters, the list asked for once a page.
+  const asked = [];
+  const site = async (url) => {
+    asked.push(url);
+    const n = Number(/catalog-(\d+)/.exec(url)[1]);
+    return { url, blob: new Blob([page(n, 3)]), type: 'text/html', rendered: false };
+  };
+  const found = await web.findLinks(['https://m.hetushu.com/book/4892/catalog-1.html'], { fetchPage: site, listGap: 0, listJitter: 0 });
+  assert.equal(found.links.filter((l) => /第\d+章/.test(l.text)).length, 9);
+  assert.deepEqual(asked.map((u) => /catalog-(\d+)/.exec(u)[1]), ['1', '2', '3']);
+});
+
+await t('one book from several sites: the first list, its gaps filled from the others in place, their copies to fall back on', async () => {
+  const site = (url) => new URL(url).hostname.split('.')[0];
+  const a = [1, 2, 3, 5, 6, 9].map((n) => ({ url: `https://a.example/b/${n}`, text: `${n}화` }));
+  const b = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => ({ url: `https://b.example/c/${n}`, text: `Chapter ${n}` }));
+  const menu = { url: 'https://b.example/', text: 'Home', chrome: true };
+  const merged = web.mergeSources([...a, menu, ...b], ['a', 'b'], site);
+  assert.deepEqual(merged.links.map((l) => Number.parseInt(l.text.replace(/\D+/, ''), 10)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.deepEqual(merged.links.filter((l) => l.source === 'b').map((l) => l.url.split('/').pop()), ['4', '7', '8', '10']);
+  assert.deepEqual(merged.links[0].alts, [{ url: 'https://b.example/c/1' }]);
+  assert.deepEqual([merged.filled, merged.backed, merged.from], [4, 6, { a: 6, b: 4 }]);
+  assert.ok(!merged.links.some((l) => l.text === 'Home'), "the other site's menus came along");
+  // A list newest first stays so, the filled-in chapters in their places.
+  const down = web.mergeSources([...a].reverse().concat(b), ['a', 'b'], site);
+  assert.deepEqual(down.links.map((l) => Number.parseInt(l.text.replace(/\D+/, ''), 10)), [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+  // One site: as it was.
+  assert.equal(web.mergeSources(a, ['a'], site).links, a);
+
+  // Downloading: a chapter that will not come from the first site is read from the next.
+  const asked = [];
+  const page = (title) => `<html><head><title>${title}</title></head><body><article><h1>${title}</h1>${'<p>Story words go on here at length, more than enough of them to count as a chapter.</p>'.repeat(10)}</article></body></html>`;
+  const fetchPage = async (url) => {
+    asked.push(url);
+    if (url === 'https://a.example/b/3') throw new Error('the site answered 404 — that page is not there');
+    return { url, blob: new Blob([page(url.split('/').pop())]), type: 'text/html', rendered: false };
+  };
+  const got = await web.readPages(merged.links.slice(0, 4), { fetchPage, gap: 0, patience: { retry: 0, refresh: [0], backoff: [0], cool: 0 } });
+  assert.equal(got.chapters.length, 4);
+  assert.deepEqual(got.failed, []);
+  assert.ok(asked.includes('https://b.example/c/3'), 'the other site was not asked for the missing chapter');
+  assert.ok(!asked.includes('https://b.example/c/1'), 'another site was asked for a chapter that came');
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /const merged = web\.mergeSources\(links, sites, siteOfAddress\);/);
+  assert.match(app, /const keptLink = \(\{ url, text, alts \}\) => \(\{ url, text, \.\.\.\(alts\?\.length \? \{ alts \} : \{\}\) \}\);/);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /links: links\.map\(\(\{ url, text, alts \}\) => \(\{ url, text, \.\.\.\(alts\?\.length \? \{ alts \} : \{\}\) \}\)\)/);
 });
 
 console.log(`\n${pass} assertions passed`);

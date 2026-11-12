@@ -805,8 +805,8 @@ function pathPagesOf(links, here) {
  * numbered pages: "다음", "Next", "›", or marked rel="next". Only one that
  * stays on the same page with another query, or goes to /page/N of it:
  * "next" on a chapter's page is the next chapter, never this. */
-const NEXT_LIST = /^[\s<«‹]*(다음|다음\s*페이지|다음\s*목록|next|next\s*page|older|older\s*posts|›|»|>|>>)[\s>»›→]*$/i;
-function nextListOf(doc, pageUrl) {
+const NEXT_LIST = /^[\s<«‹]*(다음|다음\s*페이지|다음\s*목록|next|next\s*page|older|older\s*posts|下一[页頁]|下[页頁]|›|»|>|>>)[\s>»›→]*$/i;
+export function nextListOf(doc, pageUrl) {
   let here;
   try { here = new URL(pageUrl); } catch { return null; }
   const base = here.pathname.replace(/\/page\/\d+\/?$/, '').replace(/\/+$/, '');
@@ -818,13 +818,36 @@ function nextListOf(doc, pageUrl) {
     url.hash = '';
     if (url.origin !== here.origin || url.href === here.href) continue;
     const path = url.pathname.replace(/\/page\/\d+\/?$/, '').replace(/\/+$/, '');
-    if (path !== base) continue;
+    /* The same list, or the same address with its page number on (catalog-1.html
+     * to catalog-2.html, list_2, index/3): onward, never back. */
+    if (path !== base) {
+      const numbered = numberedPage(here.pathname, url.pathname);
+      if (numbered === null || numbered <= 0) continue;
+    }
     // Onward only: a "›" on the last page that leads to itself, or to page 1, is not.
     const there = pageNumberOf(url);
     if (there !== null && there <= (pageNumberOf(here) ?? 1)) continue;
     return url.href;
   }
   return null;
+}
+
+/** Two addresses alike but for the last number in them (catalog-1.html, catalog-2.html):
+ *  how far on the second is (1 for the next page), or null if they differ otherwise. */
+export function numberedPage(fromPath, toPath) {
+  /* Only a page named as one -- catalog-2, list_2, index2 -- not a bare number
+   * (/book/7/2, /3626690.html), which is a chapter's address as often as not. */
+  const named = (path) => /[a-z]/i.test((path.replace(/\/+$/, '').split('/').pop() || '').replace(/\.(html?|php|aspx?)$/i, ''));
+  if (!named(toPath)) return null;
+  const last = /(\d+)(?!.*\d)/;
+  const a = last.exec(fromPath);
+  const b = last.exec(toPath);
+  if (!b) return null;
+  // A first page without a number of its own (catalog.html to catalog-2.html, list/ to list/2).
+  const from = a && fromPath.replace(last, '#') === toPath.replace(last, '#') ? Number(a[1]) : null;
+  if (from !== null) return Number(b[1]) - from;
+  const bare = toPath.replace(/[_-]?\d+(?!.*\d)/, '').replace(/\/+$/, '');
+  return bare === fromPath.replace(/\/+$/, '') ? Number(b[1]) - 1 : null;
 }
 
 /** The page number an address of a list gives, in its query or as /page/N; null if none. */
@@ -1018,6 +1041,69 @@ const NUMERAL = '[0-9０-９]+(?:\\.[0-9]+)?|[零〇一二两兩三四五六七�
  * Nothing said for fewer than five numbered chapters: too few to tell a gap
  * from a choice.
  */
+/* One book from several sites: the first site's list, with the chapters it
+ * lacks filled in from the others (by chapter number, each in its place),
+ * and for every chapter it has, the others' copies kept as `alts` -- tried in
+ * turn should the first not come (readPages). Menus and unnumbered links
+ * come from the first site only. `sites`: the sites in the order given;
+ * `siteOf(url)`: which site an address is. */
+export function mergeSources(links, sites, siteOf) {
+  const bySite = new Map(sites.map((site) => [site, []]));
+  for (const link of links) {
+    const site = siteOf(link.url);
+    if (!bySite.has(site)) bySite.set(site, []);
+    bySite.get(site).push(link);
+  }
+  const order = [...bySite.keys()].filter((site) => bySite.get(site).length);
+  if (order.length < 2) return { links, filled: 0, backed: 0, sites: order, from: {} };
+  const numberOf = (link) => {
+    if (link.chrome) return null;
+    const { kind, number } = chapterKind(link.text || '');
+    return kind === 'main' && Number.isFinite(number) ? number : null;
+  };
+  const merged = bySite.get(order[0]).map((link) => ({ ...link }));
+  const byNumber = new Map();
+  for (const link of merged) {
+    const n = numberOf(link);
+    if (n !== null && !byNumber.has(n)) byNumber.set(n, link);
+  }
+  const firsts = merged.map(numberOf).filter((n) => n !== null);
+  const descending = firsts.length > 1 && firsts[0] > firsts.at(-1);
+  const from = { [order[0]]: byNumber.size };
+  let filled = 0;
+  for (const site of order.slice(1)) {
+    from[site] = 0;
+    for (const link of bySite.get(site)) {
+      const n = numberOf(link);
+      if (n === null) continue;
+      const have = byNumber.get(n);
+      if (have) {
+        have.alts = have.alts || [];
+        if (have.url !== link.url && !have.alts.some((alt) => alt.url === link.url)) have.alts.push({ url: link.url });
+        continue;
+      }
+      // In its place: after the nearest chapter before it, in the list's own direction.
+      let at = -1;
+      let best = null;
+      merged.forEach((other, i) => {
+        const k = numberOf(other);
+        if (k === null || (descending ? k <= n : k >= n)) return;
+        if (best === null || (descending ? k < best : k > best)) { best = k; at = i + 1; }
+      });
+      if (best === null) {
+        const first = merged.findIndex((other) => numberOf(other) !== null);
+        at = first < 0 ? merged.length : first;
+      }
+      const added = { ...link, source: site };
+      merged.splice(at, 0, added);
+      byNumber.set(n, added);
+      filled += 1;
+      from[site] += 1;
+    }
+  }
+  return { links: merged, filled, backed: merged.filter((link) => link.alts?.length).length, sites: order, from };
+}
+
 export function numberGaps(links) {
   const counts = new Map();
   for (const link of links) {
@@ -2516,7 +2602,27 @@ export async function readPages(links, {
       const link = links[at];
       let got = false;
       try {
-        got = await fetchAgain(link, at);
+        try {
+          got = await fetchAgain(link, at);
+        } catch (error) {
+          /* The same chapter from the book's other sites, in turn, before the
+           * download stops here: one site missing a chapter, or refusing it,
+           * is what the others are for. */
+          const alts = Array.isArray(link.alts) ? link.alts : [];
+          if (error?.paused || !alts.length || pausing()) throw error;
+          let last = error;
+          for (const alt of alts) {
+            try {
+              got = await fetchAgain({ ...link, url: alt.url, alts: null }, at);
+              last = null;
+              break;
+            } catch (other) {
+              last = other;
+              if (other?.paused) break;
+            }
+          }
+          if (last) throw last;
+        }
       } catch (error) {
         // The earliest page to fail is where it stops; a later one that
         // fails meanwhile is part of the rest anyway.
@@ -2542,7 +2648,7 @@ export async function readPages(links, {
 
   const failed = stopped ? [stopped] : [];
   const rest = stopped
-    ? links.slice(stopAt).map(({ url, text }, n) => ({ url, text, ...(n === 0 ? { reason: stopped.reason } : {}) }))
+    ? links.slice(stopAt).map(({ url, text, alts }, n) => ({ url, text, ...(alts?.length ? { alts } : {}), ...(n === 0 ? { reason: stopped.reason } : {}) }))
     : [];
   if (!chapters.length) {
     const why = stopped?.reason;

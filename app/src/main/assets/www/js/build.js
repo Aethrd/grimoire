@@ -269,7 +269,7 @@ export const hasBook = (bookId) => parts.some((part) => part.bookId === bookId);
  */
 function leftOf(part, pages, reason = '') {
   if (!part.web) return {};
-  const links = (pages || part.web.links).map(({ url, text }) => ({ url, text }));
+  const links = (pages || part.web.links).map(({ url, text, alts }) => ({ url, text, ...(alts?.length ? { alts } : {}) }));
   if (!links.length) return {};
   return {
     web: {
@@ -303,7 +303,7 @@ export function webPart({
     // Pages left over from an earlier build, being tried again.
     leftover,
     name: name || 'From the web',
-    web: { links: links.map(({ url, text }) => ({ url, text })), pictures, author, sources, gap, jitter },
+    web: { links: links.map(({ url, text, alts }) => ({ url, text, ...(alts?.length ? { alts } : {}) })), pictures, author, sources, gap, jitter },
     coverBlob: cover,
     chapterCount: links.length,
   };
