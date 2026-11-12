@@ -9451,14 +9451,45 @@ const dataUrlOf = (blob) => new Promise((resolve, reject) => {
 function paintWebGaps() {
   const box = el('web-gaps');
   if (!box) return;
-  const { missing, count, twice, from, to } = web.numberGaps(webState.links.filter((link) => link.picked));
+  const ticked = webState.links.filter((link) => link.picked);
+  const { missing, count, twice, from, to } = web.numberGaps(ticked);
   const shown = (list) => (list.length > 12 ? `${list.slice(0, 12).join(', ')} and ${list.length - 12} more` : list.join(', '));
+  const picking = Array.isArray(webState.pickListed);
   const lines = [];
   if (count) {
     lines.push(`${count} chapter${count === 1 ? '' : 's'} missing between ${from} and ${to}: ${shown(missing)}. `
-      + 'Not on the site, or not found yet — Search for more, or Find links again, may bring them.');
+      + (picking
+        ? 'Passed over in the drag, or not in the site\'s list — pick again to take them.'
+        : 'Not on the site, or not found yet — Search for more, or Find links again, may bring them.'));
   }
   if (twice.length) lines.push(`Ticked twice: ${shown(twice.map(String))} — the same chapter number on two links.`);
+  /* Picked in the site: what its page listed and the pick left out -- a drag
+   * that stopped short of the end, or began past the start. Said, not
+   * ticked: a pick of only some chapters is often what was meant. */
+  if (picking && webState.pickListed.length) {
+    const numbers = (texts) => {
+      const set = new Set();
+      for (const text of texts) {
+        const { kind, number } = web.chapterKind(text);
+        if (kind === 'main' && Number.isInteger(number) && number >= 0) set.add(number);
+      }
+      return set;
+    };
+    const listed = numbers(webState.pickListed);
+    const have = numbers(ticked.map((link) => link.text));
+    const left = [...listed].filter((n) => !have.has(n)).sort((a, b) => a - b);
+    if (left.length && listed.size >= 5) {
+      const ranges = [];
+      for (let i = 0; i < left.length;) {
+        let j = i;
+        while (j + 1 < left.length && left[j + 1] === left[j] + 1) j += 1;
+        ranges.push(i === j ? String(left[i]) : `${left[i]}–${left[j]}`);
+        i = j + 1;
+      }
+      const all = [...listed].sort((a, b) => a - b);
+      lines.push(`The site's page lists ${all[0]}–${all.at(-1)}; ${left.length} of them not picked: ${shown(ranges)}.`);
+    }
+  }
   box.hidden = !lines.length;
   box.textContent = lines.length ? `⚠ ${lines.join(' ')}` : '';
 }
@@ -9597,6 +9628,7 @@ async function findWebLinks() {
     ? new Set((await store.byIndex('chapters', 'bookId', webState.updating)).map((chapter) => chapter.from).filter(Boolean))
     : null;
   let readPart = null;   // { read, of } when the list was read only so far
+  let pickListed = null; // picked in the site: every chapter its page listed
   const mine = ++webSearch;
   const current = () => mine === webSearch;
   holdSearch(true);
@@ -9622,6 +9654,7 @@ async function findWebLinks() {
         return;
       }
       links = picked.links.map((link) => ({ url: link.url, text: link.text, chrome: false, kind: null }));
+      pickListed = picked.listed || [];
       // The page's title, less the site's name after it ("Book - Site").
       title = picked.title.split(/\s+[|\-–—·]\s+/)[0] || picked.title;
     } else {
@@ -9665,6 +9698,7 @@ async function findWebLinks() {
 
     const likely = web.likelyChapters(links, addresses[0]);
     webState.links = links.map((link) => ({ ...link, likely: likely.has(link.url), picked: true, got: undefined }));
+    webState.pickListed = pickListed;
     webState.sources = addresses;
     webState.searches = 0;
     webState.title = title;
@@ -10127,7 +10161,7 @@ function webDelay() {
 
 function clearWeb() {
   Object.assign(webState, {
-    links: [], title: '', author: '', cover: '', coverData: '', sources: [], reversed: false, titleTouched: false, leftover: null,
+    links: [], title: '', author: '', cover: '', coverData: '', sources: [], reversed: false, titleTouched: false, leftover: null, pickListed: null,
     manualOrder: false, carryOn: null, searches: 0, updating: null,
   });
   const resume = el('web-resume');

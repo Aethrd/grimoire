@@ -471,6 +471,8 @@ public class WebBridge {
             + "p.holdAt=function(x,y,q){var c=toPage(x,y),a=linkAt(c.x,c.y);if(!a)return addressless(c.x,c.y)?'none':false;begin(a,c.x,c.y,q);return true;};"
             + "p.dragTo=function(x,y){if(!drag)return;var c=toPage(x,y);fx=c.x;fy=c.y;follow();};"
             + "p.release=function(){var was=drag&&quiet&&!moved,a=p.from;end();if(was&&a)tap(a);};"
+            /* Every chapter the page lists, picked or not: what is left out of a pick is told by them. */
+            + "p.listed=function(){return all().slice(0,5000).map(function(a){return(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,140);});};"
             /* Lifted before the app took the touch: the page had it all, its tap included. */
             + "p.cancelHold=function(){drag=false;clearInterval(roll);};"
             /* The page's own hold, where the app does not catch it (the tests; an old Android). */
@@ -620,6 +622,9 @@ public class WebBridge {
             + "if(hit){seen[u]=1;out.push({url:u,text:(a.textContent||'').replace(/\\s+/g,' ').trim()});}}"
             + "return JSON.stringify(out);}catch(e){return '[]';}})()";
 
+    /** The names of every chapter the shown page lists (see __gPick.listed). */
+    private static final String LISTED = "(function(){try{return JSON.stringify(window.__gPick&&__gPick.listed?__gPick.listed():[]);}catch(e){return '[]';}})()";
+
     @SuppressLint("SetJavaScriptEnabled")
     private void openShown(final String id, final String address, final boolean pick) {
         main.post(() -> {
@@ -755,13 +760,14 @@ public class WebBridge {
         if (shownPicking && view != null) {
             shownPicking = false;
             final String title = view.getTitle();
-            view.evaluateJavascript(PICKED, (picked) -> finishShown(picked, title));
+            view.evaluateJavascript(PICKED, (picked) ->
+                    view.evaluateJavascript(LISTED, (listed) -> finishShown(picked, title, listed)));
             return;
         }
-        finishShown(null, null);
+        finishShown(null, null, null);
     }
 
-    private void finishShown(String picked, String title) {
+    private void finishShown(String picked, String title, String listed) {
         String id = shownId;
         WebView view = shownView;
         String at = view != null && view.getUrl() != null ? view.getUrl() : null;
@@ -779,6 +785,10 @@ public class WebBridge {
                 if (list.startsWith("\"")) list = new org.json.JSONTokener(list).nextValue().toString();
                 result.put("links", new org.json.JSONArray(list));
                 result.put("title", title == null ? "" : title);
+                if (listed != null) {
+                    String names = listed.startsWith("\"") ? new org.json.JSONTokener(listed).nextValue().toString() : listed;
+                    try { result.put("listed", new org.json.JSONArray(names)); } catch (JSONException ignored) { /* none */ }
+                }
             }
         } catch (JSONException ignored) { /* none picked */ }
         settle(id, true, result.toString());

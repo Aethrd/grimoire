@@ -2440,6 +2440,10 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   w.__gPick.dragTo(50, 500);
   w.__gPick.release();
   assert.deepEqual(JSON.parse(w.eval(script('PICKED'))).map((l) => l.text), ['407화 악은 삶을 바란다', '406화 악은 삶을 바란다', '405화 악은 삶을 바란다']);
+  // Every link the page lists, picked or not: its chapters are known among them by their numbers.
+  const listedNames = JSON.parse(w.eval(script('LISTED')));
+  assert.equal(listedNames.filter((name) => web.chapterKind(name).kind === 'main').length, 10);
+  assert.ok(listedNames.includes('410화 악은 삶을 바란다') && listedNames.includes('401화 악은 삶을 바란다'));
   // The Drag switch on: begun at the touch, quietly. Never moved, it was a tap -- the first, then the last.
   const texts = () => JSON.parse(w.eval(script('PICKED'))).map((l) => Number.parseInt(l.text, 10));
   under = anchors[1];

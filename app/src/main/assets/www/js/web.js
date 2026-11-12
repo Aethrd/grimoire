@@ -309,7 +309,9 @@ export function pickSite(url) {
         const links = (Array.isArray(answer.links) ? answer.links : [])
           .filter((link) => /^https?:/i.test(String(link?.url || '')))
           .map((link) => ({ url: String(link.url).replace(/#.*$/, ''), text: tidy(String(link.text || '')) }));
-        resolve({ url: answer.url || url, title: tidy(String(answer.title || '')), links });
+        // Every chapter the page listed, picked or not: what a pick left out is told by them.
+        const listed = (Array.isArray(answer.listed) ? answer.listed : []).map((text) => tidy(String(text || ''))).filter(Boolean);
+        resolve({ url: answer.url || url, title: tidy(String(answer.title || '')), links, listed });
       },
     });
     try {

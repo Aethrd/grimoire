@@ -277,6 +277,26 @@ await t('per site set to two: two books of one site side by side, and no more', 
   assert.equal((await store.settings()).queuePerSite, 1);
 });
 
+await t('picked in the site: a chapter passed over in the drag, and the page\'s chapters left out, are said', async () => {
+  const fetchBefore = window.GrimoireWeb.fetch;
+  const picked = [1, 2, 3, 4, 5, 7, 8].map((n) => ({ url: `https://pick.example/b/${n}`, text: `${n}화` }));
+  const listed = Array.from({ length: 10 }, (_, i) => `${i + 1}화`);
+  window.GrimoireWeb.pickFromSite = (id, url) => setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url, title: 'B', links: picked, listed })), 0);
+  const address = document.getElementById('web-address');
+  address.value = 'https://pick.example/b';
+  address.dispatchEvent(new window.Event('input'));
+  document.getElementById('web-pick').checked = true;
+  document.getElementById('web-find').click();
+  await new Promise((r) => setTimeout(r, 300));
+  const gaps = document.getElementById('web-gaps');
+  assert.equal(gaps.hidden, false);
+  assert.match(gaps.textContent, /1 chapter missing between 1 and 8: 6\. Passed over in the drag/);
+  assert.match(gaps.textContent, /The site's page lists 1–10; 3 of them not picked: 6, 9–10\./);
+  document.getElementById('web-pick').checked = false;
+  delete window.GrimoireWeb.pickFromSite;
+  window.GrimoireWeb.fetch = fetchBefore;
+});
+
 await t('two settings saved at once both stay saved', async () => {
   await Promise.all([store.saveSettings({ testOne: 1 }), store.saveSettings({ testTwo: 2 }), store.saveSettings({ testThree: 3 })]);
   const kept = await store.get('settings', 'app');
