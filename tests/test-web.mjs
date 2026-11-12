@@ -2272,7 +2272,7 @@ await t('a queue of websites: books of their own, several at once but never two 
   // A queued book cut off when the app closed goes back to its job, not to Build's leftovers.
   assert.match(app, /const job = entry\.book\.queueJob && jobs\.find\(\(each\) => each\.id === entry\.book\.queueJob\);/);
   // Kept across the app being closed; what was under way, queued again.
-  assert.match(app, /store\.saveSettings\(\{ webQueue, queueRunning: queueState\.running, queueAtOnce: queueState\.atOnce \}\)/);
+  assert.match(app, /store\.saveSettings\(\{ webQueue, queueRunning: queueState\.running, queueAtOnce: queueState\.atOnce, queueLocked: queueState\.locked \}\)/);
   assert.match(app, /\.\.\.\(job\.status === 'running' \? \{ status: 'queued' \} : \{\}\),/);
   // Queued from the Website screen with its own ticks and title; not for pages carrying a book on.
   assert.match(html, /id="web-queue"/);

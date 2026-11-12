@@ -2670,7 +2670,10 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .build-queue-list li .col.editable { cursor: pointer; }
 .build-queue-list li .col.editable b::after { content: ' ›'; opacity: .55; font-weight: 400; }
 /* The queue: websites waiting their turn on Build, one book each. */
-.build-queue-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.build-queue-head { display: flex; align-items: center; gap: 10px; }
+.build-queue-head strong { flex: 1; min-width: 0; }
+.build-queue-lock[aria-pressed="true"] svg { fill: none; }
+.build-queue-lock[aria-pressed="true"] svg rect { fill: currentColor; }
 .build-queue-list { list-style: none; margin: 8px 0 0; padding: 0; }
 .build-queue-list li { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-top: 1px solid var(--divider); }
 .build-queue-list li .col { flex: 1; min-width: 0; overflow-wrap: anywhere; }

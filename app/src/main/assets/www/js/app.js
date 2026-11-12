@@ -6319,7 +6319,7 @@ function pauseBuild() {
  *          paused, done.
  */
 let webQueue = [];
-const queueState = { running: false, atOnce: 2, timer: null };
+const queueState = { running: false, atOnce: 2, timer: null, locked: false };
 const QUEUE_RETRY_MS = 15 * 60000;
 const QUEUE_MAX_STOPS = 5;
 const queueJobs = new Map();   // id -> { pausing, finish, run } for the jobs under way
@@ -6513,7 +6513,7 @@ function siteKey(hostname) {
 
 function saveQueue() {
   // What is under way is kept as such: on a restart it is queued again (see loadQueue).
-  store.saveSettings({ webQueue, queueRunning: queueState.running, queueAtOnce: queueState.atOnce }).catch(() => {});
+  store.saveSettings({ webQueue, queueRunning: queueState.running, queueAtOnce: queueState.atOnce, queueLocked: queueState.locked }).catch(() => {});
   paintQueue();
 }
 
@@ -6525,6 +6525,7 @@ function loadQueue(settings) {
     ...(job.status === 'running' ? { status: 'queued' } : {}),
   }));
   if ([1, 2, 3, 4, 5, 6].includes(settings.queueAtOnce)) queueState.atOnce = settings.queueAtOnce;
+  queueState.locked = settings.queueLocked === true;
   if (settings.queueRunning && webQueue.some((job) => ['queued', 'retry'].includes(job.status))) {
     setTimeout(() => toast('The queue was running when the app closed — Start queue on Build carries on.', 7000), 1500);
   }
@@ -6864,6 +6865,19 @@ function paintQueue() {
   if (!box) return;
   box.hidden = !webQueue.length;
   paintQueueHead();
+  /* The lock: shut, nothing in the queue is removed or moved -- no ✕, no arrows,
+   * no Clear done -- so a slip of the finger costs nothing. Books are still
+   * added, opened to be named, paused and retried. */
+  const locked = queueState.locked;
+  const lock = el('build-queue-lock');
+  if (lock) {
+    lock.setAttribute('aria-pressed', String(locked));
+    lock.title = locked ? 'Unlock the queue' : 'Lock the queue';
+    lock.setAttribute('aria-label', lock.title);
+    lock.innerHTML = locked
+      ? '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>'
+      : '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/></svg>';
+  }
   const count = (status) => webQueue.filter((job) => job.status === status).length;
   /* At once: up to six books side by side -- each from a site of its own, each
    * site asked no faster than its delay, so more at once asks no one site more. */
@@ -6882,7 +6896,7 @@ function paintQueue() {
       chip.onclick = () => { queueState.atOnce = n; saveQueue(); pumpQueue(); };
       once.appendChild(chip);
     }
-    if (count('done')) {
+    if (count('done') && !locked) {
       const clear = document.createElement('button');
       clear.className = 'chip';
       clear.textContent = 'Clear done';
@@ -6936,6 +6950,10 @@ function paintQueue() {
         row.appendChild(word('Retry', () => { job.status = 'queued'; job.stops = 0; job.halted = false; saveQueue(); if (queueState.running) pumpQueue(); }));
       } else if (job.status === 'retry') {
         row.appendChild(word('Now', () => { job.retryAt = 0; saveQueue(); pumpQueue(); }));
+      }
+      if (locked) {
+        list.appendChild(row);
+        return;
       }
       if (job.status !== 'done') {
         row.appendChild(icon('Move up', 'M12 19V5M5 12l7-7 7 7', move(-1), at === 0));
@@ -7594,6 +7612,11 @@ function wireWorkshop() {
   // Pressed again while it runs: that is Pause & keep.
   el('build-go').onclick = () => (buildRun ? pauseBuild() : runBuild());
   el('build-queue-go').onclick = () => (queueState.running ? pauseQueue() : startQueue());
+  el('build-queue-lock').onclick = () => {
+    queueState.locked = !queueState.locked;
+    saveQueue();
+    toast(queueState.locked ? 'Queue locked — nothing in it can be removed or moved.' : 'Queue unlocked.');
+  };
   /* The build itself: from the Build button, or Overnight's next try. (The
    * queue builds its books on its own: see runJob.) */
   runBuild = async () => {

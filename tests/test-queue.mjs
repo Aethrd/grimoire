@@ -85,6 +85,19 @@ await t('a book that stopped shows above every view, and goes to the queue first
 await t('the queue shows on Build, with each book and Start queue', async () => {
   const list = document.getElementById('build-queue-list');
   assert.equal(list.children.length, 4);
+  // Locked, nothing is removed or moved; still opened to be named. Unlocked again, as it was.
+  const buttons = () => [...list.querySelectorAll('button')].map((b) => b.title).filter(Boolean);
+  assert.ok(buttons().includes('Remove from the queue'));
+  document.getElementById('build-queue-lock').click();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(document.getElementById('build-queue-lock').getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(buttons(), []);
+  assert.equal((await store.settings()).queueLocked, true);
+  assert.ok(list.children[3].querySelector('.col.editable'), 'a locked queue cannot be opened to be named');
+  document.getElementById('build-queue-lock').click();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(buttons().includes('Move up') && buttons().includes('Remove from the queue'));
+  assert.equal((await store.settings()).queueLocked, false);
   assert.match(document.getElementById('build-queue-title').textContent, /4 waiting/);
   assert.equal(document.getElementById('build-queue-go').textContent, 'Start queue');
 });
