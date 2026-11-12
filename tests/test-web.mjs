@@ -1795,14 +1795,14 @@ await t('the delay is kept for every page -- retries too -- from when the last o
   // A page that says to wait is waited on, there, for up to three minutes.
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /private static final long RENDER_WAIT_MS = 180000;/);
-  assert.match(java, /long limit = holding \? RENDER_WAIT_MS : presses > 0 \? PRESS_MAX_MS : maxMs;/);
+  assert.match(java, /: holding \? RENDER_WAIT_MS : presses > 0 \? PRESS_MAX_MS : maxMs;/);
   assert.match(read('app/src/main/assets/www/js/web.js'), /if \(method === 'render'\) timeout = Math\.max\(timeout, press \? 16 \* 60000 : 240000\);/);
 });
 
 await t('a spinner left going once the chapter is there holds nothing; waiting and retries are said', async () => {
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\) \|\| noStoryYet\);/);
-  assert.match(java, /long limit = holding \? RENDER_WAIT_MS : presses > 0 \? PRESS_MAX_MS : maxMs;/);
+  assert.match(java, /: holding \? RENDER_WAIT_MS : presses > 0 \? PRESS_MAX_MS : maxMs;/);
   // The progress line: the delay being waited out, and why a chapter is tried again.
   const notes = [];
   let failed = false;
@@ -2086,6 +2086,19 @@ await t('a short chapter is known by its lines, and a comment section is no chap
   assert.equal(fenrir[6], '2');
   assert.match(java, /boolean storyThere = !accessCheck && \(storyLength >= READY_STORY/);
   assert.match(java, /accessCheck = "2"\.equals\(parts\[6\]\);/);
+  // Not let through in 45 s: handed to the reader to pass, not waited out for minutes -- nor got round.
+  assert.match(java, /long limit = checkingAccess && !waiting \? ACCESS_WAIT_MS/);
+  assert.match(java, /ACCESS_WAIT_MS = 45000;/);
+  assert.match(java, /\} else if \(checkingAccess\) \{\s+error = ACCESS_CHECK;/);
+  const said = 'the site\u2019s own access check (\u201cVerifying access\u2026\u201d) did not let the download through (a browser check) \u2014 tap Open the site, read a chapter there so the check passes, then Done';
+  assert.ok(java.includes('the site\\u2019s own access check (\\u201cVerifying access\\u2026\\u201d) did not let the "'));
+  assert.equal(web.accessCheck(new Error(said)), true);
+  assert.equal(web.wantsCheck(new Error(said)), true);
+  assert.equal(web.connectionTrouble(new Error(said)), false);
+  // Not asked again: the download stops there, waiting for the reader.
+  assert.match(read('app/src/main/assets/www/js/web.js'), /if \(blocked\(error\) \|\| scrambled\(error\) \|\| accessCheck\(error\)\) throw/);
+  // Overnight does not come back every 15 minutes to a check that wants a person.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /if \(web\.wantsCheck\(kept\.reason \|\| failed\[0\]\?\.reason\)\) \{\s+endOvernight\(\);/);
   // A whole chapter come, the check's line left behind somewhere: no longer held by it.
   assert.equal(shown(`<div class="chapter">${lines(14)}${lines(14)}${lines(14)}${lines(14)}</div><div><p>Verifying access…</p></div>`)[6], '0');
   assert.equal(shown(`${controls}<div class="chapter"><p>Loading chapter...</p></div>`)[6], '1');

@@ -7479,6 +7479,14 @@ function overnightAfter({ book, failed, kept, paused }) {
     }
     return false;
   }
+  // A check that wants a person: nobody is there to pass it, and coming back every 15 minutes asks the site for nothing.
+  if (web.wantsCheck(kept.reason || failed[0]?.reason)) {
+    endOvernight();
+    const text = 'The site wants its check passed by a person. Overnight has stopped: in Build, tap Open the site, pass it, then carry on.';
+    toast(`Overnight stopped. ${text}`, 15000);
+    notifyBuild({ title: 'Overnight stopped', text });
+    return true;
+  }
   // A chapter the site says is gone will never come: passed over, said in the morning.
   let left = kept;
   if (web.gone(kept.reason) && kept.links.length > 1) {

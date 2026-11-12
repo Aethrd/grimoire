@@ -109,6 +109,11 @@ public class WebBridge {
      *  a spinner -- is waited on, on the same page, before it is given up:
      *  never reloaded meanwhile. */
     private static final long RENDER_WAIT_MS = 180000;
+    /** How long a site's own access check ("Verifying access…") is waited on, before it is
+     *  taken for one that wants a person: handed to the reader (ACCESS_CHECK). */
+    private static final long ACCESS_WAIT_MS = 45000;
+    static final String ACCESS_CHECK = "the site\u2019s own access check (\u201cVerifying access\u2026\u201d) did not let the "
+            + "download through (a browser check) \u2014 tap Open the site, read a chapter there so the check passes, then Done";
     private static final long RENDER_QUIET_MS = 2500;
     private static final long RENDER_QUIET_STEP_MS = 2000;
     /** How often the open page is looked at. Looking is on the phone, in the page already
@@ -1071,6 +1076,8 @@ public class WebBridge {
         private String lastShape = "";
         /** What it was opened for is plainly on the page: then it is kept. */
         private boolean there;
+        /** The page's own access check ("Verifying access…") on show, when last looked at. */
+        private boolean checkingAccess;
         private long stillSince;
         private long startedAt;
 
@@ -1220,6 +1227,7 @@ public class WebBridge {
                 boolean noStoryYet = textOnly && !scroll && storyLength < STORY_SOME && mainStatus < 400
                         && now - startedAt < STORY_WAIT_MS && !deadStill;
                 boolean holding = !there && (waiting || (!scroll && loading) || noStoryYet);
+                checkingAccess = accessCheck && !there;
                 boolean busy = pending > 0 || holding;
                 /* A chapter is taken once its story is there and has stopped growing --
                  * whatever the adverts and the rest of the page go on doing, and before
@@ -1281,7 +1289,11 @@ public class WebBridge {
                     settled = (finished || visible) && !blank && !holding
                             && ((!busy && still >= settle) || still >= quietMs * RENDER_STUCK_SPELLS);
                 }
-                long limit = holding ? RENDER_WAIT_MS : presses > 0 ? PRESS_MAX_MS : maxMs;
+                /* A site's own "Verifying access…" that has not let this browser through in
+                 * ACCESS_WAIT_MS will not: given up then, and handed to the reader to pass,
+                 * not waited out for minutes -- nor ever got round. */
+                long limit = checkingAccess && !waiting ? ACCESS_WAIT_MS
+                        : holding ? RENDER_WAIT_MS : presses > 0 ? PRESS_MAX_MS : maxMs;
                 /* A list settled: its "show more" pressed, if it has one, and the list
                  * watched again -- until there is none, presses stop bringing more,
                  * or enough have been pressed. Spaced as the reader's list pages are. */
@@ -1330,6 +1342,8 @@ public class WebBridge {
             view.evaluateJavascript(FLATTEN + "'<!DOCTYPE html>'+document.documentElement.outerHTML", (value) -> {
                 if (lastShape.contains("|checking|") && !there) {
                     error = "the site wants its browser check passed (a bot check) — tap Open the site, let the check pass there, then Done";
+                } else if (checkingAccess) {
+                    error = ACCESS_CHECK;
                 } else {
                     raw = value;
                 }

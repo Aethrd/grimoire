@@ -260,6 +260,8 @@ export function forgetSite(url) {
 }
 
 /** An error that is a site's browser check, which showing the site can pass. */
+/** A site's own "Verifying access…" that the download's browser was not let past (WebBridge, ACCESS_CHECK). */
+export const accessCheck = (error) => /own access check/i.test(String(error?.message || error || ''));
 export const wantsCheck = (error) => /bot check|browser check|only lets a browser/i
   .test(String(error?.message || error || ''));
 
@@ -2649,7 +2651,8 @@ export async function readPages(links, {
       } catch (error) {
         if (error?.paused) throw error;
         // Blocked, or its text scrambled: not asked again, and the download stops here.
-        if (blocked(error) || scrambled(error)) throw Object.assign(error, { tries: tries + 1 });
+        // So with a site's own access check that wants a person: asking again only asks the site again.
+        if (blocked(error) || scrambled(error) || accessCheck(error)) throw Object.assign(error, { tries: tries + 1 });
         lastError = error;
         // Paused meanwhile: this page is where it stops, not tried again.
         if (pausing()) throw PAUSED();
