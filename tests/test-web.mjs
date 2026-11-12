@@ -2404,9 +2404,51 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   w.__gPick.dragTo(50, 500);
   w.__gPick.release();
   assert.deepEqual(JSON.parse(w.eval(script('PICKED'))).map((l) => l.text), ['407화 악은 삶을 바란다', '406화 악은 삶을 바란다', '405화 악은 삶을 바란다']);
+  // The Drag switch on: begun at the touch, quietly. Never moved, it was a tap -- the first, then the last.
+  const texts = () => JSON.parse(w.eval(script('PICKED'))).map((l) => Number.parseInt(l.text, 10));
+  under = anchors[1];
+  assert.equal(w.__gPick.holdAt(50, 300, true), true);
+  assert.deepEqual(texts(), [407, 406, 405], 'a touch alone changed what was marked');
+  w.__gPick.release();
+  assert.ok(anchors[1].classList.contains('__gPickStart'));
+  under = anchors[4];
+  w.__gPick.holdAt(50, 400, true);
+  w.__gPick.release();
+  assert.deepEqual(texts(), [409, 408, 407, 406]);
+  // Moved, it is a drag, as after a hold.
+  under = anchors[7];
+  w.__gPick.holdAt(50, 300, true);
+  under = anchors[9];
+  w.__gPick.dragTo(50, 500);
+  w.__gPick.release();
+  assert.deepEqual(texts(), [403, 402, 401]);
+  // Lifted before the app took the touch: nothing of the hold's, the page's own tap stands.
+  under = anchors[0];
+  w.__gPick.holdAt(50, 100, true);
+  w.__gPick.cancelHold();
+  w.__gPick.release();
+  assert.ok(!anchors[0].classList.contains('__gPickStart'));
+  assert.deepEqual(texts(), [403, 402, 401]);
   // Not on a link: nothing begun.
   under = w.document.body;
   assert.equal(w.__gPick.holdAt(50, 10), false);
+  // A reader's contents list: no links, the address kept on the item; picked the same.
+  const reader = new JSDOM(`<html><body><aside><h2>Contents</h2><ol>${Array.from({ length: 6 }, (_, i) => `<li role="button" data-href="/viewer/7/${i + 1}">${i + 1} 1장. 인간 비보호 구역 (${i + 1})</li>`).join('')}</ol>
+<ul><li id="bare" role="button">7 2장. 에리직톤 프로토콜 (1)</li></ul></aside></body></html>`, { runScripts: 'outside-only', url: 'https://r.example/viewer/7/1' });
+  const rw = reader.window;
+  rw.eval(script('PICKABLE'));
+  const items = rw.document.querySelectorAll('li[data-href]');
+  let over = items[1];
+  rw.document.elementFromPoint = () => over;
+  assert.equal(rw.__gPick.holdAt(50, 200), true);
+  over = items[4];
+  rw.__gPick.dragTo(50, 400);
+  rw.__gPick.release();
+  assert.deepEqual(JSON.parse(rw.eval(script('PICKED'))).map((l) => l.url), [2, 3, 4, 5].map((n) => `https://r.example/viewer/7/${n}`));
+  // One with no address at all: said so, not silently nothing.
+  over = rw.document.getElementById('bare');
+  assert.equal(rw.__gPick.holdAt(50, 500), 'none');
+  assert.match(java, /if \("\\"none\\""\.equals\(began\) && !toldNoAddress\)/);
   // What only opens the list out is let through, not marked: 더보기, Show more, a link to nowhere.
   const more = w.document.createElement('a');
   more.href = '#';
@@ -2428,6 +2470,13 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   assert.match(java, /private static final String PICKING_STARTS = "window\.__gPickNative=1;" \+ PICKABLE;/);
   assert.match(java, /WebViewCompat\.addDocumentStartJavaScript\(view, PICKING_STARTS, Collections\.singleton\("\*"\)\);\s+\}\s+holdToPick\(view\);/);
   assert.match(java, /view\.onTouchEvent\(cancel\);/);
+  // Android's own long-press (a selection, a link's menu) never has the touch; the app's hold comes first.
+  assert.match(java, /view\.setOnLongClickListener\(\(v\) -> true\);/);
+  assert.match(java, /getLongPressTimeout\(\) \* 0\.75/);
+  // Taken from the page only once it has begun on a chapter; with Drag on, at once.
+  assert.match(java, /if \(!"true"\.equals\(began\)\) return;[\s\S]{0,1400}view\.onTouchEvent\(cancel\);/);
+  assert.match(java, /if \(pickDrag\) begin\.run\(\);\s+else v\.postDelayed\(begin, hold\);/);
+  assert.match(java, /drag\.setText\(pickDrag \? "Drag: on" : "Drag: off"\);/);
   // The app: answered links into the list, the page's title less the site's name; back is nothing picked.
   window.GrimoireWeb = { pickFromSite: (id) => setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: 'https://k.example/b', title: '악은 삶을 바란다 - BOOKKOR', links: picked })), 0) };
   const answer = await web.pickSite('https://k.example/b');

@@ -385,31 +385,48 @@ public class WebBridge {
             + "if(document.documentElement)addStyle();document.addEventListener('DOMContentLoaded',addStyle);"
             + "['selectstart','copy'].forEach(function(t){window.addEventListener(t,function(e){e.stopImmediatePropagation();},true);});"
             + "window.addEventListener('contextmenu',function(e){e.preventDefault();e.stopImmediatePropagation();},true);"
-            + "var all=function(){return Array.prototype.slice.call(document.querySelectorAll('a[href]')).filter(chapterish);};"
+            /* A chapter: a link, or what a reader's own contents list holds its address
+             * in -- data-href, data-url, data-link -- where its items are no links. */
+            + "var SEL='a[href],[data-href],[data-url],[data-link]';"
+            + "var hrefOf=function(e){var h=e.getAttribute('href');return h!=null?h:(e.getAttribute('data-href')||e.getAttribute('data-url')||e.getAttribute('data-link')||'');};"
+            + "var all=function(){return Array.prototype.slice.call(document.querySelectorAll(SEL)).filter(chapterish);};"
             /* A link to another page, not one that only opens out the list. */
             + "var MORE=/^\\s*([+▼▽∨⌄]|(이전|다음)?\\s*(회차|목록)?\\s*(더\\s*보기|펼치기|펼쳐보기|전체\\s*보기|모두\\s*보기)|전체|show\\s*(more|all)|load\\s*more|view\\s*all|see\\s*all|more|expand|all\\s*chapters)\\s*[▼▽+…]*\\s*$/i;"
-            + "var chapterish=function(a){var h=a.getAttribute('href')||'';if(/^\\s*(#|javascript:)/i.test(h))return false;"
-            + "try{var u=new URL(a.href,location.href);if(!/^https?:$/.test(u.protocol))return false;"
+            + "var chapterish=function(a){var h=hrefOf(a);if(!h||/^\\s*(#|javascript:)/i.test(h))return false;"
+            + "try{var u=new URL(h,location.href);if(!/^https?:$/.test(u.protocol))return false;"
             + "if(u.origin+u.pathname+u.search===location.origin+location.pathname+location.search)return false;}catch(x){return false;}"
             + "return !MORE.test((a.textContent||'').replace(/\\s+/g,' '));};"
             + "var mark=function(x,y){var l=all(),i=l.indexOf(x),j=l.indexOf(y);if(i<0||j<0)return;if(i>j){var t=i;i=j;j=t;}"
             + "l.forEach(function(a,k){if(k>=i&&k<=j)a.classList.add('__gPicked');else a.classList.remove('__gPicked');});};"
             + "var linkAt=function(x,y){var w=window.innerWidth,xs=[x,w*.25,w*.5,w*.75];for(var i=0;i<xs.length;i++){"
-            + "var e=document.elementFromPoint(xs[i],y),a=e&&e.closest?e.closest('a[href]'):null;if(a&&chapterish(a))return a;}return null;};"
-            + "var drag=false,fx=0,fy=0,roll=null;"
-            + "var follow=function(){var a=linkAt(fx,fy);if(a&&p.from)mark(p.from,a);};"
-            + "var begin=function(a,x,y){drag=true;p.from=a;p.start=null;"
-            + "Array.prototype.forEach.call(document.querySelectorAll('.__gPickStart'),function(b){b.classList.remove('__gPickStart');});"
-            + "mark(a,a);fx=x;fy=y;clearInterval(roll);roll=setInterval(function(){var h=window.innerHeight,edge=90;"
+            + "var e=document.elementFromPoint(xs[i],y),a=e&&e.closest?e.closest(SEL):null;if(a&&chapterish(a))return a;}return null;};"
+            /* Something meant to be pressed, with no address to it: a reader's list whose
+             * chapters its own script opens -- there is nothing there to take. */
+            + "var addressless=function(x,y){var e=document.elementFromPoint(x,y);if(!e||!e.closest)return false;"
+            + "var it=e.closest('li,button,[role=\"button\"],[role=\"listitem\"],[role=\"option\"],[onclick],[tabindex]');"
+            + "if(!it&&getComputedStyle(e).cursor==='pointer')it=e;"
+            + "return !!it&&!it.closest(SEL)&&/\\S/.test(it.textContent||'');};"
+            + "var drag=false,quiet=false,moved=false,fx=0,fy=0,roll=null;"
+            /* Quiet (the Drag switch on, where a touch begins at once): nothing marked
+             * until the finger moves off the chapter it began on, and one that never
+             * does was a tap -- the first or the last of a range. */
+            + "var follow=function(){var a=linkAt(fx,fy);if(!a||!p.from)return;if(quiet&&!moved&&a===p.from)return;moved=true;mark(p.from,a);};"
+            + "var tap=function(a){if(!p.start){p.start=a;a.classList.add('__gPickStart');return;}"
+            + "var x=p.start;p.start=null;x.classList.remove('__gPickStart');mark(x,a);};"
+            + "var begin=function(a,x,y,q){drag=true;quiet=!!q;moved=false;p.from=a;"
+            + "if(!quiet){p.start=null;Array.prototype.forEach.call(document.querySelectorAll('.__gPickStart'),function(b){b.classList.remove('__gPickStart');});mark(a,a);}"
+            + "fx=x;fy=y;clearInterval(roll);roll=setInterval(function(){var h=window.innerHeight,edge=90;"
             + "if(fy>h-edge)window.scrollBy(0,Math.round(6+(fy-(h-edge))/2));else if(fy<edge)window.scrollBy(0,-Math.round(6+(edge-fy)/2));"
             + "follow();},40);};"
             + "var end=function(){if(drag){drag=false;clearInterval(roll);p.at=Date.now();}};"
             /* The app's hold: where the finger is, in the screen's own pixels. */
             + "var toPage=function(x,y){var v=window.visualViewport,d=window.devicePixelRatio||1,s=v?v.scale:1;"
             + "return{x:x/(d*s)+(v?v.offsetLeft:0),y:y/(d*s)+(v?v.offsetTop:0)};};"
-            + "p.holdAt=function(x,y){var c=toPage(x,y),a=linkAt(c.x,c.y);if(!a)return false;begin(a,c.x,c.y);return true;};"
+            + "p.holdAt=function(x,y,q){var c=toPage(x,y),a=linkAt(c.x,c.y);if(!a)return addressless(c.x,c.y)?'none':false;begin(a,c.x,c.y,q);return true;};"
             + "p.dragTo=function(x,y){if(!drag)return;var c=toPage(x,y);fx=c.x;fy=c.y;follow();};"
-            + "p.release=function(){end();};"
+            + "p.release=function(){var was=drag&&quiet&&!moved,a=p.from;end();if(was&&a)tap(a);};"
+            /* Lifted before the app took the touch: the page had it all, its tap included. */
+            + "p.cancelHold=function(){drag=false;clearInterval(roll);};"
             /* The page's own hold, where the app does not catch it (the tests; an old Android). */
             + "var hold=null,down=null;"
             + "window.addEventListener('touchstart',function(e){if(window.__gPickNative||e.touches.length!==1)return;var t=e.touches[0];"
@@ -420,42 +437,74 @@ public class WebBridge {
             + "e.preventDefault();fx=t.clientX;fy=t.clientY;follow();},{capture:true,passive:false});"
             + "var up=function(){clearTimeout(hold);down=null;if(!window.__gPickNative)end();};"
             + "window.addEventListener('touchend',up,true);window.addEventListener('touchcancel',up,true);"
-            + "window.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a||!chapterish(a))return;"
-            + "e.preventDefault();e.stopImmediatePropagation();if(Date.now()-p.at<400)return;"
-            + "if(!p.start){p.start=a;a.classList.add('__gPickStart');return;}"
-            + "var x=p.start;p.start=null;x.classList.remove('__gPickStart');mark(x,a);},true);})();";
+            + "window.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest(SEL):null;if(!a||!chapterish(a))return;"
+            + "e.preventDefault();e.stopImmediatePropagation();if(Date.now()-p.at<400)return;tap(a);},true);})();";
 
     /** The picking script, said to come from the app's own hold (see holdToPick). */
     private static final String PICKING_STARTS = "window.__gPickNative=1;" + PICKABLE;
 
+    /** The Drag switch in the picker's bar: on, a touch on a chapter picks at once, no hold. */
+    private boolean pickDrag;
+    /** Said already, for the page shown: its list's items have no addresses. */
+    private boolean toldNoAddress;
+
     /**
      * Hold and drag to pick, noticed here, before the page: a finger held still
-     * on the page for a long-press, and the page is told to begin at that
-     * point (__gPick.holdAt); from then the touch is the app's -- the page is
-     * told it was cancelled, so it neither scrolls nor starts a selection or a
-     * link's menu of its own -- and every move is passed on (dragTo) until the
-     * finger lifts (release). A finger that moves first is the page's: a scroll.
+     * on a chapter (a little sooner than Android's own long-press, so the page's
+     * text selection or link menu never gets it -- and those are turned off
+     * besides), and the page is asked to begin there (__gPick.holdAt). Once it
+     * has, the touch is the app's: the page is told it was cancelled, so it
+     * neither scrolls nor selects, and every move is passed on (dragTo) until
+     * the finger lifts (release). A finger that moves first is the page's: a
+     * scroll. With the Drag switch on there is no hold: a touch on a chapter
+     * begins at once (and one never moved is a tap, the first or last of a
+     * range); a touch anywhere else is still the page's, to scroll or press.
      */
     @SuppressLint("ClickableViewAccessibility")
     private void holdToPick(final WebView view) {
         final int slop = android.view.ViewConfiguration.get(activity).getScaledTouchSlop();
-        final long hold = android.view.ViewConfiguration.getLongPressTimeout();
+        final long hold = Math.max(300, Math.round(android.view.ViewConfiguration.getLongPressTimeout() * 0.75));
+        // The page's own long-press -- a selection, a link's menu -- is not had here.
+        view.setOnLongClickListener((v) -> true);
+        view.setHapticFeedbackEnabled(false);
         view.setOnTouchListener(new View.OnTouchListener() {
             private float downX;
             private float downY;
             private long downTime;
+            private boolean down;
+            private boolean asking;
             private boolean dragging;
             private long lastMove;
+            private float atX;
+            private float atY;
             private final Runnable begin = () -> {
-                dragging = true;
-                view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
-                android.view.MotionEvent cancel = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(),
-                        android.view.MotionEvent.ACTION_CANCEL, downX, downY, 0);
-                view.onTouchEvent(cancel);
-                cancel.recycle();
-                view.evaluateJavascript("window.__gPick&&__gPick.holdAt(" + downX + "," + downY + ")", (began) -> {
-                    // Not on a chapter: nothing to pick from there.
-                    if (!"true".equals(began)) dragging = false;
+                if (!down || dragging) return;
+                asking = true;
+                final boolean quiet = pickDrag;
+                view.evaluateJavascript("window.__gPick&&__gPick.holdAt(" + downX + "," + downY + "," + quiet + ")", (began) -> {
+                    asking = false;
+                    if ("\"none\"".equals(began) && !toldNoAddress) {
+                        toldNoAddress = true;
+                        android.widget.Toast.makeText(activity,
+                                "These chapters have no addresses - the site's reader opens them by its own script, so the app can't take them. Try the book's own contents page on the site.",
+                                android.widget.Toast.LENGTH_LONG).show();
+                    }
+                    if (!"true".equals(began)) return;          // not on a chapter: the page's touch
+                    if (!down) {
+                        // Lifted meanwhile: the page had the whole touch, its tap too.
+                        view.evaluateJavascript("window.__gPick&&__gPick.cancelHold()", null);
+                        return;
+                    }
+                    dragging = true;
+                    if (!quiet) {
+                        view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS,
+                                android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING);
+                    }
+                    android.view.MotionEvent cancel = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(),
+                            android.view.MotionEvent.ACTION_CANCEL, atX, atY, 0);
+                    view.onTouchEvent(cancel);
+                    cancel.recycle();
+                    view.evaluateJavascript("window.__gPick&&__gPick.dragTo(" + atX + "," + atY + ")", null);
                 });
             };
 
@@ -465,27 +514,35 @@ public class WebBridge {
                     case android.view.MotionEvent.ACTION_DOWN:
                         downX = e.getX();
                         downY = e.getY();
+                        atX = downX;
+                        atY = downY;
                         downTime = e.getDownTime();
+                        down = true;
                         dragging = false;
+                        asking = false;
                         v.removeCallbacks(begin);
-                        v.postDelayed(begin, hold);
+                        if (pickDrag) begin.run();
+                        else v.postDelayed(begin, hold);
                         return false;
                     case android.view.MotionEvent.ACTION_POINTER_DOWN:
                         v.removeCallbacks(begin);
                         return dragging;
                     case android.view.MotionEvent.ACTION_MOVE:
+                        atX = e.getX();
+                        atY = e.getY();
                         if (dragging) {
                             long now = android.os.SystemClock.uptimeMillis();
                             if (now - lastMove >= 30) {
                                 lastMove = now;
-                                view.evaluateJavascript("window.__gPick&&__gPick.dragTo(" + e.getX() + "," + e.getY() + ")", null);
+                                view.evaluateJavascript("window.__gPick&&__gPick.dragTo(" + atX + "," + atY + ")", null);
                             }
                             return true;
                         }
-                        if (Math.hypot(e.getX() - downX, e.getY() - downY) > slop) v.removeCallbacks(begin);
+                        if (!pickDrag && Math.hypot(atX - downX, atY - downY) > slop) v.removeCallbacks(begin);
                         return false;
                     case android.view.MotionEvent.ACTION_UP:
                     case android.view.MotionEvent.ACTION_CANCEL:
+                        down = false;
                         v.removeCallbacks(begin);
                         if (dragging) {
                             dragging = false;
@@ -504,8 +561,10 @@ public class WebBridge {
     /** The links marked (or, failing that, in the page's selection), in the page's
      *  order, as [{url, text}]. */
     private static final String PICKED = "(function(){try{var out=[],seen={},s=window.getSelection();"
-            + "var as=document.querySelectorAll('a[href]'),marked=document.querySelectorAll('a.__gPicked').length>0;"
-            + "for(var i=0;i<as.length;i++){var a=as[i],u=a.href;if(!/^https?:/i.test(u)||seen[u])continue;var hit=false;"
+            + "var as=document.querySelectorAll('a[href],[data-href],[data-url],[data-link]'),marked=document.querySelectorAll('.__gPicked').length>0;"
+            + "for(var i=0;i<as.length;i++){var a=as[i],u='';"
+            + "try{u=new URL(a.getAttribute('href')!=null?a.getAttribute('href'):(a.getAttribute('data-href')||a.getAttribute('data-url')||a.getAttribute('data-link')||''),location.href).href;}catch(x){continue;}"
+            + "if(!/^https?:/i.test(u)||seen[u])continue;var hit=false;"
             + "if(marked)hit=a.classList.contains('__gPicked');"
             + "else if(s)for(var r=0;r<s.rangeCount&&!hit;r++)hit=s.getRangeAt(r).intersectsNode(a);"
             + "if(hit){seen[u]=1;out.push({url:u,text:(a.textContent||'').replace(/\\s+/g,' ').trim()});}}"
@@ -573,16 +632,42 @@ public class WebBridge {
                 bar.setPadding(pad, pad / 2, pad, pad / 2);
                 android.widget.TextView note = new android.widget.TextView(activity);
                 note.setText(pick
-                        ? "Hold a chapter, then drag over the rest - or tap the first, then the last. Then Use selected."
+                        ? "Hold a chapter, then drag over the rest - or tap the first, then the last. Drag on: no hold needed."
                         : "Let the site's check pass (tap it if it asks), then Done.");
                 note.setTextColor(0xFFE6E1EA);
                 note.setTextSize(13);
                 bar.addView(note, new android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                // Picking: the note on a line of its own, the buttons under it, so neither is squeezed.
+                android.widget.LinearLayout buttons = bar;
+                if (pick) {
+                    bar.setOrientation(android.widget.LinearLayout.VERTICAL);
+                    bar.setGravity(android.view.Gravity.NO_GRAVITY);
+                    note.setLayoutParams(new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                    buttons = new android.widget.LinearLayout(activity);
+                    buttons.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+                    buttons.setGravity(android.view.Gravity.END | android.view.Gravity.CENTER_VERTICAL);
+                    bar.addView(buttons, new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                }
+                pickDrag = false;
+                toldNoAddress = false;
+                if (pick) {
+                    // The Drag switch: a touch on a chapter picks at once; off, the page scrolls as ever.
+                    final android.widget.Button drag = new android.widget.Button(activity);
+                    drag.setText("Drag: off");
+                    drag.setAllCaps(false);
+                    drag.setOnClickListener((b) -> {
+                        pickDrag = !pickDrag;
+                        drag.setText(pickDrag ? "Drag: on" : "Drag: off");
+                    });
+                    buttons.addView(drag);
+                }
                 android.widget.Button done = new android.widget.Button(activity);
                 done.setText(pick ? "Use selected" : "Done");
                 done.setAllCaps(false);
                 done.setOnClickListener((b) -> finishShown());
-                bar.addView(done);
+                buttons.addView(done);
                 column.addView(bar, new android.widget.LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
