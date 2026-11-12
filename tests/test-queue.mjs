@@ -230,8 +230,8 @@ await t("a queued book's line is said again in place, not the list drawn anew, w
   assert.ok(!/paintQueue\(\)/.test(track), 'the list is drawn anew at every step of a download');
   assert.match(track, /paintJobLine\(job\);/);
   // The whole row is the tap; a book under way says why it does not open.
-  assert.match(app, /row\.onclick = \(event\) => \{\s+if \(event\.target\.closest\('button'\)\) return;/);
-  assert.match(app, /toast\('Downloading now — once it is done, change its name or cover on the shelf\.'\)/);
+  assert.match(app, /row\.onclick = async \(event\) => \{\s+if \(event\.target\.closest\('button'\)\) return;/);
+  assert.match(app, /toast\('Downloading now — pause it to change it, or wait till it is done\.'\)/);
   // A slip in showing progress never stops a download.
   assert.match(app, /try \{ trackJob\(job, under, message, at, now, counts\); \} catch/);
 });
@@ -420,6 +420,26 @@ await t('two settings saved at once both stay saved', async () => {
   const kept = await store.get('settings', 'app');
   assert.deepEqual([kept.value.testOne, kept.value.testTwo, kept.value.testThree], [1, 2, 3]);
 });
+
+// Any book of the queue not downloading this moment opens -- paused, waiting to try again, begun or not --
+// and a begun one's changes go to its book on the shelf too; a done one opens its book.
+{
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  const assert = (await import('node:assert/strict')).default;
+  assert.match(app, /const editable = job\.status !== 'running' && job\.status !== 'done';/);
+  assert.match(app, /webQueue\.find\(\(job\) => job\.id === editingJob && job\.status !== 'running' && job\.status !== 'done'\)/);
+  assert.ok(!/!job\.bookId && job\.status !== 'running'/.test(app), 'a begun book still kept from opening');
+  assert.match(app, /onJobBook\(it, \{ title: it\.name \}\);/);
+  assert.match(app, /onJobBook\(it, \{ author: it\.author \|\| null \}\);/);
+  assert.match(app, /onJobBook\(it, \{ folder \}\);/);
+  assert.match(app, /\.\.\.\(it\.bookId != null \? \{ updating: it\.bookId \} : \{\}\)/);
+  // Begun downloading while being changed: not queued a second time.
+  assert.match(app, /if \(editingId && !editing\) \{/);
+  assert.match(app, /else if \(readable\) \{\s+const book = await store\.get\('books', job\.bookId\)/);
+  assert.match(app, /stopped\.textContent = where \|\| why/);
+  console.log('ok  any queued book not downloading opens');
+}
 
 console.log(`\n${pass} queue checks passed`);
 process.exit(0);

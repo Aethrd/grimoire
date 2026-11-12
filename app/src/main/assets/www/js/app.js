@@ -6601,7 +6601,8 @@ let shownParts = 0;
 function paintBuildIndex() {
   const index = el('build-index');
   if (!index) return;
-  const editing = buildIndex && webQueue.find((job) => job.id === editingJob && !job.bookId && job.status !== 'running');
+  // Any not downloading this moment -- queued, paused, waiting to try again, held -- begun or not.
+  const editing = buildIndex && webQueue.find((job) => job.id === editingJob && job.status !== 'running' && job.status !== 'done');
   if (!editing) editingJob = null;
   index.hidden = !buildIndex || !!editing;
   el('build-job-edit').hidden = !editing;
@@ -6615,12 +6616,36 @@ function paintBuildIndex() {
 
 /* ── a queued novel, opened ───────────────────────────────────────────
  *
- * Not yet started, it is named, given a cover and its chapters changed as
- * a book in Build is; kept as it is typed. Once started it is a book on the
- * shelf, edited there. A picture chosen is kept with it (as a data address,
+ * Whenever it is not downloading -- not started, paused, waiting to try
+ * again -- it is named, given a cover and folder and its chapters changed as
+ * a book in Build is; kept as it is typed. Begun, it is a book on the shelf
+ * as well: what is changed here is changed on that book at once, and its
+ * chapters here are the ones still to come. A picture chosen is kept with it (as a data address,
  * small); the site's own is fetched once, to be shown. */
 let editingJob = null;
 const jobCovers = new Map();   // job id -> object URL of the site's cover, as shown
+
+/* A begun one's book, changed with it -- its name, author, folder -- a moment
+ * after the last keystroke, not at each. */
+const jobBookChanges = new Map();   // book id -> { changes, timer }
+function onJobBook(job, changes) {
+  if (job?.bookId == null) return;
+  const pending = jobBookChanges.get(job.bookId) || { changes: {}, timer: null };
+  Object.assign(pending.changes, changes);
+  clearTimeout(pending.timer);
+  pending.timer = setTimeout(async () => {
+    jobBookChanges.delete(job.bookId);
+    try {
+      const book = await store.get('books', job.bookId);
+      if (!book) return;
+      await store.put('books', { ...book, ...pending.changes });
+      if (current === 'library') refreshShelf().catch(() => {});
+    } catch (error) {
+      console.warn('queued book', error);
+    }
+  }, 400);
+  jobBookChanges.set(job.bookId, pending);
+}
 
 function openJobEdit(id) {
   editingJob = id;
@@ -6646,12 +6671,26 @@ async function paintJobFolder(job) {
     if ((it.folder || '') === folder) return;
     if (folder) it.folder = folder; else delete it.folder;
     saveQueue();
+    onJobBook(it, { folder });
   }, 0);
   box.addEventListener('click', keep);
   box.addEventListener('input', keep);
 }
 
 async function paintJobEdit(job) {
+  /* Where it stands, and why it last stopped, said whole -- the row has room for a
+   * line of it; what the page held instead of the chapter (a sign-in, an age
+   * check, a reader left empty) is what says why. */
+  const stopped = el('job-stopped');
+  if (stopped) {
+    const where = job.status === 'paused' ? 'Paused'
+      : job.status === 'retry' ? `Trying again at ${clockAt(job.retryAt || Date.now())}`
+        : job.status === 'attention' ? 'Waiting for you'
+          : job.bookId != null ? 'Begun, waiting its turn' : '';
+    const why = job.note ? `${where ? ' — ' : ''}it stopped: ${job.note}` : '';
+    stopped.textContent = where || why ? `${where}${why}${job.bookId != null ? `. ${job.links.length} chapter${job.links.length === 1 ? '' : 's'} still to come; the rest are in its book on the shelf.` : ''}` : '';
+    stopped.hidden = !stopped.textContent;
+  }
   if (document.activeElement !== el('job-title')) el('job-title').value = job.name;
   if (document.activeElement !== el('job-author')) el('job-author').value = job.author || '';
   const first = job.links[0]?.text || '';
@@ -6684,12 +6723,14 @@ function wireJobEdit() {
     it.name = el('job-title').value.trim() || it.name;
     el('build-eyebrow').textContent = `Queued · ${it.name}`;
     saveQueue();
+    onJobBook(it, { title: it.name });
   });
   el('job-author').addEventListener('input', () => {
     const it = job();
     if (!it) return;
     it.author = el('job-author').value.trim();
     saveQueue();
+    onJobBook(it, { author: it.author || null });
   });
   el('job-cover-site').onclick = () => {
     const it = job();
@@ -6730,13 +6771,16 @@ function wireJobEdit() {
     const it = job();
     if (!it) return;
     clearWeb();
-    Object.assign(webState, { intent: 'queue', editing: it.id });
+    // Begun: what its book has is marked so when the site's list is read again (as an update is).
+    Object.assign(webState, { intent: 'queue', editing: it.id, ...(it.bookId != null ? { updating: it.bookId } : {}) });
     setWebAddress((it.sources || []).join('\n'));
     // Its placeholders are put back when it is queued again, where chapters are still missing.
     webState.links = it.links.filter((link) => !web.isPlaceholder(link)).map((link) => ({ ...keptLink(link), chrome: false, kind: null, likely: true, picked: true }));
     Object.assign(webState, { sources: it.sources || [], title: it.name, author: it.author || '', cover: it.cover || '', coverData: it.coverData || '', folder: it.folder || '' });
     el('web-title').value = it.name;
-    webNote(`The ${it.links.length} chapters queued for “${it.name}”. Untick any to leave out, or Find links to read the site's list again; Queue saves them.`);
+    webNote(it.bookId != null
+      ? `The ${it.links.length} chapters still to come for “${it.name}” (the rest are in its book). Untick any to leave out, or Find links to read the site's list again; Queue saves them.`
+      : `The ${it.links.length} chapters queued for “${it.name}”. Untick any to leave out, or Find links to read the site's list again; Queue saves them.`);
     drawWebList();
     show('web');
     paintWebCount();
@@ -6821,8 +6865,18 @@ function queueWeb() {
   chosen = placeholdersFor(chosen);
   const name = (el('web-title').value || '').trim() || webState.title || 'From the web';
   // Its chapters changed from its own page: saved back to it, in its place.
-  const editing = webQueue.find((job) => job.id === webState.editing && !job.bookId && job.status !== 'running');
+  const editingId = webState.editing;
+  const editing = webQueue.find((job) => job.id === editingId && job.status !== 'running');
   webState.editing = null;
+  // Began downloading while it was being changed: its changes not made, and it not queued twice.
+  if (editingId && !editing) {
+    toast(webQueue.some((job) => job.id === editingId)
+      ? 'It began downloading meanwhile, so it was left as it was — pause it to change it.'
+      : 'It is no longer in the queue, so nothing was changed.', 6000);
+    clearWeb();
+    back();
+    return;
+  }
   if (editing) {
     Object.assign(editing, {
       name, author: webState.author || editing.author || '', sources: webState.sources?.length ? webState.sources : editing.sources,
@@ -6834,6 +6888,9 @@ function queueWeb() {
     if (webState.folder) editing.folder = webState.folder;
     else delete editing.folder;
     saveQueue();
+    // Begun: its book changed with it.
+    onJobBook(editing, { title: name, author: editing.author || null, folder: editing.folder || '' });
+    coverOnJobBook(editing).catch(() => {});
     clearWeb();
     toast(`“${name}” changed — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}.`, 4000);
     back();
@@ -7333,15 +7390,21 @@ function paintQueue() {
     row.dataset.job = job.id;
     row.innerHTML = `<span class="col"><b>${escapeText(shortenMiddle(job.name))}</b>`
       + `<small class="muted">${escapeText(jobState(job))}</small></span>`;
-    /* Not yet started: tapped anywhere but its buttons, it opens -- title,
-     * author, cover, chapters. Started, it is a book on the shelf: said so. */
-    const editable = !job.bookId && job.status !== 'running' && job.status !== 'done';
-    if (editable) row.querySelector('.col').classList.add('editable');
-    row.onclick = (event) => {
+    /* Not downloading this moment -- queued, paused, waiting to try again --
+     * tapped anywhere but its buttons, it opens: title, author, cover, folder,
+     * chapters. Done, its book opens. Downloading, said so. */
+    const editable = job.status !== 'running' && job.status !== 'done';
+    const readable = job.status === 'done' && job.bookId != null;
+    if (editable || readable) row.querySelector('.col').classList.add('editable');
+    row.onclick = async (event) => {
       if (event.target.closest('button')) return;
       if (editable) openJobEdit(job.id);
-      else if (job.status === 'running') toast('Downloading now — once it is done, change its name or cover on the shelf.');
-      else if (job.bookId) toast('Begun already — its book is on the shelf, to change there.');
+      else if (job.status === 'running') toast('Downloading now — pause it to change it, or wait till it is done.');
+      else if (readable) {
+        const book = await store.get('books', job.bookId).catch(() => null);
+        if (book && library.onShelf(book)) openBook(book);
+        else toast('Its book is no longer on the shelf.');
+      }
     };
     const move = (by) => () => { webQueue.splice(at + by, 0, ...webQueue.splice(at, 1)); saveQueue(); renderWorkshop(); };
     if (job.status === 'running') {

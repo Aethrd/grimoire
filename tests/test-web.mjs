@@ -492,6 +492,50 @@ await t('missing chapters get a placeholder each, labelled, and the site is neve
   assert.match(app, /url: link\.url, text: link\.text, \.\.\.\(link\.placeholder != null \? \{ placeholder: link\.placeholder \} : \{\}\), chrome: false/);
 });
 
+await t('a chapter short the same way twice is kept as the site has it, said so; one still loading is not', async () => {
+  const story = (n, inner) => `<html><head><title>Book ${n}화</title></head><body><nav>Home Novels</nav><article class="content"><h1>${n}화</h1>${inner}</article></body></html>`;
+  const full = (n) => story(n, `<p>${'그는 길을 따라 걸었다. 밤은 깊었고 바람은 차가웠다. '.repeat(30)}</p>`);
+  const pages = new Map([
+    ['https://m.example/c/1', [full(1)]],
+    // A notice: short, and the same every time.
+    ['https://m.example/c/2', [story(2, '<p>휴재 공지: 다음 주에 돌아옵니다.</p>')]],
+    // A chapter that is a picture, pictures off.
+    ['https://m.example/c/3', [story(3, '<p><img src="https://m.example/i/3.jpg"></p>')]],
+    ['https://m.example/c/4', [full(4)]],
+  ]);
+  const asked = [];
+  const fetchPage = async (url) => {
+    asked.push(url);
+    const html = (pages.get(url) || [''])[0];
+    return { url, blob: new Blob([html]), type: 'text/html', rendered: true };
+  };
+  const quick = { retry: 0, refresh: [0], backoff: [0, 0], cool: 0 };
+  const links = [1, 2, 3, 4].map((n) => ({ url: `https://m.example/c/${n}`, text: `${n}화` }));
+  const got = await web.readPages(links, { fetchPage, gap: 0, pictures: false, patience: quick });
+  assert.deepEqual(got.failed, []);
+  assert.equal(got.chapters.length, 4);
+  assert.match(got.chapters[1].html, /휴재 공지/);
+  assert.match(got.chapters[1].html, /came out very short — \d+ characters — the same each time it was read, so it is kept as the site gave it/);
+  assert.match(got.chapters[2].html, /1 picture, not downloaded with pictures off/);
+  assert.ok(!/came out very short/.test(got.chapters[0].html));
+  // Asked twice each, no more.
+  assert.equal(asked.filter((url) => url.endsWith('/c/2')).length, 2);
+  assert.equal(asked.filter((url) => url.endsWith('/c/3')).length, 2);
+
+  // Still loading -- different each time -- or blank, or a wait screen: never kept; the download stops there.
+  let turn = 0;
+  const changing = async (url) => ({ url, blob: new Blob([story(5, `<p>${'.'.repeat(++turn)}</p>`)]), type: 'text/html', rendered: true });
+  const only = (n, inner) => web.readPages([{ url: `https://m.example/c/${n}`, text: `${n}화` }],
+    { fetchPage: async (url) => ({ url, blob: new Blob([story(n, inner)]), type: 'text/html', rendered: true }), gap: 0, pictures: false, patience: quick });
+  await assert.rejects(web.readPages([{ url: 'https://m.example/c/5', text: '5화' }], { fetchPage: changing, gap: 0, pictures: false, patience: quick }),
+    /had not finished loading/);
+  await assert.rejects(only(6, ''), /had not finished loading/);
+  await assert.rejects(only(7, '<p>로딩 중...</p>'), /had not finished loading/);
+  // Read once only, it is not yet the same twice: a single short read still stops.
+  await assert.rejects(web.readPages([{ url: 'https://m.example/c/2', text: '2화' }],
+    { fetchPage, gap: 0, pictures: false, patience: { retry: 0, refresh: [0], backoff: [], cool: 0 } }), /had not finished loading/);
+});
+
 await t('the pages are asked for at the rate set, in milliseconds', async () => {
   const times = [];
   const timed = async (url) => { times.push(Date.now()); return fakeFetch(url); };

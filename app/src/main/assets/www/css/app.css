@@ -2681,6 +2681,8 @@ body.in-book[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .build-queue-list li { flex-wrap: wrap; }
 .build-queue-list li[data-status="attention"] small { color: var(--danger, #e08a8a); }
 .build-queue-list li[data-status="done"] { opacity: .7; }
+.job-stopped { margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.45;
+  background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); overflow-wrap: anywhere; }
 .build-queue-once { margin: 10px 0 0; align-items: center; gap: 4px 6px; flex-wrap: wrap; overflow: visible; padding: 0; }
 /* At once and Per site: a slider a row, the full width, its number beside it. */
 .queue-slider { display: grid; grid-template-columns: 64px 1fr 24px; align-items: center; gap: 12px;

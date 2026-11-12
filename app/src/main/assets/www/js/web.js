@@ -1982,6 +1982,8 @@ const EXT_OF_TYPE = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif
  */
 export async function readPage(link, index, {
   pictures = true, fetchPage = download, chapterUrls = null, listedNumbers = null,
+  // How it came out short the last time it was read (see `thin` below), if it did.
+  thinAs = '',
 } = {}) {
   // Its words alone, when pictures are not wanted: then a page with none yet is
   // watched for them a while, not taken empty and loaded again.
@@ -2033,7 +2035,25 @@ export async function readPage(link, index, {
   // site whose every page carries a row of adverts, an empty chapter has
   // pictures too.
   if (page.rendered && tidy(story?.textContent).length < MIN_RENDERED_STORY && (!pictures || !story?.querySelector('img'))) {
-    throw notLoadedYet(link.url, heldText);
+    /* Short exactly as it was the last time -- the same words, the same pictures --
+     * is how the site has it: an author's notice, or a chapter that is a picture
+     * with pictures off. A page still loading is not the same twice. Kept as it
+     * came, said so at its end, so one chapter does not stop the book for good.
+     * Never a blank one, nor a page that says to wait. */
+    const words = tidy(story?.textContent);
+    const drawn = story?.querySelectorAll('img').length || 0;
+    // Its heading alone is a blank chapter, not a short one.
+    const bare = story?.cloneNode(true);
+    for (const heading of bare?.querySelectorAll('h1, h2, h3, h4') || []) heading.remove();
+    const said = tidy(bare?.textContent);
+    const thin = story && (said || drawn) && !waitScreen(story.innerHTML) ? `${words.length}|${drawn}|${words.slice(0, 80)}` : '';
+    if (!thin || thin !== thinAs) throw Object.assign(notLoadedYet(link.url, heldText), thin ? { thin } : {});
+    const note = doc.createElement('p');
+    note.className = 'thin-chapter';
+    note.textContent = `[This chapter came out very short — ${words.length} character${words.length === 1 ? '' : 's'}`
+      + (drawn ? ` and ${drawn} picture${drawn === 1 ? '' : 's'}${pictures ? '' : ', not downloaded with pictures off'}` : '')
+      + ' — the same each time it was read, so it is kept as the site gave it.]';
+    story.appendChild(note);
   }
   /* A rendered page that opens with another chapter than the one asked for
    * -- the link says 5화, the page begins "6화 …" -- is not kept: the site
@@ -2664,6 +2684,7 @@ export async function readPages(links, {
     let tries = 0;
     let uncounted = 0;
     let cooled = false;
+    let thinAs = '';
     while (true) {
       if (at > stopAt) throw new Error('stopped');
       await whenOnScreen();
@@ -2686,9 +2707,11 @@ export async function readPages(links, {
             : { kind: 'read', name: nameOf(link, at) },
         });
         if (paced === fetchPage) say(link.url);
-        return await readPage(link, at, { pictures, fetchPage: paced, chapterUrls, listedNumbers });
+        return await readPage(link, at, { pictures, fetchPage: paced, chapterUrls, listedNumbers, thinAs });
       } catch (error) {
         if (error?.paused) throw error;
+        // Short: how, so the next try can see whether it came the same.
+        thinAs = error?.thin || '';
         // Blocked, or its text scrambled: not asked again, and the download stops here.
         // So with a site's own access check that wants a person: asking again only asks the site again.
         if (blocked(error) || scrambled(error) || accessCheck(error)) throw Object.assign(error, { tries: tries + 1 });

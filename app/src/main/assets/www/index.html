@@ -374,6 +374,8 @@
       <!-- A queued novel not yet started, opened from the index: named, given a
            cover and its chapters changed, as a book in Build is. -->
       <div id="build-job-edit" hidden>
+        <!-- Paused, waiting to try again, or held: where it stands, and why it stopped, in full. -->
+        <p class="job-stopped" id="job-stopped" hidden></p>
         <label class="field"><span>Title</span>
           <input class="query" id="job-title" type="text" autocomplete="off" placeholder="What the book will be called">
         </label>
