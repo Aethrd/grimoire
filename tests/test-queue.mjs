@@ -283,10 +283,27 @@ await t("each site's delays are remembered, and come back with its address", asy
 });
 
 await t('per site set to two: two books of one site side by side, and no more', async () => {
-  const chips = [...document.querySelectorAll('#build-queue-once .chip')];
-  const perSite = chips.filter((chip) => /^\d$/.test(chip.textContent)).slice(6);
-  assert.deepEqual(perSite.map((chip) => chip.textContent), ['1', '2', '3']);
-  perSite[1].click();
+  // Sliders, a row each: At once up to eight, Per site up to three, each with its number beside it.
+  const slider = (name) => document.querySelector(`#build-queue-once input[type="range"][aria-label="${name}"]`);
+  const setSlider = (name, n) => {
+    const range = slider(name);
+    range.value = String(n);
+    range.dispatchEvent(new window.Event('input', { bubbles: true }));
+    range.dispatchEvent(new window.Event('change', { bubbles: true }));
+  };
+  assert.equal(slider('At once').max, '8');
+  assert.equal(slider('Per site').max, '3');
+  assert.equal(document.querySelectorAll('#build-queue-once .chip').length <= 1, true, 'number chips left beside the sliders');
+  const before = (await store.settings()).queueAtOnce;
+  setSlider('At once', 8);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal((await store.settings()).queueAtOnce, 8);
+  assert.equal(slider('At once').closest('.queue-slider').querySelector('output').textContent, '8');
+  assert.match(document.getElementById('build-queue-note').textContent, /up to 8 at once/);
+  setSlider('At once', before);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal((await store.settings()).queueAtOnce, before);
+  setSlider('Per site', 2);
   await new Promise((r) => setTimeout(r, 30));
   assert.equal((await store.settings()).queuePerSite, 2);
   asked.length = 0;
@@ -299,7 +316,7 @@ await t('per site set to two: two books of one site side by side, and no more', 
   // One of a site stopped by it: the others of that site stop with it, and wait (not paused by hand).
   assert.match(app, /if \(under\) \{ under\.siteStop = true; under\.pausing = true; \}/);
   assert.match(app, /settleJob\(job, outcome, under\.pausing && !under\.siteStop\);/);
-  perSite[0].click();
+  setSlider('Per site', 1);
   await new Promise((r) => setTimeout(r, 30));
   assert.equal((await store.settings()).queuePerSite, 1);
 });

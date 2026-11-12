@@ -85,14 +85,14 @@ public class WebBridge {
     /** A few at a time -- books from different sites side by side. Each site is
      *  still asked no faster than its delay allows (web.js, pacer): this is only
      *  how many requests, to all sites together, may be on their way at once. */
-    private final ExecutorService io = Executors.newFixedThreadPool(4);
+    private final ExecutorService io = Executors.newFixedThreadPool(8);
     private final java.net.CookieManager cookies = new java.net.CookieManager(null, CookiePolicy.ACCEPT_ALL);
     /** A few pages rendered at once -- each in a browser of its own -- but never
      *  two of one site: those share the site's cookies, and a site that keeps
      *  "the chapter being read" with them handed each the other's chapter (5화
      *  came back as 6화, and 6화 as 5화). Books from different sites downloaded
      *  side by side no longer wait on one another's pages. */
-    private static final int RENDER_BROWSERS = 3;
+    private static final int RENDER_BROWSERS = 4;
     private final ExecutorService renderer = Executors.newFixedThreadPool(RENDER_BROWSERS);
     private final java.util.Set<String> renderingSites = new java.util.HashSet<>();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -128,6 +128,13 @@ public class WebBridge {
      *  pacer), so a chapter takes no longer, and pages are no closer together. */
     private static final long CONFIRM_MS = 3000;
     private static final long CONFIRM_JITTER_MS = 1000;
+    /** How much a story must grow by to count as more of it coming: a hundredth, and at least this. */
+    private static final int STORY_SLACK = 40;
+
+    static int storySlack(int story) {
+        return Math.max(STORY_SLACK, Math.max(0, story) / 100);
+    }
+
     /** The longest a story is stayed on to confirm it, however it keeps changing. */
     private static final long CONFIRM_MAX_MS = 12000;
     /** How long a page whose content is plainly there -- a list with its
@@ -1204,7 +1211,12 @@ public class WebBridge {
                  * the page has "finished": that waited on every advert, and the page's
                  * shape, which every advert loaded changes, kept a chapter that was all
                  * there waiting out the stuck fallback (sixteen seconds for five). */
-                if (storyLength != lastStory) {
+                /* Grown: by more than a little over its length when it last grew. A few
+                 * characters coming and going -- an advert's line or a counter in the
+                 * story's box -- is not the chapter coming: counted so, it kept the
+                 * story from ever being still, and the chapter waited out the forty-
+                 * second limit. Growth a little at a time adds up, and counts. */
+                if (lastStory < 0 || storyLength > lastStory + storySlack(lastStory)) {
                     lastStory = storyLength;
                     storySince = now;
                 }
@@ -1236,7 +1248,7 @@ public class WebBridge {
                 if (confirmBegan > 0) {
                     // Confirming: taken once it has stayed as it was the whole time; if
                     // it grew, it was not done -- watched again, as long, from now.
-                    if (storyLength != confirmStory) {
+                    if (storyLength > confirmStory + storySlack(confirmStory)) {
                         confirmStory = storyLength;
                         confirmAt = now;
                         // More came: to the new end, for any more after it -- twice at most.

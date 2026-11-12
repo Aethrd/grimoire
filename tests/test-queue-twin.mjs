@@ -69,8 +69,8 @@ const waitFor = async (test, ms = 30000) => {
 const named = (jobs, name) => jobs.find((each) => each.name === name);
 
 await t('two of one site side by side, the third after; one stopped by its site stops the other', async () => {
-  const chips = [...document.querySelectorAll('#build-queue-once .chip')].filter((chip) => /^\d$/.test(chip.textContent));
-  assert.equal(chips[6 + 1].getAttribute('aria-pressed'), 'true', 'per site 2 not shown as chosen');
+  const perSite = document.querySelector('#build-queue-once input[type="range"][aria-label="Per site"]');
+  assert.equal(perSite.value, '2', 'per site 2 not shown as chosen');
   document.getElementById('build-queue-go').click();
   const jobs = await waitFor((all) => ['D', 'E', 'H'].every((n) => named(all, n)?.status === 'done') && named(all, 'F')?.status === 'attention' && named(all, 'G')?.status !== 'running');
   // D and E went side by side; H only once one of them was done.

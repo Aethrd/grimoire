@@ -6585,6 +6585,9 @@ function pauseBuild() {
  */
 let webQueue = [];
 const queueState = { running: false, atOnce: 2, perSite: 1, timer: null, locked: false };
+/** The most books downloaded side by side, and of those, from one site. */
+const QUEUE_AT_ONCE_MAX = 8;
+const QUEUE_PER_SITE_MAX = 3;
 const QUEUE_RETRY_MS = 15 * 60000;
 const QUEUE_MAX_STOPS = 5;
 const queueJobs = new Map();   // id -> { pausing, finish, run } for the jobs under way
@@ -6792,10 +6795,10 @@ function loadQueue(settings) {
     status: 'queued', total: job.links.length, done: 0, stops: 0, ...job,
     ...(job.status === 'running' ? { status: 'queued' } : {}),
   }));
-  if ([1, 2, 3, 4, 5, 6].includes(settings.queueAtOnce)) queueState.atOnce = settings.queueAtOnce;
+  if (Number.isInteger(settings.queueAtOnce) && settings.queueAtOnce >= 1 && settings.queueAtOnce <= QUEUE_AT_ONCE_MAX) queueState.atOnce = settings.queueAtOnce;
   queueState.locked = settings.queueLocked === true;
   if (settings.siteCosts && typeof settings.siteCosts === 'object') siteCosts = { ...settings.siteCosts };
-  if ([1, 2, 3].includes(settings.queuePerSite)) queueState.perSite = settings.queuePerSite;
+  if (Number.isInteger(settings.queuePerSite) && settings.queuePerSite >= 1 && settings.queuePerSite <= QUEUE_PER_SITE_MAX) queueState.perSite = settings.queuePerSite;
   if (settings.queueRunning && webQueue.some((job) => ['queued', 'retry'].includes(job.status))) {
     setTimeout(() => toast('The queue was running when the app closed — Start queue on Build carries on.', 7000), 1500);
   }
@@ -7257,41 +7260,45 @@ function paintQueue() {
       : '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/></svg>';
   }
   const count = (status) => webQueue.filter((job) => job.status === status).length;
-  /* At once: up to six books side by side -- each from a site of its own, each
-   * site asked no faster than its delay, so more at once asks no one site more. */
+  /* At once: up to eight books side by side -- each from a site of its own, each
+   * site asked no faster than its delay, so more at once asks no one site more.
+   * Two sliders, a row each, with what they are set to beside them. */
   const once = el('build-queue-once');
   if (once) {
     once.replaceChildren();
-    const label = document.createElement('span');
-    label.className = 'muted';
-    label.textContent = 'At once';
-    once.appendChild(label);
-    for (const n of [1, 2, 3, 4, 5, 6]) {
-      const chip = document.createElement('button');
-      chip.className = 'chip';
-      chip.textContent = String(n);
-      chip.setAttribute('aria-pressed', String(queueState.atOnce === n));
-      chip.onclick = () => { queueState.atOnce = n; saveQueue(); pumpQueue(); };
-      once.appendChild(chip);
-    }
+    const slider = (name, max, value, set) => {
+      const row = document.createElement('label');
+      row.className = 'queue-slider';
+      const label = document.createElement('span');
+      label.className = 'muted';
+      label.textContent = name;
+      const range = document.createElement('input');
+      range.type = 'range';
+      range.min = '1';
+      range.max = String(max);
+      range.step = '1';
+      range.value = String(value);
+      range.setAttribute('aria-label', name);
+      const shown = document.createElement('output');
+      shown.textContent = String(value);
+      const fill = () => range.style.setProperty('--filled', `${((Number(range.value) - 1) / (max - 1)) * 100}%`);
+      fill();
+      // Said as it moves; kept once let go.
+      range.oninput = () => { shown.textContent = range.value; fill(); };
+      range.onchange = () => { const n = Number(range.value); if (n >= 1 && n <= max) set(n); };
+      row.append(label, range, shown);
+      once.appendChild(row);
+      return range;
+    };
+    slider('At once', QUEUE_AT_ONCE_MAX, queueState.atOnce, (n) => { queueState.atOnce = n; saveQueue(); pumpQueue(); });
     // Per site: one, unless set higher -- each more asks that site as often again.
-    const per = document.createElement('span');
-    per.className = 'muted';
-    per.textContent = 'Per site';
-    once.appendChild(per);
-    for (const n of [1, 2, 3]) {
-      const chip = document.createElement('button');
-      chip.className = 'chip';
-      chip.textContent = String(n);
-      chip.setAttribute('aria-pressed', String(queueState.perSite === n));
-      chip.onclick = () => {
-        queueState.perSite = n;
-        saveQueue();
-        pumpQueue();
-        if (n > 1) toast(`Up to ${n} books from one site at once — each at the site's delay, so it is asked ${n} times as often.`, 6000);
-      };
-      once.appendChild(chip);
-    }
+    slider('Per site', QUEUE_PER_SITE_MAX, queueState.perSite, (n) => {
+      if (n === queueState.perSite) return;
+      queueState.perSite = n;
+      saveQueue();
+      pumpQueue();
+      if (n > 1) toast(`Up to ${n} books from one site at once — each at the site's delay, so it is asked ${n} times as often.`, 6000);
+    });
     if (count('done') && !locked) {
       const clear = document.createElement('button');
       clear.className = 'chip';

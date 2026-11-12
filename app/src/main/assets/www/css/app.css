@@ -2681,8 +2681,22 @@ body.in-book[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .build-queue-list li { flex-wrap: wrap; }
 .build-queue-list li[data-status="attention"] small { color: var(--danger, #e08a8a); }
 .build-queue-list li[data-status="done"] { opacity: .7; }
-.build-queue-once { margin: 8px 0 0; align-items: center; gap: 6px; }
-.build-queue-once .muted:not(:first-child) { margin-left: 10px; }
+.build-queue-once { margin: 10px 0 0; align-items: center; gap: 4px 6px; flex-wrap: wrap; overflow: visible; padding: 0; }
+/* At once and Per site: a slider a row, the full width, its number beside it. */
+.queue-slider { display: grid; grid-template-columns: 64px 1fr 22px; align-items: center; gap: 12px;
+  flex: 1 1 100%; min-height: 40px; }
+.queue-slider .muted { font-size: 13px; }
+.queue-slider output { font: 700 15px var(--font-ui); color: var(--text); text-align: right;
+  font-variant-numeric: tabular-nums; }
+.queue-slider input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; min-width: 0;
+  height: 28px; margin: 0; background: transparent; touch-action: pan-y; }
+.queue-slider input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px;
+  background: linear-gradient(to right, var(--accent) var(--filled, 0%), color-mix(in srgb, var(--text) 18%, transparent) var(--filled, 0%)); }
+.queue-slider input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+  width: 22px; height: 22px; margin-top: -8px; border-radius: 50%; background: var(--accent);
+  border: 3px solid var(--surface); box-shadow: 0 1px 4px rgb(0 0 0 / .35); }
+.queue-slider input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent-300); outline-offset: 2px; }
+.build-queue-once .chip { margin-top: 4px; }
 /* Chapters missing from the numbers of those ticked. */
 .web-gaps { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--accent-300); border-radius: var(--radius-md);
   font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }

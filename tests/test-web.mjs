@@ -2226,7 +2226,7 @@ await t('a chapter is stayed on a few seconds to confirm it, and that time comes
   assert.match(java, /private static final long CONFIRM_MS = 3000;\s+private static final long CONFIRM_JITTER_MS = 1000;/);
   // Begun when the story is there and still; taken only once it has not grown the whole time.
   assert.match(java, /if \(storyDone && confirmBegan == 0\) \{/);
-  assert.match(java, /if \(storyLength != confirmStory\) \{\s+confirmStory = storyLength;\s+confirmAt = now;\s+\/\/[^\n]*\n\s+if \(endScrolls < 2\) \{\s+endScrolls\+\+;\s+view\.evaluateJavascript\(STORY_END, null\);\s+\}\s+\}[\s\S]{0,400}settled = now - confirmAt >= confirmFor \|\| now - confirmBegan >= CONFIRM_MAX_MS;/);
+  assert.match(java, /if \(storyLength > confirmStory \+ storySlack\(confirmStory\)\) \{\s+confirmStory = storyLength;\s+confirmAt = now;\s+\/\/[^\n]*\n\s+if \(endScrolls < 2\) \{\s+endScrolls\+\+;\s+view\.evaluateJavascript\(STORY_END, null\);\s+\}\s+\}[\s\S]{0,400}settled = now - confirmAt >= confirmFor \|\| now - confirmBegan >= CONFIRM_MAX_MS;/);
   assert.match(java, /result\.put\("dwell", job\.dwell\);/);
   // The pacer takes the stay off the wait after it -- never below nothing.
   const times = [];
@@ -2953,6 +2953,9 @@ await t('a chapter is scrolled to its end while it is confirmed; one that came o
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   // Scrolled when its confirming begins, and again whenever more of it came -- inside the stay that comes off the delay.
   assert.match(java, /confirmStory = storyLength;\s+endScrolls = 0;\s+\/\*[\s\S]{0,400}\*\/\s+view\.evaluateJavascript\(STORY_END, null\);/);
+  // A few characters coming and going in the story's box is no growth: an advert held every chapter to the limit.
+  assert.match(java, /if \(lastStory < 0 \|\| storyLength > lastStory \+ storySlack\(lastStory\)\) \{\s+lastStory = storyLength;\s+storySince = now;/);
+  assert.match(java, /return Math\.max\(STORY_SLACK, Math\.max\(0, story\) \/ 100\);/);
   assert.match(java, /confirmAt = now;\s+\/\/ More came[^\n]*\n\s+if \(endScrolls < 2\) \{/);
   assert.match(java, /if \(settled\) dwell = now - confirmBegan;/);
   // Short: under 40% of the book's typical chapter, only website chapters, only with enough to say what is typical.
