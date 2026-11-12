@@ -918,7 +918,7 @@ t('no footer button sits under the tab bar', () => {
    * where the bar is hidden -- it is not, and search, the workshop and
    * dividing all had their buttons drawn underneath it. */
   const stepper = css.slice(css.indexOf('.stepper {'), css.indexOf('body[data-view="reader"] .stepper'));
-  assert.match(stepper, /margin-bottom: calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\)\)/);
+  assert.match(stepper, /margin-bottom: calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\) \+ var\(--strip-h\)\)/);
   assert.match(css, /--tabbar-h:/);
 
   // The reader hides the bar, so its footer keeps the space instead.

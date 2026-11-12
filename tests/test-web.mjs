@@ -1453,7 +1453,13 @@ await t('Pause & keep is on Build\'s footer; the progress panel takes no taps', 
   const css = read('app/src/main/assets/www/css/app.css');
   // The panel only reports: no button is put on it, and it lets taps through.
   assert.ok(!/job-action/.test(app) && !/job-action/.test(css), 'a button is put on the progress panel again');
-  assert.match(css, /\.import-progress \{[\s\S]*?pointer-events: none;/);
+  // Small, it is a strip of its own the screens make room for: it covers no button.
+  assert.match(css, /body\.jobs-up \{ --strip-h: 30px; \}/);
+  assert.match(css, /\.scroll \{[^}]*padding-bottom: calc\(var\(--safe-bottom\) \+ 68px \+ var\(--strip-h\)\);/);
+  assert.match(css, /margin-bottom: calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\) \+ var\(--strip-h\)\); \}/);
+  // Tapped, a page of every row; made small again by its button, or Back.
+  assert.match(app, /if \(strip && !strip\.onclick\) strip\.onclick = \(\) => setOpen\(true\);/);
+  assert.match(app, /onBack\(\) \{\s+if \(progress\.close\(\)\) return true;/);
   // Build's own button is Pause & keep while a website downloads.
   assert.match(app, /el\('build-go'\)\.onclick = \(\) => \(buildRun \? pauseBuild\(\) : runBuild\(\)\);/);
   assert.match(app, /go\.textContent = run\.pausing \? 'Pausing…' : run\.online \? 'Pause & keep' : 'Building…';/);

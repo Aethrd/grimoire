@@ -2272,32 +2272,38 @@ const progress = (() => {
   const panel = () => el('import-progress');
   const list = () => el('jobs');
 
-  /** At most this many rows; the rest are counted. A phone has no room for a
-   *  dozen bars, and nobody is watching a dozen. */
-  const SHOWN = 4;
+  /** Open: the page of every row. Small (as each starts): the strip. */
+  const isOpen = () => !!panel()?.classList.contains('open');
+  function setOpen(open) {
+    const host = panel();
+    if (!host) return;
+    host.classList.toggle('open', open);
+    paint();
+  }
 
   function paint() {
     const host = panel();
     if (!host) return;
     const live = jobs.filter((job) => !job.ended);
     host.hidden = jobs.length === 0;
-    if (!jobs.length) host.classList.remove('minimised');
+    if (!jobs.length) host.classList.remove('open');
+    // The screens make room for the strip while it is up (see --strip-h).
+    document.body.classList.toggle('jobs-up', jobs.length > 0);
 
-    // The summary for when the panel is minimised, or there are more rows
-    // than room.
+    // Small: what is running, in a line -- the one's own words, or how many and how far.
     const summary = el('jobs-summary');
+    const average = live.length ? live.reduce((sum, job) => sum + (job.fraction || 0), 0) / live.length : 1;
     if (summary) {
       summary.textContent = live.length > 1
-        ? `${live.length} running`
-        : live.length === 1 ? `${Math.round((live[0].fraction || 0) * 100)}%` : 'Done';
+        ? `${live.length} running · ${Math.round(average * 100)}% on average · tap to see each`
+        : live.length === 1
+          ? `${live[0].label}${live[0].count ? ` · ${live[0].count}` : ` · ${Math.round((live[0].fraction || 0) * 100)}%`}`
+          : 'Done';
     }
-    const more = el('jobs-more');
-    if (more) {
-      const hidden = jobs.length - SHOWN;
-      more.hidden = hidden <= 0;
-      more.textContent = hidden > 0 ? `+${hidden} more running` : '';
-    }
-    jobs.forEach((job, at) => { job.row.hidden = at >= SHOWN; });
+    const fill = el('jobs-strip-fill');
+    if (fill) fill.style.width = `${Math.round(average * 100)}%`;
+    const title = el('jobs-title');
+    if (title) title.textContent = live.length ? `Running · ${live.length}` : 'Done';
   }
 
   function makeRow(label) {
@@ -2313,11 +2319,11 @@ const progress = (() => {
   }
 
   function start(label) {
-    // Minimising is the panel's, not any one import's, so it is wired once.
+    // Opening and making small are the panel's, not any one job's: wired once.
     const minimise = el('import-minimise');
-    if (minimise && !minimise.onclick) {
-      minimise.onclick = () => panel()?.classList.toggle('minimised');
-    }
+    if (minimise && !minimise.onclick) minimise.onclick = () => setOpen(false);
+    const strip = el('jobs-strip');
+    if (strip && !strip.onclick) strip.onclick = () => setOpen(true);
 
     const job = { id: ++counter, label: label || 'Working', fraction: 0, ended: false };
     job.row = makeRow(job.label);
@@ -2335,7 +2341,10 @@ const progress = (() => {
         job.fraction = Math.max(0, Math.min(1, fraction));
         job.row.querySelector('.bar-fill').style.width = `${Math.round(job.fraction * 100)}%`;
       }
-      if (count != null) job.row.querySelector('.job-count').textContent = count;
+      if (count != null) {
+        job.count = count;
+        job.row.querySelector('.job-count').textContent = count;
+      }
       paint();
     };
 
@@ -2415,6 +2424,12 @@ const progress = (() => {
 
   return {
     start,
+    /** Back makes the open page small, before leaving anything. */
+    close() {
+      if (!isOpen()) return false;
+      setOpen(false);
+      return true;
+    },
     get running() { return jobs.filter((job) => !job.ended).length; },
     /* Kept for callers outside an operation: they speak for the newest
      * row, which is the one they started. */
@@ -10757,6 +10772,7 @@ window.Grimoire = {
 
   /** Return true to swallow the back gesture. */
   onBack() {
+    if (progress.close()) return true;
     if (frames.closeFrameEditor()) return true;
     // Above everything else, so it is the first thing back leaves.
     if (!el('redact').hidden) {

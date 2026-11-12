@@ -140,7 +140,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor;
 .screen[data-active] { display: flex; }
 
 .scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
-          -webkit-overflow-scrolling: touch; padding-bottom: calc(var(--safe-bottom) + 68px); }
+          -webkit-overflow-scrolling: touch; padding-bottom: calc(var(--safe-bottom) + 68px + var(--strip-h)); }
 .scroll.pad { padding-left: 16px; padding-right: 16px; }
 .pad-x { padding-left: 16px; padding-right: 16px; }
 
@@ -926,7 +926,7 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
               dividing -- had its buttons drawn underneath the bar and could
               not be pressed. */
            padding-bottom: 10px;
-           margin-bottom: calc(var(--safe-bottom) + var(--tabbar-h)); }
+           margin-bottom: calc(var(--safe-bottom) + var(--tabbar-h) + var(--strip-h)); }
 
 /* In the reader the bar is hidden, so the footer keeps the space instead. */
 body[data-view="reader"] .stepper {
@@ -999,7 +999,7 @@ body[data-view="reader"] .stepper {
 
 /* The one piece of chrome allowed to appear in NONE. */
 .toast { position: fixed; left: 50%; transform: translateX(-50%);
-         bottom: calc(var(--safe-bottom) + 82px); z-index: 50;
+         bottom: calc(var(--safe-bottom) + 82px + var(--strip-h)); z-index: 50;
          /* As wide as its words, up to nearly the screen: placed from the
             middle, a box sized by itself only had half the screen to fill,
             and a long notice stood as a narrow column. The longest scroll. */
@@ -1304,31 +1304,47 @@ body[data-view="reader"] .stepper {
 .facts small { color: var(--muted); font-size: 12px; word-break: break-word; }
 
 
-/* ── import progress ─────────────────────────────────────────────────── */
+/* ── what is running ──────────────────────────────────────────────────── */
 
-.import-progress {
-  position: fixed; left: 12px; right: 12px; z-index: 30;
-  bottom: calc(var(--safe-bottom) + 74px);
-  padding: 10px 12px; border-radius: var(--radius-lg);
-  background: var(--surface); border: 1px solid var(--hairline);
-  animation: chrome-in var(--motion-fast) var(--ease) both;
-  /* Importing a shelf takes minutes, and nothing about it should stop the
-     shelf being used meanwhile. The panel reports; it does not take taps. */
-  pointer-events: none;
-}
-/* Except the one control on it. */
-.import-progress .icon-btn { pointer-events: auto; }
+/* Small: a strip of its own, the width of the screen, just above the tab
+   bar. The screens make room for it (--strip-h), so it covers no button --
+   and what opens over the bottom of a screen (a book's actions, selecting,
+   a sheet) opens over it. Tapped, it is a page of its own: every row,
+   scrolled, and made small again from its top, or by Back. */
+:root { --strip-h: 0px; }
+body.jobs-up { --strip-h: 30px; }
+.import-progress { position: fixed; left: 0; right: 0; z-index: 20;
+  bottom: calc(var(--safe-bottom) + var(--tabbar-h) + 1px); }
 .import-progress[hidden] { display: none; }
 
-/* Room on the right for the minimise control, so no row runs under it. */
-.import-progress { padding-right: 46px; }
-.jobs-minimise { position: absolute; top: 4px; right: 4px; }
+.jobs-strip { display: flex; align-items: center; gap: 8px; width: 100%;
+  height: 30px; padding: 0 12px; position: relative;
+  background: var(--surface); border-top: 1px solid var(--divider);
+  color: var(--muted); text-align: left; }
+.jobs-strip svg { width: 16px; height: 16px; flex: none; }
+.jobs-strip-fill { position: absolute; left: 0; top: -1px; height: 2px; width: 0;
+  background: var(--accent-ink); transition: width var(--motion) var(--ease); }
+.jobs-summary { flex: 1; min-width: 0; font-size: 12px; font-family: var(--font-heading);
+  font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.jobs-page { display: none; }
+.import-progress.open { top: 0; bottom: 0; z-index: 48; background: var(--bg);
+  display: flex; flex-direction: column;
+  padding: var(--safe-top) var(--safe-right) 0 var(--safe-left);
+  animation: sheet-in var(--motion) var(--ease) both; }
+.import-progress.open .jobs-strip { display: none; }
+.import-progress.open .jobs-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.jobs-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 8px 10px 16px;
+  border-bottom: 1px solid var(--divider); }
+.jobs-head strong { flex: 1; min-width: 0; font-family: var(--font-heading); font-size: 17px; }
+.import-progress .jobs { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 14px 16px calc(var(--safe-bottom) + 24px); }
 
 /* A row per operation. */
-.job + .job { margin-top: 10px; }
+.job + .job { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--divider); }
 .job[hidden] { display: none; }
 .import-line { display: flex; justify-content: space-between; gap: 10px;
-               font-size: 12px; margin-bottom: 6px; }
+               font-size: 13px; margin-bottom: 6px; }
 /* Said in full, over as many lines as it takes: a book's whole name and
    why a page failed are what is being read, and "…" cut off both. */
 .import-line span:first-child { min-width: 0; overflow-wrap: anywhere; }
@@ -1338,7 +1354,7 @@ body[data-view="reader"] .stepper {
    bar, smaller, with a tag that says which -- waiting out the delay,
    reading a page, another try -- and the page it is about. */
 .job-activity { display: flex; align-items: baseline; gap: 8px; margin-top: 7px;
-                font-size: 11.5px; color: var(--muted); min-width: 0; }
+                font-size: 12px; color: var(--muted); min-width: 0; }
 .job-activity[hidden] { display: none; }
 .job-tag { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 10px;
            font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
@@ -1359,33 +1375,15 @@ body[data-view="reader"] .stepper {
 
 .job.done, .job.failed { opacity: .72; transition: opacity var(--motion) var(--ease); }
 
-.jobs-more { margin: 8px 0 0; font-size: 11px; }
-
-/* Shown only when minimised: the panel becomes a pill saying how many are
-   running, or how far the one is. */
-.jobs-summary { display: none; font-size: 12px; font-family: var(--font-heading);
-                font-weight: 600; white-space: nowrap; }
-.import-progress.minimised { left: auto; padding: 8px 46px 8px 14px; min-height: 46px;
-                             display: flex; align-items: center; }
-.import-progress.minimised .jobs,
-.import-progress.minimised .jobs-more { display: none; }
-.import-progress.minimised .jobs-summary { display: block; }
-
-/* In a book, the panel keeps to a small pill under the top bar -- not a
-   card over the page -- and is gone altogether when the bars are hidden for
-   reading. What it reports is still there when the book is put down. */
-/* Above Build's footer while it shows, not over it: its button is Build,
-   and Pause & keep while a website downloads. */
-body.build-foot-up .import-progress { bottom: calc(var(--safe-bottom) + 74px + 62px); }
-body.in-book .import-progress { left: auto; right: 12px; bottom: auto;
-  top: calc(var(--safe-top) + 62px); padding: 8px 46px 8px 14px; min-height: 46px;
-  display: flex; align-items: center; }
-body.in-book .import-progress[hidden],
-body.in-book[data-chrome="none"] .import-progress,
-body.in-book[data-chrome="copy"] .import-progress { display: none; }
-body.in-book .import-progress .jobs,
-body.in-book .import-progress .jobs-more { display: none; }
-body.in-book .import-progress .jobs-summary { display: block; }
+/* In a book there is no tab bar: small, it is a pill under the top bar --
+   not a card over the page -- and gone when the bars are hidden for reading. */
+body.in-book { --strip-h: 0px; }
+body.in-book .import-progress:not(.open) { left: auto; right: 12px; bottom: auto;
+  top: calc(var(--safe-top) + 62px); }
+body.in-book .import-progress:not(.open) .jobs-strip { width: auto; max-width: 70vw; height: 36px;
+  border: 1px solid var(--hairline); border-radius: 999px; overflow: hidden; }
+body.in-book[data-chrome="none"] .import-progress:not(.open),
+body.in-book[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 
 
 /* Fifty-odd languages behind a disclosure, so the handful your library
