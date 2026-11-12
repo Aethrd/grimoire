@@ -154,6 +154,12 @@ await t('a queued book not yet started opens to be named, as a book in Build is'
   assert.equal(kept.length, 4, 'changed in its place, not queued again');
   assert.deepEqual([kept[3].name, kept[3].links.length, kept[3].status], ['C, renamed', 4, 'queued']);
   assert.match(kept[3].coverData || '', /^data:image\/png;base64,/);
+  // A chosen picture wins, and is on the job's book on the shelf straight away -- made before this was so, too.
+  const app = (await import('node:fs')).readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /const cover = chosen \|\| \(before\?\.coverBlob \? null : await web\.fetchCover\(job\.cover\)/);
+  assert.match(app, /cover: chosen, shouldPause: \(\) => under\.pausing,/);
+  assert.match(app, /setTimeout\(\(\) => coversOnQueuedBooks\(\)/);
+
   openC();
   // Back, top left: every novel again.
   document.getElementById('build-minimise').click();
@@ -187,6 +193,10 @@ await t('started, it builds every book: two at once, never two from one site', a
     assert.ok(book, `no book ${name}`);
     assert.equal(book.chapters, name === 'B' ? 3 : 4);
   }
+  // The picture chosen for C is its cover, kept as chosen.
+  const c = books.find((each) => each.title === 'C, renamed');
+  assert.equal(c.coverCustom, true, 'the chosen picture is not the cover');
+  assert.ok(c.coverBlob && c.coverBytes > 0);
   // Each filed where it was asked to be: C in its folder, the rest as they were queued.
   assert.equal(books.find((each) => each.title === 'C, renamed').folder, 'Novels/Korean');
   assert.equal(books.find((each) => each.title === 'A').folder || '', '');

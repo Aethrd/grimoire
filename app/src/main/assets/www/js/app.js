@@ -6713,6 +6713,8 @@ function wireJobEdit() {
         });
         saveQueue();
         paintJobEdit(it);
+        // On its book on the shelf now, if it has one -- not only once it is built.
+        coverOnJobBook(it).catch(() => {});
       } catch (error) {
         toast(error.message, 6000);
       }
@@ -6798,6 +6800,8 @@ function loadQueue(settings) {
     setTimeout(() => toast('The queue was running when the app closed — Start queue on Build carries on.', 7000), 1500);
   }
   paintQueue();
+  // Pictures chosen for queued books, on their books on the shelf (those made before this was so, too).
+  setTimeout(() => coversOnQueuedBooks().catch(() => {}), 500);
 }
 
 /** A failure that means a site wants no more asking for now. */
@@ -6946,11 +6950,13 @@ async function runJob(job) {
     const parts = [];
     const before = job.bookId != null ? await store.get('books', job.bookId) : null;
     if (before) parts.push({ ...build.bookPart(before), seamless: true });
-    // The picture chosen for it, or the site's.
-    // The book carried on keeps its own cover; one that never had one is given the site's.
-    const cover = before?.coverBlob ? null : job.coverData
+    /* The picture chosen for it wins, always -- over the site's, and over the
+     * book it carries on. Without one: the book carried on keeps its own
+     * cover; one that never had one is given the site's. */
+    const chosen = job.coverData
       ? await fetch(job.coverData).then((response) => response.blob()).catch(() => null)
-      : await web.fetchCover(job.cover).catch(() => null);
+      : null;
+    const cover = chosen || (before?.coverBlob ? null : await web.fetchCover(job.cover).catch(() => null));
     const part = build.webPart({
       name: job.name, links: job.links, pictures: webState.pictures, cover,
       author: job.author, sources: job.sources, gap: delaysFor(siteOfJob(job)).gap, jitter: delaysFor(siteOfJob(job)).jitter,
@@ -6963,7 +6969,7 @@ async function runJob(job) {
     };
     const { book, failed } = await build.build({
       parts, tag: job.id, title: before ? library.displayTitle(before) : job.name,
-      author: job.author || undefined, cover: null, shouldPause: () => under.pausing,
+      author: job.author || undefined, cover: chosen, shouldPause: () => under.pausing,
       folder: job.folder || null,
       // Shown, never in the way: a slip in showing it does not stop the download.
       onProgress: (message, fraction, at, total, now, counts) => {
@@ -6974,6 +6980,8 @@ async function runJob(job) {
     if (before && before.id !== book.id) await library.binBooks([before.id]).catch(() => {});
     job.bookId = book.id;
     noteShort(book).catch(() => {});
+    // The chosen picture into the book itself, as Build puts its chosen cover.
+    if (chosen) await covers.placeCover(book.id, chosen).catch(() => {});
     job.done = book.chapters;
     const rest = failed.flatMap((each) => each.web?.links || []);
     outcome = {
@@ -7665,6 +7673,28 @@ const saveLeftovers = () => {
 /* The books on the shelf with more to come: a stopped download's leftover
  * carries its book on, and so does a queued book until it is done. Their
  * covers say so (library.js). Redrawn only when which they are changes. */
+/* A queued book's chosen picture, on its book on the shelf -- the book so far,
+ * carried on -- straight away, not only once the queue has built it. Also
+ * at start, for books made before this was so. */
+async function coverOnJobBook(job) {
+  if (!job?.coverData || job.bookId == null) return false;
+  const book = await store.get('books', job.bookId);
+  if (!book) return false;
+  const blob = await fetch(job.coverData).then((response) => response.blob());
+  if (book.coverCustom && book.coverBytes === blob.size) return false;
+  await store.put('books', { ...book, coverBlob: blob, coverBytes: blob.size, coverCustom: true });
+  return true;
+}
+
+async function coversOnQueuedBooks() {
+  let any = false;
+  for (const job of webQueue) {
+    if (job.status === 'done') continue;
+    try { if (await coverOnJobBook(job)) any = true; } catch { /* left as it is */ }
+  }
+  if (any && current === 'library') refreshShelf().catch(() => {});
+}
+
 let unfinishedKey = '';
 function markUnfinished() {
   // Each book, with how many chapters are still to come for it.
@@ -7780,6 +7810,7 @@ async function rescueCutBuilds() {
     if (job.bookId != null && job.bookId !== entry.book.id) await library.binBooks([job.bookId]).catch(() => {});
     Object.assign(job, { bookId: entry.book.id, done: entry.book.chapters, links, status: links.length ? 'queued' : 'done' });
     entry.queued = true;
+    await coverOnJobBook(job).catch(() => {});
   }
   if (jobs.length) await store.saveSettings({ webQueue: jobs });
   for (const entry of saved) {
