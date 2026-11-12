@@ -2259,6 +2259,41 @@ await t('a queue of websites: books of their own, several at once but never two 
   assert.ok(j.retryAt - Date.now() > 14 * 60000);
   for (let i = 0; i < 4; i += 1) settle(j, { rest, reason: 'the site took too long to answer' }, false);
   assert.deepEqual([j.status, j.halted], ['attention', false]);
+  // The queue's time left: its order played out -- at once, per site, a retry's time -- each site's chapters at what they cost.
+  {
+    const QUEUE = [];
+    const state = { atOnce: 2, perSite: 1 };
+    const kept = {};
+    const timeFor = new Function('webQueue', 'queueState', 'siteCosts', 'held', 'gaps', `
+      const STAY_GUESS_MS = 3000, PAGE_GUESS_MS = 9000;
+      const sitesHeld = () => held; const siteOfJob = (job) => job.site; const delaysFor = (site) => ({ gap: gaps[site] ?? 10000 });
+      const queueJobs = new Map(); const timeLeft = () => null; const chapterCost = () => null;
+      ${fn('queueTimeLeft')}; ${fn('costOfSite')}; return queueTimeLeft;`);
+    const held = new Set();
+    const gaps = {};
+    const book = (site, n, extra = {}) => ({ site, links: Array(n).fill({}), status: 'queued', ...extra });
+    const left = () => Math.round(timeFor(QUEUE, state, kept, held, gaps)() / 1000);
+    QUEUE.push(book('a', 10), book('a', 10), book('b', 10));
+    // 16 s a chapter (the 10 s delay, and a page): a's two one after the other, b beside them.
+    assert.equal(left(), 320);
+    state.perSite = 2; state.atOnce = 3;
+    assert.equal(left(), 160);
+    state.atOnce = 1;
+    assert.equal(left(), 480);
+    state.atOnce = 2; state.perSite = 1;
+    // A site holding for the reader downloads nothing meanwhile: not counted.
+    held.add('a');
+    assert.equal(left(), 160);
+    held.clear();
+    // A book to try again in ten minutes: not before then.
+    QUEUE.push(book('c', 10, { status: 'retry', retryAt: Date.now() + 600000 }));
+    assert.equal(left(), 760);
+    QUEUE.pop();
+    // What a site's chapters took last time, moved to the delay set now (30 s at 10 s, now 20 s: 40 s).
+    kept.b = { each: 30000, gap: 10000 };
+    gaps.b = 20000;
+    assert.equal(left(), 400);
+  }
   // Started only by "at once", never two from one site, nor one whose site holds for the reader.
   const pump = fn('pumpQueue');
   assert.match(pump, /if \(queueJobs\.size >= queueState\.atOnce\) break;/);
@@ -2273,7 +2308,7 @@ await t('a queue of websites: books of their own, several at once but never two 
   // A queued book cut off when the app closed goes back to its job, not to Build's leftovers.
   assert.match(app, /const job = entry\.book\.queueJob && jobs\.find\(\(each\) => each\.id === entry\.book\.queueJob\);/);
   // Kept across the app being closed; what was under way, queued again.
-  assert.match(app, /store\.saveSettings\(\{ webQueue, queueRunning: queueState\.running, queueAtOnce: queueState\.atOnce, queuePerSite: queueState\.perSite, queueLocked: queueState\.locked \}\)/);
+  assert.match(app, /store\.saveSettings\(\{ webQueue, queueRunning: queueState\.running, queueAtOnce: queueState\.atOnce, queuePerSite: queueState\.perSite, queueLocked: queueState\.locked, siteCosts \}\)/);
   assert.match(app, /\.\.\.\(job\.status === 'running' \? \{ status: 'queued' \} : \{\}\),/);
   // Queued from the Website screen with its own ticks and title; not for pages carrying a book on.
   assert.match(html, /id="web-queue"/);

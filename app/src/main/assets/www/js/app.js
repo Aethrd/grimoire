@@ -6513,7 +6513,7 @@ function siteKey(hostname) {
 
 function saveQueue() {
   // What is under way is kept as such: on a restart it is queued again (see loadQueue).
-  store.saveSettings({ webQueue, queueRunning: queueState.running, queueAtOnce: queueState.atOnce, queuePerSite: queueState.perSite, queueLocked: queueState.locked }).catch(() => {});
+  store.saveSettings({ webQueue, queueRunning: queueState.running, queueAtOnce: queueState.atOnce, queuePerSite: queueState.perSite, queueLocked: queueState.locked, siteCosts }).catch(() => {});
   paintQueue();
 }
 
@@ -6526,6 +6526,7 @@ function loadQueue(settings) {
   }));
   if ([1, 2, 3, 4, 5, 6].includes(settings.queueAtOnce)) queueState.atOnce = settings.queueAtOnce;
   queueState.locked = settings.queueLocked === true;
+  if (settings.siteCosts && typeof settings.siteCosts === 'object') siteCosts = { ...settings.siteCosts };
   if ([1, 2, 3].includes(settings.queuePerSite)) queueState.perSite = settings.queuePerSite;
   if (settings.queueRunning && webQueue.some((job) => ['queued', 'retry'].includes(job.status))) {
     setTimeout(() => toast('The queue was running when the app closed — Start queue on Build carries on.', 7000), 1500);
@@ -6779,7 +6780,10 @@ function trackJob(job, under, message, at, now, counts) {
       run.lastCame = nowMs;
     }
     Object.assign(run, { done: counts.done, total: counts.total });
-    if (counts.stats) run.stats = counts.stats;
+    if (counts.stats) {
+      run.stats = counts.stats;
+      noteSiteCost(siteOfJob(job), run);
+    }
   }
   if (now !== undefined) {
     finish.activity(now);
@@ -6814,23 +6818,88 @@ function paintJobLine(job) {
 /** How long the queue has yet to go: each book's chapters at its site's pace, sites side by side up to "at once". */
 function queueTimeLeft() {
   const now = Date.now();
-  const bySite = new Map();
-  let total = 0;
+  const held = sitesHeld();
+  const running = [];
+  const waiting = [];
   for (const job of webQueue) {
     if (!['queued', 'retry', 'running'].includes(job.status)) continue;
-    const under = queueJobs.get(job.id);
-    const left = under?.run && Number.isFinite(under.run.total)
-      ? timeLeft(under.run, now)?.ms ?? 0
-      : job.links.length * (delaysFor(siteOfJob(job)).gap + PAGE_GUESS_MS - STAY_GUESS_MS)
-        + (job.status === 'retry' ? Math.max(0, (job.retryAt || now) - now) : 0);
     const site = siteOfJob(job);
-    bySite.set(site, (bySite.get(site) || 0) + left);
-    total += left;
+    // A site holding for the reader downloads nothing until it is seen to.
+    if (job.status !== 'running' && held.has(site)) continue;
+    const each = costOfSite(site);
+    if (job.status === 'running') {
+      const run = queueJobs.get(job.id)?.run;
+      const known = run && Number.isFinite(run.total) ? timeLeft(run, now) : null;
+      // Its part under way, as its own estimate has it; anything after it (none, mostly) at the site's cost.
+      const later = run?.delays ? run.delays.slice((run.at ?? 0) + 1).reduce((sum, part) => sum + (part?.chapters || 0), 0) : 0;
+      const ms = known ? known.ms : job.links.length * each;
+      running.push({ site, end: now + ms + later * each });
+    } else {
+      waiting.push({ site, ms: job.links.length * each, from: job.status === 'retry' ? Math.max(now, job.retryAt || now) : now });
+    }
   }
-  if (!total) return 0;
-  // A site's books go one after another; different sites side by side.
-  const lanes = Math.max(1, Math.min(queueState.atOnce, bySite.size));
-  return Math.max(Math.max(...bySite.values()), total / lanes);
+  if (!running.length && !waiting.length) return 0;
+  /* Played out: the queue's order, up to "at once" side by side, no more of a
+   * site than "per site", a book to try again not before its time. */
+  const lanes = Math.max(1, queueState.atOnce);
+  const active = running.map(({ site, end }) => ({ site, end }));
+  let last = Math.max(now, ...active.map((each) => each.end));
+  let t = now;
+  for (let guard = 0; waiting.length && guard < 10000; guard += 1) {
+    for (let i = active.length - 1; i >= 0; i -= 1) if (active[i].end <= t) active.splice(i, 1);
+    for (let i = 0; i < waiting.length && active.length < lanes;) {
+      const book = waiting[i];
+      const ofSite = active.filter((each) => each.site === book.site).length;
+      if (book.from <= t && ofSite < queueState.perSite) {
+        active.push({ site: book.site, end: t + book.ms });
+        last = Math.max(last, t + book.ms);
+        waiting.splice(i, 1);
+      } else {
+        i += 1;
+      }
+    }
+    if (!waiting.length) break;
+    const next = Math.min(...active.map((each) => each.end).filter((end) => end > t), ...waiting.map((each) => each.from).filter((from) => from > t));
+    if (!Number.isFinite(next)) break;
+    t = next;
+  }
+  return Math.max(0, last - now);
+}
+
+/* What a chapter of a site costs, for books of it not yet begun: what one of
+ * its books downloading now is taking (once a few chapters have come), else
+ * what it took last time -- kept, and moved to the delay now set for it --
+ * else a guess from the delay. Measured costs are kept between runs. */
+let siteCosts = {};   // site -> { each, gap, at }
+const SITE_COSTS_KEPT = 300;
+
+function costOfSite(site) {
+  const gap = delaysFor(site).gap;
+  const cycle = (delay) => Math.max(STAY_GUESS_MS, delay);
+  for (const job of webQueue) {
+    if (job.status !== 'running' || siteOfJob(job) !== site) continue;
+    const run = queueJobs.get(job.id)?.run;
+    const part = run?.delays?.[run.at];
+    const cost = run && run.stats?.chapters >= 3 ? chapterCost(run, part) : null;
+    if (cost) return cost.each;
+  }
+  const kept = siteCosts[site];
+  if (kept && kept.each > 0) return Math.max(1000, kept.each - cycle(kept.gap || 0) + cycle(gap));
+  return (PAGE_GUESS_MS - STAY_GUESS_MS) + cycle(gap);
+}
+
+/** A book of the site has come far enough to say what its chapters cost: kept for next time. */
+function noteSiteCost(site, run) {
+  const part = run?.delays?.[run.at];
+  if (!site || !(run?.stats?.chapters >= 3)) return;
+  const cost = chapterCost(run, part);
+  if (!cost || !(cost.each > 0)) return;
+  siteCosts[site] = { each: Math.round(cost.each), gap: part.gap, at: Date.now() };
+  const sites = Object.keys(siteCosts);
+  if (sites.length > SITE_COSTS_KEPT) {
+    sites.sort((a, b) => (siteCosts[a].at || 0) - (siteCosts[b].at || 0));
+    for (const old of sites.slice(0, sites.length - SITE_COSTS_KEPT)) delete siteCosts[old];
+  }
 }
 
 /** "07:35": when, by the clock, something is due. */
@@ -6867,9 +6936,15 @@ function paintQueueHead() {
   if (count('paused')) parts.push(`${count('paused')} paused`);
   if (count('done')) parts.push(`${count('done')} done`);
   el('build-queue-title').textContent = `Queue · ${parts.join(', ') || 'empty'}`;
-  const ms = queueTimeLeft();
-  el('build-queue-note').textContent = `${ms ? `About ${span(ms)} to go, done by ~${clockAt(Date.now() + ms)}. ` : ''}`
-    + `Each a book of its own; up to ${queueState.atOnce} at once, never two from one site. `
+  // Eased toward a new estimate, as a download's own time left is, not jumping with each chapter.
+  const now = Date.now();
+  const target = queueTimeLeft();
+  queueState.shown = target ? steady(queueState.shown == null ? null : Math.max(0, queueState.shown - (now - queueState.shownAt)), target) : null;
+  queueState.shownAt = now;
+  const ms = queueState.shown;
+  const perSite = queueState.perSite === 1 ? 'never two from one site' : `up to ${queueState.perSite} from one site`;
+  el('build-queue-note').textContent = `${ms ? `About ${span(ms)} to go, done by ~${clockAt(now + ms)}. ` : ''}`
+    + `Each a book of its own; up to ${queueState.atOnce} at once, ${perSite}. `
     + `Each site at its own remembered delay, pictures ${webState.pictures ? 'on' : 'off'}.`;
   const go = el('build-queue-go');
   go.textContent = queueState.running ? 'Pause all' : (count('paused') ? 'Resume' : 'Start queue');
