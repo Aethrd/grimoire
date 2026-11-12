@@ -2096,6 +2096,8 @@ await t('a short chapter is known by its lines, and a comment section is no chap
     assert.match(html, /<story-card><div data-shadow=""><h2><span slot="title">Chapter 3<\/span><\/h2><div class="text"><p>Shadowed words\.<\/p><em>after<\/em><\/div><\/div><\/story-card>/);
     assert.match(java, /view\.evaluateJavascript\(FLATTEN \+ "'<!DOCTYPE html>'\+document\.documentElement\.outerHTML"/);
   }
+  // A "Loading…" in an advert or comment box beside a chapter that has come holds nothing.
+  assert.equal(shown(`<div class="chapter">${lines(14)}${lines(14)}${lines(14)}${lines(14)}</div><aside><p>Loading...</p></aside>`)[6], '0');
   // A chapter that only mentions verifying is no wait.
   assert.equal(shown(`<div class="chapter">${lines(14)}<p>He was verifying access to the vault.</p></div>`)[6], '0');
 });
@@ -2224,7 +2226,7 @@ await t('a chapter is stayed on a few seconds to confirm it, and that time comes
   assert.match(java, /private static final long CONFIRM_MS = 3000;\s+private static final long CONFIRM_JITTER_MS = 1000;/);
   // Begun when the story is there and still; taken only once it has not grown the whole time.
   assert.match(java, /if \(storyDone && confirmBegan == 0\) \{/);
-  assert.match(java, /if \(storyLength != confirmStory\) \{\s+confirmStory = storyLength;\s+confirmAt = now;\s+\/\/[^\n]*\n\s+view\.evaluateJavascript\(STORY_END, null\);\s+\}\s+settled = now - confirmAt >= confirmFor;/);
+  assert.match(java, /if \(storyLength != confirmStory\) \{\s+confirmStory = storyLength;\s+confirmAt = now;\s+\/\/[^\n]*\n\s+if \(endScrolls < 2\) \{\s+endScrolls\+\+;\s+view\.evaluateJavascript\(STORY_END, null\);\s+\}\s+\}[\s\S]{0,400}settled = now - confirmAt >= confirmFor \|\| now - confirmBegan >= CONFIRM_MAX_MS;/);
   assert.match(java, /result\.put\("dwell", job\.dwell\);/);
   // The pacer takes the stay off the wait after it -- never below nothing.
   const times = [];
@@ -2950,8 +2952,8 @@ await t('a book with more to download is marked on its cover; the strip sits on 
 await t('a chapter is scrolled to its end while it is confirmed; one that came out much shorter than the rest is said, and fetched again', async () => {
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   // Scrolled when its confirming begins, and again whenever more of it came -- inside the stay that comes off the delay.
-  assert.match(java, /confirmStory = storyLength;\s+\/\*[\s\S]{0,400}\*\/\s+view\.evaluateJavascript\(STORY_END, null\);/);
-  assert.match(java, /confirmAt = now;\s+\/\/ More came[^\n]*\n\s+view\.evaluateJavascript\(STORY_END, null\);/);
+  assert.match(java, /confirmStory = storyLength;\s+endScrolls = 0;\s+\/\*[\s\S]{0,400}\*\/\s+view\.evaluateJavascript\(STORY_END, null\);/);
+  assert.match(java, /confirmAt = now;\s+\/\/ More came[^\n]*\n\s+if \(endScrolls < 2\) \{/);
   assert.match(java, /if \(settled\) dwell = now - confirmBegan;/);
   // Short: under 40% of the book's typical chapter, only website chapters, only with enough to say what is typical.
   const chapters = Array.from({ length: 12 }, (_, i) => ({ index: i, title: `${i + 1}화`, words: 2000 + i * 10, from: `https://s.example/${i + 1}` }));

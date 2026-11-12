@@ -128,6 +128,8 @@ public class WebBridge {
      *  pacer), so a chapter takes no longer, and pages are no closer together. */
     private static final long CONFIRM_MS = 3000;
     private static final long CONFIRM_JITTER_MS = 1000;
+    /** The longest a story is stayed on to confirm it, however it keeps changing. */
+    private static final long CONFIRM_MAX_MS = 12000;
     /** How long a page whose content is plainly there -- a list with its
      *  chapters, a chapter with its story -- must stay still. The full quiet
      *  spell is for a page where that cannot be seen. */
@@ -1024,6 +1026,8 @@ public class WebBridge {
         private int flat;
         private boolean pressedOut;
         private long storySince;
+        /** Times scrolled to the story's end again, as more of it came (twice at most). */
+        private int endScrolls;
         /** Staying on to confirm the story (see CONFIRM_MS): since when, for how long, at what length. */
         private long confirmBegan;
         private long confirmAt;
@@ -1221,6 +1225,7 @@ public class WebBridge {
                     confirmAt = now;
                     confirmFor = CONFIRM_MS + Math.round((Math.random() * 2 - 1) * CONFIRM_JITTER_MS);
                     confirmStory = storyLength;
+                    endScrolls = 0;
                     /* Scrolled to its end while it is confirmed: a reader that puts up
                      * the rest of a chapter only as it is scrolled to does so now, and
                      * the story growing is watched out as before. Nothing is asked of
@@ -1234,10 +1239,16 @@ public class WebBridge {
                     if (storyLength != confirmStory) {
                         confirmStory = storyLength;
                         confirmAt = now;
-                        // More came: to the new end, for any more after it.
-                        view.evaluateJavascript(STORY_END, null);
+                        // More came: to the new end, for any more after it -- twice at most.
+                        if (endScrolls < 2) {
+                            endScrolls++;
+                            view.evaluateJavascript(STORY_END, null);
+                        }
                     }
-                    settled = now - confirmAt >= confirmFor;
+                    /* Taken once it stayed as it was the whole stay -- or, a page that
+                     * never stops changing (adverts swapped in the story's box), once the
+                     * stay has gone on CONFIRM_MAX_MS: not held to the long fallback. */
+                    settled = now - confirmAt >= confirmFor || now - confirmBegan >= CONFIRM_MAX_MS;
                     if (settled) dwell = now - confirmBegan;
                 } else {
                     settled = (finished || visible) && !blank && !holding
@@ -1503,13 +1514,25 @@ public class WebBridge {
             /* And inside the page's open shadow sections, where a reader built of web
              * components draws its chapter: shown on screen, but out of the page's own
              * tree -- walked too, or a chapter there never counts as come. */
-            + "var R=[b];for(var ri0=0;ri0<R.length&&ri0<50;ri0++){var H=R[ri0].querySelectorAll('*');for(var hi=0;hi<H.length&&hi<8000;hi++){if(H[hi].shadowRoot)R.push(H[hi].shadowRoot);}}"
-            + "for(var ri=0;ri<R.length&&ri<50;ri++){W=document.createTreeWalker(R[ri],4);"
+            /* Only when the page's own tree holds no story yet (on a page of adverts,
+             * looking through every element ten times a second is a cost), and only
+             * every second or so. */
+            + "var R=[b].concat(window.__gRoots||[]),wt=0;"
+            + "for(var ri=0;ri<R.length&&ri<50;ri++){"
+            + "W=document.createTreeWalker(R[ri],4);"
             + "while((nd=W.nextNode())&&cnt<30000){cnt++;var l=nd.nodeValue.trim().length;if(!l)continue;"
-            + "if(!w&&l<40&&WAIT.test(nd.nodeValue.trim())){var wp=nd.parentElement;if(wp&&wp.getClientRects().length){var ws=getComputedStyle(wp);if(ws.visibility!=='hidden'&&ws.opacity!=='0')w=1;}}"
+            + "if(!wt&&l<40&&WAIT.test(nd.nodeValue.trim())){var wp=nd.parentElement;if(wp&&wp.getClientRects().length){var ws=getComputedStyle(wp);if(ws.visibility!=='hidden'&&ws.opacity!=='0')wt=1;}}"
             + "var p=nd.parentElement,no=false;while(p&&p!==b){if(NO.test(p.tagName)){no=true;break;}"
             + "if(!IN.test(p.tagName))break;p=p.parentElement;}if(no||!p||ex(p))continue;"
-            + "add(p,l);var g=p.parentElement;if(g&&p!==b&&p.tagName==='DIV')add(g,l);}}}catch(e){}"
+            + "add(p,l);var g=p.parentElement;if(g&&p!==b&&p.tagName==='DIV')add(g,l);}"
+            // The shadow sections found are kept, and walked every time; looked for again each second or so.
+            + "if(ri===0&&s<400&&(!window.__gSR||Date.now()-window.__gSR>900)){window.__gSR=Date.now();var F=[b];"
+            + "for(var r0=0;r0<F.length&&r0<50;r0++){var H=F[r0].querySelectorAll('*');for(var hi=0;hi<H.length&&hi<8000;hi++){if(H[hi].shadowRoot)F.push(H[hi].shadowRoot);}}"
+            + "window.__gRoots=F.slice(1);R=F;}"
+            + "}}catch(e){}"
+            /* A "Loading…" line holds only while the story is not there yet: one in an
+             * advert or a comment box beside a chapter that has come holds nothing. */
+            + "if(wt&&s<1500)w=1;"
             + "window.__gS=[n,L.length,(blk?'blocked':c?'checking':''),k,w,s,sl];"
             + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(blk?'blocked':c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+s+'|'+sl+'|'+t;"
             + "}catch(e){return '0|0|0||0|0|0|0|0|';}})()";
