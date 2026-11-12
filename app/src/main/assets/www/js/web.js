@@ -1137,6 +1137,32 @@ export function mergeSources(links, sites, siteOf) {
   return { links: merged, filled, backed: merged.filter((link) => link.alts?.length).length, sites: order, from };
 }
 
+/* Chapters that came out much shorter than the rest of their book -- under a
+ * share of what is typical there: cut off by a page taken too soon, or a site
+ * that put up only part. Measured only against the same book, and within it
+ * against the chapters around each one (ten either side, it there; the median
+ * of them), as a book's chapters often grow or shrink as it goes. Only chapters
+ * from websites (they have the address they came from, to fetch again), and
+ * only in a book with enough of them to say what is typical. */
+export function shortChapters(chapters, { share = 0.4, least = 8, around = 10 } = {}) {
+  const web = (chapters || []).filter((chapter) => chapter.from).sort((a, b) => a.index - b.index);
+  if (web.length < least) return [];
+  const median = (list) => {
+    const sorted = list.slice().sort((a, b) => a - b);
+    // The lower middle: where the book changes pace, a chapter is judged by the gentler side.
+    return sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : 0;
+  };
+  const out = [];
+  web.forEach((chapter, at) => {
+    const near = web.slice(Math.max(0, at - around), at).concat(web.slice(at + 1, at + 1 + around)).map((other) => other.words || 0);
+    const typical = median(near);
+    if (typical > 0 && (chapter.words || 0) < typical * share) {
+      out.push({ index: chapter.index, title: chapter.title, words: chapter.words || 0, from: chapter.from, typical });
+    }
+  });
+  return out;
+}
+
 export function numberGaps(links) {
   /* Each number counted once per link that names it exactly (twice is a
    * duplicate); a chapter in parts -- 172.1, 172.2 -- is chapter 172 there,

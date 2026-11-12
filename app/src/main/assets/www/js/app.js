@@ -1561,6 +1561,13 @@ async function openBookMenu(book) {
   }
 
   choice('Build onto this book', 'Add more files to the end of it', () => buildOnto(book));
+  // Chapters that came out much shorter than the rest: fetched again, each in its place.
+  const short = book.webSources?.length ? await shortOf(book.id).catch(() => []) : [];
+  if (short.length) {
+    choice(`Fetch ${short.length} short chapter${short.length === 1 ? '' : 's'} again`,
+      `Much shorter than the rest of the book (${short.slice(0, 3).map((chapter) => chapter.title).join(', ')}${short.length > 3 ? '…' : ''}) — maybe cut off`,
+      () => refetchShort(book, short));
+  }
   choice('Check for new chapters', book.webSources?.length
     ? 'List its website again, and add what it does not have yet'
     : 'From its contents page: add what it does not have yet',
@@ -6966,6 +6973,7 @@ async function runJob(job) {
     // The book so far, carried on: the shorter one goes to the Bin.
     if (before && before.id !== book.id) await library.binBooks([before.id]).catch(() => {});
     job.bookId = book.id;
+    noteShort(book).catch(() => {});
     job.done = book.chapters;
     const rest = failed.flatMap((each) => each.web?.links || []);
     outcome = {
@@ -8120,6 +8128,7 @@ function wireWorkshop() {
           }
         },
       });
+      noteShort(book).catch(() => {});
       /* Into the book itself, as a cover chosen in Details is: its cover page
        * shows it, and anything written out of it carries it. */
       if (buildCover) {
@@ -10110,6 +10119,65 @@ async function findWebLinks() {
  * published since. What it has is shown "in book" and unticked; the rest
  * is ticked, and added builds onto the end of the book.
  */
+/* ── chapters that came out short ─────────────────────────────────────
+ *
+ * After a download, the book's website chapters much shorter than its
+ * typical one are said; from the book's actions they are fetched again, at
+ * their site's own delay, each put back in its own place -- only where what
+ * comes is longer than what the book has. */
+async function shortOf(bookId) {
+  const chapters = await store.byIndex('chapters', 'bookId', bookId);
+  return web.shortChapters(chapters);
+}
+
+async function noteShort(book) {
+  if (!book?.id) return;
+  const short = await shortOf(book.id).catch(() => []);
+  if (!short.length) return;
+  const name = library.displayTitle(book);
+  const said = `“${name}”: ${short.length} chapter${short.length === 1 ? '' : 's'} came out much shorter than the rest — maybe cut off. `
+    + 'Hold its cover and choose Fetch short chapters again.';
+  whenNotReading(() => toast(said, 9000));
+}
+
+async function refetchShort(book, short) {
+  const links = short.map((chapter) => ({ url: chapter.from, text: chapter.title }));
+  const site = siteOfAddress(links[0].url);
+  const { gap, jitter } = delaysFor(site);
+  const finish = progress.start(`Fetching ${links.length} short chapter${links.length === 1 ? '' : 's'} of ${library.displayTitle(book)}`);
+  let mended = 0;
+  try {
+    // Paced as any download from the site is: its own delay, from when the last one ended.
+    const got = await web.readPages(links, {
+      title: book.title, pictures: false, gap, jitter,
+      onProgress: (fraction, done, total) => finish.say(null, fraction, `${done} of ${total}`),
+    });
+    const byUrl = new Map(short.map((chapter) => [chapter.from, chapter]));
+    for (const chapter of got.chapters || []) {
+      const was = byUrl.get(chapter.from) || byUrl.get(chapter.url);
+      if (!was || !((chapter.words || 0) > was.words)) continue;
+      const kept = await store.get('chapters', [book.id, was.index]);
+      if (!kept) continue;
+      await store.put('chapters', { ...kept, html: chapter.html, words: chapter.words, source: undefined });
+      mended += 1;
+    }
+    if (mended) {
+      const all = await store.byIndex('chapters', 'bookId', book.id);
+      const fresh = await store.get('books', book.id);
+      if (fresh) await store.put('books', { ...fresh, words: all.reduce((sum, chapter) => sum + (chapter.words || 0), 0) });
+    }
+    const still = (await shortOf(book.id)).length;
+    toast(mended
+      ? `${mended} of ${links.length} chapter${links.length === 1 ? '' : 's'} came back longer${still ? ` · ${still} still short — they may simply be short` : ''}`
+      : 'None came back longer — those chapters may simply be short, or the site cut them off again', 8000, { kind: mended ? 'done' : undefined });
+  } catch (error) {
+    finish.fail();
+    toast(error.message || 'Those chapters could not be fetched again', 7000, { kind: 'failed' });
+  } finally {
+    finish();
+  }
+}
+
 async function checkNewChapters(book) {
   clearWeb();
   webState.updating = book.id;

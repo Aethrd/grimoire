@@ -1221,6 +1221,11 @@ public class WebBridge {
                     confirmAt = now;
                     confirmFor = CONFIRM_MS + Math.round((Math.random() * 2 - 1) * CONFIRM_JITTER_MS);
                     confirmStory = storyLength;
+                    /* Scrolled to its end while it is confirmed: a reader that puts up
+                     * the rest of a chapter only as it is scrolled to does so now, and
+                     * the story growing is watched out as before. Nothing is asked of
+                     * a site that does not. */
+                    view.evaluateJavascript(STORY_END, null);
                 }
                 boolean settled;
                 if (confirmBegan > 0) {
@@ -1229,6 +1234,8 @@ public class WebBridge {
                     if (storyLength != confirmStory) {
                         confirmStory = storyLength;
                         confirmAt = now;
+                        // More came: to the new end, for any more after it.
+                        view.evaluateJavascript(STORY_END, null);
                     }
                     settled = now - confirmAt >= confirmFor;
                     if (settled) dwell = now - confirmBegan;
@@ -1412,6 +1419,13 @@ public class WebBridge {
      * and the page's own HTML holds only the empty host. Each host's own
      * children go where its slots were (by name, the rest to the unnamed one).
      * Closed ones are not reachable, and are left. */
+    /** To the end of a chapter: the page, and the box its story scrolls in, if it has its own. */
+    static final String STORY_END = "(function(){try{var se=document.scrollingElement||document.documentElement;"
+            + "window.scrollTo(0,se.scrollHeight);"
+            + "var all=document.querySelectorAll('div,main,article,section');"
+            + "for(var i=0;i<all.length&&i<4000;i++){var e=all[i];if(e.scrollHeight>e.clientHeight+200&&e.clientHeight>200){"
+            + "var o=getComputedStyle(e).overflowY;if(o==='auto'||o==='scroll')e.scrollTop=e.scrollHeight;}}}catch(x){}})();";
+
     static final String FLATTEN = "(function(){try{var put=function(root){var all=root.querySelectorAll('*');"
             + "for(var i=0;i<all.length&&i<20000;i++){var e=all[i],r=e.shadowRoot;if(!r)continue;put(r);"
             + "var c=document.createElement('div');c.setAttribute('data-shadow','');c.innerHTML=r.innerHTML;"
