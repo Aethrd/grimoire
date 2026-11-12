@@ -2702,20 +2702,21 @@ body.in-book[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .web-in-browser input { margin-top: 3px; flex: none; }
 .web-in-browser small { display: block; font-size: 12px; line-height: 1.45; margin-top: 2px; }
 
-/* A book with more still to download (paused, or stopped short): a wash of
-   the theme's own colour over its cover -- deeper at the top, paler at the
-   bottom, the cover still seen through it -- and a download mark in the
-   middle, 60% of the cover wide, in the palest tint of the theme with a soft
-   shadow. Its tray fills, round from the left, as the chapters come in: the
-   faint tray is what is still to come. */
+/* A book with more still to download (paused, or stopped short): a grey
+   wash over its cover -- darker at the top, paler at the bottom, the cover
+   still seen through it -- and a download mark in the middle, 60% of the
+   cover wide: faint, and filled from the bottom up in the theme's own colours
+   as far as the book has come (--done, 0 to 1). The fill is cut to the mark's
+   own height (y 3.6 to 19.5 of 24), so 50% is half the mark. */
 .tile-unfinished { position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(to bottom,
-    color-mix(in srgb, var(--accent-700) 66%, transparent),
-    color-mix(in srgb, var(--accent-200) 22%, transparent)); }
+  background: linear-gradient(to bottom, rgb(18 18 20 / .7), rgb(210 210 214 / .22)); }
 .tile-unfinished svg { position: absolute; left: 20%; width: 60%; height: auto; top: 50%;
-  transform: translateY(-50%); fill: none; stroke: var(--accent-100); stroke-width: 2.3;
-  stroke-linecap: round; stroke-linejoin: round;
+  transform: translateY(-50%); fill: none; stroke-width: 2.3;
+  stroke-linecap: round; stroke-linejoin: round; }
+.tile-unfinished .mark-base { stroke: rgb(255 255 255 / .42);
   filter: drop-shadow(0 1px 3px rgb(0 0 0 / .45)); }
-.tile-unfinished .tray { stroke-opacity: .32; }
-.tile-unfinished .tray-fill { stroke-dasharray: 100; stroke-dashoffset: calc(100 - var(--done, 0) * 100);
-  transition: stroke-dashoffset var(--motion) var(--ease); }
+/* The theme's colours made livelier and lighter: they read on the grey, in any theme. */
+.tile-unfinished .mark-fill {
+  filter: saturate(1.9) brightness(1.25) drop-shadow(0 0 4px color-mix(in srgb, var(--accent-400) 55%, transparent));
+  clip-path: inset(calc((3.6 + 15.9 * (1 - var(--done, 0))) / 24 * 100% - 2px) 0 0 0);
+  transition: clip-path var(--motion) var(--ease); }

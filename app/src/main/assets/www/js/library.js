@@ -992,8 +992,9 @@ export function unfinishedDone(have, left) {
   return total > 0 ? Math.min(1, Math.max(0, (Number(have) || 0) / total)) : 0;
 }
 
-/* The download mark: its arrow, and its tray twice -- faint, and over it the
- * part that fills, left round to right, as the chapters come in. */
+/* The download mark, twice over: faint, and over it the same mark in the
+ * theme's own colours, shown from the bottom up as far as the book has come. */
+const MARK = '<path d="M12 3.6v11.2M7.4 10.4l4.6 4.6 4.6-4.6M4.4 14.6v4.9h15.2v-4.9"/>';
 const unfinishedMark = (book) => {
   // A book being made now: as far as its record says it has got.
   const making = !unfinished.has(book.id) && book.building;
@@ -1002,10 +1003,12 @@ const unfinishedMark = (book) => {
     ? Math.max(0, (book.building.webParts || []).reduce((sum, part) => sum + (part.links?.length || 0), 0) - have)
     : unfinished.get(book.id);
   const done = unfinishedDone(have, left);
+  const id = `uf-${String(book.id).replace(/[^\w-]/g, '')}`;
   return `<span class="tile-unfinished" role="img" aria-label="Not finished downloading: ${Math.round(done * 100)}%" data-have="${have}" style="--done:${done.toFixed(3)}">`
-    + '<svg viewBox="0 0 24 24"><path d="M12 3.6v11.2M7.4 10.4l4.6 4.6 4.6-4.6"/>'
-    + '<path class="tray" d="M4.4 14.6v4.9h15.2v-4.9"/>'
-    + '<path class="tray-fill" pathLength="100" d="M4.4 14.6v4.9h15.2v-4.9"/></svg></span>';
+    + `<svg class="mark-base" viewBox="0 0 24 24">${MARK}</svg>`
+    + `<svg class="mark-fill" viewBox="0 0 24 24"><defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="0" y1="3.6" x2="0" y2="19.5">`
+    + '<stop offset="0" style="stop-color:var(--accent-300)"/><stop offset="1" style="stop-color:var(--accent-500)"/></linearGradient></defs>'
+    + `<g stroke="url(#${id})">${MARK}</g></svg></span>`;
 };
 
 function tile(book, onOpen, onLongPress, selection, selecting) {

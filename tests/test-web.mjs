@@ -2925,7 +2925,7 @@ await t('a book with more to download is marked on its cover; the strip sits on 
   assert.equal(lib.unfinishedDone(30, 70), 0.3);
   assert.equal(lib.unfinishedDone(0, 0), 0);
   assert.equal(lib.unfinishedDone(10, 0), 1);
-  assert.match(library, /<path class="tray-fill" pathLength="100"/);
+  assert.match(library, /<stop offset="0" style="stop-color:var\(--accent-300\)"\/><stop offset="1" style="stop-color:var\(--accent-500\)"\/>/);
   // Its cover from the start: a book downloading, or paused, is not a blank.
   const build = read('app/src/main/assets/www/js/build.js');
   assert.match(build, /\.\.\.\(early \? \{ coverBlob: early, coverBytes: early\.size \?\? null \} : \{\}\),/);
@@ -2938,9 +2938,10 @@ await t('a book with more to download is marked on its cover; the strip sits on 
   assert.match(app, /function saveQueue\(\) \{\s+markUnfinished\(\);/);
   // The wash in the theme's colours, deep to pale; the mark the same, opaque and inverted, 60% of the cover wide.
   const css = read('app/src/main/assets/www/css/app.css');
-  assert.match(css, /\.tile-unfinished \{[^}]*linear-gradient\(to bottom,\s*color-mix\(in srgb, var\(--accent-700\) 66%, transparent\),\s*color-mix\(in srgb, var\(--accent-200\) 22%, transparent\)\)/);
-  assert.match(css, /\.tile-unfinished svg \{[^}]*width: 60%;[^}]*stroke: var\(--accent-100\);/);
-  assert.match(css, /\.tile-unfinished \.tray-fill \{ stroke-dasharray: 100; stroke-dashoffset: calc\(100 - var\(--done, 0\) \* 100\);/);
+  assert.match(css, /\.tile-unfinished \{[^}]*linear-gradient\(to bottom, rgb\(18 18 20 \/ \.7\), rgb\(210 210 214 \/ \.22\)\);/);
+  assert.match(css, /\.tile-unfinished svg \{[^}]*width: 60%;/);
+  assert.match(css, /\.tile-unfinished \.mark-fill \{\s*filter: saturate\(1\.9\) brightness\(1\.25\)/);
+  assert.match(css, /\.tile-unfinished \.mark-fill \{[^}]*clip-path: inset\(calc\(\(3\.6 \+ 15\.9 \* \(1 - var\(--done, 0\)\)\) \/ 24 \* 100% - 2px\) 0 0 0\);/);
   // The strip placed by where the tab bar's top really is.
   assert.match(app, /host\.style\.bottom = !free && shown \? `\$\{Math\.max\(0, Math\.round\(window\.innerHeight - bar\.getBoundingClientRect\(\)\.top\)\)\}px` : '';/);
   assert.match(app, /new ResizeObserver\(seat\)\.observe\(bar\)/);
