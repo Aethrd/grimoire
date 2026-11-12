@@ -315,9 +315,9 @@ export function pickSite(url) {
         try { answer = JSON.parse(payload || '{}'); } catch { /* nothing picked */ }
         const links = (Array.isArray(answer.links) ? answer.links : [])
           .filter((link) => /^https?:/i.test(String(link?.url || '')))
-          .map((link) => ({ url: String(link.url).replace(/#.*$/, ''), text: tidy(String(link.text || '')) }));
+          .map((link) => ({ url: String(link.url).replace(/#.*$/, ''), text: withoutWhen(tidy(String(link.text || ''))) }));
         // Every chapter the page listed, picked or not: what a pick left out is told by them.
-        const listed = (Array.isArray(answer.listed) ? answer.listed : []).map((text) => tidy(String(text || ''))).filter(Boolean);
+        const listed = (Array.isArray(answer.listed) ? answer.listed : []).map((text) => withoutWhen(tidy(String(text || '')))).filter(Boolean);
         resolve({ url: answer.url || url, title: tidy(String(answer.title || '')), links, listed });
       },
     });
@@ -609,8 +609,41 @@ function linkName(anchor) {
     last = piece.from;
   }
   // The row's "›" at the end is where it leads, not what it is called.
-  const name = tidy(out);
+  const name = withoutWhen(tidy(out));
   return name.replace(/\s*[›»→]+$/, '') || name;
+}
+
+/* When a chapter came out, on the end of its row ("2 months ago", "over 1
+ * year ago", "Mar 3, 2024", "3일 전"): not part of its name -- and run into
+ * its number, "Chapter 271" + "2 months ago" read as chapter 2712. */
+const WHEN = new RegExp([
+  '(?:(?:about|almost|over|nearly|less\\s+than|just)\\s+)?(?:a|an|one|\\d+)\\s*(?:sec(?:ond)?|min(?:ute)?|hour|hr|day|week|wk|month|mo|year|yr)s?\\s+ago',
+  'yesterday|today|just\\s+now',
+  '\\d{4}[-/.]\\d{1,2}[-/.]\\d{1,2}(?:\\s+\\d{1,2}:\\d{2}(?::\\d{2})?)?',
+  '\\d{1,2}[-/.]\\d{1,2}[-/.]\\d{2,4}',
+  '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?,?\\s+\\d{4}',
+  '\\d{1,2}\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?,?\\s+\\d{4}',
+  '\\d+\\s*(?:초|분|시간|일|주|개월|달|년)\\s*전',
+  '\\d+\\s*(?:秒|分钟|分鐘|小时|小時|天|日|周|週|个月|個月|月|年)前',
+].map((when) => `(?:${when})`).join('|'), 'i');
+const WHEN_AT_END = new RegExp(`[\\s·•|,(\\[-]*(?:${WHEN.source})[\\s)\\]]*$`, 'i');
+
+/** A name with when it came out taken off its end -- and run-in ones split off first. */
+export function withoutWhen(text) {
+  let name = String(text || '');
+  // Run into the name with no space ("Chapter 1almost 2 years ago"): where a
+  // letter or number meets the start of a time, a space -- then taken off.
+  // A title's own words ("The Day 2 Years Ago") are capitalised; a site's "2 years ago" is not.
+  const theirs = (tail) => !(/ago\s*\W*$/i.test(tail) && /[A-Z]/.test(tail));
+  for (let i = 0; i < 2; i += 1) {
+    const before = name;
+    const tail = WHEN_AT_END.exec(name);
+    if (tail && theirs(tail[0])) name = name.slice(0, tail.index).trim();
+    if (name !== before) continue;
+    const run = /((?:about|almost|over|nearly|less than|just)\s+.*|yesterday|today)$/i.exec(name);
+    if (run && run.index > 0 && theirs(run[1]) && WHEN_AT_END.test(` ${run[1]}`)) name = name.slice(0, run.index).trim();
+  }
+  return name || String(text || '');
 }
 
 /** A name that starts with its chapter, as a row of a contents list does:
@@ -1105,13 +1138,18 @@ export function mergeSources(links, sites, siteOf) {
 }
 
 export function numberGaps(links) {
+  /* Each number counted once per link that names it exactly (twice is a
+   * duplicate); a chapter in parts -- 172.1, 172.2 -- is chapter 172 there,
+   * not 172 missing, and not 172 twice. */
   const counts = new Map();
+  const present = new Set();
   for (const link of links) {
     const { kind, number } = chapterKind(link.text);
-    if (kind !== 'main' || !Number.isInteger(number) || number < 0) continue;
+    if (kind !== 'main' || !Number.isFinite(number) || number < 0) continue;
     counts.set(number, (counts.get(number) || 0) + 1);
+    present.add(Math.floor(number));
   }
-  const numbers = [...counts.keys()].sort((a, b) => a - b);
+  const numbers = [...present].sort((a, b) => a - b);
   if (numbers.length < 5) return { missing: [], count: 0, twice: [], from: null, to: null };
   const missing = [];
   let count = 0;
@@ -1123,7 +1161,7 @@ export function numberGaps(links) {
       count += now - before - 1;
     }
   }
-  const twice = numbers.filter((number) => counts.get(number) > 1);
+  const twice = [...counts.keys()].filter((number) => counts.get(number) > 1).sort((a, b) => a - b);
   return { missing, count, twice, from: numbers[0], to: numbers.at(-1) };
 }
 

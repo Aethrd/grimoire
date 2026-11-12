@@ -418,7 +418,8 @@ public class WebBridge {
             + "p.dragTo=function(x,y){if(!drag)return;var c=toPage(x,y);fx=c.x;fy=c.y;follow();};"
             + "p.release=function(){var was=drag&&quiet&&!moved,a=p.from;end();if(was&&a)tap(a);};"
             + "p.cancelHold=function(){drag=false;clearInterval(roll);};"
-            + "p.listed=function(){return all().slice(0,5000).map(function(a){return(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,140);});};"
+            + "p.nameOf=function(a){var out='',last=null,w=document.createTreeWalker(a,4);for(var n=w.nextNode();n;n=w.nextNode()){var t=n.nodeValue||'';if(!t.trim()||(n.parentElement&&n.parentElement.closest('script,style')))continue;if(last&&n.parentElement!==last&&/[\\p{L}\\p{N}]$/u.test(out)&&/^[\\p{L}\\p{N}]/u.test(t))out+=' ';out+=t;last=n.parentElement;}return out.replace(/\\s+/g,' ').trim();};"
+            + "p.listed=function(){return all().slice(0,5000).map(function(a){return p.nameOf(a).slice(0,140);});};"
             + "var HOLD=380,SLOP=10;"
             + "var sx=0,sy=0,ly=0,lt=0,v=0,swiping=false,held=null,sbox=null,glide=0,down=false;"
             + "var stopGlide=function(){if(glide){cancelAnimationFrame(glide);glide=0;}};"
@@ -476,7 +477,7 @@ public class WebBridge {
             + "if(!/^https?:/i.test(u)||seen[u])continue;var hit=false;"
             + "if(marked)hit=a.classList.contains('__gPicked');"
             + "else if(s)for(var r=0;r<s.rangeCount&&!hit;r++)hit=s.getRangeAt(r).intersectsNode(a);"
-            + "if(hit){seen[u]=1;out.push({url:u,text:(a.textContent||'').replace(/\\s+/g,' ').trim()});}}"
+            + "if(hit){seen[u]=1;out.push({url:u,text:window.__gPick&&__gPick.nameOf?__gPick.nameOf(a):(a.textContent||'').replace(/\\s+/g,' ').trim()});}}"
             + "return JSON.stringify(out);}catch(e){return '[]';}})()";
 
     /** The names of every chapter the shown page lists (see __gPick.listed). */

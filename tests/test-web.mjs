@@ -2855,4 +2855,35 @@ await t('one book from several sites: the first list, its gaps filled from the o
   assert.match(read('app/src/main/assets/www/js/build.js'), /links: links\.map\(\(\{ url, text, alts \}\) => \(\{ url, text, \.\.\.\(alts\?\.length \? \{ alts \} : \{\}\) \}\)\)/);
 });
 
+await t('a row that says when its chapter came out (woopread): the time is no part of its name or number; 172.1 and 172.2 are 172', async () => {
+  const names = {
+    'Chapter 0 - Prologuealmost 2 years ago': ['Chapter 0 - Prologue', 0],
+    'Chapter 1almost 2 years ago': ['Chapter 1', 1],
+    'Chapter 271 2 months ago': ['Chapter 271', 271],
+    'Chapter 172.1over 1 year ago': ['Chapter 172.1', 172.1],
+    'Chapter 250: (Main Story Complete) 3 months ago': ['Chapter 250: (Main Story Complete)', 250],
+    'Chapter 12 · Mar 3, 2024': ['Chapter 12', 12],
+    'Chapter 9 - 2024-03-01': ['Chapter 9', 9],
+    '12화 북쪽 숲 3일 전': ['12화 북쪽 숲', 12],
+    '第5章 开局 2天前': ['第5章 开局', 5],
+    'Chapter 7: Ten Years Ago': ['Chapter 7: Ten Years Ago', 7],
+    'Chapter 3: The Day 2 Years Ago': ['Chapter 3: The Day 2 Years Ago', 3],
+  };
+  for (const [raw, [name, number]] of Object.entries(names)) {
+    assert.equal(web.withoutWhen(raw), name, raw);
+    assert.equal(web.numberIn(web.withoutWhen(raw)), number, raw);
+  }
+  // Read off a page: the name and the time in their own boxes, as woopread has them.
+  const found = web.linksOf(`<html><body><ul>${[271, 270, 269].map((n) => `<li><a href="/series/x/chapter-${n}"><div><span>Chapter ${n}</span></div><div><svg></svg><span>2 months ago</span></div></a></li>`).join('')}</ul></body></html>`, 'https://w.example/series/x');
+  assert.deepEqual(found.links.filter((l) => /chapter-/.test(l.url)).map((l) => l.text), ['Chapter 271', 'Chapter 270', 'Chapter 269']);
+  // A chapter in parts is that chapter, there once; only true gaps and true twice are said.
+  const gaps = web.numberGaps(['Chapter 0 - Prologue', ...Array.from({ length: 10 }, (_, i) => `Chapter ${i + 1}`), 'Chapter 12.1', 'Chapter 12.2', 'Chapter 13', 'Chapter 13']
+    .map((text) => ({ url: 'x', text })));
+  assert.deepEqual([gaps.missing, gaps.count, gaps.twice, gaps.from, gaps.to], [['11'], 1, [13], 0, 13]);
+  // The picker names a link the same way: its parts spaced, not run together.
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  assert.match(java, /p\.nameOf=function\(a\)/);
+  assert.match(java, /text:window\.__gPick&&__gPick\.nameOf\?__gPick\.nameOf\(a\)/);
+});
+
 console.log(`\n${pass} assertions passed`);
