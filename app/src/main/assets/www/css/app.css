@@ -1375,15 +1375,17 @@ body.jobs-up { --strip-h: 30px; }
 
 .job.done, .job.failed { opacity: .72; transition: opacity var(--motion) var(--ease); }
 
-/* In a book there is no tab bar: small, it is a pill under the top bar --
-   not a card over the page -- and gone when the bars are hidden for reading. */
-body.in-book { --strip-h: 0px; }
-body.in-book .import-progress:not(.open) { left: auto; right: 12px; bottom: auto;
+/* On a book's page there is no tab bar: small, it is a pill under the top bar --
+   not a card over the page -- and gone when the bars are hidden for reading.
+   Beside the book (its search, its contents) the tab bar is there, and the
+   strip sits on it as everywhere else: a pill at the top lay over their chips. */
+body.on-page { --strip-h: 0px; }
+body.on-page .import-progress:not(.open) { left: auto; right: 12px; bottom: auto;
   top: calc(var(--safe-top) + 62px); }
-body.in-book .import-progress:not(.open) .jobs-strip { width: auto; max-width: 70vw; height: 36px;
+body.on-page .import-progress:not(.open) .jobs-strip { width: auto; max-width: 70vw; height: 36px;
   border: 1px solid var(--hairline); border-radius: 999px; overflow: hidden; }
-body.in-book[data-chrome="none"] .import-progress:not(.open),
-body.in-book[data-chrome="copy"] .import-progress:not(.open) { display: none; }
+body.on-page[data-chrome="none"] .import-progress:not(.open),
+body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 
 
 /* Fifty-odd languages behind a disclosure, so the handful your library

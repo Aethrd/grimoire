@@ -1169,7 +1169,14 @@ await t('what finishes while you read waits for the book to be put down', async 
   assert.equal((app.match(/await untilNotReading\(startedReading\);/g) || []).length, 3);
   // And the progress panel is a pill in a book, gone with the bars.
   const css = fs.readFileSync(new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
-  assert.match(css, /body\.in-book\[data-chrome="none"\] \.import-progress/);
+  assert.match(css, /body\.on-page\[data-chrome="none"\] \.import-progress/);
+  // Beside the book (search, contents) the tab bar is there: the strip sits on it, not over their chips.
+  assert.ok(!/body\.in-book[^{]*\.import-progress/.test(css), 'the pill placed on screens beside the book too');
+  assert.match(read('app/src/main/assets/www/js/app.js'), /document\.body\.classList\.toggle\('on-page', current === 'reader'\);/);
+  // A back that slips past the keyboard (Samsung's clipboard, deleting its items) does not leave the screen typed in.
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /public void handleOnBackPressed\(\) \{[\s\S]{0,500}?if \(keyboardUp\(\)\) return;/);
+  assert.match(activity, /return insets != null && insets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\);/);
 });
 
 await t('the copy button\'s amount part is about a fifth of the copy part', async () => {

@@ -57,6 +57,8 @@ function viewChanged() {
   if (current === 'reader') inBook = true;
   else if (!BESIDE_THE_BOOK.has(current)) inBook = false;
   document.body.classList.toggle('in-book', inBook);
+  // On the page itself: no tab bar, so the progress strip is a pill under the top bar (see app.css).
+  document.body.classList.toggle('on-page', current === 'reader');
   liftProgress();
   progress.seat();
   if (!inBook && held.length) {
@@ -2504,7 +2506,8 @@ const progress = (() => {
     const host = panel();
     const bar = el('tabbar');
     if (!host) return;
-    const free = host.classList.contains('open') || document.body.classList.contains('in-book');
+    // On the reading page it floats at the top; beside the book (search, contents) the tab bar is there, and it sits on it.
+    const free = host.classList.contains('open') || document.body.classList.contains('on-page');
     const shown = bar && !bar.hidden && bar.getClientRects().length;
     host.style.bottom = !free && shown ? `${Math.max(0, Math.round(window.innerHeight - bar.getBoundingClientRect().top))}px` : '';
   }

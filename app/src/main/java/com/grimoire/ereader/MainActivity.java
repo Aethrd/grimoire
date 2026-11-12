@@ -929,10 +929,22 @@ public class MainActivity extends AppCompatActivity {
         return dir;
     }
 
+    /** Whether the on-screen keyboard is showing (and with it, whatever panel of it is open). */
+    private boolean keyboardUp() {
+        if (webView == null) return false;
+        WindowInsetsCompat insets = ViewCompat.getRootWindowInsets(webView);
+        return insets != null && insets.isVisible(WindowInsetsCompat.Type.ime());
+    }
+
     private void installBackHandler() {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
+                /* The keyboard up: a back that reaches here is not the reader leaving.
+                 * The keyboard takes a back to close itself before it ever comes here;
+                 * one that slips past it -- Samsung's clipboard, as its items are
+                 * deleted -- left the screen being typed in. Not acted on. */
+                if (keyboardUp()) return;
                 // A site shown to pass its check: back is Done.
                 if (webBridge != null && webBridge.closeShownIfOpen()) return;
                 // Give the reader first refusal: it may want to close a menu or
