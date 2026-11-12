@@ -402,10 +402,56 @@ public class WebBridge {
             + "var e=document.elementFromPoint(xs[i],y),a=e&&e.closest?e.closest(SEL):null;if(a&&chapterish(a))return a;}return null;};"
             /* Something meant to be pressed, with no address to it: a reader's list whose
              * chapters its own script opens -- there is nothing there to take. */
-            + "var addressless=function(x,y){var e=document.elementFromPoint(x,y);if(!e||!e.closest)return false;"
+            + "var itemOf=function(e){if(!e||!e.closest)return null;"
             + "var it=e.closest('li,button,[role=\"button\"],[role=\"listitem\"],[role=\"option\"],[onclick],[tabindex]');"
             + "if(!it&&getComputedStyle(e).cursor==='pointer')it=e;"
-            + "return !!it&&!it.closest(SEL)&&/\\S/.test(it.textContent||'');};"
+            + "return it&&!it.closest(SEL)&&/\\S/.test(it.textContent||'')?it:null;};"
+            + "var addressless=function(x,y){return !!itemOf(document.elementFromPoint(x,y));};"
+            /* Learnt by watching: such a chapter tapped is let through, and where the
+             * reader goes is noted with the chapter's place in its list. The first and
+             * the last so tapped, and if their addresses differ only by a number that
+             * counts with the list, every chapter between has its address. Kept for the
+             * tab (sessionStorage), across the reader's own page loads. */
+            + "var LK='__gPickLearn';"
+            + "var lget=function(){try{return JSON.parse(sessionStorage.getItem(LK)||'null')||{taps:[]};}catch(x){return{taps:[]};}};"
+            + "var lset=function(v){try{sessionStorage.setItem(LK,JSON.stringify(v));}catch(x){}};"
+            + "var say=function(m){var d=document.getElementById('__gPickSay');if(!d){d=document.createElement('div');d.id='__gPickSay';"
+            + "d.style.cssText='position:fixed;left:12px;right:12px;bottom:12px;z-index:2147483647;padding:10px 12px;border-radius:10px;"
+            + "background:#2a2430;color:#f1ecf4;font:14px/1.4 sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.4)';"
+            + "(document.body||document.documentElement).appendChild(d);}d.textContent=m;clearTimeout(say.t);say.t=setTimeout(function(){d.remove();},7000);};"
+            + "var placeOf=function(it){var par=it.parentElement;if(!par)return null;"
+            + "var sib=Array.prototype.filter.call(par.children,function(c){return c.tagName===it.tagName;});"
+            + "return{i:sib.indexOf(it),texts:sib.map(function(c){return(c.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120);})};};"
+            + "var learn=function(){var l=lget();if(l.taps.length<2)return l;var a=l.taps[0],b=l.taps[1];l.made=null;"
+            + "var A=a.url.split(/(\\d+)/),B=b.url.split(/(\\d+)/),at=-1;"
+            + "if(A.length===B.length){for(var k=0;k<A.length;k++){if(A[k]===B[k])continue;if(k%2===1&&at<0){at=k;continue;}at=-2;break;}}"
+            /* Counted by the number each chapter shows in the list (1, 2, 3 ...) where
+             * both have one -- a long list may hold only the rows in view -- else by place. */
+            + "var num=function(t){var m=/^\\s*(\\d+)/.exec(t||'');return m?Number(m[1]):null;};"
+            + "var na=num(a.texts[a.i]),nb=num(b.texts[b.i]),by=na!=null&&nb!=null&&na!==nb;"
+            + "var ia=by?na:a.i,ib=by?nb:b.i;"
+            + "if(at<0||ia===ib){l.why=a.url===b.url?'same':'pattern';return l;}"
+            + "var step=(Number(B[at])-Number(A[at]))/(ib-ia);"
+            + "if(step!==Math.round(step)||!step){l.why='pattern';return l;}"
+            + "var named=function(k){if(!by)return a.texts[k]||b.texts[k]||String(k+1);"
+            + "var all=a.texts.concat(b.texts);for(var j=0;j<all.length;j++)if(num(all[j])===k)return all[j];return String(k);};"
+            + "var lo=Math.min(ia,ib),hi=Math.max(ia,ib),out=[];"
+            + "for(var i=lo;i<=hi&&out.length<5000;i++){var C=A.slice();C[at]=String(Number(A[at])+(i-ia)*step);"
+            + "out.push({url:C.join(''),text:named(i)});}"
+            + "l.made=out;l.why='';return l;};"
+            + "var noted=function(url){var l=lget(),w=l.wait;if(!w)return;l.wait=null;"
+            + "if(url===w.from){lset(l);say('That chapter was the one open already. Open another from the list first, then tap the one you wanted.');return;}"
+            + "l.taps=(l.taps.length>=2?[]:l.taps).concat([{i:w.i,texts:w.texts,url:url}]);lset(l);"
+            + "if(l.taps.length===1){say('First: '+(w.texts[w.i]||'')+'. Now open the list again and tap the last chapter you want.');return;}"
+            + "l=learn();lset(l);"
+            + "if(l.made)say(l.made.length+' chapters, '+l.made[0].text+' to '+l.made[l.made.length-1].text+'. Use selected to take them.');"
+            + "else say(l.why==='same'?'The address stays the same from chapter to chapter: this reader gives its chapters no addresses to take.'"
+            + ":'Their addresses do not count along with the list, so the ones between cannot be worked out. Tap the first again to start over.');};"
+            + "var watchFrom=function(from){var t0=Date.now(),iv=setInterval(function(){"
+            + "if(location.href!==from){clearInterval(iv);setTimeout(function(){noted(location.href);},300);}"
+            + "else if(Date.now()-t0>6000){clearInterval(iv);noted(from);}},150);};"
+            /* A page loaded anew by the reader: the tap before it is still waiting. */
+            + "(function(){var l=lget();if(l.wait&&Date.now()-l.wait.at<15000){if(location.href!==l.wait.from)setTimeout(function(){noted(location.href);},300);else watchFrom(l.wait.from);}})();"
             + "var drag=false,quiet=false,moved=false,fx=0,fy=0,roll=null;"
             /* Quiet (the Drag switch on, where a touch begins at once): nothing marked
              * until the finger moves off the chapter it began on, and one that never
@@ -437,7 +483,10 @@ public class WebBridge {
             + "e.preventDefault();fx=t.clientX;fy=t.clientY;follow();},{capture:true,passive:false});"
             + "var up=function(){clearTimeout(hold);down=null;if(!window.__gPickNative)end();};"
             + "window.addEventListener('touchend',up,true);window.addEventListener('touchcancel',up,true);"
-            + "window.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest(SEL):null;if(!a||!chapterish(a))return;"
+            + "window.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest(SEL):null;"
+            + "if(!a){var it=itemOf(e.target),pl=it&&placeOf(it);if(pl&&pl.texts.length>2){var l=lget();"
+            + "l.wait={i:pl.i,texts:pl.texts,from:location.href,at:Date.now()};lset(l);watchFrom(location.href);}return;}"
+            + "if(!chapterish(a))return;"
             + "e.preventDefault();e.stopImmediatePropagation();if(Date.now()-p.at<400)return;tap(a);},true);})();";
 
     /** The picking script, said to come from the app's own hold (see holdToPick). */
@@ -486,7 +535,7 @@ public class WebBridge {
                     if ("\"none\"".equals(began) && !toldNoAddress) {
                         toldNoAddress = true;
                         android.widget.Toast.makeText(activity,
-                                "These chapters have no addresses - the site's reader opens them by its own script, so the app can't take them. Try the book's own contents page on the site.",
+                                "These chapters have no addresses in the page. Tap the first one you want, then (from the list again) the last: the app learns their addresses from where the reader goes.",
                                 android.widget.Toast.LENGTH_LONG).show();
                     }
                     if (!"true".equals(began)) return;          // not on a chapter: the page's touch
@@ -562,6 +611,7 @@ public class WebBridge {
      *  order, as [{url, text}]. */
     private static final String PICKED = "(function(){try{var out=[],seen={},s=window.getSelection();"
             + "var as=document.querySelectorAll('a[href],[data-href],[data-url],[data-link]'),marked=document.querySelectorAll('.__gPicked').length>0;"
+            + "if(!marked){try{var l=JSON.parse(sessionStorage.getItem('__gPickLearn')||'null');if(l&&l.made&&l.made.length)return JSON.stringify(l.made);}catch(x){}}"
             + "for(var i=0;i<as.length;i++){var a=as[i],u='';"
             + "try{u=new URL(a.getAttribute('href')!=null?a.getAttribute('href'):(a.getAttribute('data-href')||a.getAttribute('data-url')||a.getAttribute('data-link')||''),location.href).href;}catch(x){continue;}"
             + "if(!/^https?:/i.test(u)||seen[u])continue;var hit=false;"

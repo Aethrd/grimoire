@@ -2449,6 +2449,38 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   over = rw.document.getElementById('bare');
   assert.equal(rw.__gPick.holdAt(50, 500), 'none');
   assert.match(java, /if \("\\"none\\""\.equals\(began\) && !toldNoAddress\)/);
+  // A reader that opens its chapters by script, the address counting with them: two taps, and the
+  // addresses of every chapter between are worked out from where the reader went.
+  const spa = (move) => {
+    const dom = new JSDOM(`<html><body><aside><button>Chapters</button><button>Bookmarks</button><ol>${
+      Array.from({ length: 9 }, (_, i) => `<li role="button">${i + 1} ${i ? `${Math.ceil(i / 5)}장. 구역 (${i})` : '프롤로그'}</li>`).join('')}</ol></aside></body></html>`,
+    { runScripts: 'outside-only', url: 'https://r.example/read/204070' });
+    const sw = dom.window;
+    sw.eval(script('PICKABLE'));
+    sw.document.querySelectorAll('li').forEach((li, i) => li.addEventListener('click', () => move(sw, i)));
+    return sw;
+  };
+  const press = async (sw, i) => { sw.document.querySelectorAll('li')[i].click(); await new Promise((r) => setTimeout(r, 800)); };
+  const counted = spa((sw, i) => sw.history.pushState({}, '', `/read/${204070 + i}`));
+  await press(counted, 2);
+  assert.match(counted.document.getElementById('__gPickSay').textContent, /^First: 3 1장/);
+  await press(counted, 6);
+  const learnt = JSON.parse(counted.eval(script('PICKED')));
+  assert.deepEqual(learnt.map((l) => l.url), [2, 3, 4, 5, 6].map((n) => `https://r.example/read/${204070 + n}`));
+  assert.deepEqual([learnt[0].text, learnt.at(-1).text], ['3 1장. 구역 (2)', '7 2장. 구역 (6)']);
+  assert.match(counted.document.getElementById('__gPickSay').textContent, /^5 chapters, 3 1장/);
+  // One whose address does not change: said so, nothing taken.
+  const still = spa(() => {});
+  await press(still, 1);
+  await new Promise((r) => setTimeout(r, 6000));
+  assert.match(still.document.getElementById('__gPickSay').textContent, /was the one open already/);
+  // Addresses that do not count along: said so.
+  const ids = [9, 41, 77, 80, 95, 130, 131, 170, 200];
+  const odd = spa((sw, i) => sw.history.pushState({}, '', `/read/x${ids[i]}y${i * 3}`));
+  await press(odd, 1);
+  await press(odd, 4);
+  assert.deepEqual(JSON.parse(odd.eval(script('PICKED'))), []);
+  assert.match(odd.document.getElementById('__gPickSay').textContent, /do not count along/);
   // What only opens the list out is let through, not marked: 더보기, Show more, a link to nowhere.
   const more = w.document.createElement('a');
   more.href = '#';
