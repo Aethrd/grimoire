@@ -205,6 +205,10 @@ await t('started, it builds every book: two at once, never two from one site', a
 });
 
 await t('done, the queue says so and lets the screen go', async () => {
+  // Said once it is drawn, a moment after the queue is kept as done.
+  for (let i = 0; i < 40 && !/4 done/.test(document.getElementById('build-queue-title').textContent); i += 1) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
   assert.match(document.getElementById('build-queue-title').textContent, /4 done/);
   assert.equal(document.getElementById('build-queue-go').textContent, 'Start queue');
   assert.equal(document.getElementById('build-queue-go').disabled, true);

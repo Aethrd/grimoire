@@ -1147,16 +1147,33 @@ export function mergeSources(links, sites, siteOf) {
 export function shortChapters(chapters, { share = 0.4, least = 8, around = 10 } = {}) {
   const web = (chapters || []).filter((chapter) => chapter.from).sort((a, b) => a.index - b.index);
   if (web.length < least) return [];
+  /* A chapter a site put up in parts -- 172.1 and 172.2, "(1)" and "(2)" --
+   * is one chapter here: its parts, one after another with the same number,
+   * are counted together, and judged together. Half a chapter is no short one. */
+  const units = [];
+  for (const chapter of web) {
+    const number = numberIn(chapter.title || '');
+    const whole = Number.isFinite(number) ? Math.floor(number) : null;
+    const last = units.at(-1);
+    if (last && whole !== null && last.whole === whole) {
+      last.parts.push(chapter);
+      last.words += chapter.words || 0;
+    } else {
+      units.push({ whole, parts: [chapter], words: chapter.words || 0 });
+    }
+  }
+  if (units.length < least) return [];
   const median = (list) => {
     const sorted = list.slice().sort((a, b) => a - b);
     // The lower middle: where the book changes pace, a chapter is judged by the gentler side.
     return sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : 0;
   };
   const out = [];
-  web.forEach((chapter, at) => {
-    const near = web.slice(Math.max(0, at - around), at).concat(web.slice(at + 1, at + 1 + around)).map((other) => other.words || 0);
+  units.forEach((unit, at) => {
+    const near = units.slice(Math.max(0, at - around), at).concat(units.slice(at + 1, at + 1 + around)).map((other) => other.words);
     const typical = median(near);
-    if (typical > 0 && (chapter.words || 0) < typical * share) {
+    if (!(typical > 0) || unit.words >= typical * share) return;
+    for (const chapter of unit.parts) {
       out.push({ index: chapter.index, title: chapter.title, words: chapter.words || 0, from: chapter.from, typical });
     }
   });

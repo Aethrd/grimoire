@@ -2965,6 +2965,23 @@ await t('a chapter is scrolled to its end while it is confirmed; one that came o
   const growing = Array.from({ length: 40 }, (_, i) => ({ index: i, title: `${i + 1}`, words: i < 20 ? 800 : 4000, from: `https://g.example/${i}` }));
   growing[30].words = 900;
   assert.deepEqual(web.shortChapters(growing).map((c) => c.index), [30]);
+  // A chapter in parts (woopread's 172.1, 172.2; "(1)", "(2)"): its parts counted together.
+  const parts = [];
+  for (let n = 160; n < 180; n += 1) {
+    if (n % 2) parts.push({ title: `Chapter ${n}.1`, words: 1500 }, { title: `Chapter ${n}.2`, words: 400 });
+    else parts.push({ title: `Chapter ${n}`, words: 1900 });
+  }
+  parts.forEach((chapter, i) => Object.assign(chapter, { index: i, from: `https://w.example/${i}` }));
+  assert.deepEqual(web.shortChapters(parts), [], 'a whole chapter in an uneven split was called short');
+  // A chapter whose parts together are short: all its parts are said.
+  const cut = parts.findIndex((c) => c.title === 'Chapter 171.1');
+  parts[cut].words = 200;
+  parts[cut + 1].words = 100;
+  assert.deepEqual(web.shortChapters(parts).map((c) => c.title), ['Chapter 171.1', 'Chapter 171.2']);
+  // So are "(1)", "(2)" parts with the chapter's number before them.
+  const korean = Array.from({ length: 12 }, (_, i) => [{ title: `${i + 1}장. 구역 (1)`, words: 1200 }, { title: `${i + 1}장. 구역 (2)`, words: 300 }]).flat()
+    .map((c, i) => ({ ...c, index: i, from: `https://k.example/${i}` }));
+  assert.deepEqual(web.shortChapters(korean), []);
   // Said after a download; fetched again from the book's actions, at the site's own delay, each in its own place.
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /job\.bookId = book\.id;\s+noteShort\(book\)/);
