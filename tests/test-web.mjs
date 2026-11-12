@@ -2067,6 +2067,18 @@ await t('a short chapter is known by its lines, and a comment section is no chap
   const comments = shape(`<div class="comment-list">${lines(80)}</div><div id="댓글">${lines(80)}</div>`);
   assert.equal(comments[7], '0');
   assert.match(java, /\|\| \(storyLength >= SHORT_STORY && storyLines >= SHORT_STORY_LINES\);/);
+  // "Verifying access…" where the story will be (fenrirealm), among a reader's controls: still on its way.
+  const shown = (page) => {
+    const w = new JSDOM(`<html><body>${page}</body></html>`, { runScripts: 'outside-only' }).window;
+    w.Element.prototype.getClientRects = function rects() { return [{ width: 10, height: 10 }]; };
+    return w.eval(code).split('|');
+  };
+  const controls = '<div class="reader-controls"><p>Theme</p><p>Font</p><p>Size</p><p>Line height</p><p>Text width</p></div>';
+  assert.equal(shown(`${controls}<div class="chapter"><p>Verifying access…</p></div>`)[6], '1');
+  assert.equal(shown(`${controls}<div class="chapter"><p>Loading chapter...</p></div>`)[6], '1');
+  assert.equal(shown(`${controls}<div class="chapter"><p>불러오는 중</p></div>`)[6], '1');
+  // A chapter that only mentions verifying is no wait.
+  assert.equal(shown(`<div class="chapter">${lines(14)}<p>He was verifying access to the vault.</p></div>`)[6], '0');
 });
 
 /* A contents page of N pages, five chapters each, newest first or oldest first. */

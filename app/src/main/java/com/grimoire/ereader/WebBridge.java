@@ -1467,7 +1467,12 @@ public class WebBridge {
             + "if(CM.test(String(a.id||'')+' '+String(cn&&cn.baseVal!==undefined?cn.baseVal:cn||''))){r=true;break;}}"
             + "X.set(e,r);return r;},"
             + "add=function(e,l){var v=(M.get(e)||0)+l,c=(N.get(e)||0)+1;M.set(e,v);N.set(e,c);if(v>s){s=v;sl=c;}};"
+            /* A line on its own saying the chapter is on its way -- "Verifying access…",
+             * "Loading chapter…" -- shown where the story will be: waited out, as a
+             * spinner is, not taken for a page that is there. */
+            + "var WAIT=/^(verifying( your)? access|checking( your)? access|verifying|authenticating|loading( the)?( chapter| content| story)?|preparing( the)?( chapter| content)?|fetching( the)?( chapter| content)?|decrypting( the)?( chapter| content)?|unlocking( the)? chapter|불러오는 ?중|로딩 ?중|加载中|載入中|正在加载)\\s*(…|\\.{2,})?$/i;"
             + "while((nd=W.nextNode())&&cnt<30000){cnt++;var l=nd.nodeValue.trim().length;if(!l)continue;"
+            + "if(!w&&l<40&&WAIT.test(nd.nodeValue.trim())){var wp=nd.parentElement;if(wp&&wp.getClientRects().length){var ws=getComputedStyle(wp);if(ws.visibility!=='hidden'&&ws.opacity!=='0')w=1;}}"
             + "var p=nd.parentElement,no=false;while(p&&p!==b){if(NO.test(p.tagName)){no=true;break;}"
             + "if(!IN.test(p.tagName))break;p=p.parentElement;}if(no||!p||ex(p))continue;"
             + "add(p,l);var g=p.parentElement;if(g&&p!==b&&p.tagName==='DIV')add(g,l);}}catch(e){}"
