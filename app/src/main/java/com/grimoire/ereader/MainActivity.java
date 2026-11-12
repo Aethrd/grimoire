@@ -399,6 +399,11 @@ public class MainActivity extends AppCompatActivity {
      */
 
     private static final int PICK_EXPORT_TARGET = 4301;
+    /** An export in parts: one folder asked for, every part written into it. */
+    private static final int PICK_EXPORT_FOLDER = 4302;
+    private static final String STAGED_SET = "stagedSet";
+    private java.util.List<File> stagedSet = new java.util.ArrayList<>();
+    private String stagedSetType;
     private File staged;
     private String stagedType;
 
@@ -469,9 +474,100 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    /** The parts of an export, kept should Android close the app while the folder is being chosen. */
+    private void rememberSet(java.util.List<File> files, @Nullable String type) {
+        stagedSet = new java.util.ArrayList<>(files);
+        stagedSetType = type;
+        StringBuilder paths = new StringBuilder();
+        for (File file : files) paths.append(file.getAbsolutePath()).append('\n');
+        getSharedPreferences("exports", MODE_PRIVATE).edit()
+                .putString(STAGED_SET, files.isEmpty() ? null : paths.toString())
+                .putString(STAGED_SET + "Type", type)
+                .apply();
+    }
+
+    private void restoreSet() {
+        android.content.SharedPreferences prefs = getSharedPreferences("exports", MODE_PRIVATE);
+        String paths = prefs.getString(STAGED_SET, null);
+        stagedSet = new java.util.ArrayList<>();
+        if (paths != null) {
+            for (String path : paths.split("\n")) {
+                if (!path.isEmpty() && new File(path).exists()) stagedSet.add(new File(path));
+            }
+        }
+        stagedSetType = prefs.getString(STAGED_SET + "Type", "application/zip");
+    }
+
+    /** Several files: a folder chosen once, and each written into it under its own name. */
+    void offerExportSet(java.util.List<File> files, String mimeType) {
+        runOnUiThread(() -> {
+            rememberSet(files, mimeType);
+            Intent tree = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            tree.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try {
+                startActivityForResult(tree, PICK_EXPORT_FOLDER);
+            } catch (Exception e) {
+                Log.w(TAG, "No folder picker available", e);
+                tellReader("window.Grimoire.exportFailed("
+                        + JSONObject.quote("This phone has no folder picker to save with") + ")");
+            }
+        });
+    }
+
+    private void savedSetInto(@Nullable Uri tree) {
+        if (stagedSet.isEmpty()) restoreSet();
+        final java.util.List<File> files = new java.util.ArrayList<>(stagedSet);
+        final String type = stagedSetType == null ? "application/zip" : stagedSetType;
+        rememberSet(new java.util.ArrayList<>(), null);
+        if (tree == null) {
+            for (File file : files) //noinspection ResultOfMethodCallIgnored
+                file.delete();
+            tellReader("window.Grimoire.exportFailed(" + JSONObject.quote("Not saved — no folder was chosen") + ")");
+            return;
+        }
+        staging.execute(() -> {
+            int saved = 0;
+            String failed = null;
+            try {
+                Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
+                        android.provider.DocumentsContract.getTreeDocumentId(tree));
+                for (File file : files) {
+                    try {
+                        Uri doc = android.provider.DocumentsContract.createDocument(
+                                getContentResolver(), folder, type, file.getName());
+                        if (doc == null) throw new java.io.IOException("the folder would not take it");
+                        copyInto(doc, file);
+                        long written = writtenSize(doc);
+                        if (written >= 0 && written != file.length()) {
+                            throw new java.io.IOException("wrote " + written + " bytes of " + file.length());
+                        }
+                        saved++;
+                    } catch (Throwable e) {
+                        Log.w(TAG, "Could not write " + file.getName(), e);
+                        if (failed == null) failed = file.getName();
+                    } finally {
+                        //noinspection ResultOfMethodCallIgnored
+                        file.delete();
+                    }
+                }
+            } catch (Throwable e) {
+                Log.w(TAG, "Could not use that folder", e);
+                for (File file : files) //noinspection ResultOfMethodCallIgnored
+                    file.delete();
+                failed = "that folder";
+            }
+            tellReader("window.Grimoire.exportSetSaved(" + saved + "," + files.size() + ","
+                    + JSONObject.quote(failed == null ? "" : failed) + ")");
+        });
+    }
+
     @Override
     protected void onActivityResult(int request, int result, @Nullable Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == PICK_EXPORT_FOLDER) {
+            savedSetInto(result == RESULT_OK && data != null ? data.getData() : null);
+            return;
+        }
         if (request != PICK_EXPORT_TARGET) return;
 
         final Uri target = result == RESULT_OK && data != null ? data.getData() : null;

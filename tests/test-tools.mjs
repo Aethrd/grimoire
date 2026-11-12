@@ -913,7 +913,41 @@ await t('many books are written into one zip a book at a time, and it opens anyw
   const many = app.slice(app.indexOf('async function exportMany'), app.indexOf('function exportSink'));
   assert.ok(!/new JSZip|generateAsync/.test(many), 'the batch is still built whole in memory');
   assert.match(many, /await zip\.add\(entry, blob/);
-  assert.match(many, /await zip\.finish\(\);\s*await sink\.done\('application\/zip'\)/);
+  assert.match(many, /await zip\.finish\(\);\s*staged\.push\(sink\);/);
+  assert.match(many, /if \(staged\.length === 1\) await staged\[0\]\.done\('application\/zip'\);\s*else await exportSinksDone\(staged, 'application\/zip', startedReading\);/);
+});
+
+await t('many books written out in parts: even shares in folder order, a zip each, saved into one folder chosen once', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const fn = (name) => { const at = app.indexOf(`function ${name}(`); return app.slice(at, app.indexOf('\n}\n', at) + 3); };
+  const library = { displayTitle: (b) => b.title };
+  const shares = new Function('library', `${fn('exportShares')}; return exportShares;`)(library);
+  const books = [];
+  for (let i = 0; i < 250; i += 1) books.push({ title: `Novel ${i}`, folder: i % 3 ? 'Korean' : 'Chinese' });
+  const four = shares(books, 4);
+  assert.deepEqual(four.map((share) => share.length), [63, 62, 63, 62]);
+  assert.equal(four.flat().length, 250);
+  assert.equal(new Set(four.flat()).size, 250, 'a book written twice, or left out');
+  // In folder order, then by name (numbers counted): Chinese first, all together.
+  assert.ok(four[0].every((b) => b.folder === 'Chinese') && four.at(-1).every((b) => b.folder === 'Korean'));
+  assert.deepEqual(four[0].slice(0, 3).map((b) => b.title), ['Novel 0', 'Novel 3', 'Novel 6']);
+  // Never more zips than books, and one is one.
+  assert.equal(shares(books.slice(0, 3), 10).length, 3);
+  assert.equal(shares(books, 1).length, 1);
+  // Named in parts; each closed and saved together: one folder asked for, every part written into it.
+  assert.match(app, /const name = several \? `\$\{base\} \(\$\{part \+ 1\} of \$\{shares\.length\}\)\.zip` : `\$\{base\}\.zip`;/);
+  assert.match(app, /bridge\.finishExportSet\(JSON\.stringify\(closed\.map\(\(each\) => each\.made\)\), mimeType\);/);
+  assert.match(app, /return askExportParts\(books\);/);
+  assert.match(app, /store\.saveSettings\(\{ exportParts: parts \}\)/);
+  const java = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(java, /new Intent\(Intent\.ACTION_OPEN_DOCUMENT_TREE\)/);
+  assert.match(java, /DocumentsContract\.createDocument\(\s*getContentResolver\(\), folder, type, file\.getName\(\)\);/);
+  assert.match(java, /if \(written >= 0 && written != file\.length\(\)\)/);
+  // Kept should Android close the app while the folder is chosen; never dropped without a word.
+  assert.match(java, /\.putString\(STAGED_SET, files\.isEmpty\(\) \? null : paths\.toString\(\)\)/);
+  assert.match(java, /if \(stagedSet\.isEmpty\(\)\) restoreSet\(\);/);
+  assert.match(java, /Not saved — no folder was chosen/);
+  assert.match(read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java'), /public void finishExportSet\(String handles, String mimeType\)/);
 });
 
 await t('an export survives Android closing the app while the save screen is open', () => {
@@ -1131,7 +1165,8 @@ await t('what finishes while you read waits for the book to be put down', async 
   // An import's report, and the save screen of an export, wait too.
   const importer = app.slice(app.indexOf('async function importNow('), app.indexOf('return results;\n}', app.indexOf('async function importNow(')));
   assert.ok(!/(?<![\w.])toast\(/.test(importer.slice(importer.indexOf('const besides'))), 'an import still reports over the page');
-  assert.equal((app.match(/await untilNotReading\(startedReading\);/g) || []).length, 2);
+  // (The save screen of one file, of parts saved together, and an import's report.)
+  assert.equal((app.match(/await untilNotReading\(startedReading\);/g) || []).length, 3);
   // And the progress panel is a pill in a book, gone with the bars.
   const css = fs.readFileSync(new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
   assert.match(css, /body\.in-book\[data-chrome="none"\] \.import-progress/);

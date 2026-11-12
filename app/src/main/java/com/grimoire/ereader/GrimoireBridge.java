@@ -265,6 +265,32 @@ public class GrimoireBridge {
     }
 
     /**
+     * Finish several files at once -- an export in parts -- and ask once for a
+     * folder to put them all in, not once per file.
+     */
+    @JavascriptInterface
+    public void finishExportSet(String handles, String mimeType) {
+        java.util.List<File> files = new java.util.ArrayList<>();
+        try {
+            org.json.JSONArray names = new org.json.JSONArray(handles);
+            File dir = new File(activity.getCacheDir(), "exports");
+            for (int i = 0; i < names.length(); i++) {
+                File file = new File(dir, new File(names.getString(i)).getName());
+                if (file.exists()) files.add(file);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not read the parts of an export", e);
+        }
+        if (files.isEmpty()) {
+            Log.w(TAG, "Nothing staged for an export in parts");
+            return;
+        }
+        if (activity instanceof MainActivity) {
+            ((MainActivity) activity).offerExportSet(files, mimeType);
+        }
+    }
+
+    /**
      * Finish a picture, straight into the phone's Pictures folder.
      *
      * Saving a picture is not like saving a book: it belongs where the gallery

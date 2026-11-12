@@ -844,7 +844,7 @@ function wireSelection() {
       const books = await selectedBooks();
       if (!books.length) return;
       if (books.length === 1) return askAboutExport(books[0]);
-      return exportMany(books);
+      return askExportParts(books);
     },
 
     /* Folder and status live here, for one book or many.
@@ -1817,10 +1817,75 @@ async function splitSelected(book) {
  * book, which for a shelf of twenty is twenty decisions to make about where
  * things go. One archive is one decision, and unpacks into the same files.
  */
-async function exportMany(books) {
-  const finish = progress.start(`Writing ${books.length} books`);
+/* In parts: how many zips, asked once, remembered. The books go in folder
+ * order (then by name), so a folder's books stay together as far as the
+ * shares allow; each zip holds an even share. */
+const EXPORT_PARTS = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20];
+
+function exportShares(books, parts) {
+  const ordered = [...books].sort((a, b) => (a.folder || '').localeCompare(b.folder || '', undefined, { numeric: true, sensitivity: 'base' })
+    || library.displayTitle(a).localeCompare(library.displayTitle(b), undefined, { numeric: true, sensitivity: 'base' }));
+  const count = Math.max(1, Math.min(parts, ordered.length));
+  const shares = [];
+  for (let i = 0; i < count; i += 1) {
+    shares.push(ordered.slice(Math.round((i * ordered.length) / count), Math.round(((i + 1) * ordered.length) / count)));
+  }
+  return shares.filter((share) => share.length);
+}
+
+async function askExportParts(books) {
+  const sheet = el('export-many-sheet');
+  const saved = (await store.settings()).exportParts;
+  let parts = EXPORT_PARTS.includes(saved) ? saved : 1;
+  const offer = EXPORT_PARTS.filter((n) => n === 1 || n <= books.length);
+  if (!offer.includes(parts)) parts = offer.at(-1);
+  el('export-many-title').textContent = `Write out ${books.length} books`;
+  const row = el('export-many-parts');
+  const paint = () => {
+    row.replaceChildren(...offer.map((n) => {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.textContent = n === 1 ? 'One zip' : String(n);
+      chip.setAttribute('aria-pressed', String(n === parts));
+      chip.onclick = () => { parts = n; paint(); };
+      return chip;
+    }));
+    const shares = exportShares(books, parts);
+    const folders = (share) => [...new Set(share.map((b) => b.folder || ''))].length;
+    el('export-many-note').textContent = shares.length === 1
+      ? `All ${books.length} in one zip.`
+      : `${shares.length} zips of about ${Math.round(books.length / shares.length)} books each`
+        + ` (${shares.map((share) => share.length).join(', ')}), across ${folders(books)} folder${folders(books) === 1 ? '' : 's'}.`;
+  };
+  paint();
+  el('export-many-cancel').onclick = () => { sheet.hidden = true; };
+  sheet.onclick = (event) => { if (event.target === sheet) sheet.hidden = true; };
+  el('export-many-go').onclick = () => {
+    sheet.hidden = true;
+    store.saveSettings({ exportParts: parts }).catch(() => {});
+    exportMany(books, parts);
+  };
+  sheet.hidden = false;
+}
+
+/**
+ * Write several books out at once, as one file -- or in parts, a zip each.
+ *
+ * Saving them individually would mean the system file picker opening once per
+ * book, which for a shelf of twenty is twenty decisions to make about where
+ * things go. One archive is one decision, and unpacks into the same files;
+ * parts are one decision too, a folder for them all.
+ */
+async function exportMany(books, parts = 1) {
+  const shares = exportShares(books, parts);
+  const several = shares.length > 1;
+  const startedReading = inBook;
+  const finish = progress.start(`Writing ${books.length} books${several ? ` in ${shares.length} zips` : ''}`);
   const failed = [];
-  const name = `${epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books')}.zip`;
+  const base = epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books');
+  const staged = [];   // each part, written and waiting to be saved
+  let written = 0;
+  let done = 0;
 
   /* One book at a time, straight into the archive.
    *
@@ -1829,52 +1894,82 @@ async function exportMany(books) {
    * the peak. With enough books Android shut the app down while its save
    * screen was open, and the export never arrived. Now each book is built,
    * written into the archive on disk, and let go before the next. */
-  const sink = exportSink(name);
-  const zip = zipWriter(sink.write);
-  const used = new Set();
-
   try {
-    for (const [at, book] of books.entries()) {
-      finish.say(`Writing ${library.displayTitle(book)}`, null, `${at + 1} of ${books.length}`);
-      try {
-        let { blob, name: entry } = await epub.buildEpub(book.id, {
-          onProgress: (fraction) => {
-            finish.say(null, ((at + fraction * 0.8) / books.length));
-          },
-        });
-        // Two books of the same name would otherwise replace each other.
-        const base = entry;
-        let n = 2;
-        while (used.has(entry)) entry = base.replace(/\.epub$/i, ` (${n++}).epub`);
-        used.add(entry);
-        await zip.add(entry, blob, (fraction) => {
-          finish.say(null, ((at + 0.8 + fraction * 0.2) / books.length));
-        });
-        blob = null;
-      } catch (error) {
-        if (error.writeFailed) throw error;
-        // One book that will not write costs that book, not the batch.
-        failed.push({ title: library.displayTitle(book), reason: error.message });
+    for (const [part, share] of shares.entries()) {
+      const name = several ? `${base} (${part + 1} of ${shares.length}).zip` : `${base}.zip`;
+      const sink = exportSink(name);
+      const zip = zipWriter(sink.write);
+      const used = new Set();
+      for (const book of share) {
+        const at = done;
+        done += 1;
+        finish.say(`Writing ${library.displayTitle(book)}${several ? ` · zip ${part + 1} of ${shares.length}` : ''}`, null, `${at + 1} of ${books.length}`);
+        try {
+          let { blob, name: entry } = await epub.buildEpub(book.id, {
+            onProgress: (fraction) => {
+              finish.say(null, ((at + fraction * 0.8) / books.length));
+            },
+          });
+          // Two books of the same name would otherwise replace each other.
+          const first = entry;
+          let n = 2;
+          while (used.has(entry)) entry = first.replace(/\.epub$/i, ` (${n++}).epub`);
+          used.add(entry);
+          await zip.add(entry, blob, (fraction) => {
+            finish.say(null, ((at + 0.8 + fraction * 0.2) / books.length));
+          });
+          blob = null;
+          written += 1;
+        } catch (error) {
+          if (error.writeFailed) throw error;
+          // One book that will not write costs that book, not the batch.
+          failed.push({ title: library.displayTitle(book), reason: error.message });
+        }
       }
+      if (!used.size) continue;
+      await zip.finish();
+      staged.push(sink);
     }
 
-    if (!used.size) {
+    if (!written) {
       throw new Error(failed[0] ? `${failed[0].title}: ${failed[0].reason}` : 'Nothing could be written');
     }
 
-    await zip.finish();
-    await sink.done('application/zip');
+    // One zip: saved as ever. Parts: one folder asked for, and every zip put in it.
+    if (staged.length === 1) await staged[0].done('application/zip');
+    else await exportSinksDone(staged, 'application/zip', startedReading);
 
     clearSelection();
     await refreshShelf();
     toast(failed.length
-      ? `${books.length - failed.length} written · ${failed.length} skipped — ${failed[0].title}: ${failed[0].reason}`
-      : `${books.length} books written out — choose where to save them`, 7000, { kind: 'done' });
+      ? `${written} written · ${failed.length} skipped — ${failed[0].title}: ${failed[0].reason}`
+      : several
+        ? `${written} books written out in ${staged.length} zips — choose a folder for them`
+        : `${written} books written out — choose where to save them`, 7000, { kind: 'done' });
   } catch (error) {
     finish.fail();
     toast(error.message || 'Those books could not be written out', 6000, { kind: 'failed' });
   } finally {
     finish();
+  }
+}
+
+/** Several archives, saved together: one folder asked for (the app), or a download each (a browser). */
+async function exportSinksDone(sinks, mimeType, startedReading = inBook) {
+  const closed = sinks.map((sink) => ({ name: sink.name, made: sink.close() }));
+  const bridge = window.GrimoireNative;
+  await untilNotReading(startedReading);
+  if (bridge?.finishExportSet) {
+    bridge.finishExportSet(JSON.stringify(closed.map((each) => each.made)), mimeType);
+    return;
+  }
+  for (const each of closed) {
+    const url = URL.createObjectURL(each.made);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = each.name;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
   }
 }
 
@@ -1919,6 +2014,12 @@ function exportSink(name) {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
     },
+    /** Written, and its name to save it under -- for saving with others (exportSinksDone). */
+    close() {
+      flush();
+      return native ? handle : new Blob(kept, { type: 'application/zip' });
+    },
+    name,
     async done(mimeType, share = false) {
       flush();
       // Android's save screen, not over a page being read.
@@ -10793,6 +10894,12 @@ window.Grimoire = {
    * the app having thrown away whatever was being read. */
   notice(message) { toast(message, 8000); },
   exportFailed(reason) { toast(reason || 'That file could not be saved', 6000); },
+  /** An export in parts, saved into the folder chosen: how many of them, and the first that would not go. */
+  exportSetSaved(saved, of, failed) {
+    toast(saved === of
+      ? `Saved ${saved} zips into the folder`
+      : `Saved ${saved} of ${of} zips — ${failed || 'one'} could not be written`, 7000, { kind: saved === of ? 'done' : 'failed' });
+  },
 
 
   /** Called from Java to settle an async bridge call. Not a reader API. */
@@ -10829,6 +10936,7 @@ window.Grimoire = {
     if (!el('picture-sheet').hidden) { el('picture-sheet').hidden = true; return true; }
     if (!el('folder-actions').hidden) { el('folder-actions').hidden = true; return true; }
     if (!el('export-sheet').hidden) { el('export-sheet').hidden = true; return true; }
+    if (!el('export-many-sheet').hidden) { el('export-many-sheet').hidden = true; return true; }
     if (!el('merge-sheet').hidden) { el('merge-sheet').hidden = true; return true; }
     if (!el('bundle-sheet').hidden) { el('bundle-sheet').hidden = true; return true; }
     if (!el('confirm-bar').hidden) { el('confirm-bar').hidden = true; resetConfirm(); return true; }
