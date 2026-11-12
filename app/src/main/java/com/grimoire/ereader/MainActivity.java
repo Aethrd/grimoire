@@ -401,6 +401,11 @@ public class MainActivity extends AppCompatActivity {
     private static final int PICK_EXPORT_TARGET = 4301;
     /** An export in parts: one folder asked for, every part written into it. */
     private static final int PICK_EXPORT_FOLDER = 4302;
+    /** Automatic backups: the folder they go into, chosen once and kept. */
+    private static final int PICK_BACKUP_FOLDER = 4303;
+    private static final String BACKUP_TREE = "backupTree";
+    /** Only these are an automatic backup's, and only these are ever removed. */
+    private static final String AUTO_BACKUP_PREFIX = "quire-backup-auto-";
     private static final String STAGED_SET = "stagedSet";
     private java.util.List<File> stagedSet = new java.util.ArrayList<>();
     private String stagedSetType;
@@ -561,9 +566,136 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    void chooseBackupFolder() {
+        runOnUiThread(() -> {
+            Intent tree = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            tree.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            try {
+                startActivityForResult(tree, PICK_BACKUP_FOLDER);
+            } catch (Exception e) {
+                Log.w(TAG, "No folder picker available", e);
+                tellReader("window.Grimoire.backupFolderChosen(null)");
+            }
+        });
+    }
+
+    private void backupFolderPicked(@Nullable Uri tree) {
+        if (tree == null) {
+            tellReader("window.Grimoire.backupFolderChosen(null)");
+            return;
+        }
+        try {
+            getContentResolver().takePersistableUriPermission(tree,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (Exception e) {
+            Log.w(TAG, "That folder's permission could not be kept", e);
+        }
+        // The folder before it, let go: a folder no longer used holds no permission.
+        String before = getSharedPreferences("exports", MODE_PRIVATE).getString(BACKUP_TREE, null);
+        if (before != null && !before.equals(tree.toString())) {
+            try {
+                getContentResolver().releasePersistableUriPermission(Uri.parse(before),
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            } catch (Exception ignored) { /* already gone */ }
+        }
+        getSharedPreferences("exports", MODE_PRIVATE).edit().putString(BACKUP_TREE, tree.toString()).apply();
+        tellReader("window.Grimoire.backupFolderChosen(" + JSONObject.quote(backupFolderName()) + ")");
+    }
+
+    @Nullable
+    private Uri backupTree() {
+        String saved = getSharedPreferences("exports", MODE_PRIVATE).getString(BACKUP_TREE, null);
+        if (saved == null) return null;
+        Uri tree = Uri.parse(saved);
+        for (android.content.UriPermission held : getContentResolver().getPersistedUriPermissions()) {
+            if (held.getUri().equals(tree) && held.isWritePermission()) return tree;
+        }
+        return null;
+    }
+
+    String backupFolderName() {
+        Uri tree = backupTree();
+        if (tree == null) return "";
+        Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
+                android.provider.DocumentsContract.getTreeDocumentId(tree));
+        try (android.database.Cursor c = getContentResolver().query(folder,
+                new String[] { android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null)) {
+            if (c != null && c.moveToFirst()) return c.getString(0);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not name the backup folder", e);
+        }
+        return "the folder chosen";
+    }
+
+    void writeBackup(File file, int keep) {
+        staging.execute(() -> {
+            Uri tree = backupTree();
+            if (tree == null || !file.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+                tellReader("window.Grimoire.backupWritten(false," + JSONObject.quote(tree == null
+                        ? "the backup folder can no longer be written — choose it again" : "nothing was staged") + ")");
+                return;
+            }
+            try {
+                String rootId = android.provider.DocumentsContract.getTreeDocumentId(tree);
+                Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, rootId);
+                Uri doc = android.provider.DocumentsContract.createDocument(getContentResolver(), folder,
+                        "application/json", file.getName());
+                if (doc == null) throw new java.io.IOException("the folder would not take it");
+                copyInto(doc, file);
+                long written = writtenSize(doc);
+                if (written >= 0 && written != file.length()) {
+                    throw new java.io.IOException("wrote " + written + " bytes of " + file.length());
+                }
+                pruneBackups(tree, rootId, Math.max(1, keep));
+                tellReader("window.Grimoire.backupWritten(true," + JSONObject.quote(file.getName()) + ")");
+            } catch (Throwable e) {
+                Log.w(TAG, "Could not write an automatic backup", e);
+                tellReader("window.Grimoire.backupWritten(false," + JSONObject.quote(String.valueOf(e.getMessage())) + ")");
+            } finally {
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+            }
+        });
+    }
+
+    /** The newest `keep` automatic backups stay (their names sort by when they were made); older ones go. */
+    private void pruneBackups(Uri tree, String rootId, int keep) {
+        Uri children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree, rootId);
+        java.util.List<String[]> found = new java.util.ArrayList<>();   // { name, documentId }
+        try (android.database.Cursor c = getContentResolver().query(children, new String[] {
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID }, null, null, null)) {
+            while (c != null && c.moveToNext()) {
+                String name = c.getString(0);
+                if (name != null && name.startsWith(AUTO_BACKUP_PREFIX) && name.endsWith(".json")) {
+                    found.add(new String[] { name, c.getString(1) });
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not list the backup folder", e);
+            return;
+        }
+        found.sort((a, b) -> b[0].compareTo(a[0]));
+        for (int i = keep; i < found.size(); i++) {
+            try {
+                android.provider.DocumentsContract.deleteDocument(getContentResolver(),
+                        android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, found.get(i)[1]));
+            } catch (Exception e) {
+                Log.w(TAG, "Could not remove an old backup " + found.get(i)[0], e);
+            }
+        }
+    }
+
     @Override
     protected void onActivityResult(int request, int result, @Nullable Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == PICK_BACKUP_FOLDER) {
+            backupFolderPicked(result == RESULT_OK && data != null ? data.getData() : null);
+            return;
+        }
         if (request == PICK_EXPORT_FOLDER) {
             savedSetInto(result == RESULT_OK && data != null ? data.getData() : null);
             return;

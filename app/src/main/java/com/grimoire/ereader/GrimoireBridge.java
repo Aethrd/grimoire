@@ -264,6 +264,33 @@ public class GrimoireBridge {
         }
     }
 
+    /* ── automatic backups ────────────────────────────────────────────────
+     *
+     * A folder chosen once and kept (the permission persisted), so a backup
+     * can be written there later without asking: on a schedule, or when the
+     * queue finishes. The newest few automatic ones are kept, the rest
+     * removed; a backup saved by hand is never touched. */
+
+    /** Ask for the folder. Answered in window.Grimoire.backupFolderChosen(name or null). */
+    @JavascriptInterface
+    public void chooseBackupFolder() {
+        if (activity instanceof MainActivity) ((MainActivity) activity).chooseBackupFolder();
+    }
+
+    /** The chosen folder's name, or "" when there is none (or it can no longer be written). */
+    @JavascriptInterface
+    public String backupFolderName() {
+        return activity instanceof MainActivity ? ((MainActivity) activity).backupFolderName() : "";
+    }
+
+    /** Write a staged backup into the folder, keeping the newest `keep` automatic ones.
+     *  Answered in window.Grimoire.backupWritten(ok, message). */
+    @JavascriptInterface
+    public void writeBackup(String handle, int keep) {
+        final File file = new File(new File(activity.getCacheDir(), "exports"), new File(handle).getName());
+        if (activity instanceof MainActivity) ((MainActivity) activity).writeBackup(file, keep);
+    }
+
     /**
      * Finish several files at once -- an export in parts -- and ask once for a
      * folder to put them all in, not once per file.

@@ -309,6 +309,68 @@ await t('picked in the site: a chapter passed over in the drag, and the page\'s 
   window.GrimoireWeb.fetch = fetchBefore;
 });
 
+await t('automatic backups: a folder chosen once, written on schedule and after the queue, the newest few kept', async () => {
+  const panels = await import(www('panels.js'));
+  let folder = '';
+  const staged = new Map();
+  const written = [];
+  window.GrimoireNative = {
+    ...(window.GrimoireNative || {}),
+    beginExport: (name) => { staged.set(name, []); return name; },
+    appendExport: (handle, b64) => { staged.get(handle).push(Buffer.from(b64, 'base64')); return true; },
+    chooseBackupFolder: () => setTimeout(() => { folder = 'Backups'; window.Grimoire.backupFolderChosen('Backups'); }, 0),
+    backupFolderName: () => folder,
+    writeBackup: (handle, keep) => {
+      written.push({ name: handle, keep, json: JSON.parse(Buffer.concat(staged.get(handle)).toString('utf8')) });
+      setTimeout(() => window.Grimoire.backupWritten(true, handle), 0);
+    },
+  };
+  const host = document.createElement('div');
+  await panels.openVault(() => {}, host);
+  const block = host.querySelector('.auto-backup');
+  assert.ok(block, 'no automatic backups in Settings');
+  assert.match(block.textContent, /into a folder you choose/);
+  const chip = (text) => [...block.querySelectorAll('.chip')].find((c) => c.textContent === text);
+  // Every week, with no folder yet: the folder is asked for first; then due (none made yet), one is made.
+  chip('Week').click();
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(folder, 'Backups');
+  assert.equal(written.length, 1, 'none made once it was due');
+  assert.match(written[0].name, /^quire-backup-auto-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
+  assert.equal(written[0].json.format, 'grimoire-backup');
+  assert.equal(written[0].keep, 5);
+  const kept = (await store.settings()).autoBackup;
+  assert.equal(kept.every, 'week');
+  assert.ok(Date.now() - kept.lastAt < 5000);
+  assert.match(block.textContent, /On · into “Backups” · the newest 5 kept · last /);
+  // Not due again within the week: none more.
+  block.querySelector('.chip[aria-pressed="true"]');
+  chip('10').click();
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(written.length, 1);
+  // By hand, now: keeping ten.
+  [...block.querySelectorAll('button')].find((b) => b.textContent === 'Back up now').click();
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(written.length, 2);
+  assert.equal(written[1].keep, 10);
+  // When the queue finishes, if asked.
+  chip('When the queue finishes').click();
+  await new Promise((r) => setTimeout(r, 100));
+  const app = (await import('node:fs')).readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /notifyBuild\(\{ title: 'Queue done', text: message \}\);\s+letScreenGo\(\);\s+autoBackups\.afterQueue\(\);/);
+  // A write that fails is said once, and kept to show.
+  window.GrimoireNative.writeBackup = () => setTimeout(() => window.Grimoire.backupWritten(false, 'the backup folder can no longer be written — choose it again'), 0);
+  [...block.querySelectorAll('button')].find((b) => b.textContent === 'Back up now').click();
+  await new Promise((r) => setTimeout(r, 200));
+  assert.match((await store.settings()).autoBackup.lastError, /can no longer be written/);
+  assert.match(block.textContent, /last try failed: the backup folder can no longer be written/);
+  // The native side: the folder's permission kept; only automatic backups ever removed.
+  const java = (await import('node:fs')).readFileSync(new URL('../app/src/main/java/com/grimoire/ereader/MainActivity.java', import.meta.url), 'utf8');
+  assert.match(java, /takePersistableUriPermission\(tree,/);
+  assert.match(java, /name\.startsWith\(AUTO_BACKUP_PREFIX\) && name\.endsWith\("\.json"\)/);
+  assert.match(java, /private static final String AUTO_BACKUP_PREFIX = "quire-backup-auto-";/);
+});
+
 await t('two settings saved at once both stay saved', async () => {
   await Promise.all([store.saveSettings({ testOne: 1 }), store.saveSettings({ testTwo: 2 }), store.saveSettings({ testThree: 3 })]);
   const kept = await store.get('settings', 'app');

@@ -1774,6 +1774,7 @@ export async function openVault(onVaultChange, host) {
     backupRow.appendChild(button);
   }
   data.appendChild(backupRow);
+  if (backupHooks?.available()) data.appendChild(await autoBackupBlock());
 
   const restoreBtn = document.createElement('button');
   restoreBtn.className = 'btn ghost block';
@@ -1991,6 +1992,79 @@ async function renderLayoutPane(body) {
 }
 
 let onWriteOut = null;
+
+/* Automatic backups, set here and run by the app (app.js): { available, state,
+ * set, chooseFolder, now }. */
+let backupHooks = null;
+export function onAutoBackup(hooks) { backupHooks = hooks; }
+
+/** How often, how many kept, into which folder, and when the last was made. */
+async function autoBackupBlock() {
+  const box = document.createElement('div');
+  box.className = 'auto-backup';
+  const paint = async () => {
+    const state = await backupHooks.state();
+    box.replaceChildren();
+    const head = document.createElement('p');
+    head.className = 'eyebrow';
+    head.textContent = 'Automatic backups';
+    box.appendChild(head);
+    const said = document.createElement('p');
+    said.className = 'muted auto-backup-note';
+    const when = state.lastAt ? new Date(state.lastAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+    said.textContent = !state.folder
+      ? 'Saved on their own into a folder you choose: on a schedule, or when the queue finishes. The newest few are kept, older ones removed; one you save by hand is never touched.'
+      : `${state.every || state.afterQueue ? 'On' : 'Off'} · into “${state.folder}” · the newest ${state.keep} kept`
+        + `${when ? ` · last ${when}` : ' · none yet'}${state.lastError ? ` · last try failed: ${state.lastError}` : ''}.`
+        + ' Made while the app is open (Android does not let it wake itself for this).';
+    box.appendChild(said);
+    const chips = (label, options, current, pick) => {
+      const row = document.createElement('div');
+      row.className = 'chip-row wrap';
+      const name = document.createElement('span');
+      name.className = 'muted';
+      name.textContent = label;
+      row.appendChild(name);
+      for (const [text, value] of options) {
+        const chip = document.createElement('button');
+        chip.className = 'chip';
+        chip.textContent = text;
+        chip.setAttribute('aria-pressed', String(value === current));
+        chip.onclick = async () => { await pick(value); paint(); };
+        row.appendChild(chip);
+      }
+      box.appendChild(row);
+    };
+    const needFolder = async () => state.folder || (await backupHooks.chooseFolder());
+    chips('Every', [['Off', null], ['Day', 'day'], ['Week', 'week']], state.every, async (every) => {
+      if (every && !(await needFolder())) return;
+      await backupHooks.set({ every });
+    });
+    chips('Also', [['When the queue finishes', true], ['No', false]], state.afterQueue, async (afterQueue) => {
+      if (afterQueue && !(await needFolder())) return;
+      await backupHooks.set({ afterQueue });
+    });
+    chips('Keep', [['3', 3], ['5', 5], ['10', 10], ['20', 20]], state.keep, (keep) => backupHooks.set({ keep }));
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;margin-top:6px';
+    const folder = document.createElement('button');
+    folder.className = 'btn ghost';
+    folder.style.flex = '1';
+    folder.textContent = state.folder ? 'Change folder' : 'Choose folder';
+    folder.onclick = async () => { await backupHooks.chooseFolder(); paint(); };
+    const now = document.createElement('button');
+    now.className = 'btn ghost';
+    now.style.flex = '1';
+    now.textContent = 'Back up now';
+    now.disabled = !state.folder;
+    now.onclick = async () => { now.disabled = true; await backupHooks.now(); };
+    row.append(folder, now);
+    box.appendChild(row);
+  };
+  backupHooks.repaint = paint;
+  await paint();
+  return box;
+}
 /** How a file leaves the app; supplied by the shell, which owns the bridge. */
 export function onWrite(fn) { onWriteOut = fn; }
 

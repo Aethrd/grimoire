@@ -2689,3 +2689,9 @@ body.in-book[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .web-gaps[hidden] { display: none; }
 #web-queue[hidden], #web-go[hidden], #build-minimise[hidden] { display: none; }
 .build-from-shelf[hidden] { display: none; }
+
+/* Automatic backups, under Save a backup. */
+.auto-backup { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--divider); }
+.auto-backup .chip-row { align-items: center; gap: 6px; margin: 6px 0; }
+.auto-backup .chip-row > .muted { font-size: 12px; min-width: 44px; }
+.auto-backup-note { font-size: 12px; line-height: 1.55; margin: 0 0 6px; }

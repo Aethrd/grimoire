@@ -1954,6 +1954,121 @@ async function exportMany(books, parts = 1) {
   }
 }
 
+/* ── automatic backups ────────────────────────────────────────────────
+ *
+ * The backup Settings saves by hand -- everything but the books: folders,
+ * places, marks, covers chosen, the queue -- saved on its own into a folder
+ * chosen once: every day or every week (checked when the app opens, comes
+ * back, and every half hour while it is open), and when the queue finishes.
+ * The native side writes it there and keeps the newest few. */
+const autoBackups = (() => {
+  const EVERY = { day: 24 * 3600e3, week: 7 * 24 * 3600e3 };
+  let running = false;
+  let manual = false;
+  let picking = null;
+  const bridge = () => window.GrimoireNative;
+  const available = () => !!bridge()?.writeBackup;
+
+  async function state() {
+    const kept = (await store.settings()).autoBackup || {};
+    let folder = '';
+    try { folder = available() ? bridge().backupFolderName() || '' : ''; } catch { /* none */ }
+    return { every: kept.every || null, afterQueue: !!kept.afterQueue, keep: kept.keep || 5,
+      lastAt: kept.lastAt || 0, lastError: kept.lastError || '', folder };
+  }
+  async function set(changes) {
+    const kept = (await store.settings()).autoBackup || {};
+    await store.saveSettings({ autoBackup: { ...kept, ...changes } });
+  }
+  /** The folder asked for: its name, or '' if none was chosen. */
+  function chooseFolder() {
+    if (!available()) return Promise.resolve('');
+    return new Promise((resolve) => {
+      picking = resolve;
+      bridge().chooseBackupFolder();
+    });
+  }
+
+  async function run({ byHand = false } = {}) {
+    if (running || !available()) return false;
+    const now = await state();
+    if (!now.folder) return false;
+    running = true;
+    manual = byHand;
+    try {
+      const pad = (n) => String(n).padStart(2, '0');
+      const at = new Date();
+      const name = `quire-backup-auto-${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}.json`;
+      const bytes = new TextEncoder().encode(JSON.stringify(await store.exportBackup()));
+      const sink = exportSink(name);
+      for (let from = 0; from < bytes.length; from += 1024 * 1024) await sink.write(bytes.subarray(from, from + 1024 * 1024));
+      bridge().writeBackup(sink.close(), now.keep);
+      return true;
+    } catch (error) {
+      running = false;
+      await failed(error.message || 'it could not be written');
+      return false;
+    }
+  }
+
+  async function failed(reason) {
+    const before = (await store.settings()).autoBackup?.lastError;
+    await set({ lastError: reason });
+    // Said once, not every half hour while it keeps failing.
+    if (manual || before !== reason) toast(`Automatic backup failed: ${reason}`, 7000, { kind: 'failed' });
+    backupPainted();
+  }
+
+  function backupPainted() { try { panelsRepaint(); } catch { /* not shown */ } }
+  const panelsRepaint = () => panelHooks.repaint?.();
+
+  /** Due: the schedule's time since the last one has passed. */
+  async function check() {
+    if (!available()) return;
+    const now = await state();
+    if (now.every && now.folder && Date.now() - now.lastAt >= EVERY[now.every]) run();
+  }
+
+  const panelHooks = {
+    available,
+    state,
+    set: async (changes) => { await set(changes); check(); },
+    chooseFolder,
+    now: () => run({ byHand: true }),
+  };
+
+  return {
+    start() {
+      panels.onAutoBackup(panelHooks);
+      // Only where it can be written (the app): nowhere else is anything due.
+      if (!available()) return;
+      setTimeout(check, 15000);
+      setInterval(check, 30 * 60000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(check, 3000); });
+    },
+    /** The queue has finished: a backup, if asked for then. */
+    async afterQueue() {
+      if ((await state()).afterQueue) run();
+    },
+    async written(ok, message) {
+      running = false;
+      if (!ok) { await failed(message); return; }
+      await set({ lastAt: Date.now(), lastError: '' });
+      if (manual) toast(`Backed up: ${message}`, 5000, { kind: 'done' });
+      manual = false;
+      backupPainted();
+    },
+    folderChosen(name) {
+      const resolve = picking;
+      picking = null;
+      resolve?.(name || '');
+      if (name) check();
+      backupPainted();
+    },
+    run,
+  };
+})();
+
 /** Several archives, saved together: one folder asked for (the app), or a download each (a browser). */
 async function exportSinksDone(sinks, mimeType, startedReading = inBook) {
   const closed = sinks.map((sink) => ({ name: sink.name, made: sink.close() }));
@@ -6781,6 +6896,7 @@ function pumpQueue() {
     whenNotReading(() => toast(message, 8000, { kind: 'done' }));
     notifyBuild({ title: 'Queue done', text: message });
     letScreenGo();
+    autoBackups.afterQueue();
   }
   saveQueue();
 }
@@ -10894,6 +11010,10 @@ window.Grimoire = {
    * the app having thrown away whatever was being read. */
   notice(message) { toast(message, 8000); },
   exportFailed(reason) { toast(reason || 'That file could not be saved', 6000); },
+  /** An automatic backup written (its name), or why not. */
+  backupWritten(ok, message) { autoBackups.written(!!ok, message); },
+  /** The folder for automatic backups, chosen: its name, or null if none was. */
+  backupFolderChosen(name) { autoBackups.folderChosen(name); },
   /** An export in parts, saved into the folder chosen: how many of them, and the first that would not go. */
   exportSetSaved(saved, of, failed) {
     toast(saved === of
@@ -11083,6 +11203,7 @@ async function boot() {
   panels.onSettingsChange(() => panels.openSettings(refreshShelf));
   panels.onGuides(refreshGuides);
   panels.onWrite((blob, name, type, opts) => writeOut(blob, name, type, opts));
+  autoBackups.start();
   panels.onFolderMenu(openFolderActions);
 
 
