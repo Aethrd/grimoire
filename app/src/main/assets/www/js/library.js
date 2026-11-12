@@ -980,6 +980,11 @@ const justHeld = () => Date.now() - heldAt < 800;
 let buildOrder = null;   // Map(book id -> { place, already })
 export function setBuildOrder(order) { buildOrder = order || null; }
 
+/* Books whose download was paused or stopped short, with the rest still to
+ * come (a leftover, or a queued book carrying it on): marked on the cover. */
+let unfinished = new Set();
+export function setUnfinished(ids) { unfinished = new Set(ids || []); }
+
 function tile(book, onOpen, onLongPress, selection, selecting) {
   const coverUrl = coverUrlFor(book);
   const placed = buildOrder?.get(book.id);
@@ -995,6 +1000,7 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
       ${coverUrl
         ? `<img src="${coverUrl}" alt="${escape(book.title)}">`
         : `<span class="tile-title">${escape(displayTitle(book))}</span>`}
+      ${unfinished.has(book.id) ? '<span class="tile-unfinished" role="img" aria-label="Not finished downloading"><svg viewBox="0 0 24 24"><path d="M12 3.6v11.2M7.4 10.4l4.6 4.6 4.6-4.6M4.4 14.6v4.9h15.2v-4.9"/></svg></span>' : ''}
       <span class="tile-badge">${escape(book.format || '?')}</span>
       ${placed ? `<span class="tile-order${placed.already ? ' already' : ''}">${placed.place}</span>` : ''}
       <span class="tile-bar"><span style="width:${Math.round((book.percent || 0) * 100)}%"></span></span>

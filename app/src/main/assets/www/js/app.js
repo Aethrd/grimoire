@@ -58,6 +58,7 @@ function viewChanged() {
   else if (!BESIDE_THE_BOOK.has(current)) inBook = false;
   document.body.classList.toggle('in-book', inBook);
   liftProgress();
+  progress.seat();
   if (!inBook && held.length) {
     for (const deliver of held.splice(0)) {
       try { deliver(); } catch (error) { console.warn('A held notice could not be shown', error); }
@@ -2488,6 +2489,27 @@ const progress = (() => {
   const panel = () => el('import-progress');
   const list = () => el('jobs');
 
+  /* Small, it sits on the tab bar itself: placed by where the bar's top
+   * really is, not by the height it was meant to have -- a bar a few pixels
+   * taller or shorter on a phone (its labels, its system inset) left a gap,
+   * or an overlap, between the two. Again whenever the bar's size changes. */
+  function seat() {
+    const host = panel();
+    const bar = el('tabbar');
+    if (!host) return;
+    const free = host.classList.contains('open') || document.body.classList.contains('in-book');
+    const shown = bar && !bar.hidden && bar.getClientRects().length;
+    host.style.bottom = !free && shown ? `${Math.max(0, Math.round(window.innerHeight - bar.getBoundingClientRect().top))}px` : '';
+  }
+  let seated = false;
+  function watchSeat() {
+    if (seated) return;
+    seated = true;
+    window.addEventListener('resize', seat);
+    const bar = el('tabbar');
+    if (bar && typeof ResizeObserver === 'function') new ResizeObserver(seat).observe(bar);
+  }
+
   /** Open: the page of every row. Small (as each starts): the strip. */
   const isOpen = () => !!panel()?.classList.contains('open');
   function setOpen(open) {
@@ -2503,6 +2525,7 @@ const progress = (() => {
     const live = jobs.filter((job) => !job.ended);
     host.hidden = jobs.length === 0;
     if (!jobs.length) host.classList.remove('open');
+    seat();
     // The screens make room for the strip while it is up (see --strip-h).
     document.body.classList.toggle('jobs-up', jobs.length > 0);
 
@@ -2535,6 +2558,7 @@ const progress = (() => {
   }
 
   function start(label) {
+    watchSeat();
     // Opening and making small are the panel's, not any one job's: wired once.
     const minimise = el('import-minimise');
     if (minimise && !minimise.onclick) minimise.onclick = () => setOpen(false);
@@ -2640,6 +2664,7 @@ const progress = (() => {
 
   return {
     start,
+    seat,
     /** Back makes the open page small, before leaving anything. */
     close() {
       if (!isOpen()) return false;
@@ -6745,6 +6770,7 @@ function siteKey(hostname) {
 }
 
 function saveQueue() {
+  markUnfinished();
   // What is under way is kept as such: on a restart it is queued again (see loadQueue).
   store.saveSettings({ webQueue, queueRunning: queueState.running, queueAtOnce: queueState.atOnce, queuePerSite: queueState.perSite, queueLocked: queueState.locked, siteCosts }).catch(() => {});
   paintQueue();
@@ -6914,7 +6940,8 @@ async function runJob(job) {
     const before = job.bookId != null ? await store.get('books', job.bookId) : null;
     if (before) parts.push({ ...build.bookPart(before), seamless: true });
     // The picture chosen for it, or the site's.
-    const cover = before ? null : job.coverData
+    // The book carried on keeps its own cover; one that never had one is given the site's.
+    const cover = before?.coverBlob ? null : job.coverData
       ? await fetch(job.coverData).then((response) => response.blob()).catch(() => null)
       : await web.fetchCover(job.cover).catch(() => null);
     const part = build.webPart({
@@ -7612,10 +7639,30 @@ function renderWorkshop() {
 let webLeftovers = [];
 store.settings().then((settings) => {
   webLeftovers = Array.isArray(settings.webLeftovers) ? settings.webLeftovers : [];
+  markUnfinished();
   if (current === 'workshop') renderWorkshop();
 }).catch(() => {});
 
-const saveLeftovers = () => store.saveSettings({ webLeftovers }).catch(() => {});
+const saveLeftovers = () => {
+  markUnfinished();
+  return store.saveSettings({ webLeftovers }).catch(() => {});
+};
+
+/* The books on the shelf with more to come: a stopped download's leftover
+ * carries its book on, and so does a queued book until it is done. Their
+ * covers say so (library.js). Redrawn only when which they are changes. */
+let unfinishedKey = '';
+function markUnfinished() {
+  const ids = [
+    ...webLeftovers.map((left) => left.bookId),
+    ...webQueue.filter((job) => job.status !== 'done').map((job) => job.bookId),
+  ].filter((id) => id != null);
+  const key = [...new Set(ids)].sort().join(',');
+  if (key === unfinishedKey) return;
+  unfinishedKey = key;
+  library.setUnfinished(ids);
+  if (current === 'library') refreshShelf().catch(() => {});
+}
 
 /* ── where a website's download stopped ───────────────────────────────
  *
@@ -7690,6 +7737,7 @@ async function rescueCutBuilds() {
   // Read fresh: this runs before anything else has loaded them.
   const settings = await store.settings();
   webLeftovers = Array.isArray(settings.webLeftovers) ? settings.webLeftovers : [];
+  markUnfinished();
   webStops = Array.isArray(settings.webStops) ? settings.webStops : [];
   /* A queued book cut off: back to its job -- the book so far, and the rest
    * still to come -- not to Build's leftovers. */

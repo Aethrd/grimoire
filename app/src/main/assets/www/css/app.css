@@ -2701,3 +2701,17 @@ body.in-book[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .web-in-browser[hidden] { display: none; }
 .web-in-browser input { margin-top: 3px; flex: none; }
 .web-in-browser small { display: block; font-size: 12px; line-height: 1.45; margin-top: 2px; }
+
+/* A book with more still to download (paused, or stopped short): a wash of
+   the theme's own colour over its cover -- deeper at the top, paler at the
+   bottom, the cover still seen through it -- and a download mark in the
+   middle, 60% of the cover wide, in the palest tint of the theme with a soft
+   shadow: light on the wash, lifted off any cover, in every theme. */
+.tile-unfinished { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(to bottom,
+    color-mix(in srgb, var(--accent-700) 66%, transparent),
+    color-mix(in srgb, var(--accent-200) 22%, transparent)); }
+.tile-unfinished svg { position: absolute; left: 20%; width: 60%; height: auto; top: 50%;
+  transform: translateY(-50%); fill: none; stroke: var(--accent-100); stroke-width: 2.3;
+  stroke-linecap: round; stroke-linejoin: round;
+  filter: drop-shadow(0 1px 3px rgb(0 0 0 / .45)); }

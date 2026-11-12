@@ -413,9 +413,21 @@ export async function build({
     }
   }
 
+  /* Its cover from the start -- the one chosen, else the first part's (a
+   * website's picture, fetched before it began; a book carried on, its own) --
+   * so a book still downloading, or paused, is its cover on the shelf, not a
+   * blank. */
+  const first = list[0];
+  let early = chosenCover || first?.coverBlob || null;
+  if (!early && first?.bookId) early = (await store.get('books', first.bookId).catch(() => null))?.coverBlob || null;
+  if (!early && first?.pictures?.length) early = first.pictures[0];
+  // A book carried on that never had one: the website's own, if it brought one.
+  if (!early) early = list.find((part) => part.coverBlob)?.coverBlob || null;
+
   const bookId = await store.add('books', {
     title: name,
     folder: filed,
+    ...(early ? { coverBlob: early, coverBytes: early.size ?? null } : {}),
     // Set here rather than left to be corrected later: a book named at the
     // moment it is made is named everywhere -- on the shelf, in its own
     // metadata, and in anything written out of it afterwards.
@@ -651,8 +663,8 @@ export async function build({
   finished.chapters = index;
   // A cover chosen in Build wins over the first part's; the app then puts it
   // into the book itself (coverpage.js), as a cover chosen in Details is.
-  finished.coverBlob = chosenCover || cover;
-  finished.coverBytes = (chosenCover || cover)?.size ?? null;
+  finished.coverBlob = chosenCover || cover || early;
+  finished.coverBytes = (chosenCover || cover || early)?.size ?? null;
   if (chosenCover) finished.coverCustom = true;
   delete finished.importing;
   delete finished.building;

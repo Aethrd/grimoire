@@ -2886,4 +2886,25 @@ await t('a row that says when its chapter came out (woopread): the time is no pa
   assert.match(java, /text:window\.__gPick&&__gPick\.nameOf\?__gPick\.nameOf\(a\)/);
 });
 
+await t('a book with more to download is marked on its cover; the strip sits on the tab bar itself', async () => {
+  const library = read('app/src/main/assets/www/js/library.js');
+  assert.match(library, /\$\{unfinished\.has\(book\.id\) \? '<span class="tile-unfinished" role="img" aria-label="Not finished downloading"><svg viewBox="0 0 24 24">/);
+  // Its cover from the start: a book downloading, or paused, is not a blank.
+  const build = read('app/src/main/assets/www/js/build.js');
+  assert.match(build, /\.\.\.\(early \? \{ coverBlob: early, coverBytes: early\.size \?\? null \} : \{\}\),/);
+  assert.match(build, /finished\.coverBlob = chosenCover \|\| cover \|\| early;/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  // Which: a stopped download's leftover, and a queued book not yet done.
+  assert.match(app, /\.\.\.webLeftovers\.map\(\(left\) => left\.bookId\),\s+\.\.\.webQueue\.filter\(\(job\) => job\.status !== 'done'\)\.map\(\(job\) => job\.bookId\),/);
+  assert.match(app, /const saveLeftovers = \(\) => \{\s+markUnfinished\(\);/);
+  assert.match(app, /function saveQueue\(\) \{\s+markUnfinished\(\);/);
+  // The wash in the theme's colours, deep to pale; the mark the same, opaque and inverted, 60% of the cover wide.
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\.tile-unfinished \{[^}]*linear-gradient\(to bottom,\s*color-mix\(in srgb, var\(--accent-700\) 66%, transparent\),\s*color-mix\(in srgb, var\(--accent-200\) 22%, transparent\)\)/);
+  assert.match(css, /\.tile-unfinished svg \{[^}]*width: 60%;[^}]*stroke: var\(--accent-100\);/);
+  // The strip placed by where the tab bar's top really is.
+  assert.match(app, /host\.style\.bottom = !free && shown \? `\$\{Math\.max\(0, Math\.round\(window\.innerHeight - bar\.getBoundingClientRect\(\)\.top\)\)\}px` : '';/);
+  assert.match(app, /new ResizeObserver\(seat\)\.observe\(bar\)/);
+});
+
 console.log(`\n${pass} assertions passed`);
