@@ -6732,7 +6732,8 @@ function wireJobEdit() {
     clearWeb();
     Object.assign(webState, { intent: 'queue', editing: it.id });
     setWebAddress((it.sources || []).join('\n'));
-    webState.links = it.links.map((link) => ({ ...keptLink(link), chrome: false, kind: null, likely: true, picked: true }));
+    // Its placeholders are put back when it is queued again, where chapters are still missing.
+    webState.links = it.links.filter((link) => !web.isPlaceholder(link)).map((link) => ({ ...keptLink(link), chrome: false, kind: null, likely: true, picked: true }));
     Object.assign(webState, { sources: it.sources || [], title: it.name, author: it.author || '', cover: it.cover || '', coverData: it.coverData || '', folder: it.folder || '' });
     el('web-title').value = it.name;
     webNote(`The ${it.links.length} chapters queued for “${it.name}”. Untick any to leave out, or Find links to read the site's list again; Queue saves them.`);
@@ -6817,6 +6818,7 @@ function queueWeb() {
   // Its site's delays, as set here: what the queue downloads it at.
   keepDelays({ site: siteOfJob({ sources: webState.sources, links: chosen }) || delaysShownFor });
   if (!webState.manualOrder) chosen = web.inReadingOrder(chosen, () => true).links;
+  chosen = placeholdersFor(chosen);
   const name = (el('web-title').value || '').trim() || webState.title || 'From the web';
   // Its chapters changed from its own page: saved back to it, in its place.
   const editing = webQueue.find((job) => job.id === webState.editing && !job.bookId && job.status !== 'running');
@@ -8018,7 +8020,7 @@ function showLeftoverInWeb(left) {
   if (Number.isFinite(left.jitter)) el('web-jitter').value = String(left.jitter);
   paintWebRange();
   webState.links = left.links.map((link) => ({
-    url: link.url, text: link.text, chrome: false, kind: null, likely: true, picked: true,
+    url: link.url, text: link.text, ...(link.placeholder != null ? { placeholder: link.placeholder } : {}), chrome: false, kind: null, likely: true, picked: true,
   }));
   webState.sources = left.sources;
   webState.title = left.name;
@@ -9850,7 +9852,10 @@ function paintWebGaps() {
     lines.push(`${count} chapter${count === 1 ? '' : 's'} missing between ${from} and ${to}: ${shown(missing)}. `
       + (picking
         ? 'Passed over in the drag, or not in the site\'s list — pick again to take them.'
-        : 'Not on the site, or not found yet — Search for more, or Find links again, may bring them.'));
+        : 'Not on the site, or not found yet — Search for more, or Find links again, may bring them.')
+      // Said where the book will get them (a fresh book; see placeholdersFor).
+      + (webState.updating != null || webState.carryOn != null || webState.leftover
+        ? '' : ' Built as it is, each gets a placeholder chapter, labelled as one, in its place.'));
   }
   if (twice.length) lines.push(`Ticked twice: ${shown(twice.map(String))} — the same chapter number on two links.`);
   /* Picked in the site: what its page listed and the pick left out -- a drag
@@ -10457,6 +10462,7 @@ async function addWebToBuild() {
    * different set from what was ordered when the list was found -- unless
    * the order was turned round by hand, which is the reader's say. */
   if (!webState.manualOrder) chosen = web.inReadingOrder(chosen, () => true).links;
+  chosen = placeholdersFor(chosen);
   let name = (el('web-title').value || '').trim() || webState.title || 'From the web';
   // Left over pages, looked over: named for where they now pick up.
   if (webState.leftover && !webState.titleTouched && chosen[0]?.text) {
@@ -10554,7 +10560,12 @@ let delaysShownFor = '';                   // the site the fields now hold, '' f
 const SITE_DELAYS_KEPT = 300;
 
 /** A chapter's link as kept (in the queue, a leftover): with its other sites' copies, if it has any. */
-const keptLink = ({ url, text, alts }) => ({ url, text, ...(alts?.length ? { alts } : {}) });
+const keptLink = ({ url, text, alts, placeholder }) => ({ url, text, ...(alts?.length ? { alts } : {}), ...(placeholder != null ? { placeholder } : {}) });
+/* A fresh book's chapters, with a placeholder in the place of each missing one (web.js,
+ * withPlaceholders). Not a book carried on or brought up to date: there the numbers
+ * left out are the chapters it already has. */
+const placeholdersFor = (chosen) => (webState.updating != null || webState.carryOn != null || webState.leftover
+  ? chosen : web.withPlaceholders(chosen));
 
 function siteOfAddress(address) {
   try { return siteKey(new URL(address).hostname); } catch { return ''; }

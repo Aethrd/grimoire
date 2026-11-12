@@ -433,6 +433,65 @@ await t('a page turned away is fetched afresh at once, not given up on', async (
   assert.ok(!/wait a few minutes|Waiting a few minutes/i.test(read('app/src/main/assets/www/js/app.js')));
 });
 
+await t('missing chapters get a placeholder each, labelled, and the site is never asked for one', async () => {
+  const link = (n) => ({ url: `${SITE}chapter-${n}`, text: `Chapter ${n}` });
+  // 1, 2, 3, 6, 7: 4 and 5 kept a place, in order.
+  const placed = web.withPlaceholders([1, 2, 3, 6, 7].map(link));
+  assert.deepEqual(placed.map((l) => l.text), ['Chapter 1', 'Chapter 2', 'Chapter 3',
+    'Chapter 4 — placeholder (missing)', 'Chapter 5 — placeholder (missing)', 'Chapter 6', 'Chapter 7']);
+  assert.deepEqual(placed.filter(web.isPlaceholder).map((l) => l.placeholder), [4, 5]);
+  // Nothing missing: as it was. Placed again: no second set.
+  assert.deepEqual(web.withPlaceholders([1, 2, 3, 4, 5].map(link)).map((l) => l.text), [1, 2, 3, 4, 5].map((n) => `Chapter ${n}`));
+  assert.equal(web.withPlaceholders(placed).filter(web.isPlaceholder).length, 2);
+  // A chapter in parts is that chapter, not one missing; a numbering's leap is left; out of order, nothing guessed.
+  assert.equal(web.withPlaceholders(['Chapter 1', 'Chapter 2', 'Chapter 3.1', 'Chapter 3.2', 'Chapter 4', 'Chapter 5'].map((text, i) => ({ url: `${SITE}p${i}`, text }))).filter(web.isPlaceholder).length, 0);
+  assert.equal(web.withPlaceholders([1, 2, 3, 4, 500].map(link)).filter(web.isPlaceholder).length, 0);
+  assert.equal(web.withPlaceholders([7, 6, 5, 3, 2, 1].map(link)).filter(web.isPlaceholder).length, 0);
+  // Fewer than five numbered: no gaps said, none placed.
+  assert.equal(web.withPlaceholders([1, 3].map(link)).length, 2);
+
+  // Read: the placeholders cost no request and no wait, and sit in their places, said as such.
+  const asked = [];
+  const counting = async (url, options) => { asked.push(url); return fakeFetch(url, options); };
+  const parsed = await web.readPages(web.withPlaceholders([1, 2, 3, 1, 2].map((n, i) => ({ url: `${SITE}chapter-${n}`, text: `Chapter ${[1, 2, 3, 6, 7][i]}` }))),
+    { fetchPage: counting, gap: 0, pictures: false });
+  assert.equal(asked.length, 5);
+  assert.ok(asked.every((url) => !url.startsWith('placeholder:')));
+  assert.deepEqual(parsed.chapters.map((c) => c.title), ['Chapter 1', 'Chapter 2', 'Chapter 3',
+    'Chapter 4 — placeholder (missing)', 'Chapter 5 — placeholder (missing)', 'Chapter 6', 'Chapter 7']);
+  const held = parsed.chapters[3];
+  assert.equal(held.placeholder, true);
+  assert.equal(held.words, 0);
+  assert.equal(held.from, undefined);
+  assert.match(held.html, /Placeholder — this chapter is missing/);
+  assert.equal(parsed.failed.length, 0);
+  // Never taken for a short chapter, nor for a wait screen.
+  assert.equal(web.waitScreen(held.html), '');
+  assert.deepEqual(web.shortChapters(parsed.chapters.map((c, i) => ({ ...c, index: i }))).filter((c) => c.index === 3), []);
+  // Stopped part way: the placeholders still to come are kept with the rest, as placeholders.
+  const refusing = async (url, options) => {
+    if (url.endsWith('chapter-2')) throw new Error('the site turned the request away (403)');
+    return fakeFetch(url, options);
+  };
+  const cut = await web.readPages(web.withPlaceholders([1, 2, 3, 6, 7].map(link)),
+    { fetchPage: refusing, gap: 0, pictures: false, patience: { retry: 0, refresh: [0], backoff: [0], cool: 0 } });
+  assert.deepEqual(cut.chapters.map((c) => c.title), ['Chapter 1']);
+  assert.deepEqual(cut.rest.map((l) => [l.text, l.placeholder ?? null]), [['Chapter 2', null], ['Chapter 3', null],
+    ['Chapter 4 — placeholder (missing)', 4], ['Chapter 5 — placeholder (missing)', 5], ['Chapter 6', null], ['Chapter 7', null]]);
+
+  // On the website screen: added for a fresh book, never one carried on or brought up to date.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /const placeholdersFor = \(chosen\) => \(webState\.updating != null \|\| webState\.carryOn != null \|\| webState\.leftover\s+\? chosen : web\.withPlaceholders\(chosen\)\);/);
+  assert.equal((app.match(/chosen = placeholdersFor\(chosen\);/g) || []).length, 2);
+  assert.match(app, /const keptLink = \(\{ url, text, alts, placeholder \}\)/);
+  assert.match(app, /it\.links\.filter\(\(link\) => !web\.isPlaceholder\(link\)\)/);
+  // Every copy of a book's links keeps the mark: lost, a placeholder's own address was asked for.
+  const buildJs = read('app/src/main/assets/www/js/build.js');
+  assert.equal((buildJs.match(/\.\.\.\(placeholder != null \? \{ placeholder \} : \{\}\)/g) || []).length, 2);
+  assert.ok(!/\(\{ url, text, alts \}\) =>/.test(buildJs + app + read('app/src/main/assets/www/js/web.js')), 'a copy of the links leaves out the placeholder mark');
+  assert.match(app, /url: link\.url, text: link\.text, \.\.\.\(link\.placeholder != null \? \{ placeholder: link\.placeholder \} : \{\}\), chrome: false/);
+});
+
 await t('the pages are asked for at the rate set, in milliseconds', async () => {
   const times = [];
   const timed = async (url) => { times.push(Date.now()); return fakeFetch(url); };
@@ -2941,8 +3000,8 @@ await t('one book from several sites: the first list, its gaps filled from the o
   assert.ok(!asked.includes('https://b.example/c/1'), 'another site was asked for a chapter that came');
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /const merged = web\.mergeSources\(links, sites, siteOfAddress\);/);
-  assert.match(app, /const keptLink = \(\{ url, text, alts \}\) => \(\{ url, text, \.\.\.\(alts\?\.length \? \{ alts \} : \{\}\) \}\);/);
-  assert.match(read('app/src/main/assets/www/js/build.js'), /links: links\.map\(\(\{ url, text, alts \}\) => \(\{ url, text, \.\.\.\(alts\?\.length \? \{ alts \} : \{\}\) \}\)\)/);
+  assert.match(app, /const keptLink = \(\{ url, text, alts, placeholder \}\) => \(\{ url, text, \.\.\.\(alts\?\.length \? \{ alts \} : \{\}\)/);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /links: links\.map\(\(\{ url, text, alts, placeholder \}\) => \(\{ url, text, \.\.\.\(alts\?\.length \? \{ alts \} : \{\}\)/);
 });
 
 await t('a row that says when its chapter came out (woopread): the time is no part of its name or number; 172.1 and 172.2 are 172', async () => {

@@ -1233,6 +1233,43 @@ export function numberGaps(links) {
   return { missing, count, twice, from: numbers[0], to: numbers.at(-1) };
 }
 
+/* Missing chapters, kept a place: a book built with chapters missing from the
+ * numbers of those picked gets a placeholder chapter in each one's place, said
+ * plainly as such -- so the book's chapters line up with the story's, and what
+ * is not there is seen where it is not. Nothing is asked of the site for one.
+ * Only inside the numbers picked, counting up; a jump of more than
+ * PLACEHOLDER_GAP at once is a numbering's oddity, not chapters, and is left. */
+const PLACEHOLDER_GAP = 100;
+export const isPlaceholder = (link) => link?.placeholder != null;
+export function placeholderLink(number) {
+  return { url: `placeholder:${number}`, text: `Chapter ${number} — placeholder (missing)`, placeholder: number };
+}
+export function withPlaceholders(links) {
+  const real = (links || []).filter((link) => !isPlaceholder(link));
+  if (!numberGaps(real).count) return real;
+  const out = [];
+  let last = null;
+  for (const link of real) {
+    const { kind, number } = chapterKind(link.text);
+    const n = kind === 'main' && Number.isFinite(number) && number >= 0 ? Math.floor(number) : null;
+    if (n !== null && last !== null && n - last > 1 && n - last - 1 <= PLACEHOLDER_GAP) {
+      for (let m = last + 1; m < n; m += 1) out.push(placeholderLink(m));
+    }
+    out.push(link);
+    if (n !== null && (last === null || n > last)) last = n;
+  }
+  return out;
+}
+/** A placeholder's chapter: its number, and that nothing came for it. */
+export function placeholderChapter(link, index) {
+  const number = link.placeholder;
+  const html = '<div class="placeholder-chapter"><p><strong>Placeholder — this chapter is missing.</strong></p>'
+    + `<p>Chapter ${escapeHtml(String(number))} was not among the chapters picked when this book was made (not in the site's list, `
+    + 'or not found), so nothing was downloaded for it. Its place is kept here so the chapters after it line up.</p></div>';
+  const chapter = { index, title: link.text, fromToc: true, html, words: 0, placeholder: true, number };
+  return { chapter, chapters: [chapter], images: [], lang: null };
+}
+
 export function chapterKind(text) {
   const name = String(text || '');
   if (/後記|后记|完結感言|完结感言|作者的話|作者的话|\bafterword\b|\bauthor'?s? note\b/i.test(name)) return { kind: 'after', number: null };
@@ -2613,13 +2650,15 @@ export async function readPages(links, {
    * is not there gets a single second try. And a try that was cut off by the
    * app going off screen does not count at all.
    */
-  const chapterUrls = new Set(links.map((link) => link.url));
+  const chapterUrls = new Set(links.filter((link) => !isPlaceholder(link)).map((link) => link.url));
   // The chapters the list has links of their own for, by number: a post that
-  // carries them as well is not let put them in the book twice.
-  const listedNumbers = new Set(links.map((link) => markedNumber(link.text || '')).filter(Number.isFinite));
+  // carries them as well is not let put them in the book twice. (A placeholder is no link of its own.)
+  const listedNumbers = new Set(links.filter((link) => !isPlaceholder(link)).map((link) => markedNumber(link.text || '')).filter(Number.isFinite));
   const nameOf = (link, at) => link.text || `page ${at + 1}`;
   onProgress?.(0, 0, links.length);
   const fetchAgain = async (link, at) => {
+    // A missing chapter's place, kept: nothing to ask the site.
+    if (isPlaceholder(link)) return placeholderChapter(link, at);
     let lastError = null;
     let waits = null;
     let tries = 0;
@@ -2760,7 +2799,7 @@ export async function readPages(links, {
 
   const failed = stopped ? [stopped] : [];
   const rest = stopped
-    ? links.slice(stopAt).map(({ url, text, alts }, n) => ({ url, text, ...(alts?.length ? { alts } : {}), ...(n === 0 ? { reason: stopped.reason } : {}) }))
+    ? links.slice(stopAt).map(({ url, text, alts, placeholder }, n) => ({ url, text, ...(alts?.length ? { alts } : {}), ...(placeholder != null ? { placeholder } : {}), ...(n === 0 ? { reason: stopped.reason } : {}) }))
     : [];
   if (!chapters.length) {
     const why = stopped?.reason;
