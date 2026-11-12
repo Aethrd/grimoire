@@ -786,6 +786,8 @@ export async function open(bookId, opts = {}) {
   const images = (await store.byIndex('images', 'bookId', bookId))
     .filter((image) => !image.removed);
   state.images = new Map(images.filter((i) => i.blob).map((i) => [i.href, i.blob]));
+  // The book and its chapters are in: its index and picture reel can be drawn (app.js, bookReady).
+  opts.onBook?.(book);
   state.layout = await store.layoutFor(bookId);
   applyLayout(state.layout, await store.settings());
 

@@ -1232,5 +1232,30 @@ await t('the reel holds to save, and the viewer saves the picture rather than it
   assert.match(java, /SDK_INT < Build\.VERSION_CODES\.Q\) \{\s*main\.offerExport\(file, mimeType, false\)/);
 });
 
+await t('the index and the reel tapped while a book is still opening wait for it, never "Open a book"', async () => {
+  const reader = await import(www('reader.js'));
+  const id = await comic(5);
+  // Back to the shelf, and the new book's tile drawn.
+  while (!el('tabbar').hidden && document.body.dataset.view !== 'library') tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(300);
+  // Opened, and Images tapped at once -- before the book is in.
+  tap(document.querySelector(`[data-book="${id}"]`));
+  tap(document.querySelector('[data-go="reel"]'));
+  await settle(600);
+  assert.equal(reader.state.book?.id, id);
+  assert.equal(document.body.dataset.view, 'reel');
+  assert.ok(!/Open a book/.test(el('reel-grid').textContent), el('reel-grid').textContent);
+  assert.equal(el('reel-grid').querySelectorAll('img').length, 5);
+  // And the index, the same way.
+  tap(document.querySelector('[data-back]') || el('tabbar'));
+  await settle(300);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /case 'toc':[\s\S]{0,200}return bookReady\(\)\.then\(\(\) => current === 'toc' && screens\.openToc\(goToChapter\)\);/);
+  assert.match(app, /if \(opening\) \{ el\('reel-grid'\)\.innerHTML = '<p class="muted" style="padding:24px 0">Opening the book…<\/p>'; return; \}/);
+});
+
 console.log(`\n${pass} assertions passed`);
 process.exit(0);

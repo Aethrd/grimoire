@@ -159,12 +159,16 @@ async function enter(name) {
     case 'divide': return renderDivide();
     case 'remove': return renderRemove();
     case 'bin': return renderBin();
-    case 'find': return screens.initFind(goToMatch, cameFrom === 'reader');
-    case 'toc': return screens.openToc(goToChapter);
-    case 'reel': return reader.state.book
-      ? screens.openReel(reader.state.book.id, jumpToImage)
-      : emptyReel();
-    case 'layout': return reader.state.book
+    case 'find': if (cameFrom === 'reader') await bookReady(); return screens.initFind(goToMatch, cameFrom === 'reader');
+    // The book's own screens: drawn once the book being opened is in (see bookReady).
+    case 'toc':
+      if (opening) el('toc-list').innerHTML = '<p class="muted" style="padding:24px 16px">Opening the book…</p>';
+      return bookReady().then(() => current === 'toc' && screens.openToc(goToChapter));
+    case 'reel': return bookReady().then(() => {
+      if (current !== 'reel') return null;
+      return reader.state.book ? screens.openReel(reader.state.book.id, jumpToImage) : emptyReel();
+    });
+    case 'layout': await bookReady(); return reader.state.book
       ? screens.openLayout(reader.state.book.id)
       : (el('layout-body').innerHTML = '<p class="muted" style="padding:24px 0">Open a book first.</p>');
     case 'folders': return panels.openFolders(openFolder);
@@ -179,6 +183,8 @@ async function enter(name) {
 }
 
 function emptyReel() {
+  // A book still being opened is not "no book": said as what it is.
+  if (opening) { el('reel-grid').innerHTML = '<p class="muted" style="padding:24px 0">Opening the book…</p>'; return; }
   el('reel-counts').textContent = '';
   el('reel-grid').innerHTML = '<p class="muted" style="padding:24px 0">Open a book to see its images.</p>';
 }
@@ -346,13 +352,35 @@ function settleGreyMix(book) {
   });
 }
 
+/* The book being read in, while it is: the reader shows at once, and the book
+ * is only its own once it has been written down as opened and its chapters
+ * read in (not its first page drawn: see reader.open's onBook) -- which,
+ * with downloads writing to the library meanwhile, can take a few seconds. Its
+ * index, picture reel and the rest wait for it rather than draw nothing (they
+ * came up "Open a book to see its images", and stayed so). */
+let opening = null;
+const bookReady = () => opening || Promise.resolve();
+
 async function openBook(book, opts) {
   // Opened afresh, so nothing is waiting to be reopened.
   readerStale = null;
   // Another book: the last one's page and name are cleared before the reader
   // shows, not left up until this one has been read in.
   if (reader.state.book?.id !== book.id) blankReader(book);
-  await show('reader');
+  let done = () => {};
+  const mine = new Promise((resolve) => { done = resolve; });
+  opening = mine;
+  // Ready once the book and its chapters are in -- not once its first page is drawn.
+  const ready = () => { done(); if (opening === mine) opening = null; };
+  try {
+    await show('reader');
+    await readIn(book, { ...opts, onBook: ready });
+  } finally {
+    ready();
+  }
+}
+
+async function readIn(book, opts) {
   try {
     // Opened, not read. Continue follows this; the status does not, because
     // glancing at a book is not reading it.
