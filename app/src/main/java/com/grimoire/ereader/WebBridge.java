@@ -95,6 +95,10 @@ public class WebBridge {
     private static final int RENDER_BROWSERS = 4;
     private final ExecutorService renderer = Executors.newFixedThreadPool(RENDER_BROWSERS);
     private final java.util.Set<String> renderingSites = new java.util.HashSet<>();
+    /** Counted up by each Pause (stopAll): a page asked for before it, still waiting its
+     *  turn, is never opened -- its answer is no longer wanted, and opening it kept the
+     *  first page after the pause waiting behind it. */
+    private final java.util.concurrent.atomic.AtomicInteger stops = new java.util.concurrent.atomic.AtomicInteger();
     private final Handler main = new Handler(Looper.getMainLooper());
     /** How long a page may take to settle, and how long it must stay still
      *  to count as settled -- each longer at every level of patience the page
@@ -268,6 +272,7 @@ public class WebBridge {
          * chapter back until its adverts have shown: leaving out their pictures did that
          * to every chapter, each then coming only at the third try. */
         final boolean skipHeavy = ownSiteOnly;
+        final int askedAt = stops.get();
         renderer.execute(() -> {
             String safeId = id == null ? "x" : id.replaceAll("[^A-Za-z0-9_-]", "_");
             File target = new File(dir(), safeId);
@@ -286,7 +291,9 @@ public class WebBridge {
                 // One page of a site at a time: another of its pages waits its turn here.
                 String siteKey = job.site == null ? address : job.site;
                 synchronized (renderingSites) {
-                    while (renderingSites.contains(siteKey)) renderingSites.wait();
+                    while (renderingSites.contains(siteKey) && stops.get() == askedAt) renderingSites.wait();
+                    // Paused while it waited: not opened.
+                    if (stops.get() != askedAt) throw new IOException("paused");
                     renderingSites.add(siteKey);
                 }
                 try {
@@ -702,6 +709,11 @@ public class WebBridge {
      *  (Its answer, and any plain fetch's still on its way, are ignored.) */
     @JavascriptInterface
     public void stopAll() {
+        stops.incrementAndGet();
+        // Pages waiting their turn see it now, and go.
+        synchronized (renderingSites) {
+            renderingSites.notifyAll();
+        }
         main.post(() -> {
             for (Browser each : browsers) {
                 Rendering job = each.current;

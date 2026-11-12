@@ -1408,7 +1408,9 @@ await t('a rendered page that holds another chapter than the one asked for is no
   // One page of a site is rendered at a time (pages of different sites side by side, each in a browser of its own).
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /renderer = Executors\.newFixedThreadPool\(RENDER_BROWSERS\)/);
-  assert.match(java, /while \(renderingSites\.contains\(siteKey\)\) renderingSites\.wait\(\);/);
+  // A page asked for before a Pause, still waiting its turn, is not opened after it.
+  assert.match(java, /while \(renderingSites\.contains\(siteKey\) && stops\.get\(\) == askedAt\) renderingSites\.wait\(\);\s+\/\/[^\n]*\n\s+if \(stops\.get\(\) != askedAt\) throw new IOException\("paused"\);/);
+  assert.match(java, /public void stopAll\(\) \{\s+stops\.incrementAndGet\(\);/);
   assert.match(java, /renderingSites\.remove\(siteKey\);\s+renderingSites\.notifyAll\(\);/);
   // A browser reading a page is not given another; its events go to its own page.
   assert.match(java, /if \(each\.current != null\) continue;/);
