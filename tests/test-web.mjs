@@ -2077,6 +2077,25 @@ await t('a short chapter is known by its lines, and a comment section is no chap
   assert.equal(shown(`${controls}<div class="chapter"><p>Verifying access…</p></div>`)[6], '1');
   assert.equal(shown(`${controls}<div class="chapter"><p>Loading chapter...</p></div>`)[6], '1');
   assert.equal(shown(`${controls}<div class="chapter"><p>불러오는 중</p></div>`)[6], '1');
+  // A chapter drawn inside an open shadow section (a reader of web components) counts as come.
+  {
+    const w = new JSDOM('<html><body><div class="reader-controls"><p>Theme</p></div><chapter-view></chapter-view></body></html>', { runScripts: 'outside-only' }).window;
+    w.document.querySelector('chapter-view').attachShadow({ mode: 'open' }).innerHTML = `<article>${lines(14)}</article>`;
+    const got = w.eval(code).split('|');
+    assert.ok(Number(got[7]) >= 400 && Number(got[8]) >= 10, got.join('|'));
+    // And copied with the page: put into it where it is shown, slotted children in their slots.
+    const host = w.document.createElement('story-card');
+    host.innerHTML = '<span slot="title">Chapter 3</span><em>after</em>';
+    host.attachShadow({ mode: 'open' }).innerHTML = '<h2><slot name="title"></slot></h2><div class="text"><p>Shadowed words.</p><slot></slot></div>';
+    w.document.body.appendChild(host);
+    const flatten = [...java.slice(java.indexOf('String FLATTEN = '), java.indexOf('})();";', java.indexOf('String FLATTEN = ')) + 7).split('\n')
+      .filter((l) => /^\s*(\+ |(static final )?String FLATTEN)/.test(l)).join('\n').matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`)).join('');
+    w.eval(flatten);
+    const html = w.document.body.innerHTML;
+    assert.match(html, /<chapter-view><div data-shadow=""><article><p>짧은 장의/);
+    assert.match(html, /<story-card><div data-shadow=""><h2><span slot="title">Chapter 3<\/span><\/h2><div class="text"><p>Shadowed words\.<\/p><em>after<\/em><\/div><\/div><\/story-card>/);
+    assert.match(java, /view\.evaluateJavascript\(FLATTEN \+ "'<!DOCTYPE html>'\+document\.documentElement\.outerHTML"/);
+  }
   // A chapter that only mentions verifying is no wait.
   assert.equal(shown(`<div class="chapter">${lines(14)}<p>He was verifying access to the vault.</p></div>`)[6], '0');
 });

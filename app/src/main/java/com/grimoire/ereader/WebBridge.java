@@ -1282,7 +1282,7 @@ public class WebBridge {
                 fail("that page does not exist (404)");
                 return;
             }
-            view.evaluateJavascript("'<!DOCTYPE html>'+document.documentElement.outerHTML", (value) -> {
+            view.evaluateJavascript(FLATTEN + "'<!DOCTYPE html>'+document.documentElement.outerHTML", (value) -> {
                 if (lastShape.contains("|checking|") && !there) {
                     error = "the site wants its browser check passed (a bot check) — tap Open the site, let the check pass there, then Done";
                 } else {
@@ -1407,6 +1407,21 @@ public class WebBridge {
             + "if(!best)return 'none';"
             + "try{best.scrollIntoView({block:'center'});}catch(x){}best.click();return 'pressed';"
             + "}catch(e){return 'none';}})()";
+    /* The page's open shadow sections, put into it where they are shown, before
+     * it is copied: a reader built of web components draws its chapter in one,
+     * and the page's own HTML holds only the empty host. Each host's own
+     * children go where its slots were (by name, the rest to the unnamed one).
+     * Closed ones are not reachable, and are left. */
+    static final String FLATTEN = "(function(){try{var put=function(root){var all=root.querySelectorAll('*');"
+            + "for(var i=0;i<all.length&&i<20000;i++){var e=all[i],r=e.shadowRoot;if(!r)continue;put(r);"
+            + "var c=document.createElement('div');c.setAttribute('data-shadow','');c.innerHTML=r.innerHTML;"
+            + "var light=Array.prototype.slice.call(e.childNodes),slots=c.querySelectorAll('slot');"
+            + "for(var j=0;j<slots.length;j++){var sl=slots[j],nm=sl.getAttribute('name')||'';"
+            + "var mine=light.filter(function(n){var a=n.nodeType===1?n.getAttribute('slot')||'':'';return a===nm;});"
+            + "if(!mine.length){var f=document.createDocumentFragment();while(sl.firstChild)f.appendChild(sl.firstChild);sl.replaceWith(f);continue;}"
+            + "mine.forEach(function(n){light.splice(light.indexOf(n),1);});sl.replaceWith.apply(sl,mine);}"
+            + "e.replaceChildren(c);}};put(document);}catch(x){}})();";
+
     private static final String SHAPE = "(function(){try{var b=document.body;"
             + "var t=document.title||'';"
             + "var r=(window.performance&&performance.getEntriesByType)?performance.getEntriesByType('resource').length:0;"
@@ -1471,11 +1486,16 @@ public class WebBridge {
              * "Loading chapter…" -- shown where the story will be: waited out, as a
              * spinner is, not taken for a page that is there. */
             + "var WAIT=/^(verifying( your)? access|checking( your)? access|verifying|authenticating|loading( the)?( chapter| content| story)?|preparing( the)?( chapter| content)?|fetching( the)?( chapter| content)?|decrypting( the)?( chapter| content)?|unlocking( the)? chapter|불러오는 ?중|로딩 ?중|加载中|載入中|正在加载)\\s*(…|\\.{2,})?$/i;"
+            /* And inside the page's open shadow sections, where a reader built of web
+             * components draws its chapter: shown on screen, but out of the page's own
+             * tree -- walked too, or a chapter there never counts as come. */
+            + "var R=[b];for(var ri0=0;ri0<R.length&&ri0<50;ri0++){var H=R[ri0].querySelectorAll('*');for(var hi=0;hi<H.length&&hi<8000;hi++){if(H[hi].shadowRoot)R.push(H[hi].shadowRoot);}}"
+            + "for(var ri=0;ri<R.length&&ri<50;ri++){W=document.createTreeWalker(R[ri],4);"
             + "while((nd=W.nextNode())&&cnt<30000){cnt++;var l=nd.nodeValue.trim().length;if(!l)continue;"
             + "if(!w&&l<40&&WAIT.test(nd.nodeValue.trim())){var wp=nd.parentElement;if(wp&&wp.getClientRects().length){var ws=getComputedStyle(wp);if(ws.visibility!=='hidden'&&ws.opacity!=='0')w=1;}}"
             + "var p=nd.parentElement,no=false;while(p&&p!==b){if(NO.test(p.tagName)){no=true;break;}"
             + "if(!IN.test(p.tagName))break;p=p.parentElement;}if(no||!p||ex(p))continue;"
-            + "add(p,l);var g=p.parentElement;if(g&&p!==b&&p.tagName==='DIV')add(g,l);}}catch(e){}"
+            + "add(p,l);var g=p.parentElement;if(g&&p!==b&&p.tagName==='DIV')add(g,l);}}}catch(e){}"
             + "window.__gS=[n,L.length,(blk?'blocked':c?'checking':''),k,w,s,sl];"
             + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(blk?'blocked':c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+s+'|'+sl+'|'+t;"
             + "}catch(e){return '0|0|0||0|0|0|0|0|';}})()";
