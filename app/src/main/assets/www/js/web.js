@@ -1905,6 +1905,8 @@ export async function readPage(link, index, {
     }
   }
   let { html: body, text } = read[0];
+  // Text the site has scrambled is not kept: a book of it would be unreadable.
+  if (isScrambled(text)) throw new Error(SCRAMBLED_REASON);
 
   /* Named by the link it was reached from: that is the name it had in the
    * list, where it was chosen. Without one, by the page's title with the
@@ -2436,8 +2438,8 @@ export async function readPages(links, {
         return await readPage(link, at, { pictures, fetchPage: paced, chapterUrls, listedNumbers });
       } catch (error) {
         if (error?.paused) throw error;
-        // Blocked: not asked again, and the download stops here.
-        if (blocked(error)) throw Object.assign(error, { tries: tries + 1 });
+        // Blocked, or its text scrambled: not asked again, and the download stops here.
+        if (blocked(error) || scrambled(error)) throw Object.assign(error, { tries: tries + 1 });
         lastError = error;
         // Paused meanwhile: this page is where it stops, not tried again.
         if (pausing()) throw PAUSED();
@@ -2566,6 +2568,20 @@ export const connectionTrouble = (error) => !error?.notLoaded && !blocked(error)
 /** A site that has blocked the connection outright (Cloudflare's "Sorry, you
  *  have been blocked"): every request now only keeps the block up longer, so
  *  nothing is asked again -- not a retry, not the next page. */
+/* Scrambled text: a site that sends its words as private-use characters,
+ * which only its own font draws as the real ones (fanqienovel, and others,
+ * to stop copying). What comes is unreadable without that font, and the app
+ * does not undo it -- the download stops, said, rather than filling a book
+ * with gaps. Known by how much of the text is private-use characters. */
+export const SCRAMBLED_REASON = 'the site scrambles its text (only its own font turns it back into words), so its chapters cannot be read here';
+export function isScrambled(text) {
+  const all = String(text || '').replace(/\s+/g, '');
+  if (all.length < 40) return false;
+  const odd = (all.match(/[\uE000-\uF8FF]/g) || []).length;
+  return odd >= 20 && odd / all.length > 0.05;
+}
+export const scrambled = (error) => /scrambles its text/i.test(String(error?.message || error || ''));
+
 export const blocked = (error) => /has blocked this connection/i.test(String(error?.message || error || ''));
 
 /** A page that is not there, which no amount of asking will change. */

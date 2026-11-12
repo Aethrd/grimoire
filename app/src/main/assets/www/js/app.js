@@ -6535,7 +6535,7 @@ function loadQueue(settings) {
 }
 
 /** A failure that means a site wants no more asking for now. */
-const queueHalts = (reason) => web.blocked(reason) || web.wantsCheck(reason) || web.tooMany(reason);
+const queueHalts = (reason) => web.blocked(reason) || web.wantsCheck(reason) || web.tooMany(reason) || web.scrambled(reason);
 
 /** The ticked chapters on the Website screen, into the queue as a book of their own. */
 function queueWeb() {

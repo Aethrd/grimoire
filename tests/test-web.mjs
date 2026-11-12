@@ -2710,4 +2710,22 @@ await t('in the browser, the "more" pressed is the one after the chapters, never
   assert.match(java, /allLinks = Integer\.parseInt\(parts\[2\]\);/);
 });
 
+await t('a site that scrambles its text (its own font draws it): stopped and said, no book of gaps, not asked again', async () => {
+  // As fanqienovel sends it: common words as private-use characters, put right only by its font.
+  const odd = (n) => Array.from({ length: n }, (_, i) => String.fromCharCode(0xE3E8 + (i * 7) % 300)).join('');
+  const line = (i) => `<p>曹${odd(3)}，${odd(2)}、！低调奢华的${odd(2)}房，朝${odd(1)}办${odd(1)}椅。第${i}段${odd(4)}。</p>`;
+  const page = (url) => `<html><head><title>第1章 开局</title></head><body><div class="muya-reader-content">${Array.from({ length: 30 }, (_, i) => line(i)).join('')}</div></body></html>`;
+  assert.equal(web.isScrambled('曹' + odd(40) + '低调奢华'.repeat(30)), true);
+  assert.equal(web.isScrambled('普通的中文句子，一个字也没有被替换。'.repeat(20)), false);
+  assert.equal(web.isScrambled('Chapter text  with a stray   icon glyph or two  in it. '.repeat(10)), false);
+  const asked = [];
+  const site = async (url) => { asked.push(url); return { url, blob: new Blob([page(url)]), type: 'text/html', rendered: false }; };
+  const links = [1, 2, 3].map((n) => ({ url: `https://fanqie.example/reader/${n}`, text: `第${n}章` }));
+  await assert.rejects(web.readPages(links, { fetchPage: site, gap: 0, patience: { retry: 0, refresh: [0], backoff: [0, 0], cool: 0 } }),
+    (error) => web.scrambled(error) && /scrambles its text/.test(error.message));
+  assert.equal(asked.filter((url) => url.endsWith('/1')).length, 1, 'a scrambled page was asked again');
+  // The queue holds such a book for the reader, as it does a block.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /const queueHalts = \(reason\) => [^\n]*web\.scrambled\(reason\);/);
+});
+
 console.log(`\n${pass} assertions passed`);
