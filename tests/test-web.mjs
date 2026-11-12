@@ -289,7 +289,7 @@ await t('the screen is reached from Build, and only from there', () => {
   assert.match(add, /clearWeb\(\);/);
   const go = app.slice(app.indexOf("el('build-go').onclick"), app.indexOf('\nfunction wireReader('));
   assert.match(go, /clearWeb\(\);/);
-  assert.match(app, /el\('build-clear'\)\.onclick = \(\) => \{\n    build\.clear\(\);\n    clearWeb\(\);/);
+  assert.match(app, /el\('build-clear'\)\.onclick = \(\) => \{\n    build\.clear\(\);\n    buildFolder = null;\n    clearWeb\(\);/);
 });
 
 /* ── into Build ──────────────────────────────────────────────────────── */
@@ -2416,29 +2416,45 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   // The other way round (last tapped first) is the same.
   tap(anchors[6]); tap(anchors[2]);
   assert.equal(JSON.parse(w.eval(script('PICKED'))).length, 5);
-  // Held half a second, then dragged: from the link held to the one under the finger.
+  /* Picking, a cover over the page has every touch -- the page's script, not
+   * Android's, so nothing races it: held, then dragged, from the chapter held to
+   * the one under the finger; a swipe scrolls; a tap marks, or presses what it is on. */
+  const cover = w.document.getElementById('__gPickCover');
+  assert.ok(cover, 'no cover over the page while picking');
   let under = anchors[1];
   w.document.elementFromPoint = () => under;
   const touch = (type, y) => {
     const event = new w.Event(type, { bubbles: true, cancelable: true });
     Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : [{ clientX: 50, clientY: y }] });
-    w.dispatchEvent(event);
+    cover.dispatchEvent(event);
     return event;
   };
-  touch('touchstart', 100);
-  await new Promise((r) => setTimeout(r, 520));
+  assert.ok(touch('touchstart', 100).defaultPrevented, 'the page had the touch too');
+  await new Promise((r) => setTimeout(r, 450));
   under = anchors[8];
   const moved = touch('touchmove', 400);
-  assert.ok(moved.defaultPrevented, 'the page does not scroll under a drag');
+  assert.ok(moved.defaultPrevented, 'the page scrolled under a drag');
   touch('touchend', 400);
   const dragged = JSON.parse(w.eval(script('PICKED')));
   assert.deepEqual([dragged.length, dragged[0].text, dragged.at(-1).text], [8, '409화 악은 삶을 바란다', '402화 악은 삶을 바란다']);
-  // A finger that moves before the half second is a scroll, not a pick.
+  assert.equal(w.document.getElementById('__gPickCount').textContent, '8 picked');
+  // A finger that moves before the hold is a swipe: the list scrolls, nothing is picked.
+  let scrolled = 0;
+  w.scrollBy = (x, y) => { scrolled += y; };
   under = anchors[0];
-  touch('touchstart', 100);
-  touch('touchmove', 160);
-  await new Promise((r) => setTimeout(r, 520));
+  touch('touchstart', 300);
+  touch('touchmove', 240);
+  touch('touchmove', 200);
+  await new Promise((r) => setTimeout(r, 450));
+  touch('touchend', 200);
+  assert.equal(scrolled, 100);
   assert.equal(JSON.parse(w.eval(script('PICKED'))).length, 8);
+  // A tap through the cover: a chapter marked (not followed), first then last.
+  const tapAt = (a) => { under = a; touch('touchstart', 100); touch('touchend', 100); };
+  tapAt(anchors[5]);
+  assert.ok(anchors[5].classList.contains('__gPickStart'));
+  tapAt(anchors[3]);
+  assert.deepEqual(JSON.parse(w.eval(script('PICKED'))).map((l) => Number.parseInt(l.text, 10)), [407, 406, 405]);
   // The app's own hold (it notices it before the page): begun where the finger is, dragged, let go.
   under = anchors[3];
   assert.equal(w.__gPick.holdAt(50, 300), true);
@@ -2494,7 +2510,13 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   // One with no address at all: said so, not silently nothing.
   over = rw.document.getElementById('bare');
   assert.equal(rw.__gPick.holdAt(50, 500), 'none');
-  assert.match(java, /if \("\\"none\\""\.equals\(began\) && !toldNoAddress\)/);
+  // (Held there, it says so, in the page.)
+  const rcover = rw.document.getElementById('__gPickCover');
+  const rtouch = (type) => { const e = new rw.Event(type, { cancelable: true }); Object.defineProperty(e, 'touches', { value: type === 'touchend' ? [] : [{ clientX: 50, clientY: 500 }] }); rcover.dispatchEvent(e); };
+  rtouch('touchstart');
+  await new Promise((r) => setTimeout(r, 450));
+  rtouch('touchend');
+  assert.match(rw.document.getElementById('__gPickSay').textContent, /no addresses in the page/);
   // A reader that opens its chapters by script, the address counting with them: two taps, and the
   // addresses of every chapter between are worked out from where the reader went.
   const spa = (move) => {
@@ -2536,25 +2558,29 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   showMore.href = 'https://k.example/b?all=1';
   showMore.textContent = 'Show more';
   w.document.body.appendChild(showMore);
-  // (Each reaches the page's own handler, which opens the list out.)
+  // (Each reaches the page's own handler, which opens the list out -- tapped through the cover, too.)
   const reached = [];
   for (const opener of [more, showMore]) {
     opener.addEventListener('click', (e) => { reached.push(opener.textContent); e.preventDefault(); });
     tap(opener);
   }
   assert.deepEqual(reached, ['이전 회차 더보기', 'Show more']);
+  tapAt(more);
+  assert.deepEqual(reached, ['이전 회차 더보기', 'Show more', '이전 회차 더보기']);
   assert.ok(!more.classList.contains('__gPickStart') && !showMore.classList.contains('__gPickStart'));
-  // Begun by the app, the page's own touch handling stands aside.
-  assert.match(java, /private static final String PICKING_STARTS = "window\.__gPickNative=1;" \+ PICKABLE;/);
+  // Browsing: the cover gone, the site as it is -- a chapter tapped is followed.
+  w.__gPick.setMode('browse');
+  assert.equal(w.document.getElementById('__gPickCover'), null);
+  assert.equal(tap(anchors[2]), true, 'a chapter tapped while browsing was not followed');
+  w.__gPick.setMode('pick');
+  assert.ok(w.document.getElementById('__gPickCover'));
+  // The app: the script before the page's own, and again as it shows, told the mode each time;
+  // Android's own long-press (a selection, a link's menu) never has the touch while picking.
   assert.match(java, /WebViewCompat\.addDocumentStartJavaScript\(view, PICKING_STARTS, Collections\.singleton\("\*"\)\);\s+\}\s+holdToPick\(view\);/);
-  assert.match(java, /view\.onTouchEvent\(cancel\);/);
-  // Android's own long-press (a selection, a link's menu) never has the touch; the app's hold comes first.
-  assert.match(java, /view\.setOnLongClickListener\(\(v\) -> true\);/);
-  assert.match(java, /getLongPressTimeout\(\) \* 0\.75/);
-  // Taken from the page only once it has begun on a chapter; with Drag on, at once.
-  assert.match(java, /if \(!"true"\.equals\(began\)\) return;[\s\S]{0,1400}view\.onTouchEvent\(cancel\);/);
-  assert.match(java, /if \(pickDrag\) begin\.run\(\);\s+else v\.postDelayed\(begin, hold\);/);
-  assert.match(java, /drag\.setText\(pickDrag \? "Drag: on" : "Drag: off"\);/);
+  assert.match(java, /v\.evaluateJavascript\(PICKING_STARTS, null\);\s+v\.evaluateJavascript\(modeScript\(pickMode\), null\);/);
+  assert.match(java, /view\.setOnLongClickListener\(\(v\) -> pickMode\);/);
+  assert.match(java, /mode\.setText\(pickMode \? "Browse" : "Pick"\);/);
+  assert.ok(!/onTouchEvent\(cancel\)/.test(java), 'the app still takes touches from the page itself');
   // The app: answered links into the list, the page's title less the site's name; back is nothing picked.
   window.GrimoireWeb = { pickFromSite: (id) => setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url: 'https://k.example/b', title: '악은 삶을 바란다 - BOOKKOR', links: picked })), 0) };
   const answer = await web.pickSite('https://k.example/b');
@@ -2567,6 +2593,8 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   assert.match(app, /\} else if \(el\('web-pick'\)\?\.checked && web\.canPickSite\(\)\) \{/);
   assert.match(app, /title = picked\.title\.split\(\/\\s\+\[\|\\-–—·\]\\s\+\/\)\[0\] \|\| picked\.title;/);
   assert.match(java, /boolean closeShownIfOpen\(\) \{\s+if \(shown == null\) return false;\s+\/\/[^\n]*\n\s+shownPicking = false;/);
+  // The pages made here closed, their timers with them.
+  for (const each of [w, rw, counted, still, odd]) each.close();
 });
 
 await t("a book is named by what its page agrees on, never by the site's own name", () => {

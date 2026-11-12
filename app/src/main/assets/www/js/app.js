@@ -5951,6 +5951,8 @@ let buildTitleTouched = false;
  * building, so it is not a surprise afterwards. One chosen here replaces it,
  * and goes into the book as a cover chosen in Details does. */
 let buildCover = null;
+/** Where the book Build makes is filed: picked with a website added (see paintWebFolder), else the shelf's open folder. */
+let buildFolder = null;
 // Where it came from: the first book ('first'), a picture in one of the
 // books ('book', with what it was), or a picture of your own ('file').
 let buildCoverFrom = 'first';
@@ -6478,7 +6480,7 @@ function wireJobEdit() {
     Object.assign(webState, { intent: 'queue', editing: it.id });
     setWebAddress((it.sources || []).join('\n'));
     webState.links = it.links.map(({ url, text }) => ({ url, text, chrome: false, kind: null, likely: true, picked: true }));
-    Object.assign(webState, { sources: it.sources || [], title: it.name, author: it.author || '', cover: it.cover || '', coverData: it.coverData || '' });
+    Object.assign(webState, { sources: it.sources || [], title: it.name, author: it.author || '', cover: it.cover || '', coverData: it.coverData || '', folder: it.folder || '' });
     el('web-title').value = it.name;
     webNote(`The ${it.links.length} chapters queued for “${it.name}”. Untick any to leave out, or Find links to read the site's list again; Queue saves them.`);
     drawWebList();
@@ -6571,24 +6573,27 @@ function queueWeb() {
     });
     if (webState.coverData) editing.coverData = webState.coverData;
     else delete editing.coverData;
+    if (webState.folder) editing.folder = webState.folder;
+    else delete editing.folder;
     saveQueue();
     clearWeb();
     toast(`“${name}” changed — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}.`, 4000);
     back();
     return;
   }
+  const into = webState.folder ?? activeFolder ?? '';
   webQueue.push({
     id: `q-${Date.now()}`, name, author: webState.author || '', sources: webState.sources || [],
     cover: webState.cover || '', links: chosen.map(({ url, text }) => ({ url, text })),
     total: chosen.length, done: 0, status: 'queued', stops: 0,
     ...(webState.coverData ? { coverData: webState.coverData } : {}),
-    // Filed, once built, where the shelf was open when it was queued -- as Build files.
-    ...(activeFolder ? { folder: activeFolder } : {}),
+    // Filed, once built, where it was picked to be (the shelf's open folder unless changed).
+    ...(into ? { folder: into } : {}),
   });
   saveQueue();
   clearWeb();
   const waiting = webQueue.filter((job) => job.status !== 'done').length;
-  toast(`“${name}” queued — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}${activeFolder ? `, into “${activeFolder}”` : ''}. ${waiting} in the queue, on Build.`, 5000);
+  toast(`“${name}” queued — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}${into ? `, into “${into}”` : ''}. ${waiting} in the queue, on Build.`, 5000);
   if (queueState.running) pumpQueue();
   back();
 }
@@ -7326,7 +7331,7 @@ function renderWorkshop() {
   // Where it will be filed, said before it is built: the folder the shelf is
   // open at is two tabs away from here.
   el('build-count').textContent = parts.length
-    ? `${parts.length} part${parts.length === 1 ? '' : 's'}${activeFolder ? ` · into “${activeFolder}”` : ''}` : '';
+    ? `${parts.length} part${parts.length === 1 ? '' : 's'}${(buildFolder ?? activeFolder) ? ` · into “${buildFolder ?? activeFolder}”` : ''}` : '';
   paintBuildFoot();
 
   /* The suggested name follows what has been added, until it is typed over.
@@ -7722,6 +7727,7 @@ function wireWorkshop() {
 
   el('build-clear').onclick = () => {
     build.clear();
+    buildFolder = null;
     clearWeb();
     buildTitleTouched = false;
     el('build-title').value = '';
@@ -7779,8 +7785,8 @@ function wireWorkshop() {
         shouldPause: () => !!buildRun?.pausing,
         title: el('build-title').value.trim() || undefined,
         author: el('build-author').value.trim() || undefined,
-        // Into the folder the shelf is open at, as an import would be.
-        folder: activeFolder || null,
+        // Into the folder picked with its website, else the one the shelf is open at, as an import would be.
+        folder: (buildFolder ?? activeFolder) || null,
         cover: buildCover,
         onProgress: (message, fraction, at, total, now, counts) => {
           /* The bar goes by chapters downloaded, where there are websites in
@@ -7837,6 +7843,7 @@ function wireWorkshop() {
         }
       }
       build.clear();
+      buildFolder = null;
       buildTitleTouched = false;
       el('build-title').value = '';
       el('build-author').value = '';
@@ -9391,6 +9398,7 @@ const webState = {
   author: '',
   cover: '',          // the site's picture of the book, from its link preview
   coverData: '',      // a picture of the reader's own, chosen here, as a data URL
+  folder: null,       // where the book is filed: picked here, else the folder the shelf is open at
   sources: [],
   reversed: false,
   pictures: true,
@@ -9417,7 +9425,10 @@ function renderWeb() {
   el('web-pictures').textContent = webState.pictures ? 'Pictures: on' : 'Pictures: off';
   if (!webState.titleTouched) el('web-title').value = webState.title;
   el('web-eyebrow').textContent = (el('web-title').value || '').trim() || 'Chapters from a website, for Build';
-  if (webState.links.length) paintWebCover();
+  if (webState.links.length) {
+    paintWebCover();
+    paintWebFolder();
+  }
   paintWebCount();
 }
 
@@ -9452,6 +9463,28 @@ async function paintWebCover() {
       : !address ? 'The site gave no picture of the book.'
         : held === null ? 'The site\'s picture could not be fetched — choose one of your own, or it is tried again when built.'
           : 'The site\'s picture, fetched when it is built.';
+}
+
+/* Its folder, picked here beside the delays, as a book's is in its details:
+ * drawn afresh for each list found, starting at the folder the shelf is open
+ * at (or the queued book's own). Queued, it goes with the book; added to
+ * Build, the book Build makes is filed there. */
+let webFolderDrawn = '';
+async function paintWebFolder() {
+  const box = el('web-folder');
+  if (!box) return;
+  if (webState.folder == null) webState.folder = activeFolder || '';
+  const key = `${webState.sources.join('\n')}|${webState.editing || ''}|${webState.links.length}`;
+  if (webFolderDrawn === key && box.childElementCount) return;
+  webFolderDrawn = key;
+  box.replaceChildren();
+  const picked = await folderPicker(box, webState.folder);
+  const keep = () => setTimeout(() => {
+    if (picked.value === undefined) return;
+    webState.folder = String(picked.value || '').trim().replace(/^\/+|\/+$/g, '');
+  }, 0);
+  box.addEventListener('click', keep);
+  box.addEventListener('input', keep);
 }
 
 /** A picture, as a data URL: kept with a queued book, it survives the app closing. */
@@ -10033,6 +10066,8 @@ async function addWebToBuild() {
     });
     if (carried) build.contents().at(-1).seamless = true;
     if (webState.author && !el('build-author').value) el('build-author').value = webState.author;
+    // Filed where it was picked to be, if picked other than the shelf's open folder.
+    if (webState.folder != null && webState.folder !== (activeFolder || '')) buildFolder = webState.folder;
     clearWeb();
     toast(carried
       ? `${chosen.length} page${chosen.length === 1 ? '' : 's'} added after “${library.displayTitle(carried)}” — built, they carry it on as one book`
@@ -10176,7 +10211,7 @@ function webDelay() {
 
 function clearWeb() {
   Object.assign(webState, {
-    links: [], title: '', author: '', cover: '', coverData: '', sources: [], reversed: false, titleTouched: false, leftover: null, pickListed: null,
+    links: [], title: '', author: '', cover: '', coverData: '', folder: null, sources: [], reversed: false, titleTouched: false, leftover: null, pickListed: null,
     manualOrder: false, carryOn: null, searches: 0, updating: null,
   });
   const resume = el('web-resume');

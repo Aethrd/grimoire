@@ -1540,7 +1540,7 @@ await t('opened at a folder, imports and builds are filed in it', async () => {
   // The app passes the folder the shelf is open at, captured when it is asked.
   const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
   assert.match(app, /const into = options\.transient \? '' : \(activeFolder \|\| ''\);/);
-  assert.match(app, /folder: activeFolder \|\| null,/);
+  assert.match(app, /folder: \(buildFolder \?\? activeFolder\) \|\| null,/);
   assert.match(app, /const where = into \? ` to “\$\{into\}”` : '';/);
   for (const b of [filed, zipped, glance, book, onto]) await store.deleteBook(b.id);
 });

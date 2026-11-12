@@ -292,6 +292,18 @@ await t('picked in the site: a chapter passed over in the drag, and the page\'s 
   assert.equal(gaps.hidden, false);
   assert.match(gaps.textContent, /1 chapter missing between 1 and 8: 6\. Passed over in the drag/);
   assert.match(gaps.textContent, /The site's page lists 1–10; 3 of them not picked: 6, 9–10\./);
+  // Its folder, picked beside the delays, goes with it to the queue.
+  const box = document.getElementById('web-folder');
+  assert.ok(box.querySelector('.chip'), 'no folders to pick from beside the delays');
+  [...box.querySelectorAll('.chip')].find((chip) => /New folder/.test(chip.textContent)).click();
+  const named = box.querySelector('input');
+  named.value = 'From the web';
+  named.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 30));
+  document.getElementById('web-queue').click();
+  await new Promise((r) => setTimeout(r, 80));
+  const queued = (await store.settings()).webQueue.at(-1);
+  assert.deepEqual([queued.name, queued.folder], ['B', 'From the web']);
   document.getElementById('web-pick').checked = false;
   delete window.GrimoireWeb.pickFromSite;
   window.GrimoireWeb.fetch = fetchBefore;
