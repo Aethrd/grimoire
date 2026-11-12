@@ -2684,6 +2684,7 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .build-queue-list li[data-status="attention"] small { color: var(--danger, #e08a8a); }
 .build-queue-list li[data-status="done"] { opacity: .7; }
 .build-queue-once { margin: 8px 0 0; align-items: center; gap: 6px; }
+.build-queue-once .muted:not(:first-child) { margin-left: 10px; }
 /* Chapters missing from the numbers of those ticked. */
 .web-gaps { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--accent-300); border-radius: var(--radius-md);
   font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }

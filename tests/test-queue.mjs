@@ -255,6 +255,28 @@ await t("each site's delays are remembered, and come back with its address", asy
   assert.match(document.getElementById('build-queue-note').textContent, /Each site at its own remembered delay/);
 });
 
+await t('per site set to two: two books of one site side by side, and no more', async () => {
+  const chips = [...document.querySelectorAll('#build-queue-once .chip')];
+  const perSite = chips.filter((chip) => /^\d$/.test(chip.textContent)).slice(6);
+  assert.deepEqual(perSite.map((chip) => chip.textContent), ['1', '2', '3']);
+  perSite[1].click();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal((await store.settings()).queuePerSite, 2);
+  asked.length = 0;
+  const jobs = (await store.settings()).webQueue.filter((each) => each.status !== 'done');
+  await store.saveSettings({ webQueue: [...jobs] });
+  document.querySelector('[data-go="workshop"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  // Three books of one site, queued from the Website screen's way in.
+  const app = (await import('node:fs')).readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /if \(\(busy\.get\(site\) \|\| 0\) >= queueState\.perSite \|\| held\.has\(site\)\) continue;/);
+  // One of a site stopped by it: the others of that site stop with it, and wait (not paused by hand).
+  assert.match(app, /if \(under\) \{ under\.siteStop = true; under\.pausing = true; \}/);
+  assert.match(app, /settleJob\(job, outcome, under\.pausing && !under\.siteStop\);/);
+  perSite[0].click();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal((await store.settings()).queuePerSite, 1);
+});
+
 await t('two settings saved at once both stay saved', async () => {
   await Promise.all([store.saveSettings({ testOne: 1 }), store.saveSettings({ testTwo: 2 }), store.saveSettings({ testThree: 3 })]);
   const kept = await store.get('settings', 'app');

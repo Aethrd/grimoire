@@ -2240,6 +2240,7 @@ await t('a queue of websites: books of their own, several at once but never two 
   const notified = [];
   const settle = new Function('web', 'notifyBuild', `const QUEUE_RETRY_MS = 900000; const QUEUE_MAX_STOPS = 5;
     const queueHalts = (reason) => web.blocked(reason) || web.wantsCheck(reason) || web.tooMany(reason);
+    const webQueue = []; const queueJobs = new Map(); const siteOfJob = () => '';
     ${fn('settleJob')}; return settleJob;`)(web, (n) => notified.push(n));
   const job = () => ({ name: 'N', links: [], total: 10, stops: 0 });
   const rest = [{ url: 'https://a.example/5', text: '5화' }];
@@ -2261,8 +2262,8 @@ await t('a queue of websites: books of their own, several at once but never two 
   // Started only by "at once", never two from one site, nor one whose site holds for the reader.
   const pump = fn('pumpQueue');
   assert.match(pump, /if \(queueJobs\.size >= queueState\.atOnce\) break;/);
-  assert.match(pump, /if \(busy\.has\(site\) \|\| held\.has\(site\)\) continue;/);
-  assert.match(fn('sitesInUse'), /if \(buildRun\) \{/);
+  assert.match(pump, /if \(\(busy\.get\(site\) \|\| 0\) >= queueState\.perSite \|\| held\.has\(site\)\) continue;/);
+  assert.match(fn('siteCounts'), /if \(buildRun\) \{/);
   // Built on their own, outside Build; carried on from the book so far, the shorter one binned.
   const run = app.slice(app.indexOf('async function runJob('), app.indexOf('\nfunction settleJob('));
   assert.match(run, /if \(before\) parts\.push\(\{ \.\.\.build\.bookPart\(before\), seamless: true \}\);/);
@@ -2272,7 +2273,7 @@ await t('a queue of websites: books of their own, several at once but never two 
   // A queued book cut off when the app closed goes back to its job, not to Build's leftovers.
   assert.match(app, /const job = entry\.book\.queueJob && jobs\.find\(\(each\) => each\.id === entry\.book\.queueJob\);/);
   // Kept across the app being closed; what was under way, queued again.
-  assert.match(app, /store\.saveSettings\(\{ webQueue, queueRunning: queueState\.running, queueAtOnce: queueState\.atOnce, queueLocked: queueState\.locked \}\)/);
+  assert.match(app, /store\.saveSettings\(\{ webQueue, queueRunning: queueState\.running, queueAtOnce: queueState\.atOnce, queuePerSite: queueState\.perSite, queueLocked: queueState\.locked \}\)/);
   assert.match(app, /\.\.\.\(job\.status === 'running' \? \{ status: 'queued' \} : \{\}\),/);
   // Queued from the Website screen with its own ticks and title; not for pages carrying a book on.
   assert.match(html, /id="web-queue"/);

@@ -6319,7 +6319,7 @@ function pauseBuild() {
  *          paused, done.
  */
 let webQueue = [];
-const queueState = { running: false, atOnce: 2, timer: null, locked: false };
+const queueState = { running: false, atOnce: 2, perSite: 1, timer: null, locked: false };
 const QUEUE_RETRY_MS = 15 * 60000;
 const QUEUE_MAX_STOPS = 5;
 const queueJobs = new Map();   // id -> { pausing, finish, run } for the jobs under way
@@ -6513,7 +6513,7 @@ function siteKey(hostname) {
 
 function saveQueue() {
   // What is under way is kept as such: on a restart it is queued again (see loadQueue).
-  store.saveSettings({ webQueue, queueRunning: queueState.running, queueAtOnce: queueState.atOnce, queueLocked: queueState.locked }).catch(() => {});
+  store.saveSettings({ webQueue, queueRunning: queueState.running, queueAtOnce: queueState.atOnce, queuePerSite: queueState.perSite, queueLocked: queueState.locked }).catch(() => {});
   paintQueue();
 }
 
@@ -6526,6 +6526,7 @@ function loadQueue(settings) {
   }));
   if ([1, 2, 3, 4, 5, 6].includes(settings.queueAtOnce)) queueState.atOnce = settings.queueAtOnce;
   queueState.locked = settings.queueLocked === true;
+  if ([1, 2, 3].includes(settings.queuePerSite)) queueState.perSite = settings.queuePerSite;
   if (settings.queueRunning && webQueue.some((job) => ['queued', 'retry'].includes(job.status))) {
     setTimeout(() => toast('The queue was running when the app closed — Start queue on Build carries on.', 7000), 1500);
   }
@@ -6604,12 +6605,20 @@ function letScreenGo() {
 
 /** The sites in use now: the queue's books under way, and a website Build is downloading. */
 function sitesInUse() {
-  const sites = new Set();
-  for (const job of webQueue) if (job.status === 'running') sites.add(siteOfJob(job));
+  return new Set(siteCounts().keys());
+}
+
+/** How many books of each site are downloading now: the queue's, and Build's own. */
+function siteCounts() {
+  const counts = new Map();
+  const add = (site) => counts.set(site, (counts.get(site) || 0) + 1);
+  for (const job of webQueue) if (job.status === 'running') add(siteOfJob(job));
   if (buildRun) {
+    const sites = new Set();
     for (const part of build.contents()) if (part.web) sites.add(siteOfJob({ sources: part.web.sources, links: part.web.links }));
+    sites.forEach(add);
   }
-  return sites;
+  return counts;
 }
 
 /** Sites holding their books for the reader: one of them said stop. */
@@ -6625,15 +6634,17 @@ function pumpQueue() {
   clearTimeout(queueState.timer);
   if (!queueState.running) { paintQueue(); return; }
   const now = Date.now();
-  const busy = sitesInUse();
+  /* Per site: how many of one site's books may download side by side (1 unless
+   * set higher). Each goes at the site's delay, so two ask it twice as often. */
+  const busy = siteCounts();
   const held = sitesHeld();
   for (const job of webQueue) {
     if (queueJobs.size >= queueState.atOnce) break;
     const due = job.status === 'queued' || (job.status === 'retry' && (job.retryAt || 0) <= now);
     if (!due) continue;
     const site = siteOfJob(job);
-    if (busy.has(site) || held.has(site)) continue;
-    busy.add(site);
+    if ((busy.get(site) || 0) >= queueState.perSite || held.has(site)) continue;
+    busy.set(site, (busy.get(site) || 0) + 1);
     runJob(job);
   }
   // The next try that is waiting for its time.
@@ -6702,7 +6713,7 @@ async function runJob(job) {
     under.finish();
     queueJobs.delete(job.id);
   }
-  settleJob(job, outcome, under.pausing);
+  settleJob(job, outcome, under.pausing && !under.siteStop);
   await refreshShelf().catch(() => {});
   saveQueue();
   if (queueState.running) pumpQueue();
@@ -6729,6 +6740,12 @@ function settleJob(job, { rest, reason, paused }, byHand) {
     job.halted = true;
     job.note = reason;
     notifyBuild({ title: 'A book needs you', text: `“${job.name}”: ${reason}. Its site's other books wait; the rest go on.` });
+    // Its site's other books downloading beside it stop too, after the page under way, and wait with it.
+    const site = siteOfJob(job);
+    for (const other of webQueue) {
+      const under = other !== job && other.status === 'running' && siteOfJob(other) === site ? queueJobs.get(other.id) : null;
+      if (under) { under.siteStop = true; under.pausing = true; }
+    }
     return;
   }
   const at = job.links[0]?.url || '';
@@ -6894,6 +6911,24 @@ function paintQueue() {
       chip.textContent = String(n);
       chip.setAttribute('aria-pressed', String(queueState.atOnce === n));
       chip.onclick = () => { queueState.atOnce = n; saveQueue(); pumpQueue(); };
+      once.appendChild(chip);
+    }
+    // Per site: one, unless set higher -- each more asks that site as often again.
+    const per = document.createElement('span');
+    per.className = 'muted';
+    per.textContent = 'Per site';
+    once.appendChild(per);
+    for (const n of [1, 2, 3]) {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.textContent = String(n);
+      chip.setAttribute('aria-pressed', String(queueState.perSite === n));
+      chip.onclick = () => {
+        queueState.perSite = n;
+        saveQueue();
+        pumpQueue();
+        if (n > 1) toast(`Up to ${n} books from one site at once — each at the site's delay, so it is asked ${n} times as often.`, 6000);
+      };
       once.appendChild(chip);
     }
     if (count('done') && !locked) {
