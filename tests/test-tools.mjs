@@ -1968,6 +1968,32 @@ await t('two imports at once are two bars -- one running, one waiting -- and bot
   assert.equal(el('import-progress').hidden, true, 'the panel stayed up after both finished');
 });
 
+await t('made small, the progress page lets go of a tap that was waiting -- it does not open the file picker', async () => {
+  // Its buttons were wired when the imports above began; shown open, as a busy export leaves it.
+  const host = el('import-progress');
+  host.hidden = false;
+  host.classList.add('open');
+  const input = el('file-input');
+  let picked = 0;
+  const real = input.click;
+  input.click = () => { picked += 1; };
+  const importButton = document.querySelector('[data-import]');
+  assert.ok(importButton, 'no Import files button to land on');
+  // Made small, and a second tap -- held up while the app was busy -- arrives straight after.
+  el('import-minimise').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(host.classList.contains('open'), false);
+  importButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(picked, 0, 'the tap behind the minimise opened the file picker');
+  // The strip itself is never let go of: tapped again, it opens the page.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /if \(event\.target\?\.closest\?\.\('#jobs-strip'\)\) return;/);
+  // A moment later, taps are taps again.
+  await settle(600);
+  importButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(picked, 1);
+  input.click = real;
+  host.hidden = true;
+});
+
 await t('a second notice joins the first instead of replacing it', async () => {
   const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
   el('toast').hidden = true;

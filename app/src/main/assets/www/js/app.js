@@ -2550,9 +2550,31 @@ const progress = (() => {
 
   /** Open: the page of every row. Small (as each starts): the strip. */
   const isOpen = () => !!panel()?.classList.contains('open');
+  /* Made small, the page is gone from under the finger -- and a second tap
+   * that was waiting (an export busy writing a book can keep the app from
+   * answering for a moment, so the first tap seems to do nothing) landed on
+   * what had been under it: on the shelf, Import files, opening the phone's
+   * file picker. Taps just after are let go of, not passed on. */
+  const SETTLE_MS = 500;
+  let quietUntil = 0;
+  let guarded = false;
+  function guardTaps() {
+    quietUntil = Date.now() + SETTLE_MS;
+    if (guarded) return;
+    guarded = true;
+    const swallow = (event) => {
+      if (Date.now() >= quietUntil) return;
+      // The strip itself still opens it again.
+      if (event.target?.closest?.('#jobs-strip')) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener('click', swallow, true);
+  }
   function setOpen(open) {
     const host = panel();
     if (!host) return;
+    if (!open && host.classList.contains('open')) guardTaps();
     host.classList.toggle('open', open);
     paint();
   }
