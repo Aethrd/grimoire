@@ -85,6 +85,10 @@ export async function download(url, options = {}) {
   /* A site already found to build its pages in script is rendered from the
    * start: asking it twice for every chapter would be twice the load. */
   if (host && renderedHosts.has(host)) return fetchNative('render', url, options);
+  /* A site the reader has said to read in the browser: its pages are put
+   * right by its own script (paragraphs in their order, say), so they are
+   * taken as the browser shows them, every time. */
+  if (host && !options.list && readInBrowser(host)) return fetchNative('render', url, options);
   /* Asked for in the browser: a contents page whose list its script puts in
    * after the page has come (findLinks) -- and that site's other list pages. */
   if (options.render || (options.list && host && listRenderedHosts.has(host))) return fetchNative('render', url, options);
@@ -120,6 +124,9 @@ export async function download(url, options = {}) {
  * and hands back the page as it then stands.
  */
 const renderedHosts = new Set();
+/** Which sites the reader has said to read in the browser (app.js keeps them, by site). */
+let readInBrowser = () => false;
+export function setReadInBrowser(test) { readInBrowser = typeof test === 'function' ? test : () => false; }
 /* Sites whose contents page is sent without its list -- its script fetches
  * the list after the page has come (WordPress's Madara theme, for one) --
  * though their chapters come whole: their lists are read in the browser,
@@ -1909,6 +1916,12 @@ export async function readPage(link, index, {
   let { html: body, text } = read[0];
   // Text the site has scrambled is not kept: a book of it would be unreadable.
   if (isScrambled(text)) throw new Error(SCRAMBLED_REASON);
+  // The site's own name stamped into the story ("heｔusｈｕ•cｏｍ", "和-图-书"): taken out.
+  const marks = siteMarks(page.url, doc);
+  if (marks) {
+    body = stripMarks(body, marks);
+    text = text.replace(marks, '');
+  }
 
   /* Named by the link it was reached from: that is the name it had in the
    * list, where it was chosen. Without one, by the page's title with the
@@ -2582,6 +2595,53 @@ export function isScrambled(text) {
   const odd = (all.match(/[\uE000-\uF8FF]/g) || []).length;
   return odd >= 20 && odd / all.length > 0.05;
 }
+/* A site's name stamped into its chapters, to be read as part of the story:
+ * its address (letters spaced, dotted or in full-width forms, "heｔusｈｕ•cｏｍ",
+ * "m.hetushu.com.com"), and its name in other letters when spaced out
+ * ("和-图-书"). Only as an address -- with a .com, .net or the like, or a www.
+ * or http -- or spaced out, so a word that happens to be the name stays. */
+const SPACER = '[\\s.\\-•·・_*~/|，。,]{0,2}';
+const wide = (ch) => {
+  const code = ch.charCodeAt(0);
+  const full = code >= 0x21 && code <= 0x7e ? String.fromCharCode(code + 0xfee0) : '';
+  const lower = ch.toLowerCase();
+  const upper = ch.toUpperCase();
+  const forms = [...new Set([lower, upper, full, lower !== upper ? String.fromCharCode(upper.charCodeAt(0) + 0xfee0) : ''].filter(Boolean))];
+  return `[${forms.map((f) => f.replace(/[\\\]^-]/g, '\\$&')).join('')}]`;
+};
+const spelt = (word) => [...word].map(wide).join(SPACER);
+const TLDS = ['com', 'net', 'org', 'cc', 'info', 'me', 'co', 'tw', 'cn', 'io', 'xyz', 'top', 'vip', 'la', 'so'];
+
+export function siteMarks(pageUrl, doc) {
+  let core = '';
+  try {
+    const parts = new URL(pageUrl).hostname.toLowerCase().split('.').filter((part) => !['www', 'm', 'wap', 'mobile', 'read'].includes(part));
+    core = parts.length > 1 ? parts.slice(0, -1).join('.') : parts[0] || '';
+    core = core.split('.').filter((part) => !TLDS.includes(part)).pop() || '';
+  } catch { /* no address */ }
+  const shapes = [];
+  if (core.length >= 4 && /^[a-z0-9-]+$/.test(core)) {
+    const tld = `(?:${SPACER}(?:${TLDS.map(spelt).join('|')}))+`;
+    const lead = `(?:(?:https?${SPACER}:${SPACER}\\/\\/${SPACER})?(?:(?:www|m|wap)${SPACER}[.•·・]${SPACER})?)`;
+    shapes.push(`${lead}${spelt(core)}${tld}`);
+    shapes.push(`(?:https?:\\/\\/|www\\.)${spelt(core)}`);
+  }
+  // Its name in other letters (og:site_name, the end of its title), when spaced out.
+  const named = [
+    doc?.querySelector?.('meta[property="og:site_name"]')?.getAttribute('content'),
+    (doc?.querySelector?.('title')?.textContent || '').split(/[_|\u2013\u2014-]/).pop(),
+  ].map((name) => tidy(name || '')).filter((name) => /^[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]{2,6}$/.test(name));
+  for (const name of new Set(named)) {
+    shapes.push([...name].join('[\\s\\-•·・_*~/|.]{1,2}'));
+  }
+  return shapes.length ? new RegExp(shapes.join('|'), 'g') : null;
+}
+
+/** The marks taken out of a chapter's HTML: out of its text only, never its tags. */
+export function stripMarks(html, marks) {
+  return String(html).replace(/>([^<]+)</g, (whole, words) => `>${words.replace(marks, '')}<`);
+}
+
 export const scrambled = (error) => /scrambles its text/i.test(String(error?.message || error || ''));
 
 export const blocked = (error) => /has blocked this connection/i.test(String(error?.message || error || ''));

@@ -243,8 +243,21 @@ await t("each site's delays are remembered, and come back with its address", asy
   // A mirror of the first: its delays again.
   paste('https://marumaru110.com/novel/2');
   assert.deepEqual([field('web-delay').value, field('web-list-delay').value], ['12000', '7000']);
+  // Read in the browser, said for the site and kept for it (and its mirrors).
+  assert.equal(field('web-in-browser-row').hidden, false);
+  field('web-in-browser').checked = true;
+  field('web-in-browser').dispatchEvent(new window.Event('change'));
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual((await store.settings()).browserSites, { marumaru: true });
+  paste('https://fresh.example/x');
+  assert.equal(field('web-in-browser').checked, false);
+  paste('https://marumaru109.com/novel/1');
+  assert.equal(field('web-in-browser').checked, true);
+  field('web-in-browser').checked = false;
+  field('web-in-browser').dispatchEvent(new window.Event('change'));
   // Nothing in the box: the usual ones, and the usual ones are what is changed.
   paste('');
+  assert.equal(field('web-in-browser-row').hidden, true);
   assert.equal(field('web-delay').value, '150');
   assert.equal(field('web-site-delays').hidden, true);
   kept = await store.settings();

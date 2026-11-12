@@ -2766,4 +2766,35 @@ await t('a site that scrambles its text (its own font draws it): stopped and sai
   assert.match(read('app/src/main/assets/www/js/app.js'), /const queueHalts = \(reason\) => [^\n]*web\.scrambled\(reason\);/);
 });
 
+await t("a site's name stamped into its chapters is taken out; a site read in the browser, on the reader's say", async () => {
+  const doc = new window.DOMParser().parseFromString('<html><head><title>修真四万年_第1章_和图书</title></head><body></body></html>', 'text/html');
+  const marks = web.siteMarks('https://m.hetushu.com/book/4892/3626689.html', doc);
+  const out = (text) => text.replace(marks, '');
+  assert.equal(out('在垃圾山https://m.hetushu.com.com上'), '在垃圾山上');
+  assert.equal(out('垃圾船heｔusｈｕ•cｏｍ•cｏｍ漂'), '垃圾船漂');
+  assert.equal(out('十分狼和-图-书狈'), '十分狼狈');
+  // A word that is the name, unspaced and not an address, stays.
+  assert.equal(out('他在和图书馆看书'), '他在和图书馆看书');
+  assert.equal(out('hetushu is a word'), 'hetushu is a word');
+  // Out of the text, never the tags.
+  assert.equal(web.stripMarks('<p>船heｔusｈｕ•cｏｍ漂<a href="https://m.hetushu.com">x</a></p>', marks), '<p>船漂<a href="https://m.hetushu.com">x</a></p>');
+  // Read in the browser when the reader says so: every chapter of the site, not its lists.
+  const asked = [];
+  window.GrimoireWeb = {
+    fetch: (id, url) => { asked.push(['fetch', url]); setTimeout(() => web.settleWeb(id, false, 'no'), 0); },
+    render: (id, url) => { asked.push(['render', url]); setTimeout(() => web.settleWeb(id, false, 'no'), 0); },
+    release() {},
+  };
+  web.setReadInBrowser((host) => host.endsWith('hetushu.com'));
+  await web.download('https://m.hetushu.com/book/4892/3626690.html').catch(() => {});
+  await web.download('https://m.hetushu.com/book/4892/catalog-2.html', { list: true }).catch(() => {});
+  await web.download('https://other.example/1.html').catch(() => {});
+  assert.deepEqual(asked.map((a) => a[0]), ['render', 'fetch', 'fetch']);
+  web.setReadInBrowser(null);
+  delete window.GrimoireWeb;
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /web\.setReadInBrowser\(\(host\) => !!browserSites\[siteKey\(host\)\]\);/);
+  assert.match(app, /store\.saveSettings\(\{ browserSites \}\)/);
+});
+
 console.log(`\n${pass} assertions passed`);

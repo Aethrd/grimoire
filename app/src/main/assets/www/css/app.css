@@ -2695,3 +2695,9 @@ body.in-book[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .auto-backup .chip-row { align-items: center; gap: 6px; margin: 6px 0; }
 .auto-backup .chip-row > .muted { font-size: 12px; min-width: 44px; }
 .auto-backup-note { font-size: 12px; line-height: 1.55; margin: 0 0 6px; }
+
+/* Read a site's chapters in the browser: a box and its reason, under the delays. */
+.web-in-browser { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 12px; font-size: 14px; }
+.web-in-browser[hidden] { display: none; }
+.web-in-browser input { margin-top: 3px; flex: none; }
+.web-in-browser small { display: block; font-size: 12px; line-height: 1.45; margin-top: 2px; }

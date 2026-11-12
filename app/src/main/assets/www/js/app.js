@@ -10376,7 +10376,17 @@ function delayFields() {
   return { gap: webDelay(), jitter: webJitter(), listGap: webListDelay(), listJitter: webListJitter() };
 }
 
+/* Sites read in the browser, by the reader's say: kept by site (mirrors one),
+ * and asked by web.js for every chapter of theirs. */
+let browserSites = {};
+web.setReadInBrowser((host) => !!browserSites[siteKey(host)]);
+
 function paintSiteDelays() {
+  const row = el('web-in-browser-row');
+  if (row) {
+    row.hidden = !delaysShownFor;
+    el('web-in-browser').checked = !!browserSites[delaysShownFor];
+  }
   const note = el('web-site-delays');
   if (!note) return;
   const site = delaysShownFor;
@@ -10452,6 +10462,14 @@ function wireWeb() {
   };
   el('web-address').addEventListener('input', paintMore);
   el('web-address').addEventListener('input', applySiteDelays);
+  el('web-in-browser').addEventListener('change', () => {
+    const site = delaysShownFor;
+    if (!site) return;
+    if (el('web-in-browser').checked) browserSites[site] = true;
+    else delete browserSites[site];
+    store.saveSettings({ browserSites }).catch(() => {});
+    toast(el('web-in-browser').checked ? `${site}: chapters read in the browser, from now on.` : `${site}: chapters read as sent again.`);
+  });
   el('web-go').onclick = addWebToBuild;
   el('web-queue').onclick = queueWeb;
   // Pick in the browser: only where the app can show a site; remembered.
@@ -10465,6 +10483,7 @@ function wireWeb() {
     if (Number.isFinite(settings.webDelay)) el('web-delay').value = String(settings.webDelay);
     if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
     if (settings.siteDelays && typeof settings.siteDelays === 'object') siteDelays = { ...settings.siteDelays, ...siteDelays };
+    if (settings.browserSites && typeof settings.browserSites === 'object') browserSites = { ...settings.browserSites, ...browserSites };
     if (typeof settings.webPictures === 'boolean') webState.pictures = settings.webPictures;
     if (el('web-pick')) el('web-pick').checked = settings.webPick === true;
     loadQueue(settings);
