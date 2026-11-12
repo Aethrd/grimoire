@@ -1137,47 +1137,65 @@ export function mergeSources(links, sites, siteOf) {
   return { links: merged, filled, backed: merged.filter((link) => link.alts?.length).length, sites: order, from };
 }
 
-/* Chapters that came out much shorter than the rest of their book -- under a
- * share of what is typical there: cut off by a page taken too soon, or a site
- * that put up only part. Measured only against the same book, and within it
- * against the chapters around each one (ten either side, it there; the median
- * of them), as a book's chapters often grow or shrink as it goes. Only chapters
- * from websites (they have the address they came from, to fetch again), and
- * only in a book with enough of them to say what is typical. */
-export function shortChapters(chapters, { share = 0.4, least = 8, around = 10 } = {}) {
+/* Chapters that came out much shorter than they should -- cut off by a page
+ * taken too soon, or a site that put up only part. Measured only within the
+ * same book, against the chapters around each one (ten either side, it there;
+ * the lower middle of them, as a book's chapters often grow or shrink as it
+ * goes). Only chapters from websites (they have the address they came from,
+ * to fetch again), and only in a book with enough of them to say what is
+ * typical.
+ *
+ * Each chapter is judged on its own: a full-length part is never short. One
+ * that is short is let off only as part of an uneven split -- of three parts
+ * at most, one after another with the same number (172.1, 172.2; "(1)",
+ * "(2)"), that together make a chapter the length of those around it, and
+ * not ending mid-sentence (`cut`, from its text: a chapter cut off seldom
+ * stops at a full stop or a closing quote). Lengths alone cannot tell an
+ * uneven split from a cut-off second part; how it ends often can. */
+export function shortChapters(chapters, { share = 0.4, whole = 0.75, least = 8, around = 10 } = {}) {
   const web = (chapters || []).filter((chapter) => chapter.from).sort((a, b) => a.index - b.index);
   if (web.length < least) return [];
-  /* A chapter a site put up in parts -- 172.1 and 172.2, "(1)" and "(2)" --
-   * is one chapter here: its parts, one after another with the same number,
-   * are counted together, and judged together. Half a chapter is no short one. */
   const units = [];
+  const unitOf = new Map();
   for (const chapter of web) {
     const number = numberIn(chapter.title || '');
-    const whole = Number.isFinite(number) ? Math.floor(number) : null;
+    const at = Number.isFinite(number) ? Math.floor(number) : null;
     const last = units.at(-1);
-    if (last && whole !== null && last.whole === whole) {
+    if (last && at !== null && last.at === at) {
       last.parts.push(chapter);
       last.words += chapter.words || 0;
     } else {
-      units.push({ whole, parts: [chapter], words: chapter.words || 0 });
+      units.push({ at, parts: [chapter], words: chapter.words || 0 });
     }
+    unitOf.set(chapter, units.at(-1));
   }
-  if (units.length < least) return [];
-  const median = (list) => {
+  const lowerMiddle = (list) => {
     const sorted = list.slice().sort((a, b) => a - b);
-    // The lower middle: where the book changes pace, a chapter is judged by the gentler side.
+    // Where the book changes pace, a chapter is judged by the gentler side.
     return sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : 0;
   };
+  const near = (list, at, size) => list.slice(Math.max(0, at - around), at).concat(list.slice(at + 1, at + 1 + around)).map(size);
   const out = [];
-  units.forEach((unit, at) => {
-    const near = units.slice(Math.max(0, at - around), at).concat(units.slice(at + 1, at + 1 + around)).map((other) => other.words);
-    const typical = median(near);
-    if (!(typical > 0) || unit.words >= typical * share) return;
-    for (const chapter of unit.parts) {
-      out.push({ index: chapter.index, title: chapter.title, words: chapter.words || 0, from: chapter.from, typical });
+  web.forEach((chapter, at) => {
+    const typical = lowerMiddle(near(web, at, (other) => other.words || 0));
+    const words = chapter.words || 0;
+    if (!(typical > 0) || words >= typical * share) return;
+    const unit = unitOf.get(chapter);
+    if (unit.parts.length >= 2 && unit.parts.length <= 3 && !chapter.cut) {
+      const u = units.indexOf(unit);
+      const wholes = lowerMiddle(near(units, u, (other) => other.words));
+      if (wholes > 0 && unit.words >= wholes * whole) return;   // an uneven split, all there
     }
+    out.push({ index: chapter.index, title: chapter.title, words, from: chapter.from, typical });
   });
   return out;
+}
+
+/** Whether a chapter's text stops mid-sentence: its last mark no full stop, closing quote or the like. */
+export function endsCut(text) {
+  const end = String(text || '').replace(/[\s\u200b]+$/, '');
+  if (!end) return false;
+  return !/[.!?…。！？～~)\]）」』"'”’»›*—–\-]$/.test(end);
 }
 
 export function numberGaps(links) {

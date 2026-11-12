@@ -10127,7 +10127,9 @@ async function findWebLinks() {
  * comes is longer than what the book has. */
 async function shortOf(bookId) {
   const chapters = await store.byIndex('chapters', 'bookId', bookId);
-  return web.shortChapters(chapters);
+  // How each ends, from its text: one stopped mid-sentence is no uneven split.
+  const text = (html) => String(html || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/&[a-z]+;|&#\d+;/gi, '.');
+  return web.shortChapters(chapters.map((chapter) => ({ ...chapter, cut: web.endsCut(text(chapter.html)) })));
 }
 
 async function noteShort(book) {
