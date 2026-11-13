@@ -160,7 +160,8 @@ async function enter(name) {
     case 'divide': return renderDivide();
     case 'remove': return renderRemove();
     case 'bin': return renderBin();
-    case 'find': if (cameFrom === 'reader') await bookReady(); return screens.initFind(goToMatch, cameFrom === 'reader');
+    // From the shelf, what it finds can be written out as the shelf's picks can.
+    case 'find': if (cameFrom === 'reader') await bookReady(); return screens.initFind(goToMatch, cameFrom === 'reader', exportFound);
     // The book's own screens: drawn once the book being opened is in (see bookReady).
     case 'toc':
       if (opening) el('toc-list').innerHTML = '<p class="muted" style="padding:24px 16px">Opening the book…</p>';
@@ -1909,6 +1910,14 @@ function exportShares(books, parts) {
     shares.push(ordered.slice(Math.round((i * ordered.length) / count), Math.round(((i + 1) * ordered.length) / count)));
   }
   return shares.filter((share) => share.length);
+}
+
+/** The books a shelf search found, written out: one as its own file, several in one zip or in parts. */
+function exportFound(books) {
+  const kept = books.filter((book) => library.onShelf(book));
+  if (!kept.length) return;
+  if (kept.length === 1) return askAboutExport(kept[0]);
+  return askExportParts(kept);
 }
 
 async function askExportParts(books) {

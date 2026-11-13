@@ -603,6 +603,27 @@ const foldDiacritics = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 
 /** Whether the search screen is searching a book or the shelf. */
 let findInBook = false;
+/* What the shelf search's books can be written out by: the shelf's own export
+ * (app.js) -- one book as its own file, several in one zip or in parts. */
+let findExport = null;
+
+/** Above a shelf search's books: how many were found, and Export for them all. */
+function exportBar(hits) {
+  const bar = document.createElement('div');
+  bar.className = 'find-actions';
+  const count = document.createElement('span');
+  count.className = 'muted';
+  count.textContent = `${hits.length} book${hits.length === 1 ? '' : 's'} found`;
+  bar.appendChild(count);
+  if (findExport) {
+    const button = document.createElement('button');
+    button.className = 'chip';
+    button.textContent = hits.length === 1 ? 'Export…' : `Export ${hits.length}…`;
+    button.onclick = () => findExport(hits.slice());
+    bar.appendChild(button);
+  }
+  return bar;
+}
 
 /* A long press on a search result.
  *
@@ -726,6 +747,7 @@ async function runTagFind(query, onGoToMatch) {
     results.appendChild(none);
     return;
   }
+  results.appendChild(exportBar(hits));
   results.appendChild(bookGrid(hits, onGoToMatch, (book) => {
     const wanted = new Set(findTags.map(tagKey));
     const shown = tagsOf(book).filter((t) => wanted.has(tagKey(t)) || (key && tagKey(t).includes(key)));
@@ -744,7 +766,8 @@ let onPictureHeld = null;
 
 export function onPicture(fn) { onPictureHeld = fn; }
 
-export function initFind(onGoToMatch, fromReader = false) {
+export function initFind(onGoToMatch, fromReader = false, onExport = null) {
+  findExport = onExport;
   const input = el('find-input');
   // Told, not inferred: the reader keeps its book so reading can be resumed.
   /* Which search this is, decided once when the screen opens.
@@ -877,6 +900,7 @@ async function runFind(query, onGoToMatch) {
      * A book matched on its folder or its series looks like a mistake beside
      * one matched on its title, unless it says so. */
     const words = foldDiacritics(query).split(/\s+/).filter(Boolean);
+    if (hits.length) results.appendChild(exportBar(hits));
     results.appendChild(bookGrid(hits, onGoToMatch, (book) => {
       const where = library.matchedOn(book, query, only);
       if (!where || where === 'author') return '';

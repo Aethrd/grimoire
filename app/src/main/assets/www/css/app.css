@@ -2723,6 +2723,8 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .gradient-end input[type="color"] { width: 40px; height: 32px; padding: 0; border: 1px solid var(--divider);
   border-radius: 8px; background: none; }
 .gradient-ends .chip { margin-left: auto; }
+.find-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px 4px; font-size: 13px; }
 .font-list { display: grid; gap: 6px; margin-bottom: 10px; }
 .font-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--divider); }
 .font-text { flex: 1; min-width: 0; display: grid; gap: 2px; }

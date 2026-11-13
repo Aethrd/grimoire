@@ -1257,5 +1257,38 @@ await t('the index and the reel tapped while a book is still opening wait for it
   assert.match(app, /if \(opening\) \{ el\('reel-grid'\)\.innerHTML = '<p class="muted" style="padding:24px 0">Opening the book…<\/p>'; return; \}/);
 });
 
+await t('the books a shelf search finds can be exported, as the shelf picks can', async () => {
+  // Two books sharing a word; searched for from the shelf, through the app's own way in.
+  const first = await comic(2);
+  const second = await comic(2);
+  for (const [id, title] of [[first, 'Lantern Road'], [second, 'Lantern Keeper']]) {
+    await store.put('books', { ...(await store.get('books', id)), title });
+  }
+  el('tabbar').hidden = false;
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle(200);
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(300);
+  assert.equal(document.body.dataset.view, 'library');
+  tap(document.querySelector('[data-screen="library"] [data-go="find"]') || document.querySelector('[data-go="find"]'));
+  await settle(200);
+  el('find-input').value = 'Lantern';
+  el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle(500);
+  const bar = el('find-results').querySelector('.find-actions');
+  assert.ok(bar, 'no export above what was found');
+  assert.match(bar.textContent, /2 books found/);
+  const button = bar.querySelector('button');
+  assert.equal(button.textContent, 'Export 2…');
+  tap(button);
+  await settle(200);
+  // The shelf's own choice for several: one zip, or in parts.
+  assert.equal(el('export-many-sheet').hidden, false, 'the export sheet did not open');
+  assert.match(el('export-many-title').textContent, /Write out 2 books/);
+  tap(el('export-many-cancel'));
+  // Inside a book, the search is the book's: nothing to export there.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /screens\.initFind\(goToMatch, cameFrom === 'reader', exportFound\)/);
+});
+
 console.log(`\n${pass} assertions passed`);
 process.exit(0);

@@ -582,7 +582,7 @@ t('search resets when opened from the shelf', () => {
   // keeps its book so reading can be resumed, so "has a book ever been
   // opened" is true forever and search never left in-book mode.
   assert.match(screens, /const inBook = fromReader && !!reader\.state\.book/);
-  assert.match(app, /screens\.initFind\(goToMatch, cameFrom === 'reader'\)/);
+  assert.match(app, /screens\.initFind\(goToMatch, cameFrom === 'reader', exportFound\)/);
   assert.match(screens, /if \(!inBook\) \{[\s\S]{0,400}input\.value = ''/);
   // Inside a book the query and the stepper's place are kept, which is the
   // point of being able to dismiss and come back.
