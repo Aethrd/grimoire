@@ -3165,7 +3165,7 @@ await t('a book with more to download is marked on its cover; the strip sits on 
   const app = read('app/src/main/assets/www/js/app.js');
   // Which: a stopped download's leftover, and a queued book not yet done.
   assert.match(app, /for \(const each of webLeftovers\) add\(each\.bookId, each\.links\?\.length\);/);
-  assert.match(app, /add\(job\.bookId, run && Number\.isFinite\(run\.total\) \? Math\.max\(0, run\.total - \(run\.done \|\| 0\)\) : job\.links\?\.length\);/);
+  assert.match(app, /const \{ came, of \} = runCounts\(job, run\);\s+add\(job\.bookId, run \? Math\.max\(0, of - came\) : job\.links\?\.length\);/);
   assert.match(app, /const saveLeftovers = \(\) => \{\s+markUnfinished\(\);/);
   assert.match(app, /function saveQueue\(\) \{\s+markUnfinished\(\);/);
   // The wash in the theme's colours, deep to pale; the mark the same, opaque and inverted, 60% of the cover wide.
