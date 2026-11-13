@@ -2326,6 +2326,54 @@ await t('a blurred book is blurred in Continue reading too', async () => {
   assert.ok(!el('continue-card').hasAttribute('data-blur'), 'the blur stayed after the cover was shown again');
 });
 
+await t('a novel downloading now is on the shelf from the start, in its folder, marked -- not yet a book to open or change', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const links = Array.from({ length: 40 }, (_, i) => ({ url: `https://novel.example/c/${i + 1}`, text: `Chapter ${i + 1}` }));
+  // The book it carries on, from where it paused.
+  const before = await store.add('books', { title: 'Carried', folder: 'Novels', addedAt: 1, chapters: 10, lastOpenedAt: 1 });
+  const making = await store.add('books', {
+    title: 'Carried', folder: 'Novels', addedAt: 2, importing: true, queueJob: 'job-x',
+    coverBlob: new window.Blob(['x'], { type: 'image/png' }), coverBytes: 1,
+    builtFrom: [{ name: 'Carried', bookId: before }, { name: 'Carried' }],
+    building: { webParts: [{ at: 1, links }], at: { part: 1, next: 12, chapters: 22, words: 0 } },
+  });
+  // Something else half read in (an import cut short) is still not a book.
+  const half = await store.add('books', { title: 'Half', folder: 'Novels', addedAt: 3, importing: true });
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(500);
+  const tileOf = (id) => document.querySelector(`.tile[data-book="${id}"]`);
+  assert.ok(tileOf(making), 'the downloading novel is not on the shelf');
+  assert.ok(tileOf(making).hasAttribute('data-downloading'));
+  assert.equal(tileOf(making).dataset.job, 'job-x');
+  assert.ok(tileOf(making).querySelector('.tile-cover img'), 'its cover is not shown');
+  const mark = tileOf(making).querySelector('.tile-unfinished');
+  assert.ok(mark, 'no wash and mark on it');
+  assert.equal(Number(mark.style.getPropertyValue('--done')).toFixed(2), (22 / 40).toFixed(2));
+  assert.equal(tileOf(before), null, 'the book it carries on is shown beside it');
+  assert.equal(tileOf(half), null, 'an import cut short is on the shelf');
+  // Tapped or held: said how far it has come, not opened, not picked.
+  el('toast').hidden = true;
+  tileOf(making).click();
+  await settle(100);
+  assert.notEqual(document.body.dataset.view, 'reader');
+  assert.match(el('toast').textContent, /still downloading — 22 of 40 chapters/);
+  // Never caught up in Select all.
+  assert.equal(library.isDownloading(await store.get('books', making)), true);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /library\.shownOnShelf\.has\(book\.id\) && !library\.isDownloading\(book\)/);
+  // Not counted as a book anywhere else until it is one.
+  assert.equal(library.onShelf(await store.get('books', making)), false);
+  for (const id of [before, making, half]) await store.deleteBook(id);
+});
+
+await t('the soft accent behind text is a deep tint on a dark ground, not the palest step under light text', async () => {
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.ok(!/background: var\(--accent-100\)/.test(css), 'the palest step still sits behind text');
+  assert.match(css, /\.list-row\.current \{ background: var\(--accent-soft\);/);
+  assert.match(css, /:root\[data-mode="dark"\] \{ --accent-soft: color-mix\(in srgb, var\(--accent\) 26%, var\(--surface\)\); \}/);
+});
+
 await t('the shelf drawn twice at once ends drawn from the library as it is now', async () => {
   // As the queue does, while a book is read: a drawing under way, the book written, another asked for.
   const books = (await store.all('books')).filter((b) => !b.binnedAt && !b.transient && b.bundleId == null && !b.inVault && !b.status && !b.finishedAt);

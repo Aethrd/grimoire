@@ -163,6 +163,8 @@ export function countWorks(books, among = books) {
 
 /** Whether a book is on the shelf: not in the bin, not half-imported, not only passing through. */
 export const onShelf = (book) => !book.binnedAt && !book.importing && !book.transient;
+/** A novel being downloaded from a website now: on the shelf as it comes, not yet a book to open or change. */
+export const isDownloading = (book) => !!(book?.importing && book.building?.webParts?.length);
 
 /**
  * Reduce a list to one entry per bundle.
@@ -1018,6 +1020,11 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
   node.className = selection?.has(book.id) ? 'tile selected' : 'tile';
   if (book.bundle) node.classList.add('bundled');
   node.dataset.book = String(book.id);
+  // Downloading now: its queue job's, so the mark can be filled in place as chapters come (app.js, markUnfinished).
+  if (isDownloading(book)) {
+    node.dataset.downloading = '';
+    if (book.queueJob != null) node.dataset.job = String(book.queueJob);
+  }
   // A cover you would rather not have on screen. Nothing is changed in the
   // file; it is the tile that is blurred.
   if (book.coverBlur) node.dataset.blur = '';
@@ -1130,8 +1137,16 @@ export async function renderShelf(handlers) {
   // same filter is applied in search, the reel and the stats totals.
   // A hard kill during import leaves a row with no chapters behind it. It is
   // not a book yet, so it does not belong on the shelf.
+  /* A novel downloading now is on the shelf from its first chapter -- its
+   * cover, in its folder, washed grey with the mark filling as it comes --
+   * not only once it is paused or done. (Queued and not yet begun, it has no
+   * book.) The book it carries on, while it does, is not shown beside it:
+   * the same novel twice. Anything else still being read in is not a book yet. */
+  const carriedOn = new Set(all.filter(isDownloading)
+    .flatMap((b) => (b.builtFrom || []).map((part) => part.bookId).filter((id) => id != null)));
   let visible = all.filter((b) =>
-    !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
+    (!b.importing || isDownloading(b)) && !carriedOn.has(b.id)
+    && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
 
   // The main shelf leaves out hidden folders. Opened from Folders, a folder
   // shows what is in it, hidden or not -- that is the way in.

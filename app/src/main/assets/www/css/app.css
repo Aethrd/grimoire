@@ -155,7 +155,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 .icon-btn { width: 42px; height: 42px; flex: none; display: grid; place-items: center;
             border-radius: var(--radius-md); color: var(--text); }
-.icon-btn:active { background: var(--accent-100); }
+.icon-btn:active { background: var(--accent-soft); }
 .icon-btn.accent { background: var(--accent); color: var(--on-accent); }
 .icon-btn.accent:active { background: var(--accent-600); }
 .icon-btn[aria-pressed="true"] { color: var(--accent-ink); }
@@ -166,7 +166,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .btn.primary { background: var(--accent); color: var(--on-accent); }
 .btn.primary:active { background: var(--accent-600); }
 .btn.ghost { border: 1px solid var(--hairline); color: var(--text); }
-.btn.ghost:active { background: var(--accent-100); }
+.btn.ghost:active { background: var(--accent-soft); }
 .btn.block { width: 100%; }
 .btn[disabled] { opacity: .45; }
 
@@ -862,7 +862,7 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
 .list-row { display: flex; align-items: flex-start; gap: 10px; width: 100%;
             padding: 13px 16px; border-bottom: 1px solid var(--divider);
             text-align: left; min-height: 48px; }
-.list-row.current { background: var(--accent-100);
+.list-row.current { background: var(--accent-soft);
                     box-shadow: inset 3px 0 0 var(--accent); }
 .list-row .lead { flex: none; width: 26px; font-size: 11px; color: var(--muted);
                   padding-top: 2px; }
@@ -888,7 +888,7 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
   border: 2px solid var(--divider);
   box-sizing: border-box;
 }
-.list-row[aria-pressed="true"] { background: var(--accent-100);
+.list-row[aria-pressed="true"] { background: var(--accent-soft);
                                  box-shadow: inset 3px 0 0 var(--accent); }
 .list-row[aria-pressed="true"] .body b { color: var(--accent-ink); }
 .list-row[aria-pressed="true"]::after {
@@ -1102,7 +1102,7 @@ body[data-view="reader"] .stepper {
 .tile:active, .continue-card:active { transform: scale(.975); }
 .chip:active, .pill:active, .btn:active, .swatch:active { transform: scale(.96); }
 .icon-btn:active { transform: scale(.9); }
-.list-row:active { background: var(--accent-100); }
+.list-row:active { background: var(--accent-soft); }
 
 .tile-cover { transition: box-shadow var(--motion) var(--ease); }
 .tile:active .tile-cover { box-shadow: 0 0 0 2px var(--accent-400); }
@@ -1181,7 +1181,7 @@ body[data-view="reader"] .stepper {
                       padding: 12px 4px; border-radius: var(--radius-md);
                       transition: background-color var(--motion-fast) var(--ease),
                                   transform var(--motion-fast) var(--ease); }
-.action-grid button:active { background: var(--accent-100); transform: scale(.96); }
+.action-grid button:active { background: var(--accent-soft); transform: scale(.96); }
 .action-grid button svg { width: 23px; height: 23px; }
 .action-grid button span { font-size: 11px; font-family: var(--font-heading);
                            font-weight: 600; }
@@ -1249,7 +1249,7 @@ body[data-view="reader"] .stepper {
 .sheet-list button { text-align: left; padding: 13px 4px; font-size: 14px;
                      border-bottom: 1px solid var(--divider); display: flex;
                      justify-content: space-between; gap: 10px; }
-.sheet-list button:active { background: var(--accent-100); }
+.sheet-list button:active { background: var(--accent-soft); }
 .sheet-list button span:last-child { color: var(--muted); font-size: 12px; }
 
 
@@ -1263,7 +1263,7 @@ body[data-view="reader"] .stepper {
                      border-radius: var(--radius-md); color: var(--muted);
                      transition: background-color var(--motion-fast) var(--ease),
                                  color var(--motion-fast) var(--ease); }
-.icon-strip button[aria-pressed="true"] { background: var(--accent-100);
+.icon-strip button[aria-pressed="true"] { background: var(--accent-soft);
                                           color: var(--accent-ink); }
 .icon-strip button svg { width: 21px; height: 21px; }
 /* Labelled, because six unlabelled glyphs is a guessing game -- and the one
@@ -1322,6 +1322,12 @@ body[data-view="reader"] .stepper {
    a sheet) opens over it. Tapped, it is a page of its own: every row,
    scrolled, and made small again from its top, or by Back. */
 :root { --strip-h: 0px; }
+/* The accent's soft wash behind text -- the chapter being read in the index,
+   a pressed button, a chosen option. Its palest step on a light ground; on a
+   dark one that step is near white under light text, so the dark ground
+   takes a deeper tint of the accent instead. */
+:root { --accent-soft: var(--accent-100); }
+:root[data-mode="dark"] { --accent-soft: color-mix(in srgb, var(--accent) 26%, var(--surface)); }
 body.jobs-up { --strip-h: 30px; }
 .import-progress { position: fixed; left: 0; right: 0; z-index: 20;
   /* On the tab bar: its real height, kept by app.js (seat) as it shows, hides
@@ -1371,7 +1377,7 @@ body.jobs-up { --strip-h: 30px; }
 .job-activity[hidden] { display: none; }
 .job-tag { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 10px;
            font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
-           background: var(--accent-100); color: var(--accent-ink); }
+           background: var(--accent-soft); color: var(--accent-ink); }
 .job-activity.wait .job-tag { background: transparent; color: var(--muted);
                               box-shadow: inset 0 0 0 1px currentColor; }
 .job-activity.retry .job-tag, .job-activity.failed .job-tag { background: transparent; color: var(--text);
@@ -1567,7 +1573,7 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .annotate-styles button { flex: 1; padding: 7px 4px; border-radius: var(--radius-md);
                           border: 1px solid var(--hairline); font-size: 10px;
                           font-family: var(--font-heading); font-weight: 600; }
-.annotate-styles button[aria-pressed="true"] { background: var(--accent-100);
+.annotate-styles button[aria-pressed="true"] { background: var(--accent-soft);
                                                color: var(--accent-ink); }
 .annotate-colours { justify-content: space-between; }
 /* A swatch was a 28px circle, which is about half what a finger needs -- the
@@ -1705,7 +1711,7 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
              border-bottom: 1px solid var(--hairline); }
 .build-row:last-child { border-bottom: 0; }
 .build-num { flex: none; margin-top: 2px; width: 26px; height: 26px; border-radius: 50%;
-             display: grid; place-items: center; background: var(--accent-100);
+             display: grid; place-items: center; background: var(--accent-soft);
              color: var(--accent-ink); font-family: var(--font-heading);
              font-weight: 700; font-size: 11px; }
 .build-what { flex: 1; min-width: 0; }
@@ -2041,7 +2047,7 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
                stroke: currentColor; stroke-width: 2;
                stroke-linecap: round; stroke-linejoin: round; }
 .pad-btn:disabled { opacity: .3; }
-.pad-btn:active { background: var(--accent-100); }
+.pad-btn:active { background: var(--accent-soft); }
 
 /* The grip, not the buttons.
    Dragging by a button means every slightly imprecise press moves the thing
@@ -2554,7 +2560,7 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
            text-transform: uppercase; color: var(--muted); border: 1px solid var(--hairline);
            border-radius: var(--radius-sm); padding: 2px 5px; }
 .web-link.likely .web-tag { color: var(--accent-ink); border-color: var(--accent-300); }
-.web-link.got .web-tag { background: var(--accent-100); color: var(--accent-ink); }
+.web-link.got .web-tag { background: var(--accent-soft); color: var(--accent-ink); }
 .web-link.lost .web-tag { color: #c0553f; border-color: currentColor; }
 .web-list.painting .web-link { cursor: ns-resize; }
 

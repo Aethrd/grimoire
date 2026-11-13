@@ -639,7 +639,19 @@ let selectMode = false;
 
 function selecting() { return selectMode || !!buildPicks; }
 
+/* A novel still downloading is on the shelf, but not yet a book to open,
+ * pick or change: what it holds is still being written. Said, with how far
+ * it has come. */
+function stillDownloading(book) {
+  if (!library.isDownloading(book)) return false;
+  const have = book.building?.at?.chapters || 0;
+  const all = (book.building?.webParts || []).reduce((sum, part) => sum + (part.links?.length || 0), 0);
+  toast(`“${library.displayTitle(book)}” is still downloading${all ? ` — ${have} of ${all} chapters` : ''}. It opens once it is paused or done.`);
+  return true;
+}
+
 function onTileTap(book) {
+  if (stillDownloading(book)) return;
   if (buildPicks) { pickTile(book); return; }
   if (!selectMode) {
     // A bundle is one thing on the shelf and several things to open, so it
@@ -656,6 +668,7 @@ function onTileTap(book) {
 }
 
 function onTileHold(book) {
+  if (stillDownloading(book)) return;
   // While picking for Build a press is a tap: no second mode on top of it.
   if (buildPicks) { pickTile(book); return; }
   selectMode = true;
@@ -856,7 +869,8 @@ function wireSelection() {
      */
     // What the shelf drew, so nothing in a hidden folder is caught up in it
     // -- nor anything outside the folder the shelf is filtered to.
-    const books = (await store.all('books')).filter((book) => library.shownOnShelf.has(book.id));
+    // Not a novel still downloading: not a book yet to move or bin.
+    const books = (await store.all('books')).filter((book) => library.shownOnShelf.has(book.id) && !library.isDownloading(book));
 
     // A second press clears, so the same button undoes itself.
     const all = books.every((book) => selection.has(book.id));
@@ -7875,7 +7889,20 @@ function markUnfinished() {
     add(job.bookId, run && Number.isFinite(run.total) ? Math.max(0, run.total - (run.done || 0)) : job.links?.length);
   }
   library.setUnfinished(left);
-  const key = [...left.keys()].sort().join(',');
+  // Downloading now: each one's mark filled as far as it has come, in place.
+  for (const job of webQueue) {
+    const run = queueJobs.get(job.id)?.run;
+    if (job.status !== 'running' || !run || !Number.isFinite(run.total) || !run.total) continue;
+    const mark = [...document.querySelectorAll('.tile[data-job]')]
+      .find((node) => node.dataset.job === String(job.id))?.querySelector('.tile-unfinished');
+    if (!mark) continue;
+    const done = Math.min(1, Math.max(0, (run.done || 0) / run.total));
+    mark.style.setProperty('--done', done.toFixed(3));
+    mark.setAttribute('aria-label', `Not finished downloading: ${Math.round(done * 100)}%`);
+  }
+  // A novel just begun downloading: its book now on the shelf, drawn there.
+  const making = [...webQueue].filter((job) => job.status === 'running' && queueJobs.get(job.id)?.run?.done > 0).map((job) => job.id).sort().join(',');
+  const key = [...left.keys()].sort().join(',') + `|${making}`;
   if (key !== unfinishedKey) {
     unfinishedKey = key;
     if (current === 'library') refreshShelf().catch(() => {});

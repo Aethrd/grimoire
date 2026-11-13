@@ -482,7 +482,8 @@ t('a half-imported book is neither shown nor kept', () => {
   // before its chapters do. A hard kill in the middle used to leave that row
   // on the shelf as a book with nothing in it.
   const library = read('app/src/main/assets/www/js/library.js');
-  assert.match(library, /!b\.importing && !b\.transient/);
+  // Only a novel downloading now shows while it is still being read in (see the tools tests).
+  assert.match(library, /\(!b\.importing \|\| isDownloading\(b\)\) && !carriedOn\.has\(b\.id\)\s+&& !b\.transient/);
   assert.match(library, /export async function sweepUnfinishedImports/);
   assert.match(app, /await library\.sweepUnfinishedImports\(\)/);
   // And a failure during parse cleans up after itself rather than waiting
@@ -889,7 +890,7 @@ t('select all means all of what is shown', () => {
   // trap: the next thing pressed happens to books you cannot see.
   // What the shelf drew: the folder it is filtered to, and nothing in a
   // folder hidden from it.
-  assert.match(app, /filter\(\(book\) => library\.shownOnShelf\.has\(book\.id\)\)/);
+  assert.match(app, /filter\(\(book\) => library\.shownOnShelf\.has\(book\.id\) && !library\.isDownloading\(book\)\)/);
   assert.match(library, /shownOnShelf = new Set\(visible\.map/);
 });
 
@@ -1066,7 +1067,8 @@ t('a file opened from elsewhere is read, not collected', () => {
   // Opening something to look at it should not quietly add it to a library.
   const library = read('app/src/main/assets/www/js/library.js');
   assert.match(library, /transient = false/);
-  assert.match(library, /!b\.importing && !b\.transient/);
+  // Only a novel downloading now shows while it is still being read in (see the tools tests).
+  assert.match(library, /\(!b\.importing \|\| isDownloading\(b\)\) && !carriedOn\.has\(b\.id\)\s+&& !b\.transient/);
   assert.match(app, /handleFiles\(\[file\], \{ transient: true \}\)/);
   // Closing the reader forgets it, rather than leaving it until a restart.
   assert.match(app, /async function forgetTransientBook/);
@@ -1240,8 +1242,8 @@ t('books are picked for a build on the shelf, in order, only when asked for', ()
   assert.equal((app.match(/startPicking\(\)/g) || []).length, 2);
   assert.match(app, /else if \(name !== 'library'\) endPicking\(\);/);
   // A tap, or a press, picks rather than opens.
-  assert.match(app, /function onTileTap\(book\) \{\n  if \(buildPicks\) \{ pickTile\(book\); return; \}/);
-  assert.match(app, /function onTileHold\(book\) \{\n  \/\/[^\n]*\n  if \(buildPicks\) \{ pickTile\(book\); return; \}/);
+  assert.match(app, /function onTileTap\(book\) \{\n  if \(stillDownloading\(book\)\) return;\n  if \(buildPicks\) \{ pickTile\(book\); return; \}/);
+  assert.match(app, /function onTileHold\(book\) \{\n  if \(stillDownloading\(book\)\) return;\n  \/\/[^\n]*\n  if \(buildPicks\) \{ pickTile\(book\); return; \}/);
   // Each numbered with the place it will have, after what is already in.
   assert.match(app, /order\.set\(id, \{ place: parts\.length \+ at \+ 1, already: false \}\)/);
   // Finish puts them in, in the order picked, and goes to Build.
