@@ -182,8 +182,11 @@ export const DEFAULT_SETTINGS = {
   themeMode: 'dark',              // both themes are pastel; dark is default
   accent: '#b4b0d6',
   backgroundImage: null,
-  // The theme's gradient (marks, pause and resume): null follows the accent, else { from, to }.
+  // The theme's gradient (marks, pause and resume, progress): null follows the accent,
+  // else { from, to, stops: [{ color, share }] } -- two to five colours (theme.gradientOf).
   gradient: null,
+  // Its direction everywhere: 'auto' (each place its own) or one of theme.GRADIENT_DIRS.
+  gradientDir: 'auto',
   // Fonts of your own, to read in: [{ id, name }] (the files themselves kept apart, see fonts.js).
   fonts: [],
   veil: 0.62,                     // 62% in dark, 28% in light

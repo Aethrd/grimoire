@@ -3157,7 +3157,7 @@ await t('a book with more to download is marked on its cover; the strip sits on 
   assert.equal(lib.unfinishedDone(0, 0), 0);
   assert.equal(lib.unfinishedDone(10, 0), 1);
   // The theme's gradient (Appearance): the accent's own unless two colours of your own are chosen.
-  assert.match(library, /<stop offset="0" style="stop-color:var\(--grad-from\)"\/><stop offset="1" style="stop-color:var\(--grad-to\)"\/>/);
+  assert.match(library, /<defs>\$\{gradientSvg\(id, 'mark'\)\}<\/defs>/);
   // Its cover from the start: a book downloading, or paused, is not a blank.
   const build = read('app/src/main/assets/www/js/build.js');
   assert.match(build, /\.\.\.\(early \? \{ coverBlob: early, coverBytes: early\.size \?\? null \} : \{\}\),/);

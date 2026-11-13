@@ -1115,7 +1115,7 @@ body[data-view="reader"] .stepper {
    download's, the strip's line, the reading progress, a cover's. A finished
    or failed download keeps its own plain colour (below). */
 .bar-fill, .progress-fill, .tile-bar > span, .jobs-strip-fill {
-  background: linear-gradient(90deg, var(--grad-from, var(--accent-300)), var(--grad-to, var(--accent)));
+  background: var(--grad-bar, linear-gradient(90deg, var(--grad-from, var(--accent-300)), var(--grad-to, var(--accent))));
 }
 .scrub-thumb { transition: top var(--motion) var(--ease); }
 /* Except while being dragged, where lag is the opposite of what you want. */
@@ -2717,12 +2717,24 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .play-btn:active { background: var(--accent-soft); }
 .play-btn:disabled { opacity: .35; }
 /* Appearance: the gradient's preview and its two ends; your fonts, each in its own face. */
-.gradient-preview { height: 18px; border-radius: 9px; margin: 2px 0 10px; }
-.gradient-ends { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.gradient-end { display: flex; align-items: center; gap: 8px; }
-.gradient-end input[type="color"] { width: 40px; height: 32px; padding: 0; border: 1px solid var(--divider);
-  border-radius: 8px; background: none; }
-.gradient-ends .chip { margin-left: auto; }
+.gradient-preview { height: 48px; border-radius: var(--radius-md); margin: 2px 0 10px; }
+/* Its direction, a row of arrows; each colour a row: the colour, its share, what share that is. */
+.gradient-dirs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.gradient-dirs .chip { min-width: 40px; justify-content: center; }
+.gradient-dirs .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.gradient-stops { display: grid; gap: 4px; margin-bottom: 8px; }
+.gradient-stop { display: grid; grid-template-columns: 40px 1fr 44px 36px; align-items: center; gap: 10px; min-height: 44px; }
+.gradient-stop input[type="color"] { width: 40px; height: 32px; padding: 0; border: 1px solid var(--divider); border-radius: 8px; background: none; }
+.gradient-stop output { font: 600 13px var(--font-ui); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.gradient-stop .gradient-drop { width: 36px; height: 36px; }
+.gradient-stop input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; min-width: 0;
+  height: 28px; margin: 0; background: transparent; touch-action: pan-y; }
+.gradient-stop input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px;
+  background: linear-gradient(to right, var(--accent) var(--filled, 0%), color-mix(in srgb, var(--text) 18%, transparent) var(--filled, 0%)); }
+.gradient-stop input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+  width: 22px; height: 22px; margin-top: -8px; border-radius: 50%; background: var(--accent);
+  border: 3px solid var(--surface); box-shadow: 0 1px 4px rgb(0 0 0 / .35); }
+.gradient-ends { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* While a book opens, if it takes more than a moment: over the page, on the
    app's own ground, faded in and out -- never a flash (app.js, openingScreen). */
 .opening { position: fixed; inset: 0; z-index: 45; background: var(--bg); opacity: 0;

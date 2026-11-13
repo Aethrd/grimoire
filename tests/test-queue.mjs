@@ -443,7 +443,7 @@ await t('two settings saved at once both stay saved', async () => {
   assert.match(app, /playButton\(go, queueState\.running \? 'pause' : 'play', queueState\.running \? 'Pause all' : \(count\('paused'\) \? 'Resume all' : 'Start queue'\)\);/);
   assert.match(app, /if \(job\.status === 'paused'\) \{\s+row\.appendChild\(playButton\(word\('', \(\) => \{\s+job\.status = 'queued';/);
   assert.match(app, /if \(queueState\.running\) \{ pumpQueue\(\); return; \}[\s\S]{0,160}runJob\(job\);/);
-  assert.match(app, /<stop offset="0" style="stop-color:var\(--grad-from\)"\/>/);
+  assert.match(app, /<defs>\$\{theme\.gradientSvg\(id, 'icon'\)\}/);
   const head = document.getElementById('build-queue-go');
   assert.ok(head.classList.contains('play-btn') && head.querySelector('svg circle'), 'the queue head is not drawn');
   assert.equal(head.textContent.trim(), '', 'a word beside the drawn button');

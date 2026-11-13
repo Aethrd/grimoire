@@ -111,6 +111,117 @@ export function heatRamp(name, accent, dark) {
   return dark ? [s[7], s[6], s[5], s[4], s[3]] : [s[0], s[1], s[3], s[5], s[6]];
 }
 
+/* ── the theme's gradient ──────────────────────────────────────────────
+ *
+ * Two to five colours, each with a share: how much of the length it holds
+ * before it blends into the next. Equal shares of two are the plain blend,
+ * end to end; a larger share holds its colour solid for longer. One direction
+ * for all of it -- Auto keeps each place its own (bars across, the download
+ * mark down, pause and resume corner to corner).
+ */
+export const GRADIENT_MAX = 5;
+export const GRADIENT_DIRS = {
+  auto: { name: 'Auto', css: 'to right' },
+  right: { name: 'Left to right', css: 'to right', line: [0, 0.5, 1, 0.5] },
+  left: { name: 'Right to left', css: 'to left', line: [1, 0.5, 0, 0.5] },
+  down: { name: 'Top to bottom', css: 'to bottom', line: [0.5, 0, 0.5, 1] },
+  up: { name: 'Bottom to top', css: 'to top', line: [0.5, 1, 0.5, 0] },
+  'down-right': { name: 'Corner to corner, down', css: 'to bottom right', line: [0, 0, 1, 1] },
+  'up-right': { name: 'Corner to corner, up', css: 'to top right', line: [0, 1, 1, 0] },
+};
+const STOP_HEX = /^#[0-9a-f]{6}$/i;
+const shareOf = (value) => {
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) ? Math.max(1, Math.min(100, n)) : 50;
+};
+
+/** A gradient checked: { from, to, stops: [{ color, share }] }, or null. Takes
+ *  the older two-colour { from, to } as two equal shares. */
+export function gradientOf(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  let stops = null;
+  if (Array.isArray(raw.stops)) {
+    const kept = raw.stops
+      .filter((stop) => stop && STOP_HEX.test(String(stop.color || '').trim()))
+      .slice(0, GRADIENT_MAX)
+      .map((stop) => ({ color: String(stop.color).trim().toLowerCase(), share: shareOf(stop.share) }));
+    if (kept.length >= 2) stops = kept;
+  }
+  if (!stops && STOP_HEX.test(String(raw.from || '').trim()) && STOP_HEX.test(String(raw.to || '').trim())) {
+    stops = [{ color: raw.from.trim().toLowerCase(), share: 50 }, { color: raw.to.trim().toLowerCase(), share: 50 }];
+  }
+  return stops ? { from: stops[0].color, to: stops[stops.length - 1].color, stops } : null;
+}
+
+/** Where each colour stands along the length, 0 to 1: solid through its share,
+ *  blending into the next across a band as wide as the narrower side allows. */
+export function placeStops(stops) {
+  const total = stops.reduce((sum, stop) => sum + stop.share, 0) || 1;
+  const seg = stops.map((stop) => stop.share / total);
+  const last = stops.length - 1;
+  const out = [{ color: stops[0].color, at: 0 }];
+  let edge = 0;
+  for (let i = 0; i < last; i += 1) {
+    edge += seg[i];
+    const half = Math.min(seg[i] * (i === 0 ? 1 : 0.5), seg[i + 1] * (i + 1 === last ? 1 : 0.5));
+    out.push({ color: stops[i].color, at: edge - half }, { color: stops[i + 1].color, at: edge + half });
+  }
+  out.push({ color: stops[last].color, at: 1 });
+  return out;
+}
+
+/** The colour at t (0 to 1) along placed stops. */
+export function colourAt(placed, t) {
+  if (t <= placed[0].at) return placed[0].color;
+  for (let i = 1; i < placed.length; i += 1) {
+    const a = placed[i - 1], b = placed[i];
+    if (t <= b.at) {
+      const k = b.at - a.at > 1e-6 ? (t - a.at) / (b.at - a.at) : 1;
+      const p = hexToRgb(a.color), q = hexToRgb(b.color);
+      return rgbToHex(p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k, p[2] + (q[2] - p[2]) * k);
+    }
+  }
+  return placed[placed.length - 1].color;
+}
+
+/** As a CSS background, in the direction given. */
+export function gradientCss(placed, dir = 'auto') {
+  const way = (GRADIENT_DIRS[dir] || GRADIENT_DIRS.auto).css;
+  return `linear-gradient(${way}, ${placed.map((p) => `${p.color} ${(p.at * 100).toFixed(1)}%`).join(', ')})`;
+}
+
+/* Drawn marks (the download mark, pause and resume) take the gradient as
+ * samples along it -- each a custom property, so a change of colour reaches
+ * every one already drawn -- and their direction from the setting, set again
+ * on each when it changes (apply, below). */
+export const GRADIENT_SAMPLES = 17;
+const SVG_PLACES = {
+  // The download mark, in its own 24-unit box: by default, down.
+  mark: { units: 'userSpaceOnUse', box: [4.4, 3.6, 19.6, 19.5], auto: 'down' },
+  // Pause and resume, across their own box: by default, corner to corner.
+  icon: { units: 'objectBoundingBox', box: [0, 0, 1, 1], auto: 'down-right' },
+};
+let gradientDir = 'auto';
+function gradientLine(place) {
+  const spot = SVG_PLACES[place] || SVG_PLACES.icon;
+  const dir = gradientDir === 'auto' ? spot.auto : gradientDir;
+  const [x0, y0, x1, y1] = spot.box;
+  const [a, b, c, d] = GRADIENT_DIRS[dir].line;
+  const r = (v) => Number(v.toFixed(2));
+  return { x1: r(x0 + (x1 - x0) * a), y1: r(y0 + (y1 - y0) * b), x2: r(x0 + (x1 - x0) * c), y2: r(y0 + (y1 - y0) * d) };
+}
+/** The <linearGradient> for a drawn mark: `place` is 'mark' or 'icon'. */
+export function gradientSvg(id, place) {
+  const spot = SVG_PLACES[place] || SVG_PLACES.icon;
+  const line = gradientLine(place);
+  let stops = '';
+  for (let k = 0; k < GRADIENT_SAMPLES; k += 1) {
+    const end = k < GRADIENT_SAMPLES / 2 ? '--grad-from' : '--grad-to';
+    stops += `<stop offset="${(k / (GRADIENT_SAMPLES - 1)).toFixed(4)}" style="stop-color:var(--grad-s${k}, var(${end}))"/>`;
+  }
+  return `<linearGradient id="${id}" data-grad="${place}" gradientUnits="${spot.units}" x1="${line.x1}" y1="${line.y1}" x2="${line.x2}" y2="${line.y2}">${stops}</linearGradient>`;
+}
+
 /** Push the whole computed theme onto :root as custom properties. */
 export function apply(settings) {
   const mode = settings.themeMode === 'system'
@@ -137,12 +248,22 @@ export function apply(settings) {
 
   /* The theme's gradient -- the download mark, pause and resume: from a
    * light step of the accent to a deep one, or two colours of your own. */
-  const gradient = settings.gradient && HEX.test(settings.gradient.from || '') && HEX.test(settings.gradient.to || '')
-    ? settings.gradient : null;
-  root.setProperty('--grad-from', gradient ? gradient.from : steps[STEP_NAMES.indexOf(300)]);
-  root.setProperty('--grad-to', gradient ? gradient.to : steps[STEP_NAMES.indexOf(600)]);
+  const gradient = gradientOf(settings.gradient);
+  const stops = gradient ? gradient.stops
+    : [{ color: steps[STEP_NAMES.indexOf(300)], share: 50 }, { color: steps[STEP_NAMES.indexOf(600)], share: 50 }];
+  const placed = placeStops(stops);
+  root.setProperty('--grad-from', stops[0].color);
+  root.setProperty('--grad-to', stops[stops.length - 1].color);
+  for (let k = 0; k < GRADIENT_SAMPLES; k += 1) root.setProperty(`--grad-s${k}`, colourAt(placed, k / (GRADIENT_SAMPLES - 1)));
+  gradientDir = GRADIENT_DIRS[settings.gradientDir] ? settings.gradientDir : 'auto';
+  root.setProperty('--grad-bar', gradientCss(placed, gradientDir));
   if (gradient) document.documentElement.dataset.gradient = 'own';
   else delete document.documentElement.dataset.gradient;
+  // The marks already drawn turn with it.
+  for (const g of document.querySelectorAll('linearGradient[data-grad]')) {
+    const line = gradientLine(g.dataset.grad);
+    for (const key of ['x1', 'y1', 'x2', 'y2']) g.setAttribute(key, String(line[key]));
+  }
 
   // Body-size text in the accent needs a deeper step than chrome does.
   root.setProperty('--accent-ink', guard(base, ground.bg).ink);
@@ -291,7 +412,7 @@ const matrixFor = ([r, g, b]) => [
  * to bring back after a reinstall. The picture travels inside the file.
  */
 
-export const THEME_KEYS = ['themeMode', 'accent', 'heatRamp', 'backgroundImage', 'veil', 'gradient'];
+export const THEME_KEYS = ['themeMode', 'accent', 'heatRamp', 'backgroundImage', 'veil', 'gradient', 'gradientDir'];
 /** What a theme file says it is, so that one can be told from any other JSON. */
 export const THEME_FORMAT = 'quire-theme';
 
@@ -338,11 +459,10 @@ export function readThemes(data, fallbackName = 'Imported theme') {
     else if (typeof raw.backgroundImage === 'string' && PICTURE.test(raw.backgroundImage)) {
       theme.backgroundImage = raw.backgroundImage.replace(/\s+/g, '');
     }
-    // The gradient: two colours, or following the accent.
+    // The gradient: two to five colours with their shares, or following the accent; and its direction.
     if (raw.gradient === null) theme.gradient = null;
-    else if (raw.gradient && HEX.test(String(raw.gradient.from || '').trim()) && HEX.test(String(raw.gradient.to || '').trim())) {
-      theme.gradient = { from: raw.gradient.from.trim().toLowerCase(), to: raw.gradient.to.trim().toLowerCase() };
-    }
+    else if (gradientOf(raw.gradient)) theme.gradient = gradientOf(raw.gradient);
+    if (raw.gradientDir === null || (typeof raw.gradientDir === 'string' && GRADIENT_DIRS[raw.gradientDir])) theme.gradientDir = raw.gradientDir;
     const veil = Number(raw.veil);
     if (raw.veil != null && Number.isFinite(veil)) theme.veil = Math.max(0, Math.min(0.95, veil));
     if (!THEME_KEYS.some((key) => key in theme)) return;

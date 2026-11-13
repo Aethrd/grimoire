@@ -2066,51 +2066,109 @@ await t('a font of your own: checked, kept apart from the settings, a face to re
   assert.equal(await store.get('settings', `font:${font.id}`), undefined);
 });
 
-await t('the theme gradient: the accent by default, two colours of your own, kept with a theme', async () => {
+await t('the theme gradient: the accent by default, two to five colours of your own with their shares, one direction, kept with a theme', async () => {
   const theme = await import(new URL('../app/src/main/assets/www/js/theme.js', import.meta.url).href);
   const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
   const root = document.documentElement.style;
-  theme.apply({ ...(await store.settings()), gradient: null });
+  theme.apply({ ...(await store.settings()), gradient: null, gradientDir: 'auto' });
   const steps = theme.ramp((await store.settings()).accent);
   assert.equal(root.getPropertyValue('--grad-from'), steps[2]);
   assert.equal(root.getPropertyValue('--grad-to'), steps[5]);
+  // An older two-colour gradient reads as two equal shares: the plain blend, end to end, as before.
   theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' } });
   assert.equal(root.getPropertyValue('--grad-from'), '#ff8800');
   assert.equal(root.getPropertyValue('--grad-to'), '#3355ff');
   assert.equal(document.documentElement.dataset.gradient, 'own');
-  // The marks and pause and resume drawn in it.
-  assert.match(read('app/src/main/assets/www/js/library.js'), /stop-color:var\(--grad-from\)[\s\S]{0,80}stop-color:var\(--grad-to\)/);
-  assert.match(read('app/src/main/assets/www/js/app.js'), /stop-color:var\(--grad-from\)[\s\S]{0,80}stop-color:var\(--grad-to\)/);
+  assert.equal(root.getPropertyValue('--grad-bar'), 'linear-gradient(to right, #ff8800 0.0%, #ff8800 0.0%, #3355ff 100.0%, #3355ff 100.0%)');
+  // A larger share holds its colour solid for longer before it blends.
+  const placed = theme.placeStops([{ color: '#ff0000', share: 70 }, { color: '#0000ff', share: 30 }]);
+  assert.deepEqual(placed.map((p) => [p.color, Number(p.at.toFixed(3))]), [['#ff0000', 0], ['#ff0000', 0.4], ['#0000ff', 1], ['#0000ff', 1]]);
+  // Three equal: each solid at its own place, blended between, never out of order.
+  const three = theme.placeStops([{ color: '#ff0000', share: 50 }, { color: '#00ff00', share: 50 }, { color: '#0000ff', share: 50 }]);
+  for (let i = 1; i < three.length; i += 1) assert.ok(three[i].at >= three[i - 1].at - 1e-9, 'stops out of order');
+  assert.equal(theme.colourAt(three, 0.5), '#00ff00');
+  // Five at most; a bad colour is passed over; shares kept 1 to 100.
+  const many = theme.gradientOf({ stops: [1, 2, 3, 4, 5, 6].map((n) => ({ color: `#0${n}0${n}0${n}`, share: n * 30 })).concat([{ color: 'red', share: 5 }]) });
+  assert.equal(many.stops.length, 5);
+  assert.deepEqual(many.stops.map((s) => s.share), [30, 60, 90, 100, 100]);
+  assert.equal(theme.gradientOf({ stops: [{ color: '#112233' }] }), null);
+  // The marks and pause and resume drawn in samples of it, in the direction set -- turned when it changes.
+  assert.match(read('app/src/main/assets/www/js/library.js'), /gradientSvg\(id, 'mark'\)/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /theme\.gradientSvg\(id, 'icon'\)/);
+  const svg = theme.gradientSvg('g1', 'icon');
+  assert.equal((svg.match(/<stop /g) || []).length, theme.GRADIENT_SAMPLES);
+  assert.match(svg, /x1="0" y1="0" x2="1" y2="1"/);
+  const holder = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  holder.innerHTML = theme.gradientSvg('g2', 'mark');
+  document.body.appendChild(holder);
+  assert.match(holder.innerHTML, /x1="12" y1="3.6" x2="12" y2="19.5"/);
+  theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 'right' });
+  const g = holder.querySelector('linearGradient');
+  assert.deepEqual(['x1', 'y1', 'x2', 'y2'].map((k) => g.getAttribute(k)), ['4.4', '11.55', '19.6', '11.55']);
+  assert.match(root.getPropertyValue('--grad-bar'), /^linear-gradient\(to right,/);
+  theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 'up' });
+  assert.match(root.getPropertyValue('--grad-bar'), /^linear-gradient\(to top,/);
+  holder.remove();
   // Every progress bar in it too -- and nothing later in the stylesheet painting one plain over it.
   const css = read('app/src/main/assets/www/css/app.css');
-  assert.match(css, /\.bar-fill, \.progress-fill, \.tile-bar > span, \.jobs-strip-fill \{\s+background: linear-gradient\(90deg, var\(--grad-from, var\(--accent-300\)\), var\(--grad-to, var\(--accent\)\)\);/);
-  const gradientRule = css.indexOf('.jobs-strip-fill {\n  background: linear-gradient');
+  assert.match(css, /\.bar-fill, \.progress-fill, \.tile-bar > span, \.jobs-strip-fill \{\s+background: var\(--grad-bar, linear-gradient\(90deg, var\(--grad-from, var\(--accent-300\)\), var\(--grad-to, var\(--accent\)\)\)\);/);
+  const gradientRule = css.indexOf('.jobs-strip-fill {\n  background: var(--grad-bar');
+  assert.ok(gradientRule > 0);
   const after = css.slice(css.indexOf('}', gradientRule) + 1);
   for (const name of ['.bar-fill', '.progress-fill', '.tile-bar > span', '.jobs-strip-fill']) {
     const later = [...after.matchAll(new RegExp(`(^|\\n)${name.replace(/[.>]/g, (c) => `\\${c}`)} \\{[^}]*background:`, 'g'))];
     assert.equal(later.length, 0, `${name} painted plain after the gradient`);
   }
-  // Kept with a theme, read back from a file; a bad colour is not taken.
-  assert.ok(theme.THEME_KEYS.includes('gradient'));
-  const [read1] = theme.readThemes({ name: 'Sunset', gradient: { from: '#FF8800', to: '#3355ff' } });
-  assert.deepEqual(read1.gradient, { from: '#ff8800', to: '#3355ff' });
-  assert.equal('gradient' in theme.readThemes({ name: 'Odd', accent: '#112233', gradient: { from: 'red', to: '#3355ff' } })[0], false);
-  // In Appearance: its two ends, and back to the accent's.
-  await store.saveSettings({ gradient: { from: '#ff8800', to: '#3355ff' } });
+  // Kept with a theme, read back from a file; a bad colour or direction is not taken.
+  assert.ok(theme.THEME_KEYS.includes('gradient') && theme.THEME_KEYS.includes('gradientDir'));
+  const [read1] = theme.readThemes({ name: 'Sunset', gradient: { from: '#FF8800', to: '#3355ff' }, gradientDir: 'down' });
+  assert.deepEqual(read1.gradient, { from: '#ff8800', to: '#3355ff', stops: [{ color: '#ff8800', share: 50 }, { color: '#3355ff', share: 50 }] });
+  assert.equal(read1.gradientDir, 'down');
+  const odd = theme.readThemes({ name: 'Odd', accent: '#112233', gradient: { from: 'red', to: '#3355ff' }, gradientDir: 'sideways' })[0];
+  assert.equal('gradient' in odd, false);
+  assert.equal('gradientDir' in odd, false);
+
+  // In Appearance: each colour with its share, more added, one taken out, a direction, and back to the accent's.
+  await store.saveSettings({ gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 'auto' });
   const host = document.createElement('div');
   await panels.openAppearance(host);
-  const ends = host.querySelectorAll('.gradient-field input[type="color"]');
-  assert.equal(ends.length, 2);
-  assert.deepEqual([...ends].map((i) => i.value), ['#ff8800', '#3355ff']);
-  ends[1].value = '#00aa66';
-  ends[1].dispatchEvent(new window.Event('change'));
+  const field = () => host.querySelector('.gradient-field');
+  let colours = field().querySelectorAll('.gradient-stop input[type="color"]');
+  assert.deepEqual([...colours].map((i) => i.value), ['#ff8800', '#3355ff']);
+  assert.deepEqual([...field().querySelectorAll('.gradient-stop output')].map((o) => o.textContent), ['50%', '50%']);
+  assert.equal(field().querySelectorAll('.gradient-drop').length, 0, 'two colours cannot lose one');
+  colours[1].value = '#00aa66';
+  colours[1].dispatchEvent(new window.Event('change'));
   await settle(50);
-  assert.deepEqual((await store.settings()).gradient, { from: '#ff8800', to: '#00aa66' });
-  const back = [...host.querySelectorAll('.gradient-field .chip')].find((b) => /Follow the accent/.test(b.textContent));
-  back.click();
+  assert.deepEqual((await store.settings()).gradient.stops.map((s) => s.color), ['#ff8800', '#00aa66']);
+  const shares = field().querySelectorAll('.gradient-stop input[type="range"]');
+  shares[0].value = '75';
+  shares[0].dispatchEvent(new window.Event('input'));
+  assert.deepEqual([...field().querySelectorAll('.gradient-stop output')].map((o) => o.textContent), ['60%', '40%']);
+  shares[0].dispatchEvent(new window.Event('change'));
+  await settle(50);
+  assert.deepEqual((await store.settings()).gradient.stops.map((s) => s.share), [75, 50]);
+  const button = (re) => [...field().querySelectorAll('button')].find((b) => re.test(b.textContent));
+  for (let n = 3; n <= theme.GRADIENT_MAX; n += 1) { button(/Add a colour/).click(); await settle(50); }
+  assert.equal((await store.settings()).gradient.stops.length, theme.GRADIENT_MAX);
+  assert.equal(button(/Add a colour/), undefined, 'more than five could be added');
+  // Added in before the last, ends unchanged.
+  colours = field().querySelectorAll('.gradient-stop input[type="color"]');
+  assert.equal(colours[0].value, '#ff8800');
+  assert.equal(colours[colours.length - 1].value, '#00aa66');
+  field().querySelectorAll('.gradient-drop')[1].click();
+  await settle(50);
+  assert.equal((await store.settings()).gradient.stops.length, theme.GRADIENT_MAX - 1);
+  field().querySelector('.gradient-dirs [data-dir="down"]').click();
+  await settle(50);
+  assert.equal((await store.settings()).gradientDir, 'down');
+  assert.equal(field().querySelector('.gradient-dirs [data-dir="down"]').getAttribute('aria-pressed'), 'true');
+  button(/Follow the accent/).click();
   await settle(50);
   assert.equal((await store.settings()).gradient, null);
   assert.equal(document.documentElement.dataset.gradient, undefined);
+  await store.saveSettings({ gradientDir: 'auto' });
+  theme.apply(await store.settings());
 });
 
 await t('the opening scene: only for a slow open, faded in and out, faint behind the queue, calm when motion is reduced', async () => {

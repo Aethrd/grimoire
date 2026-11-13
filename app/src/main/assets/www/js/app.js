@@ -7145,10 +7145,8 @@ function playIcon(kind) {
      * centre of mass sits on the ring's centre (x = 12) -- its span's middle
      * alone put it to the right. Corners rounded by a stroke of its own fill. */
     : `<path d="M9.4 8.1L15.8 12L9.4 15.9Z" stroke="url(#${id})" stroke-width="1.3" stroke-linejoin="round"/>`;
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><defs>'
-    + `<linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">`
-    + '<stop offset="0" style="stop-color:var(--grad-from)"/><stop offset="1" style="stop-color:var(--grad-to)"/>'
-    + `</linearGradient></defs><circle cx="12" cy="12" r="9.6" fill="none" stroke="url(#${id})" stroke-width="1.8"/>`
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><defs>${theme.gradientSvg(id, 'icon')}`
+    + `</defs><circle cx="12" cy="12" r="9.6" fill="none" stroke="url(#${id})" stroke-width="1.8"/>`
     + `<g fill="url(#${id})" stroke="none">${inner}</g></svg>`;
 }
 function playButton(button, kind, label) {

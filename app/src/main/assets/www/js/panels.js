@@ -211,63 +211,123 @@ export async function openAppearance(host) {
 
 /* ── the theme's gradient ──────────────────────────────────────────────
  *
- * What the download mark fills with and pause and resume are drawn in: from
- * a light step of the accent to a deep one, unless two colours of your own
- * are chosen. Kept with the theme, so a saved or sent theme carries it.
+ * What the download mark fills with, pause and resume are drawn in and every
+ * progress bar runs through: from a light step of the accent to a deep one,
+ * unless colours of your own are chosen -- two to five, each with a share of
+ * the length -- and in one direction everywhere, or each place its own. Kept
+ * with the theme, so a saved or sent theme carries it.
  */
+const DIR_ARROWS = { auto: 'Auto', right: '→', left: '←', down: '↓', up: '↑', 'down-right': '↘', 'up-right': '↗' };
 function gradientField(settings, redraw) {
   const steps = theme.ramp(settings.accent);
-  const own = settings.gradient && settings.gradient.from && settings.gradient.to ? settings.gradient : null;
+  const own = theme.gradientOf(settings.gradient);
   // The accent's own, as it is drawn (theme.apply: its 300 and 600 steps).
-  const from = own ? own.from : steps[2];
-  const to = own ? own.to : steps[5];
+  let stops = own ? own.stops.map((stop) => ({ ...stop }))
+    : [{ color: steps[2], share: 50 }, { color: steps[5], share: 50 }];
+  const dir = theme.GRADIENT_DIRS[settings.gradientDir] ? settings.gradientDir : 'auto';
   const field = document.createElement('div');
   field.className = 'field gradient-field';
-  field.innerHTML = `<label><span>Gradient</span><span class="muted">${own ? 'Your own two colours' : 'Follows the accent'}</span></label>`;
+  field.innerHTML = `<label><span>Gradient</span><span class="muted">${own ? `Your own ${stops.length} colours` : 'Follows the accent'}</span></label>`;
   const preview = document.createElement('div');
   preview.className = 'gradient-preview';
-  preview.style.background = `linear-gradient(90deg, ${from}, ${to})`;
+  const paint = () => {
+    preview.style.background = theme.gradientCss(theme.placeStops(stops), dir === 'auto' ? 'right' : dir);
+    const total = stops.reduce((sum, stop) => sum + stop.share, 0) || 1;
+    field.querySelectorAll('.gradient-stop output').forEach((out, i) => { out.textContent = `${Math.round((stops[i].share / total) * 100)}%`; });
+  };
   field.appendChild(preview);
+  const keep = async (patch) => {
+    const next = await store.saveSettings(patch);
+    theme.apply(next);
+    refreshTheme();
+    redraw();
+  };
+  const keepStops = () => keep({ gradient: theme.gradientOf({ stops }) });
+
+  // Its direction: one for everything, or Auto.
+  const ways = document.createElement('div');
+  ways.className = 'gradient-dirs';
+  ways.setAttribute('role', 'group');
+  ways.setAttribute('aria-label', 'Gradient direction');
+  for (const [key, label] of Object.entries(DIR_ARROWS)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'chip';
+    button.dataset.dir = key;
+    button.textContent = label;
+    button.setAttribute('aria-label', key === 'auto' ? 'Auto: each place its own direction' : theme.GRADIENT_DIRS[key].name);
+    button.setAttribute('aria-pressed', String(key === dir));
+    button.onclick = () => { if (key !== dir) keep({ gradientDir: key }); };
+    ways.appendChild(button);
+  }
+  field.appendChild(ways);
+
+  // Each colour: its own, its share, and taken out (while more than two).
+  const list = document.createElement('div');
+  list.className = 'gradient-stops';
+  stops.forEach((stop, i) => {
+    const row = document.createElement('div');
+    row.className = 'gradient-stop';
+    const colour = document.createElement('input');
+    colour.type = 'color';
+    colour.value = stop.color;
+    colour.setAttribute('aria-label', `Gradient colour ${i + 1}`);
+    // Shown as it moves; kept once chosen.
+    colour.oninput = () => { stops[i].color = colour.value.toLowerCase(); paint(); };
+    colour.onchange = () => { stops[i].color = colour.value.toLowerCase(); keepStops(); };
+    const share = document.createElement('input');
+    share.type = 'range';
+    share.min = '1';
+    share.max = '100';
+    share.step = '1';
+    share.value = String(stop.share);
+    share.setAttribute('aria-label', `Share of colour ${i + 1}`);
+    const fill = () => share.style.setProperty('--filled', `${((Number(share.value) - 1) / 99) * 100}%`);
+    fill();
+    share.oninput = () => { stops[i].share = Number(share.value); fill(); paint(); };
+    share.onchange = () => { stops[i].share = Number(share.value); keepStops(); };
+    const shown = document.createElement('output');
+    row.append(colour, share, shown);
+    if (stops.length > 2) {
+      const drop = document.createElement('button');
+      drop.type = 'button';
+      drop.className = 'icon-btn gradient-drop';
+      drop.title = `Remove colour ${i + 1}`;
+      drop.setAttribute('aria-label', drop.title);
+      drop.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      drop.onclick = () => { stops.splice(i, 1); keepStops(); };
+      row.appendChild(drop);
+    }
+    list.appendChild(row);
+  });
+  field.appendChild(list);
+
   const row = document.createElement('div');
   row.className = 'gradient-ends';
-  const end = (label, value, key) => {
-    const wrap = document.createElement('label');
-    wrap.className = 'gradient-end';
-    const input = document.createElement('input');
-    input.type = 'color';
-    input.value = value;
-    input.setAttribute('aria-label', `Gradient ${label.toLowerCase()}`);
-    // Shown as it moves; kept once chosen.
-    input.oninput = () => {
-      const next = { from, to, [key]: input.value };
-      preview.style.background = `linear-gradient(90deg, ${next.from}, ${next.to})`;
+  if (stops.length < theme.GRADIENT_MAX) {
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'chip';
+    add.textContent = '+ Add a colour';
+    // In before the last, as the blend there already was -- so nothing jumps until it is changed.
+    add.onclick = () => {
+      const placed = theme.placeStops(stops);
+      const mid = (placed[placed.length - 3].at + placed[placed.length - 2].at) / 2;
+      stops.splice(stops.length - 1, 0, { color: theme.colourAt(placed, mid), share: 50 });
+      keepStops();
     };
-    input.onchange = async () => {
-      const next = await store.saveSettings({ gradient: { from, to, [key]: input.value.toLowerCase() } });
-      theme.apply(next);
-      refreshTheme();
-      redraw();
-    };
-    const name = document.createElement('span');
-    name.className = 'muted';
-    name.textContent = label;
-    wrap.append(input, name);
-    return wrap;
-  };
-  row.append(end('Start', from, 'from'), end('End', to, 'to'));
+    row.appendChild(add);
+  }
   if (own) {
     const back = document.createElement('button');
+    back.type = 'button';
     back.className = 'chip';
     back.textContent = 'Follow the accent';
-    back.onclick = async () => {
-      const next = await store.saveSettings({ gradient: null });
-      theme.apply(next);
-      refreshTheme();
-      redraw();
-    };
+    back.onclick = () => keep({ gradient: null });
     row.appendChild(back);
   }
   field.appendChild(row);
+  paint();
   return field;
 }
 

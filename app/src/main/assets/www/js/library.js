@@ -10,6 +10,7 @@ import { planBooks } from './group.js';
 import { isRar, rarToZip, zipNameFor } from './rar.js';
 import * as translate from './translate.js';
 import * as mix from './mix.js';
+import { gradientSvg } from './theme.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -1008,8 +1009,7 @@ const unfinishedMark = (book) => {
   const id = `uf-${String(book.id).replace(/[^\w-]/g, '')}`;
   return `<span class="tile-unfinished" role="img" aria-label="Not finished downloading: ${Math.round(done * 100)}%" data-have="${have}" style="--done:${done.toFixed(3)}">`
     + `<svg class="mark-base" viewBox="0 0 24 24">${MARK}</svg>`
-    + `<svg class="mark-fill" viewBox="0 0 24 24"><defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="0" y1="3.6" x2="0" y2="19.5">`
-    + '<stop offset="0" style="stop-color:var(--grad-from)"/><stop offset="1" style="stop-color:var(--grad-to)"/></linearGradient></defs>'
+    + `<svg class="mark-fill" viewBox="0 0 24 24"><defs>${gradientSvg(id, 'mark')}</defs>`
     + `<g stroke="url(#${id})">${MARK}</g></svg></span>`;
 };
 
