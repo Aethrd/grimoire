@@ -136,6 +136,7 @@ async function show(name, { replace = false } = {}) {
    * with a build in it -- mid-download, say, to read -- is going to the shelf.
    * Anywhere else, picking is over. */
   if (name === 'library' && pickNext) { pickNext = false; startPicking(); }
+  if (name === 'library' && shelfStale) { shelfStale = false; refreshShelf().catch(() => {}); }
   // Build with nothing in it and novels queued: their index, first.
   if (name === 'workshop' && build.isEmpty() && !buildRun && (webQueue.length || queueState.running)) buildIndex = true;
   else if (name !== 'library') endPicking();
@@ -294,7 +295,7 @@ function heldNote(count, days) {
 async function putQuietOnHold() {
   const count = await library.holdQuietBooks().catch(() => 0);
   if (!count) return;
-  if (current === 'library') await refreshShelf();
+  shelfChanged();
   heldNote(count, (await store.settings()).autoHoldDays ?? 5);
 }
 
@@ -309,7 +310,18 @@ async function putQuietOnHold() {
  * from what the library is then; any number asked for meanwhile are that one. */
 let shelfDrawing = null;
 let shelfAgain = false;
+/* The shelf changed behind another screen -- a download's book appearing on
+ * it, a book done -- is drawn again when it is next shown, not left as it was
+ * when it was last looked at (seven downloading, three on the shelf). On it
+ * now: drawn at once. */
+let shelfStale = false;
+function shelfChanged() {
+  if (current === 'library') refreshShelf().catch(() => {});
+  else shelfStale = true;
+}
+
 function refreshShelf() {
+  shelfStale = false;
   if (shelfDrawing) {
     shelfAgain = true;
     return shelfDrawing;
@@ -755,7 +767,7 @@ function endPicking() {
   buildPicks = null;
   library.setBuildOrder(null);
   paintPicking();
-  if (current === 'library') refreshShelf();
+  shelfChanged();
   return true;
 }
 
@@ -6855,7 +6867,7 @@ function onJobBook(job, changes) {
       const book = await store.get('books', job.bookId);
       if (!book) return;
       await store.put('books', { ...book, ...pending.changes });
-      if (current === 'library') refreshShelf().catch(() => {});
+      shelfChanged();
     } catch (error) {
       console.warn('queued book', error);
     }
@@ -8123,7 +8135,7 @@ function markUnfinished() {
   const key = [...left.keys()].sort().join(',') + `|${making}`;
   if (key !== unfinishedKey) {
     unfinishedKey = key;
-    if (current === 'library') refreshShelf().catch(() => {});
+    shelfChanged();
     return;
   }
   // The same books: each mark's tray filled to where it is now, in place.
@@ -11648,7 +11660,7 @@ async function settleMisplacedOnce(settings) {
   await store.saveSettings({ misplacedSettled: true });
   if (put) {
     whenNotReading(() => toast(`${put} chapter${put === 1 ? '' : 's'} sent to the end of a book put back in ${put === 1 ? 'its' : 'their'} place.`, 6000));
-    if (current === 'library') refreshShelf().catch(() => {});
+    shelfChanged();
   }
 }
 

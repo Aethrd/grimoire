@@ -3207,6 +3207,12 @@ await t('a book with more to download is marked on its cover; the strip sits on 
   assert.match(css, /\.tile-unfinished \.mark-fill \{[^}]*clip-path: inset\(calc\(\(3\.6 \+ 15\.9 \* \(1 - var\(--done, 0\)\)\) \/ 24 \* 100% - 2px\) 0 0 0\);/);
   // The strip seated on the tab bar by its real height (see the tools tests).
   assert.match(app, /setProperty\('--tabbar-real', shown \? `\$\{height\.toFixed\(2\)\}px` : '0px'\)/);
+  /* A download's book appearing while another screen is shown: the shelf is
+   * drawn again when next shown, not left as it was last looked at. */
+  assert.match(app, /function shelfChanged\(\) \{\s+if \(current === 'library'\) refreshShelf\(\)\.catch\(\(\) => \{\}\);\s+else shelfStale = true;\s+\}/);
+  assert.match(app, /if \(name === 'library' && shelfStale\) \{ shelfStale = false; refreshShelf\(\)\.catch\(\(\) => \{\}\); \}/);
+  assert.match(app, /unfinishedKey = key;\s+shelfChanged\(\);/);
+  assert.equal((app.match(/if \(current === 'library'\) refreshShelf\(\)\.catch/g) || []).length, 1, 'a change behind another screen still left undrawn');
   assert.match(app, /new ResizeObserver\(seat\)\.observe\(bar\)/);
 });
 
