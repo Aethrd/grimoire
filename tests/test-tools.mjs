@@ -2113,6 +2113,36 @@ await t('the theme gradient: the accent by default, two colours of your own, kep
   assert.equal(document.documentElement.dataset.gradient, undefined);
 });
 
+await t('the opening scene: only for a slow open, faded in and out, faint behind the queue, calm when motion is reduced', async () => {
+  const opening = await import(new URL('../app/src/main/assets/www/js/opening.js', import.meta.url).href);
+  // Where no canvas can be drawn on (here), it starts nothing and stops cleanly.
+  const scene = opening.playScene(document.createElement('canvas'), { glyphs: 'Test' });
+  assert.equal(typeof scene.stop, 'function');
+  scene.stop();
+  assert.doesNotThrow(() => opening.playScene(null).stop());
+  const src = read('app/src/main/assets/www/js/opening.js');
+  // Four times in ten the circle lies dark; otherwise one effect of six, at random.
+  assert.match(src, /Math\.random\(\) < 0\.4 \? 'dark' : EFFECTS\[Math\.floor\(Math\.random\(\) \* EFFECTS\.length\)\]/);
+  assert.match(src, /const EFFECTS = \['shine', 'fluctuate', 'decay', 'erode', 'burn', 'freeze'\];/);
+  // A quarter faster than it was; reduced motion read from the phone; an effect handed over from where it was.
+  assert.match(src, /const WRITE_SPEED = 37\.5;/);
+  assert.match(src, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
+  assert.match(src, /const b = effectLook\(c\.was, c, seed, now, c\.wasT \|\| 0\);/);
+  // Every circle is put together at random, and the pages are plain (no grain).
+  for (const part of ["'spiked'", "'crescents'", "'broken'", "'script'", "'petals'", "'orbit'", "'hexagram'"]) assert.ok(src.includes(part), part);
+  assert.ok(!/grain(Pattern)?\b/.test(src.replace(/no grain/g, '')), 'no paper grain left');
+  const app = read('app/src/main/assets/www/js/app.js');
+  // Only for an open that takes more than a moment; stays long enough not to blink; faded out.
+  assert.match(app, /const SOON_MS = 330;\s+const STAY_MS = 600;/);
+  assert.match(app, /const opened = openingScreen\.soon\(book\);[\s\S]{0,200}finally \{\s+ready\(\);\s+opened\(\);/);
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\.opening \{[^}]*background: var\(--bg\); opacity: 0;\s+transition: opacity \.4s/);
+  assert.match(css, /\.import-progress\.open \.jobs-scene \{[^}]*opacity: \.22;/);
+  assert.match(app, /if \(showing && !scene\) scene = playScene\(el\('jobs-scene'\), \{ faint: true \}\);\s+else if \(!showing && scene\) \{ scene\.stop\(\); scene = null; \}/);
+  // A book that opens at once never shows it.
+  assert.equal(el('opening').hidden, true);
+});
+
 await t('a second notice joins the first instead of replacing it', async () => {
   const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
   el('toast').hidden = true;

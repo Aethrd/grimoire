@@ -1103,7 +1103,15 @@
       </button>
     </header>
     <div class="jobs" id="jobs"></div>
+    <!-- The opening scene, faint, under the books' progress (opening.js). -->
+    <canvas class="jobs-scene" id="jobs-scene" aria-hidden="true"></canvas>
   </div>
+</div>
+
+<!-- While a book takes more than a moment to open: the opening scene (opening.js). -->
+<div class="opening" id="opening" hidden>
+  <canvas class="opening-scene" id="opening-scene" aria-hidden="true"></canvas>
+  <div class="opening-caption" role="status"><b id="opening-title"></b><small id="opening-meta"></small></div>
 </div>
 
 <!-- Sits opposite Android's own selection menu, never over it. -->

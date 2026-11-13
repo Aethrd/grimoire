@@ -7,6 +7,7 @@ import * as library from './library.js';
 import * as screens from './screens.js';
 import * as panels from './panels.js';
 import * as fonts from './fonts.js';
+import { playScene } from './opening.js';
 import { nameWithFormat, chapterHtml, plainTextOf } from './parse.js';
 import * as glossary from './glossary.js';
 import * as build from './build.js';
@@ -388,6 +389,56 @@ function settleGreyMix(book) {
 let opening = null;
 const bookReady = () => opening || Promise.resolve();
 
+/* The opening scene (opening.js), over the page while a book opens -- only
+ * if it takes longer than SOON_MS: a short book opens straight to its page,
+ * with no loader flashed at it. Shown, it fades in, stays at least STAY_MS,
+ * and fades out into the page. */
+const openingScreen = (() => {
+  const SOON_MS = 330;
+  const STAY_MS = 600;
+  let timer = null;
+  let shownAt = 0;
+  let scene = null;
+  let leaving = null;
+  function show(book) {
+    const node = el('opening');
+    if (!node) return;
+    clearTimeout(leaving);
+    el('opening-title').textContent = library.displayTitle(book);
+    const chapters = book.chapters || book.chapterCount || 0;
+    el('opening-meta').textContent = chapters ? `Opening · ${chapters.toLocaleString()} chapter${chapters === 1 ? '' : 's'}` : 'Opening';
+    node.classList.remove('leaving');
+    node.hidden = false;
+    if (!scene) scene = playScene(el('opening-scene'), { glyphs: library.displayTitle(book) });
+    requestAnimationFrame(() => node.classList.add('shown'));
+    shownAt = Date.now();
+  }
+  function hide() {
+    const node = el('opening');
+    if (!node || !shownAt) return;
+    const stay = Math.max(0, STAY_MS - (Date.now() - shownAt));
+    shownAt = 0;
+    leaving = setTimeout(() => {
+      node.classList.add('leaving');
+      node.classList.remove('shown');
+      leaving = setTimeout(() => {
+        node.hidden = true;
+        scene?.stop();
+        scene = null;
+      }, 320);
+    }, stay);
+  }
+  return {
+    /** A book begun opening: the scene comes if it is still opening in a moment. @returns done() */
+    soon(book) {
+      clearTimeout(timer);
+      let over = false;
+      timer = setTimeout(() => { if (!over) show(book); }, SOON_MS);
+      return () => { over = true; clearTimeout(timer); hide(); };
+    },
+  };
+})();
+
 async function openBook(book, opts) {
   // Opened afresh, so nothing is waiting to be reopened.
   readerStale = null;
@@ -399,11 +450,14 @@ async function openBook(book, opts) {
   opening = mine;
   // Ready once the book and its chapters are in -- not once its first page is drawn.
   const ready = () => { done(); if (opening === mine) opening = null; };
+  // Slow to open (a long book, the library busy): the opening scene over it meanwhile.
+  const opened = openingScreen.soon(book);
   try {
     await show('reader');
     await readIn(book, { ...opts, onBook: ready });
   } finally {
     ready();
+    opened();
   }
 }
 
@@ -2599,6 +2653,9 @@ const progress = (() => {
     if (seated) return;
     seated = true;
     window.addEventListener('resize', seat);
+    // However the page comes to close -- everything finished, Back -- its scene stops with it.
+    const host = panel();
+    if (host && typeof MutationObserver === 'function') new MutationObserver(syncScene).observe(host, { attributes: true, attributeFilter: ['class', 'hidden'] });
     const bar = el('tabbar');
     if (!bar) return;
     // Its height as it changes, and its showing and hiding -- each said the moment it happens.
@@ -2635,6 +2692,16 @@ const progress = (() => {
     if (!open && host.classList.contains('open')) guardTaps();
     host.classList.toggle('open', open);
     paint();
+    syncScene();
+  }
+  /* The opening scene, faint, under the books' progress -- playing only while
+   * the page is open and shown; stopped the moment it is not. */
+  let scene = null;
+  function syncScene() {
+    const host = panel();
+    const showing = !!host && !host.hidden && host.classList.contains('open');
+    if (showing && !scene) scene = playScene(el('jobs-scene'), { faint: true });
+    else if (!showing && scene) { scene.stop(); scene = null; }
   }
 
   function paint() {
