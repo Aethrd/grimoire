@@ -2704,6 +2704,12 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .build-queue-list li small { display: block; }
 .build-queue-list .icon-btn { flex: none; }
 .build-queue-list .chip { flex: none; }
+/* Pause and resume: a ring and its mark in the theme's gradient, no word. */
+.play-btn { flex: none; width: 44px; height: 44px; min-height: 0; padding: 0; display: grid; place-items: center;
+  border: 0; border-radius: 50%; background: none; box-shadow: none; }
+.play-btn svg { width: 34px; height: 34px; filter: saturate(1.4) brightness(1.15); }
+.play-btn:active { background: var(--accent-soft); }
+.play-btn:disabled { opacity: .35; }
 .build-queue-list li { flex-wrap: wrap; }
 .build-queue-list li[data-status="attention"] small { color: var(--danger, #e08a8a); }
 .build-queue-list li[data-status="done"] { opacity: .7; }
@@ -2751,7 +2757,8 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
    as far as the book has come (--done, 0 to 1). The fill is cut to the mark's
    own height (y 3.6 to 19.5 of 24), so 50% is half the mark. */
 .tile-unfinished { position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(to bottom, rgb(18 18 20 / .7), rgb(210 210 214 / .22)); }
+  /* A little darker than it was, the cover still plain through it. */
+  background: linear-gradient(to bottom, rgb(18 18 20 / .76), rgb(150 150 156 / .26)); }
 .tile-unfinished svg { position: absolute; left: 20%; width: 60%; height: auto; top: 50%;
   transform: translateY(-50%); fill: none; stroke-width: 2.3;
   stroke-linecap: round; stroke-linejoin: round; }

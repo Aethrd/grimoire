@@ -99,7 +99,7 @@ await t('the queue shows on Build, with each book and Start queue', async () => 
   assert.ok(buttons().includes('Move up') && buttons().includes('Remove from the queue'));
   assert.equal((await store.settings()).queueLocked, false);
   assert.match(document.getElementById('build-queue-title').textContent, /4 waiting/);
-  assert.equal(document.getElementById('build-queue-go').textContent, 'Start queue');
+  assert.equal(document.getElementById('build-queue-go').getAttribute('aria-label'), 'Start queue');
 });
 
 await t('a queued book not yet started opens to be named, as a book in Build is', async () => {
@@ -220,7 +220,7 @@ await t('done, the queue says so and lets the screen go', async () => {
     await new Promise((r) => setTimeout(r, 50));
   }
   assert.match(document.getElementById('build-queue-title').textContent, /4 done/);
-  assert.equal(document.getElementById('build-queue-go').textContent, 'Start queue');
+  assert.equal(document.getElementById('build-queue-go').getAttribute('aria-label'), 'Start queue');
   assert.equal(document.getElementById('build-queue-go').disabled, true);
 });
 
@@ -439,6 +439,15 @@ await t('two settings saved at once both stay saved', async () => {
   assert.match(app, /else if \(readable\) \{\s+const book = await store\.get\('books', job\.bookId\)/);
   assert.match(app, /stopped\.textContent = where \|\| why/);
   console.log('ok  any queued book not downloading opens');
+  // Pause and resume drawn, in the theme's gradient, named for a screen reader; a paused book resumes on its own.
+  assert.match(app, /playButton\(go, queueState\.running \? 'pause' : 'play', queueState\.running \? 'Pause all' : \(count\('paused'\) \? 'Resume all' : 'Start queue'\)\);/);
+  assert.match(app, /if \(job\.status === 'paused'\) \{\s+row\.appendChild\(playButton\(word\('', \(\) => \{\s+job\.status = 'queued';/);
+  assert.match(app, /if \(queueState\.running\) \{ pumpQueue\(\); return; \}[\s\S]{0,160}runJob\(job\);/);
+  assert.match(app, /<stop offset="0" style="stop-color:var\(--accent-300\)"\/>/);
+  const head = document.getElementById('build-queue-go');
+  assert.ok(head.classList.contains('play-btn') && head.querySelector('svg circle'), 'the queue head is not drawn');
+  assert.equal(head.textContent.trim(), '', 'a word beside the drawn button');
+  console.log('ok  pause and resume drawn; a paused book resumes on its own');
 }
 
 console.log(`\n${pass} queue checks passed`);

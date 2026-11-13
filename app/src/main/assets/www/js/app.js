@@ -7023,6 +7023,31 @@ function startQueue() {
   pumpQueue();
 }
 
+/* Pause and resume, drawn: a ring with two bars, a ring with a triangle --
+ * in the theme's own gradient, deep to bright. Where they stand says what
+ * they do, so no word goes with them; each is named for a screen reader. */
+let playIcons = 0;
+function playIcon(kind) {
+  const id = `play-grad-${++playIcons}`;
+  const inner = kind === 'pause'
+    ? '<rect x="9" y="8" width="2.2" height="8" rx="1.1"/><rect x="12.8" y="8" width="2.2" height="8" rx="1.1"/>'
+    : '<path d="M10 8.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1l-6.1-3.8a.6.6 0 0 0-.9.5z"/>';
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><defs>'
+    + `<linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">`
+    + '<stop offset="0" style="stop-color:var(--accent-300)"/><stop offset="1" style="stop-color:var(--accent-600, var(--accent))"/>'
+    + `</linearGradient></defs><circle cx="12" cy="12" r="9.6" fill="none" stroke="url(#${id})" stroke-width="1.8"/>`
+    + `<g fill="url(#${id})" stroke="none">${inner}</g></svg>`;
+}
+function playButton(button, kind, label) {
+  button.classList.remove('btn', 'ghost', 'chip');
+  button.classList.add('play-btn');
+  button.dataset.kind = kind;
+  button.innerHTML = playIcon(kind);
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  return button;
+}
+
 /** Pause all: the books under way stop now -- each keeps what came, the rest kept to resume -- and none starts. */
 function pauseQueue() {
   queueState.running = false;
@@ -7396,7 +7421,7 @@ function paintQueueHead() {
     + `Each a book of its own; up to ${queueState.atOnce} at once, ${perSite}. `
     + `Each site at its own remembered delay, pictures ${webState.pictures ? 'on' : 'off'}.`;
   const go = el('build-queue-go');
-  go.textContent = queueState.running ? 'Pause all' : (count('paused') ? 'Resume' : 'Start queue');
+  playButton(go, queueState.running ? 'pause' : 'play', queueState.running ? 'Pause all' : (count('paused') ? 'Resume all' : 'Start queue'));
   go.disabled = !queueState.running && !webQueue.some((job) => ['queued', 'retry', 'paused'].includes(job.status));
 }
 
@@ -7509,8 +7534,21 @@ function paintQueue() {
     };
     const move = (by) => () => { webQueue.splice(at + by, 0, ...webQueue.splice(at, 1)); saveQueue(); renderWorkshop(); };
     if (job.status === 'running') {
-      row.appendChild(word('Pause', () => { const under = queueJobs.get(job.id); if (under) under.pausing = true; }));
+      row.appendChild(playButton(word('', () => { const under = queueJobs.get(job.id); if (under) under.pausing = true; }), 'pause', `Pause “${job.name}”`));
     } else {
+      /* Paused: carried on from where it stopped. With the queue going, it
+       * takes its turn; with the queue paused, it alone goes -- the others
+       * stay as they are. */
+      if (job.status === 'paused') {
+        row.appendChild(playButton(word('', () => {
+          job.status = 'queued';
+          saveQueue();
+          if (queueState.running) { pumpQueue(); return; }
+          try { window.GrimoireNative?.keepScreenOn?.(true); } catch { /* not in a browser */ }
+          runJob(job);
+          renderWorkshop();
+        }), 'play', `Resume “${job.name}”`));
+      }
       if (job.status === 'attention') {
         // Past a check in the site itself, then tried again; or just tried again.
         if (web.wantsCheck(job.note) && web.canOpenSite()) {

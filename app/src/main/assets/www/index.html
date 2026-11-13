@@ -411,7 +411,8 @@
           <strong id="build-queue-title">Queue</strong>
           <!-- Locked: nothing removed or moved by a slip of the finger. -->
           <button class="icon-btn build-queue-lock" id="build-queue-lock" aria-pressed="false" title="Lock the queue"></button>
-          <button class="btn ghost" id="build-queue-go">Start queue</button>
+          <!-- Start, pause all, resume all: drawn (app.js, playButton), named for a screen reader. -->
+          <button class="play-btn" id="build-queue-go" aria-label="Start queue"></button>
         </div>
         <small class="muted" id="build-queue-note"></small>
         <!-- How many books side by side, and from one site (sliders); finished ones cleared. -->
