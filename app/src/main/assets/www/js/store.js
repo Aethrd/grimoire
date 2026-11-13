@@ -182,6 +182,10 @@ export const DEFAULT_SETTINGS = {
   themeMode: 'dark',              // both themes are pastel; dark is default
   accent: '#b4b0d6',
   backgroundImage: null,
+  // The theme's gradient (marks, pause and resume): null follows the accent, else { from, to }.
+  gradient: null,
+  // Fonts of your own, to read in: [{ id, name }] (the files themselves kept apart, see fonts.js).
+  fonts: [],
   veil: 0.62,                     // 62% in dark, 28% in light
   columns: 2,
   // Which folder the shelf is filtered to: null for everything, '' for

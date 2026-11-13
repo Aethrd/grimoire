@@ -1009,7 +1009,7 @@ const unfinishedMark = (book) => {
   return `<span class="tile-unfinished" role="img" aria-label="Not finished downloading: ${Math.round(done * 100)}%" data-have="${have}" style="--done:${done.toFixed(3)}">`
     + `<svg class="mark-base" viewBox="0 0 24 24">${MARK}</svg>`
     + `<svg class="mark-fill" viewBox="0 0 24 24"><defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="0" y1="3.6" x2="0" y2="19.5">`
-    + '<stop offset="0" style="stop-color:var(--accent-300)"/><stop offset="1" style="stop-color:var(--accent-500)"/></linearGradient></defs>'
+    + '<stop offset="0" style="stop-color:var(--grad-from)"/><stop offset="1" style="stop-color:var(--grad-to)"/></linearGradient></defs>'
     + `<g stroke="url(#${id})">${MARK}</g></svg></span>`;
 };
 

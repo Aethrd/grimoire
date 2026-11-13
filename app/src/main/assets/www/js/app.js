@@ -6,6 +6,7 @@ import * as reader from './reader.js';
 import * as library from './library.js';
 import * as screens from './screens.js';
 import * as panels from './panels.js';
+import * as fonts from './fonts.js';
 import { nameWithFormat, chapterHtml, plainTextOf } from './parse.js';
 import * as glossary from './glossary.js';
 import * as build from './build.js';
@@ -7037,7 +7038,7 @@ function playIcon(kind) {
     : `<path d="M9.4 8.1L15.8 12L9.4 15.9Z" stroke="url(#${id})" stroke-width="1.3" stroke-linejoin="round"/>`;
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><defs>'
     + `<linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">`
-    + '<stop offset="0" style="stop-color:var(--accent-300)"/><stop offset="1" style="stop-color:var(--accent-600, var(--accent))"/>'
+    + '<stop offset="0" style="stop-color:var(--grad-from)"/><stop offset="1" style="stop-color:var(--grad-to)"/>'
     + `</linearGradient></defs><circle cx="12" cy="12" r="9.6" fill="none" stroke="url(#${id})" stroke-width="1.8"/>`
     + `<g fill="url(#${id})" stroke="none">${inner}</g></svg>`;
 }
@@ -11609,6 +11610,8 @@ async function boot() {
   // cleared before the shelf is drawn.
   const rescued = await rescueCutBuilds().catch(() => []);
   await library.sweepUnfinishedImports();
+  // Fonts of your own, loaded before any book is drawn in one (not waited on for long: a slow one is not the shelf's).
+  await Promise.race([fonts.loadAll().catch(() => []), new Promise((resolve) => setTimeout(resolve, 1500))]);
   // Books left unread for days go On hold before the shelf shows them.
   const held = await library.holdQuietBooks().catch(() => 0);
   // Locked only if a passphrase exists to unlock it with.

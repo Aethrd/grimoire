@@ -19,6 +19,7 @@ import { countWords, chapterHtml, spacedByLines } from './parse.js';
 import { pool } from './blobs.js';
 import * as translate from './translate.js';
 import * as frames from './frame.js';
+import { faceFamily } from './fonts.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -1216,8 +1217,8 @@ export function applyLayout(layout, settings) {
   root.setProperty('--read-align', layout.justified ? 'justify' : 'left');
   // Justified text needs a first-line indent or the paragraph breaks vanish.
   root.setProperty('--read-indent', layout.justified ? '1.2em' : '0');
-  root.setProperty('--read-face', layout.face === 'Archivo'
-    ? 'var(--font-heading)' : 'var(--font-body)');
+  // Newsreader, Archivo, or a font of your own (fonts.js).
+  root.setProperty('--read-face', faceFamily(layout.face));
   if (layout.ink) root.setProperty('--read-ink', layout.ink);
   else root.removeProperty('--read-ink');
 

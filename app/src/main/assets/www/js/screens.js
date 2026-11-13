@@ -1,6 +1,7 @@
 /* Screens that hang off a book: sort, layout, reel, find, index. */
 
 import * as store from './store.js';
+import * as fonts from './fonts.js';
 import { chapterPlainText } from './parse.js';
 import * as reader from './reader.js';
 import * as library from './library.js';
@@ -264,12 +265,14 @@ export async function openLayout(bookId) {
   faces.innerHTML = '<p class="eyebrow">Face</p>';
   const faceRow = document.createElement('div');
   faceRow.className = 'chip-row wrap';
-  for (const [face, family] of [['Newsreader', 'var(--font-body)'], ['Archivo', 'var(--font-heading)']]) {
+  for (const [face, family, label] of [['Newsreader', 'var(--font-body)'], ['Archivo', 'var(--font-heading)'],
+    // Fonts of your own (Settings, Appearance): each chip set in its own face.
+    ...(await fonts.list()).map((font) => [`font:${font.id}`, fonts.faceFamily(`font:${font.id}`), font.name])]) {
     const chip = document.createElement('button');
     chip.className = 'chip';
     chip.style.fontFamily = family;      // each chip is set in its own face
     chip.style.textTransform = 'none';
-    chip.textContent = face;
+    chip.textContent = label || face;
     chip.setAttribute('aria-pressed', String(layout.face === face));
     chip.onclick = async () => {
       const next = await store.saveLayout(bookId, { face });

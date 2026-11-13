@@ -2028,6 +2028,91 @@ await t('the progress strip sits on the tab bar by its real height, and at the f
   await settle(30);
 });
 
+await t('a font of your own: checked, kept apart from the settings, a face to read in, let go', async () => {
+  const fonts = await import(new URL('../app/src/main/assets/www/js/fonts.js', import.meta.url).href);
+  const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
+  const real = fs.readFileSync(new URL('../app/src/main/assets/www/fonts/archivo-latin-600-normal.woff2', import.meta.url));
+  assert.equal(fonts.looksLikeFont(real.buffer.slice(real.byteOffset, real.byteOffset + 8)), true);
+  assert.equal(fonts.looksLikeFont(new TextEncoder().encode('<html>').buffer), false);
+  assert.equal(fonts.nameOfFile('Noto_Serif_JP.ttf'), 'Noto Serif JP');
+  // Not a font: said so, nothing kept.
+  await assert.rejects(fonts.add(new window.File(['not a font at all'], 'notes.ttf')), /not a font/);
+  assert.deepEqual(await fonts.list(), []);
+  // A font: kept -- its file apart from the settings, only its name in them.
+  const font = await fonts.add(new window.File([real], 'My_Face.woff2', { type: 'font/woff2' }));
+  assert.equal(font.name, 'My Face');
+  assert.deepEqual((await fonts.list()).map((f) => f.name), ['My Face']);
+  const kept = await store.get('settings', `font:${font.id}`);
+  // (The test database keeps no Blob as a Blob -- as with covers here; the phone's does.)
+  assert.ok(kept?.blob && kept.name === 'My Face', 'the font file is not kept');
+  assert.ok(!JSON.stringify(await store.settings()).includes('wOF2'), 'the font file is in the settings');
+  // A face to read in, beside the app's two, set in its own face.
+  assert.equal(fonts.faceFamily(`font:${font.id}`), `"quire-font-${font.id}", var(--font-body)`);
+  assert.equal(fonts.faceFamily('Archivo'), 'var(--font-heading)');
+  assert.equal(fonts.faceFamily('Newsreader'), 'var(--font-body)');
+  reader.applyLayout({ size: 18, leading: 1.6, para: 8, margin: 20, vmargin: 16, justified: false, face: `font:${font.id}` });
+  assert.equal(document.documentElement.style.getPropertyValue('--read-face'), `"quire-font-${font.id}", var(--font-body)`);
+  // In Appearance, listed in its own face; and Add a font asks for fonts, not only "font/*".
+  const host = document.createElement('div');
+  await panels.openAppearance(host);
+  await settle(50);
+  assert.ok(!/not possible yet/.test(host.textContent));
+  assert.match(host.querySelector('.font-row .font-name').textContent, /My Face/);
+  assert.match(host.querySelector('.fonts-field input[type="file"]').accept, /\.ttf.*\.otf.*\.woff.*application\/octet-stream/);
+  // Let go: its file and its name.
+  await fonts.remove(font.id);
+  assert.deepEqual(await fonts.list(), []);
+  assert.equal(await store.get('settings', `font:${font.id}`), undefined);
+});
+
+await t('the theme gradient: the accent by default, two colours of your own, kept with a theme', async () => {
+  const theme = await import(new URL('../app/src/main/assets/www/js/theme.js', import.meta.url).href);
+  const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  const root = document.documentElement.style;
+  theme.apply({ ...(await store.settings()), gradient: null });
+  const steps = theme.ramp((await store.settings()).accent);
+  assert.equal(root.getPropertyValue('--grad-from'), steps[2]);
+  assert.equal(root.getPropertyValue('--grad-to'), steps[5]);
+  theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' } });
+  assert.equal(root.getPropertyValue('--grad-from'), '#ff8800');
+  assert.equal(root.getPropertyValue('--grad-to'), '#3355ff');
+  assert.equal(document.documentElement.dataset.gradient, 'own');
+  // The marks and pause and resume drawn in it.
+  assert.match(read('app/src/main/assets/www/js/library.js'), /stop-color:var\(--grad-from\)[\s\S]{0,80}stop-color:var\(--grad-to\)/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /stop-color:var\(--grad-from\)[\s\S]{0,80}stop-color:var\(--grad-to\)/);
+  // Every progress bar in it too -- and nothing later in the stylesheet painting one plain over it.
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\.bar-fill, \.progress-fill, \.tile-bar > span, \.jobs-strip-fill \{\s+background: linear-gradient\(90deg, var\(--grad-from, var\(--accent-300\)\), var\(--grad-to, var\(--accent\)\)\);/);
+  const gradientRule = css.indexOf('.jobs-strip-fill {\n  background: linear-gradient');
+  const after = css.slice(css.indexOf('}', gradientRule) + 1);
+  for (const name of ['.bar-fill', '.progress-fill', '.tile-bar > span', '.jobs-strip-fill']) {
+    const later = [...after.matchAll(new RegExp(`(^|\\n)${name.replace(/[.>]/g, (c) => `\\${c}`)} \\{[^}]*background:`, 'g'))];
+    assert.equal(later.length, 0, `${name} painted plain after the gradient`);
+  }
+  // Kept with a theme, read back from a file; a bad colour is not taken.
+  assert.ok(theme.THEME_KEYS.includes('gradient'));
+  const [read1] = theme.readThemes({ name: 'Sunset', gradient: { from: '#FF8800', to: '#3355ff' } });
+  assert.deepEqual(read1.gradient, { from: '#ff8800', to: '#3355ff' });
+  assert.equal('gradient' in theme.readThemes({ name: 'Odd', accent: '#112233', gradient: { from: 'red', to: '#3355ff' } })[0], false);
+  // In Appearance: its two ends, and back to the accent's.
+  await store.saveSettings({ gradient: { from: '#ff8800', to: '#3355ff' } });
+  const host = document.createElement('div');
+  await panels.openAppearance(host);
+  const ends = host.querySelectorAll('.gradient-field input[type="color"]');
+  assert.equal(ends.length, 2);
+  assert.deepEqual([...ends].map((i) => i.value), ['#ff8800', '#3355ff']);
+  ends[1].value = '#00aa66';
+  ends[1].dispatchEvent(new window.Event('change'));
+  await settle(50);
+  assert.deepEqual((await store.settings()).gradient, { from: '#ff8800', to: '#00aa66' });
+  const back = [...host.querySelectorAll('.gradient-field .chip')].find((b) => /Follow the accent/.test(b.textContent));
+  back.click();
+  await settle(50);
+  assert.equal((await store.settings()).gradient, null);
+  assert.equal(document.documentElement.dataset.gradient, undefined);
+});
+
 await t('a second notice joins the first instead of replacing it', async () => {
   const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
   el('toast').hidden = true;

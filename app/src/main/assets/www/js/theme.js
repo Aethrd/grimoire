@@ -135,6 +135,15 @@ export function apply(settings) {
   root.setProperty('--accent', base);
   root.setProperty('--on-accent', contrast(base, '#ffffff') >= 3 ? '#ffffff' : steps[7]);
 
+  /* The theme's gradient -- the download mark, pause and resume: from a
+   * light step of the accent to a deep one, or two colours of your own. */
+  const gradient = settings.gradient && HEX.test(settings.gradient.from || '') && HEX.test(settings.gradient.to || '')
+    ? settings.gradient : null;
+  root.setProperty('--grad-from', gradient ? gradient.from : steps[STEP_NAMES.indexOf(300)]);
+  root.setProperty('--grad-to', gradient ? gradient.to : steps[STEP_NAMES.indexOf(600)]);
+  if (gradient) document.documentElement.dataset.gradient = 'own';
+  else delete document.documentElement.dataset.gradient;
+
   // Body-size text in the accent needs a deeper step than chrome does.
   root.setProperty('--accent-ink', guard(base, ground.bg).ink);
 
@@ -282,7 +291,7 @@ const matrixFor = ([r, g, b]) => [
  * to bring back after a reinstall. The picture travels inside the file.
  */
 
-export const THEME_KEYS = ['themeMode', 'accent', 'heatRamp', 'backgroundImage', 'veil'];
+export const THEME_KEYS = ['themeMode', 'accent', 'heatRamp', 'backgroundImage', 'veil', 'gradient'];
 /** What a theme file says it is, so that one can be told from any other JSON. */
 export const THEME_FORMAT = 'quire-theme';
 
@@ -328,6 +337,11 @@ export function readThemes(data, fallbackName = 'Imported theme') {
     if (raw.backgroundImage === null) theme.backgroundImage = null;
     else if (typeof raw.backgroundImage === 'string' && PICTURE.test(raw.backgroundImage)) {
       theme.backgroundImage = raw.backgroundImage.replace(/\s+/g, '');
+    }
+    // The gradient: two colours, or following the accent.
+    if (raw.gradient === null) theme.gradient = null;
+    else if (raw.gradient && HEX.test(String(raw.gradient.from || '').trim()) && HEX.test(String(raw.gradient.to || '').trim())) {
+      theme.gradient = { from: raw.gradient.from.trim().toLowerCase(), to: raw.gradient.to.trim().toLowerCase() };
     }
     const veil = Number(raw.veil);
     if (raw.veil != null && Number.isFinite(veil)) theme.veil = Math.max(0, Math.min(0.95, veil));

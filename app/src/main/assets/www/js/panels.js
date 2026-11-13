@@ -15,6 +15,7 @@ import { toast } from './screens.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
 import * as frames from './frame.js';
+import * as fonts from './fonts.js';
 
 const el = (id) => document.getElementById(id);
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -127,6 +128,7 @@ export async function openAppearance(host) {
   check.textContent = `Body text contrast ${ratio.toFixed(1)}:1 — ${ratio >= 4.5 ? 'passes' : 'blocked, using nearest passing step'}`;
   accents.appendChild(check);
   body.appendChild(accents);
+  body.appendChild(gradientField(settings, () => openAppearance(body)));
 
   // Background image + veil.
   const bg = document.createElement('div');
@@ -179,16 +181,7 @@ export async function openAppearance(host) {
   paletteHost.id = 'auto-palette';
   body.appendChild(paletteHost);
 
-  // Font import needs a bridge the shell does not have yet, so say so rather
-  // than shipping a control that quietly does nothing.
-  const fonts = document.createElement('div');
-  fonts.className = 'card';
-  fonts.innerHTML = `
-    <h2>Font import</h2>
-    <p class="muted" style="font-size:12px;line-height:1.5;margin:0">
-      Archivo and Newsreader come with the app. Adding your own .ttf or .otf
-      fonts is not possible yet.</p>`;
-  body.appendChild(fonts);
+  body.appendChild(fontsField(() => openAppearance(body)));
 
   function renderPalette(palette) {
     paletteHost.innerHTML = '';
@@ -216,6 +209,138 @@ export async function openAppearance(host) {
   }
 }
 
+/* ── the theme's gradient ──────────────────────────────────────────────
+ *
+ * What the download mark fills with and pause and resume are drawn in: from
+ * a light step of the accent to a deep one, unless two colours of your own
+ * are chosen. Kept with the theme, so a saved or sent theme carries it.
+ */
+function gradientField(settings, redraw) {
+  const steps = theme.ramp(settings.accent);
+  const own = settings.gradient && settings.gradient.from && settings.gradient.to ? settings.gradient : null;
+  // The accent's own, as it is drawn (theme.apply: its 300 and 600 steps).
+  const from = own ? own.from : steps[2];
+  const to = own ? own.to : steps[5];
+  const field = document.createElement('div');
+  field.className = 'field gradient-field';
+  field.innerHTML = `<label><span>Gradient</span><span class="muted">${own ? 'Your own two colours' : 'Follows the accent'}</span></label>`;
+  const preview = document.createElement('div');
+  preview.className = 'gradient-preview';
+  preview.style.background = `linear-gradient(90deg, ${from}, ${to})`;
+  field.appendChild(preview);
+  const row = document.createElement('div');
+  row.className = 'gradient-ends';
+  const end = (label, value, key) => {
+    const wrap = document.createElement('label');
+    wrap.className = 'gradient-end';
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = value;
+    input.setAttribute('aria-label', `Gradient ${label.toLowerCase()}`);
+    // Shown as it moves; kept once chosen.
+    input.oninput = () => {
+      const next = { from, to, [key]: input.value };
+      preview.style.background = `linear-gradient(90deg, ${next.from}, ${next.to})`;
+    };
+    input.onchange = async () => {
+      const next = await store.saveSettings({ gradient: { from, to, [key]: input.value.toLowerCase() } });
+      theme.apply(next);
+      refreshTheme();
+      redraw();
+    };
+    const name = document.createElement('span');
+    name.className = 'muted';
+    name.textContent = label;
+    wrap.append(input, name);
+    return wrap;
+  };
+  row.append(end('Start', from, 'from'), end('End', to, 'to'));
+  if (own) {
+    const back = document.createElement('button');
+    back.className = 'chip';
+    back.textContent = 'Follow the accent';
+    back.onclick = async () => {
+      const next = await store.saveSettings({ gradient: null });
+      theme.apply(next);
+      refreshTheme();
+      redraw();
+    };
+    row.appendChild(back);
+  }
+  field.appendChild(row);
+  return field;
+}
+
+/* ── fonts of your own ─────────────────────────────────────────────────
+ *
+ * Picked from the phone, checked to be a font, kept, and from then on a
+ * face to read in -- chosen in Layout beside Newsreader and Archivo. Each
+ * is listed in its own face, with a way to let it go.
+ */
+function fontsField(redraw) {
+  const field = document.createElement('div');
+  field.className = 'field fonts-field';
+  field.innerHTML = '<label><span>Fonts</span><span class="muted">Your own, to read in — .ttf, .otf, .woff</span></label>';
+  const listBox = document.createElement('div');
+  listBox.className = 'font-list';
+  field.appendChild(listBox);
+  fonts.list().then((kept) => {
+    if (!kept.length) {
+      listBox.innerHTML = '<p class="muted" style="font-size:12px;margin:0">Newsreader and Archivo come with the app. '
+        + 'Add a font, then choose it in Layout as you would those.</p>';
+      return;
+    }
+    for (const font of kept) {
+      const row = document.createElement('div');
+      row.className = 'font-row';
+      const name = document.createElement('span');
+      name.className = 'font-name';
+      name.style.fontFamily = fonts.faceFamily(`font:${font.id}`);
+      name.textContent = font.name;
+      const sample = document.createElement('small');
+      sample.className = 'muted';
+      sample.style.fontFamily = fonts.faceFamily(`font:${font.id}`);
+      sample.textContent = 'The quick brown fox · 永遠の物語 · 이야기';
+      const text = document.createElement('span');
+      text.className = 'font-text';
+      text.append(name, sample);
+      const remove = document.createElement('button');
+      remove.className = 'theme-remove';
+      remove.setAttribute('aria-label', `Remove ${font.name}`);
+      remove.textContent = '✕';
+      remove.onclick = async () => {
+        await fonts.remove(font.id);
+        toast(`${font.name} removed — books read in it go back to Newsreader`, 4000);
+        redraw();
+      };
+      row.append(text, remove);
+      listBox.appendChild(row);
+    }
+  }).catch(() => {});
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = fonts.FONT_ACCEPT;
+  input.hidden = true;
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    try {
+      const font = await fonts.add(file);
+      toast(`${font.name} added — choose it in Layout`, 4000);
+      redraw();
+    } catch (error) {
+      toast(error.message || 'That font could not be added.', 6000);
+    }
+  };
+  const add = document.createElement('button');
+  add.className = 'btn ghost block';
+  add.textContent = 'Add a font…';
+  add.onclick = () => input.click();
+  field.append(input, add);
+  return field;
+}
+
 /* ── themes ───────────────────────────────────────────────────────────
  *
  * The look, kept by name: saved from what is set now, switched between with
@@ -229,7 +354,8 @@ export async function openAppearance(host) {
  *  "some file", and a picker asked only for JSON greys those out. */
 const THEME_ACCEPT = `application/json,text/plain,application/octet-stream,.json,${blobs.COVER_ACCEPT}`;
 
-const sameLook = (a, b) => theme.THEME_KEYS.every((key) => (a[key] ?? null) === (b[key] ?? null));
+// A gradient is two colours: the same look when both are.
+const sameLook = (a, b) => theme.THEME_KEYS.every((key) => JSON.stringify(a[key] ?? null) === JSON.stringify(b[key] ?? null));
 
 function themesField(settings, redraw) {
   const field = document.createElement('div');
@@ -1981,11 +2107,13 @@ async function renderTextPane(body) {
   faces.innerHTML = '<p class="eyebrow">Face</p>';
   const faceRow = document.createElement('div');
   faceRow.className = 'chip-row wrap';
-  for (const [face, family] of [['Newsreader', 'var(--font-body)'], ['Archivo', 'var(--font-heading)']]) {
+  for (const [face, family, label] of [['Newsreader', 'var(--font-body)'], ['Archivo', 'var(--font-heading)'],
+    // Fonts of your own (Settings, Appearance): each chip set in its own face.
+    ...(await fonts.list()).map((font) => [`font:${font.id}`, fonts.faceFamily(`font:${font.id}`), font.name])]) {
     const chip = document.createElement('button');
     chip.className = 'chip';
     chip.style.cssText = `font-family:${family};text-transform:none`;
-    chip.textContent = face;
+    chip.textContent = label || face;
     chip.setAttribute('aria-pressed', String(layout.face === face));
     chip.onclick = async () => { await store.saveLayout(0, { face }); renderSettings(); };
     faceRow.appendChild(chip);

@@ -1111,6 +1111,12 @@ body[data-view="reader"] .stepper {
 .bar-fill, .progress-fill, .tile-bar > span {
   transition: width var(--motion) var(--ease);
 }
+/* Every progress bar in the theme's gradient (Appearance, Gradient): a
+   download's, the strip's line, the reading progress, a cover's. A finished
+   or failed download keeps its own plain colour (below). */
+.bar-fill, .progress-fill, .tile-bar > span, .jobs-strip-fill {
+  background: linear-gradient(90deg, var(--grad-from, var(--accent-300)), var(--grad-to, var(--accent)));
+}
 .scrub-thumb { transition: top var(--motion) var(--ease); }
 /* Except while being dragged, where lag is the opposite of what you want. */
 .scrub-rail:active .scrub-thumb,
@@ -1342,7 +1348,7 @@ body.jobs-up { --strip-h: 30px; }
   color: var(--muted); text-align: left; }
 .jobs-strip svg { width: 16px; height: 16px; flex: none; }
 .jobs-strip-fill { position: absolute; left: 0; top: -1px; height: 2px; width: 0;
-  background: var(--accent-ink); transition: width var(--motion) var(--ease); }
+  transition: width var(--motion) var(--ease); }   /* its colour: the theme gradient, with every progress bar */
 .jobs-summary { flex: 1; min-width: 0; font-size: 12px; font-family: var(--font-heading);
   font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -2710,6 +2716,21 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .play-btn svg { width: 34px; height: 34px; filter: saturate(1.4) brightness(1.15); }
 .play-btn:active { background: var(--accent-soft); }
 .play-btn:disabled { opacity: .35; }
+/* Appearance: the gradient's preview and its two ends; your fonts, each in its own face. */
+.gradient-preview { height: 18px; border-radius: 9px; margin: 2px 0 10px; }
+.gradient-ends { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.gradient-end { display: flex; align-items: center; gap: 8px; }
+.gradient-end input[type="color"] { width: 40px; height: 32px; padding: 0; border: 1px solid var(--divider);
+  border-radius: 8px; background: none; }
+.gradient-ends .chip { margin-left: auto; }
+.font-list { display: grid; gap: 6px; margin-bottom: 10px; }
+.font-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--divider); }
+.font-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.font-name { font-size: 17px; overflow-wrap: anywhere; }
+.font-text small { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A gradient of your own is shown as chosen: not brightened as the accent's is. */
+[data-gradient="own"] .play-btn svg { filter: none; }
+[data-gradient="own"] .tile-unfinished .mark-fill { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--grad-to) 55%, transparent)); }
 .build-queue-list li { flex-wrap: wrap; }
 .build-queue-list li[data-status="attention"] small { color: var(--danger, #e08a8a); }
 .build-queue-list li[data-status="done"] { opacity: .7; }
