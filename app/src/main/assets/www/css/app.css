@@ -2577,6 +2577,11 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .tile-order.already { background: rgba(0,0,0,.6); color: #fff; }
 
 /* The stats page's list of what is in each folder. */
+.folder-lists-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.folder-lists-head h2 { margin: 0; }
+.folder-lists-head { margin: 0 0 10px; }
+.folder-list summary .folder-copy, .folder-lists-head .folder-copy { flex: none; align-self: center; }
+.folder-list summary .folder-copy { padding: 4px 10px; min-height: 0; font-size: 12px; }
 .folder-list { border-top: 1px solid var(--hairline); }
 .folder-list summary { display: flex; align-items: baseline; gap: 8px; padding: 10px 0; cursor: pointer;
   font-family: var(--font-heading); font-weight: 600; font-size: 14px; list-style: none; }

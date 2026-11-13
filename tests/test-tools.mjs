@@ -1700,6 +1700,24 @@ await t('a bundle of editions is one book in every count', async () => {
   await panels.openStats();
   assert.deepEqual([...document.querySelectorAll('#stats-body .folder-list summary span')].map((x) => x.textContent),
     ['Novels', 'Novels / Done']);
+  // Copied: the whole list, each folder under its name and count, numbered as shown; or just one folder's.
+  let copied = null;
+  const clipboard = Object.getOwnPropertyDescriptor(window.navigator, 'clipboard');
+  Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: async (text) => { copied = text; } } });
+  const copyAll = document.querySelector('#stats-body .folder-lists-head .folder-copy');
+  assert.equal(copyAll.textContent, 'Copy list');
+  copyAll.click();
+  await settle(30);
+  assert.equal(copied, 'Novels (1)\n1. English (Raw)\n\nNovels / Done (1)\n1. Alone');
+  const boxes = [...document.querySelectorAll('#stats-body .folder-list')];
+  const wasOpen = boxes[1].open;
+  boxes[1].querySelector('summary .folder-copy').click();
+  await settle(30);
+  assert.equal(copied, 'Novels / Done (1)\n1. Alone');
+  // Copying from a folder's heading does not open or shut it.
+  assert.equal(boxes[1].open, wasOpen);
+  if (clipboard) Object.defineProperty(window.navigator, 'clipboard', clipboard);
+  else delete window.navigator.clipboard;
   moved.folder = 'Novels';
   await store.put('books', moved);
 

@@ -1461,10 +1461,53 @@ function entryOf(item) {
   return { book: item, title: displayTitle(first) || 'Untitled', also: others };
 }
 
+/* The list, as text to paste somewhere: a folder's, or all of them, each
+ * folder under its name and count, its books numbered in the order shown,
+ * a bundle's other titles beside its first. */
+const listLine = (entry, n) => `${n}. ${entry.title}${entry.also.length ? ` (${entry.also.join(' · ')})` : ''}`;
+const folderText = (name, entries) => [`${name} (${entries.length})`, ...entries.map((entry, i) => listLine(entry, i + 1))].join('\n');
+
+async function copyPlain(text) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('no clipboard');
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Older WebViews: the copy command, from a box made for it and taken away.
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    if (!ok) throw new Error('The phone would not take the copy');
+  }
+}
+
+function copyButton(label, text, said) {
+  const button = document.createElement('button');
+  button.className = 'chip folder-copy';
+  button.type = 'button';
+  button.textContent = label;
+  button.onclick = async (event) => {
+    // In a folder's heading: copies, and leaves the folder open or shut as it was.
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await copyPlain(text());
+      toast(said);
+    } catch (error) {
+      toast(`Could not copy — ${error.message}`);
+    }
+  };
+  return button;
+}
+
 function folderLists(shelf, hidden, onOpen) {
   const section = document.createElement('section');
   section.className = 'block folder-lists';
-  section.innerHTML = '<h2>In each folder</h2>';
+  section.innerHTML = '<div class="folder-lists-head"><h2>In each folder</h2></div>';
 
   const listed = shelf.filter((book) => !hiddenBy(book.folder || '', hidden));
   const away = new Set(shelf.filter((book) => hiddenBy(book.folder || '', hidden))
@@ -1484,16 +1527,25 @@ function folderLists(shelf, hidden, onOpen) {
   // Loose books first, then the folders by name, numbers in number order.
   const folders = [...byFolder.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : naturalOrder(a, b)));
   const total = [...byFolder.values()].reduce((n, list) => n + list.length, 0);
+  const nameOf = (folder) => (folder ? folder.split('/').join(' / ') : 'Not in a folder');
+  for (const folder of folders) byFolder.get(folder).sort((a, b) => naturalOrder(a.title, b.title));
+  // The whole list: every folder shown, as it is shown.
+  section.querySelector('.folder-lists-head').appendChild(copyButton('Copy list',
+    () => folders.map((folder) => folderText(nameOf(folder), byFolder.get(folder))).join('\n\n'),
+    `List copied · ${total} book${total === 1 ? '' : 's'} in ${folders.length} folder${folders.length === 1 ? '' : 's'}`));
   for (const folder of folders) {
-    const entries = byFolder.get(folder).sort((a, b) => naturalOrder(a.title, b.title));
+    const entries = byFolder.get(folder);
     const box = document.createElement('details');
     box.className = 'folder-list';
     // Open when the whole library is short enough to read at a glance.
     box.open = total <= 60;
     // The whole path: a folder inside another reads as where it is.
-    const name = folder ? folder.split('/').join(' / ') : 'Not in a folder';
+    const name = nameOf(folder);
     box.innerHTML = `<summary><span>${escape(name)}</span>`
       + `<small class="muted">${entries.length}</small></summary>`;
+    // Just this folder's.
+    box.querySelector('summary').appendChild(copyButton('Copy', () => folderText(name, entries),
+      `“${name}” copied · ${entries.length} book${entries.length === 1 ? '' : 's'}`));
     const list = document.createElement('ol');
     for (const entry of entries) {
       const row = document.createElement('li');
