@@ -1070,6 +1070,18 @@ await t('a chapter that mentions an author\u2019s note stays in its place, and i
   assert.ok(!JSON.stringify(gaps).includes('249'), `249 called missing: ${JSON.stringify(gaps)}`);
 });
 
+await t('a run of numbered afterword chapters listed after the last chapter goes back to its numbers (ewwtbh)', () => {
+  const site = 'https://dreamy-translations.com/novel/ewwtbh/chapter/';
+  const at = (n) => ({ url: `${site}${n}`, text: n >= 219 && n <= 226 ? `Ch. ${n} Afterword: The Warmest Winter in the World (${n - 218})${100 + n}` : `Ch. ${n} Side Story ${n}${50 + n}` });
+  const numbers = [...Array.from({ length: 219 }, (_, n) => n), ...Array.from({ length: 16 }, (_, n) => 227 + n), ...Array.from({ length: 8 }, (_, n) => 219 + n)];
+  const links = numbers.map(at);
+  for (const n of [219, 222, 226]) assert.deepEqual(web.chapterKind(at(n).text), { kind: 'main', number: n });
+  const order = web.inReadingOrder(links, () => true);
+  assert.equal(order.how, 'sorted');
+  assert.deepEqual(order.links.map((l) => l.url), Array.from({ length: 243 }, (_, n) => `${site}${n}`));
+  assert.equal(web.numberGaps(order.links).count || 0, 0);
+});
+
 await t('side stories listed out of order are put in their order, after the chapters', () => {
   const found = web.linksOf(cnDir, `${CN}/dir`);
   const likely = web.likelyChapters(found.links, `${CN}/dir`);
