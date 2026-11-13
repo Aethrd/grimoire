@@ -148,10 +148,16 @@ await t('a queued book not yet started opens to be named, as a book in Build is'
   assert.ok(document.querySelector('#web-cover img'), 'the picture chosen is not shown');
   assert.equal(document.getElementById('web-cover-pick').getAttribute('aria-pressed'), 'true');
   assert.match(document.getElementById('web-cover-note').textContent, /Your own picture/);
+  // Its author, here too, under its title: what the queue had, and what is typed kept.
+  const author = document.getElementById('web-author');
+  assert.equal(author.value, (await store.settings()).webQueue[3].author || '');
+  author.value = 'Someone, typed';
+  author.dispatchEvent(new window.Event('input'));
   document.getElementById('web-queue').click();
   await new Promise((r) => setTimeout(r, 80));
   const kept = (await store.settings()).webQueue;
   assert.equal(kept.length, 4, 'changed in its place, not queued again');
+  assert.equal(kept[3].author, 'Someone, typed');
   assert.deepEqual([kept[3].name, kept[3].links.length, kept[3].status], ['C, renamed', 4, 'queued']);
   assert.match(kept[3].coverData || '', /^data:image\/png;base64,/);
   // A chosen picture wins, and is on the job's book on the shelf straight away -- made before this was so, too.

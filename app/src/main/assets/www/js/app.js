@@ -7006,6 +7006,8 @@ function wireJobEdit() {
     webState.links = it.links.filter((link) => !web.isPlaceholder(link)).map((link) => ({ ...keptLink(link), chrome: false, kind: null, likely: true, picked: true }));
     Object.assign(webState, { sources: it.sources || [], title: it.name, author: it.author || '', cover: it.cover || '', coverData: it.coverData || '', folder: it.folder || '' });
     el('web-title').value = it.name;
+    el('web-author').value = it.author || '';
+    webState.authorTouched = true;
     webNote(it.bookId != null
       ? `The ${it.links.length} chapters still to come for “${it.name}” (the rest are in its book). Untick any to leave out, or Find links to read the site's list again; Queue saves them.`
       : `The ${it.links.length} chapters queued for “${it.name}”. Untick any to leave out, or Find links to read the site's list again; Queue saves them.`);
@@ -7107,7 +7109,8 @@ function queueWeb() {
   }
   if (editing) {
     Object.assign(editing, {
-      name, author: webState.author || editing.author || '', sources: webState.sources?.length ? webState.sources : editing.sources,
+      // As typed here, even cleared; else as it was.
+      name, author: webState.authorTouched ? webState.author : (webState.author || editing.author || ''), sources: webState.sources?.length ? webState.sources : editing.sources,
       cover: webState.cover || editing.cover || '', links: chosen.map(keptLink),
       total: chosen.length, status: 'queued', stops: 0, note: '',
     });
@@ -10155,6 +10158,8 @@ const webState = {
   reversed: false,
   pictures: true,
   titleTouched: false,
+  // The author as typed here, kept over what the site gives -- as the title is.
+  authorTouched: false,
 };
 
 /* What the screen says before anything has been asked of it. */
@@ -10176,6 +10181,7 @@ function renderWeb() {
   el('web-pictures').setAttribute('aria-pressed', String(webState.pictures));
   el('web-pictures').textContent = webState.pictures ? 'Pictures: on' : 'Pictures: off';
   if (!webState.titleTouched) el('web-title').value = webState.title;
+  if (!webState.authorTouched && document.activeElement !== el('web-author')) el('web-author').value = webState.author || '';
   el('web-eyebrow').textContent = (el('web-title').value || '').trim() || 'Chapters from a website, for Build';
   if (webState.links.length) {
     paintWebCover();
@@ -10522,6 +10528,7 @@ async function findWebLinks() {
     webState.author = author;
     webState.cover = cover;
     webState.titleTouched = false;
+    webState.authorTouched = false;
     webState.manualOrder = false;
     // A contents page that lists the newest chapter first is turned round,
     // and says so: a book read from its last chapter is no book.
@@ -10650,6 +10657,9 @@ async function checkNewChapters(book) {
   el('web-direct').checked = false;
   el('web-title').value = library.displayTitle(book);
   webState.titleTouched = true;
+  webState.author = book.author || '';
+  el('web-author').value = webState.author;
+  webState.authorTouched = true;
   await show('web');
   if (!book.webSources?.length) {
     webNote(`Paste the address of “${library.displayTitle(book)}”'s contents page and tap Find links: what it has will be unticked, the rest ticked to add to its end.`);
@@ -10774,7 +10784,7 @@ async function searchMore() {
     webState.links = links;
     if (webState.updating != null) await markWhatTheBookHas(webState.links);
     if (!webState.title && found.title) webState.title = found.title;
-    if (!webState.author && found.author) webState.author = found.author;
+    if (!webState.author && !webState.authorTouched && found.author) webState.author = found.author;
     if (!webState.cover && found.cover) webState.cover = found.cover;
     const added = links.filter((link) => !before.has(link.url)).length;
     const chapters = links.filter((link) => link.likely).length;
@@ -11066,7 +11076,7 @@ function webDelay() {
 
 function clearWeb() {
   Object.assign(webState, {
-    links: [], title: '', author: '', cover: '', coverData: '', folder: null, sources: [], reversed: false, titleTouched: false, leftover: null, pickListed: null,
+    links: [], title: '', author: '', cover: '', coverData: '', folder: null, sources: [], reversed: false, titleTouched: false, authorTouched: false, leftover: null, pickListed: null,
     manualOrder: false, carryOn: null, searches: 0, updating: null,
   });
   const resume = el('web-resume');
@@ -11075,6 +11085,7 @@ function clearWeb() {
   setWebAddress('');
   el('web-filter').value = '';
   el('web-title').value = '';
+  el('web-author').value = '';
   webNote(webIntro || '');
   renderWeb();
 }
@@ -11170,6 +11181,11 @@ function wireWeb() {
   el('web-title').addEventListener('input', () => {
     webState.titleTouched = true;
     renderWeb();
+  });
+  // What is typed is the author: queued with the book, into Build, into its metadata.
+  el('web-author').addEventListener('input', () => {
+    webState.authorTouched = true;
+    webState.author = el('web-author').value.trim();
   });
   el('web-filter').addEventListener('input', filterWebList);
   el('web-cover-site').onclick = () => {
