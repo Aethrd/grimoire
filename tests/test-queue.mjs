@@ -315,7 +315,16 @@ await t('per site set to two: two books of one site side by side, and no more', 
   assert.match(app, /if \(\(busy\.get\(site\) \|\| 0\) >= queueState\.perSite \|\| held\.has\(site\)\) continue;/);
   // One of a site stopped by it: the others of that site stop with it, and wait (not paused by hand).
   assert.match(app, /if \(under\) \{ under\.siteStop = true; under\.pausing = true; \}/);
-  assert.match(app, /settleJob\(job, outcome, under\.pausing && !under\.siteStop\);/);
+  assert.match(app, /settleJob\(job, outcome, under\.pausing && !under\.siteStop && !under\.yielding\);/);
+  /* A book paused by hand, resumed: first in line, and the book that took its
+   * slot since steps back into line (queued, not paused) -- of its own site
+   * when its site is what is full. Handed over, never added: the limits stand. */
+  assert.match(app, /row\.appendChild\(playButton\(word\('', \(\) => resumeJob\(job\)\), 'play', `Resume “\$\{job\.name\}”`\)\);/);
+  assert.match(app, /const inTurn = \[\.\.\.webQueue\]\.sort\(\(a, b\) => \(b\.resumed \? 1 : 0\) - \(a\.resumed \? 1 : 0\)\);\s+for \(const job of inTurn\) \{\s+if \(queueJobs\.size >= queueState\.atOnce\) break;/);
+  assert.match(app, /\.filter\(\(\{ other, under \}\) => under && !under\.pausing && under\.startedAt >= since && \(!siteFull \|\| siteOfJob\(other\) === site\)\)\s+\.sort\(\(a, b\) => b\.under\.startedAt - a\.under\.startedAt\)\[0\];/);
+  assert.match(app, /took\.under\.yielding = true;\s+took\.under\.pausing = true;/);
+  assert.match(app, /if \(byHand\) job\.pausedAt = Date\.now\(\);/);
+  assert.match(app, /job\.status = 'running';\s+delete job\.resumed;/);
   setSlider('Per site', 1);
   await new Promise((r) => setTimeout(r, 30));
   assert.equal((await store.settings()).queuePerSite, 1);
@@ -441,8 +450,9 @@ await t('two settings saved at once both stay saved', async () => {
   console.log('ok  any queued book not downloading opens');
   // Pause and resume drawn, in the theme's gradient, named for a screen reader; a paused book resumes on its own.
   assert.match(app, /playButton\(go, queueState\.running \? 'pause' : 'play', queueState\.running \? 'Pause all' : \(count\('paused'\) \? 'Resume all' : 'Start queue'\)\);/);
-  assert.match(app, /if \(job\.status === 'paused'\) \{\s+row\.appendChild\(playButton\(word\('', \(\) => \{\s+job\.status = 'queued';/);
-  assert.match(app, /if \(queueState\.running\) \{ pumpQueue\(\); return; \}[\s\S]{0,160}runJob\(job\);/);
+  assert.match(app, /if \(job\.status === 'paused'\) \{\s+row\.appendChild\(playButton\(word\('', \(\) => resumeJob\(job\)\)/);
+  // With the queue paused, it alone goes.
+  assert.match(app, /if \(!queueState\.running\) \{\s+delete job\.resumed;[\s\S]{0,160}runJob\(job\);/);
   assert.match(app, /<defs>\$\{theme\.gradientSvg\(id, 'icon'\)\}/);
   const head = document.getElementById('build-queue-go');
   assert.ok(head.classList.contains('play-btn') && head.querySelector('svg circle'), 'the queue head is not drawn');

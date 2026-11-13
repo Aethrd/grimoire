@@ -7159,6 +7159,48 @@ function playButton(button, kind, label) {
   return button;
 }
 
+/**
+ * A book paused by hand, resumed: it takes back its place. Pausing it let the
+ * next book start in its slot; resumed, it goes first in line, and if every
+ * slot is full -- or its site has as many going as it may -- the book that
+ * started after it was paused (the latest such, of its own site where the
+ * site is what is full) steps back into line, keeping what came, and this one
+ * starts in its place. Never more at once, or from one site, than set: the
+ * slot is handed over, not added. With the queue paused, it alone goes.
+ */
+export function resumeJob(job) {
+  job.status = 'queued';
+  job.resumed = true;
+  saveQueue();
+  if (!queueState.running) {
+    delete job.resumed;
+    try { window.GrimoireNative?.keepScreenOn?.(true); } catch { /* not in a browser */ }
+    runJob(job);
+    renderWorkshop();
+    return;
+  }
+  const site = siteOfJob(job);
+  const siteFull = (siteCounts().get(site) || 0) >= queueState.perSite;
+  const full = queueJobs.size >= queueState.atOnce;
+  if (siteFull || full) {
+    const since = job.pausedAt || 0;
+    const took = webQueue
+      .filter((other) => other.status === 'running' && !other.resumed)
+      .map((other) => ({ other, under: queueJobs.get(other.id) }))
+      .filter(({ other, under }) => under && !under.pausing && under.startedAt >= since && (!siteFull || siteOfJob(other) === site))
+      .sort((a, b) => b.under.startedAt - a.under.startedAt)[0];
+    if (took) {
+      took.under.yielding = true;
+      took.under.pausing = true;
+      toast(`“${job.name}” resumes as “${took.other.name}” steps back into line.`, 4000);
+    } else {
+      toast(`“${job.name}” is first in line — it starts as soon as a download finishes.`, 4000);
+    }
+  }
+  pumpQueue();
+  renderWorkshop();
+}
+
 /** Pause all: the books under way stop now -- each keeps what came, the rest kept to resume -- and none starts. */
 function pauseQueue() {
   queueState.running = false;
@@ -7211,7 +7253,9 @@ function pumpQueue() {
    * set higher). Each goes at the site's delay, so two ask it twice as often. */
   const busy = siteCounts();
   const held = sitesHeld();
-  for (const job of webQueue) {
+  // A book resumed by hand goes first: it is taking back the place it gave up.
+  const inTurn = [...webQueue].sort((a, b) => (b.resumed ? 1 : 0) - (a.resumed ? 1 : 0));
+  for (const job of inTurn) {
     if (queueJobs.size >= queueState.atOnce) break;
     const due = job.status === 'queued' || (job.status === 'retry' && (job.retryAt || 0) <= now);
     if (!due) continue;
@@ -7239,9 +7283,10 @@ function pumpQueue() {
 
 /** One book of the queue, built on its own: carried on from the book so far, if there is one. */
 async function runJob(job) {
-  const under = { pausing: false, finish: progress.start(job.name), run: null };
+  const under = { pausing: false, finish: progress.start(job.name), run: null, startedAt: Date.now() };
   queueJobs.set(job.id, under);
   job.status = 'running';
+  delete job.resumed;
   job.note = '';
   saveQueue();
   let outcome = { rest: job.links, reason: '', paused: false };
@@ -7295,7 +7340,8 @@ async function runJob(job) {
     under.finish();
     queueJobs.delete(job.id);
   }
-  settleJob(job, outcome, under.pausing && !under.siteStop);
+  // Stepped back for a book resumed by hand: back in line, not paused.
+  settleJob(job, outcome, under.pausing && !under.siteStop && !under.yielding);
   await refreshShelf().catch(() => {});
   saveQueue();
   if (queueState.running) pumpQueue();
@@ -7314,6 +7360,8 @@ function settleJob(job, { rest, reason, paused }, byHand) {
   if (paused) {
     // Paused by hand: kept so. Stopped by Build's own Pause & keep: straight back in line.
     job.status = byHand ? 'paused' : 'queued';
+    // When: a book started after this, in the place it gave up, steps back for it when it is resumed.
+    if (byHand) job.pausedAt = Date.now();
     job.note = '';
     return;
   }
@@ -7653,14 +7701,7 @@ function paintQueue() {
        * takes its turn; with the queue paused, it alone goes -- the others
        * stay as they are. */
       if (job.status === 'paused') {
-        row.appendChild(playButton(word('', () => {
-          job.status = 'queued';
-          saveQueue();
-          if (queueState.running) { pumpQueue(); return; }
-          try { window.GrimoireNative?.keepScreenOn?.(true); } catch { /* not in a browser */ }
-          runJob(job);
-          renderWorkshop();
-        }), 'play', `Resume “${job.name}”`));
+        row.appendChild(playButton(word('', () => resumeJob(job)), 'play', `Resume “${job.name}”`));
       }
       if (job.status === 'attention') {
         // Past a check in the site itself, then tried again; or just tried again.

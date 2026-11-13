@@ -1378,7 +1378,17 @@ export function placeholderChapter(link, index) {
 export function chapterKind(text) {
   // Its number read in plain figures ("第十⑨章" is 19), the name left as it is.
   const name = plainNumerals(text);
-  if (/後記|后记|完結感言|完结感言|作者的話|作者的话|\bafterword\b|\bauthor'?s? note\b/i.test(name)) return { kind: 'after', number: null };
+  /* The afterword, or an author's note standing on its own -- but a chapter
+   * whose name only mentions one after its own number ("Ch. 249 Heungbu's
+   * Wife (3) [Please read Author's Note]", "Ch. 149 Side Story. The Author's
+   * Afterword") is that chapter, read where it stands: taken for the
+   * afterword, it was moved to the end and its number called missing. */
+  const after = /後記|后记|完結感言|完结感言|作者的話|作者的话|\bafterword\b|\bauthor'?s? note\b/i.exec(name);
+  if (after) {
+    const own = mainNumber(name.slice(0, after.index));
+    if (own !== null) return { kind: 'main', number: own };
+    return { kind: 'after', number: null };
+  }
   const side = new RegExp(`(?:番外(?:篇|編)?|外[傳传]|特別篇|特别篇|特典|閑話|閒話|외전|\\bside[ -]?stor(?:y|ies)\\b|\\bextras?\\b|\\bspecial\\b|\\bbonus\\b|\\bSS\\b)\\s*[:：.·・\\-–—]?\\s*(?:第\\s*)?(${NUMERAL})?`, 'i').exec(name);
   if (side) {
     // A side story in a chapter's place ("Chapter 64: Side-story") is

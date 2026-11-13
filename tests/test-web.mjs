@@ -1049,6 +1049,25 @@ await t('Chinese numbers are read', () => {
   assert.deepEqual(web.chapterKind('Side Story 2: Hugo'), { kind: 'side', number: 2 });
   assert.deepEqual(web.chapterKind('后记'), { kind: 'after', number: null });
   assert.deepEqual(web.chapterKind('Chapter 64: Side-story'), { kind: 'main', number: 64 });
+  // A chapter whose name only mentions an author's note or afterword after its number is that chapter.
+  assert.deepEqual(web.chapterKind("Ch. 249 Heungbu's Wife (3) [Please read Author's Note]88"), { kind: 'main', number: 249 });
+  assert.deepEqual(web.chapterKind("Ch. 149 Side Story. The Author's Afterword 474"), { kind: 'main', number: 149 });
+  assert.deepEqual(web.chapterKind('Afterword'), { kind: 'after', number: null });
+  assert.deepEqual(web.chapterKind("Author's Note: on hiatus"), { kind: 'after', number: null });
+  assert.deepEqual(web.chapterKind('完結感言'), { kind: 'after', number: null });
+});
+
+await t('a chapter that mentions an author\u2019s note stays in its place, and is not called missing (as dreamy-translations lists them)', () => {
+  const site = 'https://dreamy-translations.com/novel/hhh/chapter/';
+  const links = Array.from({ length: 333 }, (_, n) => ({
+    url: `${site}${n}`,
+    text: n === 0 ? 'Ch. 0 Prologue 7,966' : n === 249 ? "Ch. 249 Heungbu's Wife (3) [Please read Author's Note]88" : `Ch. ${n} Heungbu's Wife (${n % 7})${50 + n}`,
+  }));
+  const order = web.inReadingOrder(links, () => true);
+  assert.equal(order.how, null, 'the site\u2019s own order, already right, moved');
+  assert.equal(order.links[249].url, `${site}249`);
+  const gaps = web.numberGaps(links);
+  assert.ok(!JSON.stringify(gaps).includes('249'), `249 called missing: ${JSON.stringify(gaps)}`);
 });
 
 await t('side stories listed out of order are put in their order, after the chapters', () => {
