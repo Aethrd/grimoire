@@ -2137,8 +2137,31 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.match(app, /const opened = openingScreen\.soon\(book\);[\s\S]{0,200}finally \{\s+ready\(\);\s+opened\(\);/);
   const css = read('app/src/main/assets/www/css/app.css');
   assert.match(css, /\.opening \{[^}]*background: var\(--bg\); opacity: 0;\s+transition: opacity \.4s/);
-  assert.match(css, /\.import-progress\.open \.jobs-scene \{[^}]*opacity: \.22;/);
-  assert.match(app, /if \(showing && !scene\) scene = playScene\(el\('jobs-scene'\), \{ faint: true \}\);\s+else if \(!showing && scene\) \{ scene\.stop\(\); scene = null; \}/);
+  assert.match(css, /\.import-progress\.open \.jobs-scene \{[^}]*opacity: var\(--jobs-scene-opacity, \.22\);/);
+  // Its strength is the person's: 0 stops it; a change of faintness starts it afresh.
+  assert.match(app, /host\.classList\.contains\('open'\) && sceneOpacity > 0;/);
+  assert.match(app, /if \(scene && \(!showing \|\| faint !== sceneFaint\)\) \{ scene\.stop\(\); scene = null; \}/);
+  assert.match(app, /store\.saveSettings\(\{ queueSceneOpacity: sceneOpacity \}\)/);
+  // From the queue page's head: a slider, seen as it moves, kept once let go. (Wired when the imports above began.)
+  const button = el('jobs-scene-btn'), row = el('jobs-scene-row'), range = el('jobs-scene-opacity');
+  assert.equal(row.hidden, true);
+  button.click();
+  assert.equal(row.hidden, false);
+  assert.equal(button.getAttribute('aria-expanded'), 'true');
+  range.value = '65';
+  range.dispatchEvent(new window.Event('input'));
+  assert.equal(document.documentElement.style.getPropertyValue('--jobs-scene-opacity'), '0.65');
+  assert.equal(el('jobs-scene-shown').textContent, '65%');
+  range.value = '0';
+  range.dispatchEvent(new window.Event('change'));
+  await settle(30);
+  assert.equal(el('jobs-scene-shown').textContent, 'Off');
+  assert.equal((await store.settings()).queueSceneOpacity, 0);
+  range.value = '22';
+  range.dispatchEvent(new window.Event('change'));
+  await settle(30);
+  button.click();
+  assert.equal(row.hidden, true);
   // A book that opens at once never shows it.
   assert.equal(el('opening').hidden, true);
 });

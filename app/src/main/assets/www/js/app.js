@@ -2697,11 +2697,43 @@ const progress = (() => {
   /* The opening scene, faint, under the books' progress -- playing only while
    * the page is open and shown; stopped the moment it is not. */
   let scene = null;
+  let sceneFaint = true;
+  /* How strongly it shows, 0 to 100, as the person set it (22 until they do).
+   * At 0 it does not play at all; faint, it draws every other frame, which
+   * cannot be seen at that strength; stronger, every frame. */
+  let sceneOpacity = 22;
   function syncScene() {
     const host = panel();
-    const showing = !!host && !host.hidden && host.classList.contains('open');
-    if (showing && !scene) scene = playScene(el('jobs-scene'), { faint: true });
-    else if (!showing && scene) { scene.stop(); scene = null; }
+    const showing = !!host && !host.hidden && host.classList.contains('open') && sceneOpacity > 0;
+    const faint = sceneOpacity < 40;
+    if (scene && (!showing || faint !== sceneFaint)) { scene.stop(); scene = null; }
+    if (showing && !scene) { sceneFaint = faint; scene = playScene(el('jobs-scene'), { faint }); }
+  }
+  function showSceneOpacity(n) {
+    sceneOpacity = Math.max(0, Math.min(100, Math.round(n)));
+    document.documentElement.style.setProperty('--jobs-scene-opacity', String(sceneOpacity / 100));
+    const range = el('jobs-scene-opacity'), shown = el('jobs-scene-shown');
+    if (range) { range.value = String(sceneOpacity); range.style.setProperty('--filled', `${sceneOpacity}%`); }
+    if (shown) shown.textContent = sceneOpacity ? `${sceneOpacity}%` : 'Off';
+    syncScene();
+  }
+  let sceneWired = false;
+  function wireScene() {
+    if (sceneWired) return;
+    sceneWired = true;
+    store.settings().then((settings) => {
+      if (Number.isFinite(settings.queueSceneOpacity)) showSceneOpacity(settings.queueSceneOpacity);
+    }).catch(() => {});
+    const button = el('jobs-scene-btn'), row = el('jobs-scene-row'), range = el('jobs-scene-opacity');
+    if (button && row) button.onclick = () => {
+      row.hidden = !row.hidden;
+      button.setAttribute('aria-expanded', String(!row.hidden));
+    };
+    if (range) {
+      // Seen as it moves; kept once let go.
+      range.oninput = () => showSceneOpacity(Number(range.value));
+      range.onchange = () => { showSceneOpacity(Number(range.value)); store.saveSettings({ queueSceneOpacity: sceneOpacity }).catch(() => {}); };
+    }
   }
 
   function paint() {
@@ -2744,6 +2776,7 @@ const progress = (() => {
 
   function start(label) {
     watchSeat();
+    wireScene();
     // Opening and making small are the panel's, not any one job's: wired once.
     const minimise = el('import-minimise');
     if (minimise && !minimise.onclick) minimise.onclick = () => setOpen(false);

@@ -1098,10 +1098,19 @@
   <div class="jobs-page" id="jobs-page">
     <header class="jobs-head">
       <strong id="jobs-title">Running</strong>
+      <button class="icon-btn" id="jobs-scene-btn" title="Animation" aria-label="Animation behind the queue" aria-expanded="false" aria-controls="jobs-scene-row">
+        <svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
       <button class="icon-btn jobs-minimise" id="import-minimise" title="Make small" aria-label="Make small">
         <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
       </button>
     </header>
+    <!-- How strongly the scene shows behind the queue: 0 (off) to 100. -->
+    <label class="queue-slider jobs-scene-row" id="jobs-scene-row" hidden>
+      <span class="muted">Animation</span>
+      <input type="range" id="jobs-scene-opacity" min="0" max="100" step="1" value="22" aria-label="Animation opacity">
+      <output id="jobs-scene-shown">22%</output>
+    </label>
     <div class="jobs" id="jobs"></div>
     <!-- The opening scene, faint, under the books' progress (opening.js). -->
     <canvas class="jobs-scene" id="jobs-scene" aria-hidden="true"></canvas>

@@ -2738,7 +2738,12 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .import-progress.open .jobs-page { position: relative; }
 .jobs-scene { display: none; }
 .import-progress.open .jobs-scene { display: block; position: absolute; left: 0; right: 0; bottom: 0; height: 62%; width: 100%;
-  opacity: .22; pointer-events: none; z-index: 0; }
+  opacity: var(--jobs-scene-opacity, .22); pointer-events: none; z-index: 0; }
+/* Its strength, set from the page's head: a slider row under it, while asked for. */
+.jobs-scene-row { flex: none; grid-template-columns: auto 1fr 44px; padding: 6px 16px; min-height: 44px;
+  border-bottom: 1px solid var(--divider); position: relative; z-index: 1; }
+.jobs-scene-row[hidden] { display: none; }
+#jobs-scene-btn[aria-expanded="true"] svg { stroke: var(--accent); }
 .import-progress.open .jobs { position: relative; z-index: 1; }
 .find-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 10px 16px 4px; font-size: 13px; }
