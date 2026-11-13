@@ -1718,6 +1718,14 @@ await t('a build the app is closed in the middle of keeps what had come, and whe
   // Checkpointed as it goes (written just after each chapter: one behind at most).
   assert.equal(book.building.at?.part, 0);
   assert.ok([1, 2].includes(book.building.at?.next), JSON.stringify(book.building.at));
+  // Noted only now and then (every 20 chapters or 30 s): resuming does not rest on it.
+  const buildJs = read('app/src/main/assets/www/js/build.js');
+  assert.match(buildJs, /if \(streamed !== 1 && streamed % CHECKPOINT_EVERY !== 0 && now - notedAt < CHECKPOINT_MS\) return;/);
+  assert.match(buildJs, /const CHECKPOINT_EVERY = 20;\nconst CHECKPOINT_MS = 30000;/);
+  // A note far behind -- nothing past the start -- carries on from the last chapter kept all the same.
+  const stale = await build.rescueCutBuild({ ...(await store.get('books', book.id)), building: { ...book.building, at: { part: 0, next: 0, chapters: 0, words: 0 } } });
+  assert.deepEqual(stale.rest.map((part) => part.links.map((l) => l.text)), [['No. 3']]);
+  await store.put('books', { ...(await store.get('books', book.id)), importing: true, building: book.building });
   // The next start: a book of what came, and the rest to carry it on.
   const kept = await build.rescueCutBuild(await store.get('books', book.id));
   assert.equal(kept.book.chapters, 2);

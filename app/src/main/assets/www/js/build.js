@@ -541,11 +541,22 @@ export async function build({
      * from, not all at the end: a build of six hundred is an hour or two,
      * and the app can be closed, or killed, in the middle of it. */
     let streamed = 0;
+    /* Where to resume, noted on the book -- not after every chapter. The note
+     * is a rewrite of the whole book record (its every link, its cover), and
+     * with several novels downloading that was a stream of large writes
+     * competing with everything else the library does. Resuming does not
+     * rest on it: rescueCutBuild works out where a cut build stopped from the
+     * chapters actually kept. So it is noted at a part's first chapter, then
+     * every CHECKPOINT_EVERY chapters or CHECKPOINT_MS, whichever comes first. */
+    let notedAt = 0;
     const onChapter = part.web ? async (chapter, next) => {
       const record = recordOf(part, chapter, streamed, prefix, volume);
       streamed += 1;
       words += record.words;
       await store.put('chapters', record);
+      const now = Date.now();
+      if (streamed !== 1 && streamed % CHECKPOINT_EVERY !== 0 && now - notedAt < CHECKPOINT_MS) return;
+      notedAt = now;
       const book = await store.get('books', bookId);
       if (book?.building) {
         book.building.at = { part: at, next, chapters: index, words };
@@ -685,6 +696,10 @@ export async function build({
  * @returns {{ book, rest: [{ name, links, sources, pictures, author, gap,
  *   jitter, leftover }] }} or null
  */
+/** How often a download notes where to resume (see onChapter): every so many chapters, or so long. */
+const CHECKPOINT_EVERY = 20;
+const CHECKPOINT_MS = 30000;
+
 export async function rescueCutBuild(book) {
   if (!book?.importing || !book.building?.webParts?.length) return null;
   const chapters = await store.byIndex('chapters', 'bookId', book.id);
