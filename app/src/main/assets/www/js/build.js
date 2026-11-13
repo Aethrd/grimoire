@@ -23,7 +23,7 @@ import {
   coverOf, picturesInFile,
 } from './parse.js';
 import { planBooks } from './group.js';
-import { readPages, PAUSED_REASON } from './web.js';
+import { readPages, PAUSED_REASON, chapterKind } from './web.js';
 
 /** The parts waiting to be built, in the order they will be joined. */
 let parts = [];
@@ -854,4 +854,69 @@ export function commonName(names) {
     shared.pop();
   }
   return shared.join(' ').trim() || null;
+}
+
+/* ── a chapter put back in its placeholder's place ──────────────────────
+ *
+ * A book built while a chapter was taken for something else -- "Ch. 249 ...
+ * [Please read Author's Note]" read as the afterword -- has a placeholder at
+ * 249 and the real chapter at the end. The real one goes into the
+ * placeholder's place; the chapters after the one it left move up one; where
+ * the reader was, bookmarks and pictures follow their chapters. Only a
+ * placeholder with the real chapter of its number later in the book is
+ * touched (by the chapter's own name: one whose name has no number is left).
+ *
+ * @returns how many chapters were put back
+ */
+const PLACEHOLDER_TITLE = /^Chapter (\d+(?:\.\d+)?) — placeholder \(missing\)$/;
+export async function settleMisplaced(bookId) {
+  const book = await store.get('books', bookId);
+  if (!book) return 0;
+  const chapters = (await store.byIndex('chapters', 'bookId', bookId)).sort((a, b) => a.index - b.index);
+  const holes = new Map();   // number -> place
+  chapters.forEach((chapter, at) => {
+    const m = PLACEHOLDER_TITLE.exec(chapter.title || '');
+    if (m && /class="placeholder-chapter"/.test(chapter.html || '')) holes.set(Number(m[1]), at);
+  });
+  if (!holes.size) return 0;
+  const order = chapters.map((chapter, at) => at);   // new place -> old place
+  const filled = new Map();   // placeholder's old place -> the chapter's that came into it
+  let moved = 0;
+  for (let at = 0; at < chapters.length; at += 1) {
+    if (PLACEHOLDER_TITLE.test(chapters[at].title || '')) continue;
+    const { kind, number } = chapterKind(chapters[at].title || '');
+    const hole = kind === 'main' ? holes.get(number) : undefined;
+    if (hole === undefined || hole >= at) continue;
+    holes.delete(number);
+    filled.set(hole, at);
+    order[order.indexOf(hole)] = at;
+    order.splice(order.lastIndexOf(at), 1);
+    moved += 1;
+  }
+  if (!moved) return 0;
+  // Old place -> new place, for what follows its chapter; a placeholder replaced goes nowhere.
+  const to = new Map(order.map((old, place) => [old, place]));
+  for (const [hole, real] of filled) to.set(hole, to.get(real));
+  const replaced = new Set(filled.keys());
+  const next = order.map((old, place) => ({ ...chapters[old], bookId, index: place }));
+  await store.putAll('chapters', next);
+  for (let i = next.length; i < chapters.length; i += 1) await store.del('chapters', [bookId, i]);
+  for (const mark of await store.byIndex('marks', 'bookId', bookId)) {
+    // A mark in a placeholder's text: that text is gone.
+    if (replaced.has(mark.chapterIndex) || !to.has(mark.chapterIndex)) { await store.del('marks', mark.id); continue; }
+    if (to.get(mark.chapterIndex) !== mark.chapterIndex) await store.put('marks', { ...mark, chapterIndex: to.get(mark.chapterIndex) });
+  }
+  const images = (await store.byIndex('images', 'bookId', bookId))
+    .filter((image) => !replaced.has(image.chapterIndex) && to.has(image.chapterIndex) && to.get(image.chapterIndex) !== image.chapterIndex);
+  if (images.length) await store.putAll('images', images.map((image) => ({ ...image, chapterIndex: to.get(image.chapterIndex) })));
+  const position = await store.get('positions', bookId);
+  if (position) {
+    const at = position.chapterIndex || 0;
+    // In a placeholder now filled: the top of the chapter that came into its place.
+    const place = to.has(at) ? to.get(at) : 0;
+    const same = to.has(at) && !replaced.has(at);
+    await store.put('positions', { ...position, chapterIndex: Math.max(0, Math.min(place, next.length - 1)), ...(same ? {} : { anchor: 0, page: 0 }) });
+  }
+  await store.put('books', { ...book, chapters: next.length, words: next.reduce((n, c) => n + (c.words || 0), 0) });
+  return moved;
 }

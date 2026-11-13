@@ -1365,6 +1365,27 @@ export function withPlaceholders(links) {
   }
   return out;
 }
+/**
+ * A list kept from before a chapter was known for what it is ("Ch. 249 ...
+ * [Please read Author's Note]", once taken for the afterword): a placeholder
+ * for a number, and further on the real chapter of that number, sent to the
+ * end. The real one goes into the placeholder's place, and only that moves.
+ */
+export function settlePlaceholders(links) {
+  const list = (links || []).slice();
+  let moved = 0;
+  for (let at = 0; at < list.length; at += 1) {
+    const link = list[at];
+    if (!isPlaceholder(link)) continue;
+    const later = list.findIndex((other, i) => i > at && !isPlaceholder(other)
+      && chapterKind(other.text || '').kind === 'main' && chapterKind(other.text || '').number === Number(link.placeholder));
+    if (later < 0) continue;
+    list[at] = list[later];
+    list.splice(later, 1);
+    moved += 1;
+  }
+  return moved ? list : links;
+}
 /** A placeholder's chapter: its number, and that nothing came for it. */
 export function placeholderChapter(link, index) {
   const number = link.placeholder;

@@ -3257,7 +3257,7 @@ await t('a chapter is scrolled to its end while it is confirmed; one that came o
   assert.equal(web.endsCut('他走了。'), false);
   // Said after a download; fetched again from the book's actions, at the site's own delay, each in its own place.
   const app = read('app/src/main/assets/www/js/app.js');
-  assert.match(app, /job\.bookId = book\.id;\s+noteShort\(book\)/);
+  assert.match(app, /job\.bookId = book\.id;[\s\S]{0,160}await build\.settleMisplaced\(book\.id\)\.catch\(\(\) => 0\);\s+noteShort\(book\)/);
   assert.match(app, /noteShort\(book\)\.catch\(\(\) => \{\}\);\s+\/\* Into the book itself/);
   assert.match(app, /choice\(`Fetch \$\{short\.length\} short chapter/);
   assert.match(app, /const \{ gap, jitter \} = delaysFor\(site\);/);

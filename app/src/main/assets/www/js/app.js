@@ -7289,6 +7289,8 @@ async function runJob(job) {
   delete job.resumed;
   job.note = '';
   saveQueue();
+  // Kept from before a chapter was known for what it is: the real one into its placeholder's place.
+  job.links = web.settlePlaceholders(job.links);
   let outcome = { rest: job.links, reason: '', paused: false };
   try {
     const parts = [];
@@ -7325,6 +7327,8 @@ async function runJob(job) {
     // The book so far, carried on: the shorter one goes to the Bin.
     if (before && before.id !== book.id) await library.binBooks([before.id]).catch(() => {});
     job.bookId = book.id;
+    // A chapter that came at the end, its placeholder further back: put in its place.
+    await build.settleMisplaced(book.id).catch(() => 0);
     noteShort(book).catch(() => {});
     // The chosen picture into the book itself, as Build puts its chosen cover.
     if (chosen) await covers.placeCover(book.id, chosen).catch(() => {});
@@ -8562,6 +8566,7 @@ function wireWorkshop() {
           }
         },
       });
+      await build.settleMisplaced(book.id).catch(() => 0);
       noteShort(book).catch(() => {});
       /* Into the book itself, as a cover chosen in Details is: its cover page
        * shows it, and anything written out of it carries it. */
@@ -11622,6 +11627,26 @@ async function offerPicture(blob, { title = '', href = '' } = {}) {
   sheet.hidden = false;
 }
 
+/* Once: books built since placeholders were first put in (13 November 2026),
+ * while a chapter could still be taken for the afterword and sent to the end
+ * -- each such chapter put back in its placeholder's place. Websites' books
+ * only, and in the background: the shelf is not kept waiting for it. Queued
+ * books' lists are settled the same way as each starts (runJob). */
+const PLACEHOLDERS_SINCE = Date.UTC(2026, 10, 12, 12);
+async function settleMisplacedOnce(settings) {
+  if (settings.misplacedSettled) return;
+  let put = 0;
+  for (const book of await store.all('books')) {
+    if (!book.webSources?.length || (book.addedAt || 0) < PLACEHOLDERS_SINCE) continue;
+    put += await build.settleMisplaced(book.id).catch(() => 0);
+  }
+  await store.saveSettings({ misplacedSettled: true });
+  if (put) {
+    whenNotReading(() => toast(`${put} chapter${put === 1 ? '' : 's'} sent to the end of a book put back in ${put === 1 ? 'its' : 'their'} place.`, 6000));
+    if (current === 'library') refreshShelf().catch(() => {});
+  }
+}
+
 /* A back while typing is the keyboard's, not the screen's. The keyboard takes
  * a back to close itself before it reaches the page; one that slips past it --
  * Samsung's clipboard, as its items are deleted, hides the keyboard for a
@@ -11798,6 +11823,7 @@ async function boot() {
   await Promise.race([fonts.loadAll().catch(() => []), new Promise((resolve) => setTimeout(resolve, 1500))]);
   // Books left unread for days go On hold before the shelf shows them.
   const held = await library.holdQuietBooks().catch(() => 0);
+  settleMisplacedOnce(settings).catch(() => {});
   // Locked only if a passphrase exists to unlock it with.
   await library.initVaultGate();
   reader.setChrome('full');

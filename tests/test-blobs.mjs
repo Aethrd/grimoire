@@ -254,6 +254,52 @@ await t('a backup carries everything except the books', async () => {
   assert.equal(backup.books.find((x) => x.fingerprint === 'b:2').bundleLeader, 'a:1');
 });
 
+await t('a chapter sent to the end, its placeholder further back: put in its place, in a queued list and in a built book', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const web = await import(new URL('../app/src/main/assets/www/js/web.js', import.meta.url).href);
+  const build = await import(new URL('../app/src/main/assets/www/js/build.js', import.meta.url).href);
+  // A queued list: the placeholder at 249, the real 249 at the end. Only that moves.
+  const real = (n) => ({ url: `https://dreamy-translations.com/novel/hhh/chapter/${n}`, text: n === 249 ? "Ch. 249 Heungbu's Wife (3) [Please read Author's Note]88" : `Ch. ${n} Title ${n}` });
+  const kept = [...Array.from({ length: 249 }, (_, n) => real(n)), web.placeholderLink(249), ...Array.from({ length: 83 }, (_, n) => real(250 + n)), real(249)];
+  const settled = web.settlePlaceholders(kept);
+  assert.equal(settled.length, 333);
+  assert.equal(settled[249].url, real(249).url);
+  assert.ok(!settled.some(web.isPlaceholder));
+  assert.deepEqual(settled.map((l) => l.url), Array.from({ length: 333 }, (_, n) => real(n).url));
+  // Nothing to settle: the same list back.
+  const plain = Array.from({ length: 5 }, (_, n) => real(n));
+  assert.equal(web.settlePlaceholders(plain), plain);
+
+  // A built book: chapters 0-5 with 3 a placeholder, the real 3 at the end (6).
+  const bookId = await store.add('books', { title: 'HHH', chapters: 7, words: 600, webSources: ['https://dreamy-translations.com/novel/hhh'], addedAt: Date.now() });
+  const placeholder = web.placeholderChapter(web.placeholderLink(3), 3).chapter;
+  for (let i = 0; i < 7; i += 1) {
+    const chapter = i === 3 ? { title: placeholder.title, html: placeholder.html, words: 0 }
+      : i === 6 ? { title: "Ch. 3 Heungbu's Wife [Please read Author's Note]", html: '<p>the real three</p>', words: 100 }
+      : { title: `Ch. ${i} Title`, html: `<p>chapter ${i}</p>`, words: 100 };
+    await store.put('chapters', { bookId, index: i, ...chapter });
+  }
+  const onReal = await store.addMark({ bookId, chapterIndex: 6, start: 0, end: 4, kind: 'highlight' });
+  const onFour = await store.addMark({ bookId, chapterIndex: 4, start: 0, end: 4, kind: 'highlight' });
+  const onHole = await store.addMark({ bookId, chapterIndex: 3, start: 0, end: 4, kind: 'highlight' });
+  await store.put('positions', { bookId, chapterIndex: 6, anchor: 12, page: 2 });
+  assert.equal(await build.settleMisplaced(bookId), 1);
+  const after = (await store.byIndex('chapters', 'bookId', bookId)).sort((a, b) => a.index - b.index);
+  assert.deepEqual(after.map((c) => c.index), [0, 1, 2, 3, 4, 5]);
+  assert.equal(after[3].html, '<p>the real three</p>');
+  assert.ok(!after.some((c) => /placeholder/.test(c.title)));
+  // Its marks went with it; one in the placeholder's text is gone with that text; where the reader was, followed.
+  const marks = await store.byIndex('marks', 'bookId', bookId);
+  const markAt = (id) => marks.find((m) => m.id === id)?.chapterIndex;
+  assert.equal(markAt(onReal), 3);
+  assert.equal(markAt(onFour), 4);
+  assert.equal(markAt(onHole), undefined);
+  assert.deepEqual(await store.get('positions', bookId), { bookId, chapterIndex: 3, anchor: 12, page: 2 });
+  assert.equal((await store.get('books', bookId)).chapters, 6);
+  // Again: nothing more to do.
+  assert.equal(await build.settleMisplaced(bookId), 0);
+});
+
 await t('the look goes in a backup and comes back: gradient colours and shares, direction, solid or gradient, the queue animation', async () => {
   const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
   const before = await store.settings();
