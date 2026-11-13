@@ -2040,7 +2040,9 @@ await t('the progress strip sits on the tab bar by its real height, and at the f
   const css = read('app/src/main/assets/www/css/app.css');
   // No position measured off the window: the bar's own height, kept as it shows, hides and changes.
   assert.ok(!/window\.innerHeight - bar\.getBoundingClientRect\(\)\.top/.test(app), 'still measured off the window');
-  assert.match(app, /const height = bar && !bar\.hidden && bar\.getClientRects\(\)\.length \? bar\.offsetHeight : 0;\s+document\.documentElement\.style\.setProperty\('--tabbar-real', `\$\{height\}px`\);/);
+  // To the fraction of a pixel, and lapping the bar's top edge by one: no sliver of the shelf between them.
+  assert.match(app, /const shown = bar && !bar\.hidden && bar\.getClientRects\(\)\.length;\s+const height = shown \? Math\.max\(0, bar\.getBoundingClientRect\(\)\.height - 1\) : 0;\s+document\.documentElement\.style\.setProperty\('--tabbar-real', shown \? `\$\{height\.toFixed\(2\)\}px` : '0px'\);/);
+  assert.ok(!/bar\.offsetHeight/.test(app.slice(app.indexOf('function seat()'), app.indexOf('function watchSeat()'))), 'still rounded to a whole pixel');
   assert.match(app, /new MutationObserver\(seat\)\.observe\(bar, \{ attributes: true, attributeFilter: \['hidden', 'class', 'style'\] \}\)/);
   assert.match(css, /\.import-progress \{ position: fixed;[^}]*bottom: max\(var\(--safe-bottom\), var\(--tabbar-real, calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\) \+ 1px\)\)\); \}/);
   // In the harness: hidden, it is 0 -- the strip at the foot.

@@ -2642,8 +2642,13 @@ const progress = (() => {
    * book's page it is a pill at the top instead (app.css, body.on-page). */
   function seat() {
     const bar = el('tabbar');
-    const height = bar && !bar.hidden && bar.getClientRects().length ? bar.offsetHeight : 0;
-    document.documentElement.style.setProperty('--tabbar-real', `${height}px`);
+    /* Its height as drawn, to the fraction of a pixel (offsetHeight rounds to a
+     * whole one, and on a phone whose pixels are 2.625 to the CSS pixel that
+     * left a sliver of the shelf showing between the two), and a pixel less:
+     * the strip laps over the bar's top edge rather than stopping short of it. */
+    const shown = bar && !bar.hidden && bar.getClientRects().length;
+    const height = shown ? Math.max(0, bar.getBoundingClientRect().height - 1) : 0;
+    document.documentElement.style.setProperty('--tabbar-real', shown ? `${height.toFixed(2)}px` : '0px');
     // An older build's own placement, gone.
     const host = panel();
     if (host) host.style.bottom = '';

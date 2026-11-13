@@ -3206,7 +3206,7 @@ await t('a book with more to download is marked on its cover; the strip sits on 
   assert.match(css, /\.tile-unfinished \.mark-fill \{\s*filter: saturate\(1\.9\) brightness\(1\.25\)/);
   assert.match(css, /\.tile-unfinished \.mark-fill \{[^}]*clip-path: inset\(calc\(\(3\.6 \+ 15\.9 \* \(1 - var\(--done, 0\)\)\) \/ 24 \* 100% - 2px\) 0 0 0\);/);
   // The strip seated on the tab bar by its real height (see the tools tests).
-  assert.match(app, /setProperty\('--tabbar-real', `\$\{height\}px`\)/);
+  assert.match(app, /setProperty\('--tabbar-real', shown \? `\$\{height\.toFixed\(2\)\}px` : '0px'\)/);
   assert.match(app, /new ResizeObserver\(seat\)\.observe\(bar\)/);
 });
 
