@@ -169,7 +169,15 @@ const ALLOWED = new Set([
   'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE', 'CODE',
   'UL', 'OL', 'LI', 'DL', 'DT', 'DD', 'HR', 'BR', 'IMG', 'FIGURE',
   'FIGCAPTION', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TD', 'TH', 'SMALL', 'A',
+  // Furigana: a reading over its word (rp is written by readChapter itself).
+  'RUBY', 'RB', 'RT',
 ]);
+
+/* Emphasis dots (傍点) -- Kakuyomu's <em class="emphasisDots">, a "sesame" or
+ * "boten" span elsewhere: dots over each character in Japanese, not italics,
+ * which Japanese type does not have. Kept as <em class="dots">, the one
+ * class let through. */
+const DOTS = /\b(emphasis-?dots|emphasisdots|boten|bouten|sesame|kenten)\b/i;
 
 /** Elements with no closing tag. */
 const VOID = new Set(['br', 'hr', 'img']);
@@ -200,7 +208,8 @@ export function readChapter(root, resolveImage) {
   const html = [];
   const text = [];
 
-  const walk = (node) => {
+  // quiet: inside a reading (rt), whose words are the word's own, not more of them.
+  const walk = (node, quiet = false) => {
     // firstChild/nextSibling rather than childNodes: no array is allocated
     // per element, and there are a great many elements.
     for (let child = node.firstChild; child; child = child.nextSibling) {
@@ -208,7 +217,7 @@ export function readChapter(root, resolveImage) {
         const value = child.nodeValue;
         if (!value) continue;
         html.push(escapeText(value));
-        text.push(value);
+        if (!quiet) text.push(value);
         continue;
       }
       if (child.nodeType !== Node.ELEMENT_NODE) continue;
@@ -227,8 +236,26 @@ export function readChapter(root, resolveImage) {
         continue;
       }
 
+      /* A reading's brackets, as the site wrote them: dropped, and written
+       * round every reading alike below -- so a reader that shows no ruby
+       * shows 漢字（かんじ）, never 漢字かんじ run together. */
+      if (tag === 'RP') continue;
+      if (tag === 'RT') {
+        html.push('<rp>（</rp><rt>');
+        walk(child, true);
+        html.push('</rt><rp>）</rp>');
+        continue;
+      }
+      // Emphasis dots: kept as dots (see DOTS).
+      if ((tag === 'EM' || tag === 'SPAN' || tag === 'B' || tag === 'STRONG') && DOTS.test(child.getAttribute('class') || '')) {
+        html.push('<em class="dots">');
+        walk(child, quiet);
+        html.push('</em>');
+        continue;
+      }
+
       // Not allowed, but its contents might be: unwrap rather than drop.
-      if (!ALLOWED.has(tag)) { walk(child); continue; }
+      if (!ALLOWED.has(tag)) { walk(child, quiet); continue; }
 
       if (tag === 'IMG') {
         const src = child.getAttribute('src');
@@ -245,7 +272,7 @@ export function readChapter(root, resolveImage) {
       // a set of records, and a live href is a way out of the reader.
       const name = tag === 'A' ? 'span' : tag.toLowerCase();
       html.push(`<${name}>`);
-      walk(child);
+      walk(child, quiet);
       if (!VOID.has(name)) html.push(`</${name}>`);
     }
   };
@@ -1498,6 +1525,21 @@ export function chapterPlainText(chapter) {
  * sanitised here, on the way to the page -- the same walk as before, moved
  * from import time to read time.
  */
+/* Spaced by its own blank lines: a chapter written a line to a paragraph,
+ * with empty paragraphs between its beats -- how Kakuyomu, Narou and most
+ * Korean and Chinese serials set a page (and many a WordPress translation,
+ * a &nbsp; between every paragraph). Its blank lines are its spacing: a gap
+ * after every line as well doubled it, and an indent on top of the
+ * full-width space the author typed pushed every line in twice. A tenth of
+ * its paragraphs blank, and at least three. */
+const BLANK_PARA = /<p>(?:\s|&nbsp;|&#160;|\u00a0|\u3000|<br\s*\/?>)*<\/p>/gi;
+export function spacedByLines(html) {
+  const all = (String(html || '').match(/<p>/gi) || []).length;
+  if (all < 10) return false;
+  const blank = (String(html).match(BLANK_PARA) || []).length;
+  return blank >= 3 && blank / all >= 0.1;
+}
+
 export function chapterHtml(chapter) {
   if (chapter.html != null) return chapter.html;
   if (chapter.source == null) return '';

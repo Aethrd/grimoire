@@ -2656,7 +2656,7 @@ await t("margins are every book's, and a book keeps only what was changed in it"
 
 await t("the book's own indents give way to the reader's margins", async () => {
   const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
-  assert.match(src, /section\.innerHTML = chapterHtml\(chapter\);\n  flattenLayoutIndents\(section\);/);
+  assert.match(src, /section\.innerHTML = html;\n[^\n]*\n  if \(spacedByLines\(html\)\) section\.classList\.add\('lines'\);\n  flattenLayoutIndents\(section\);/);
   const css = fs.readFileSync(new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
   assert.match(css, /\.page-flow \.book-indent \{ margin: 0 !important; padding: 0 !important; border: 0 !important; \}/);
   // Top and bottom margins: the page's padding when paged, the edges of the

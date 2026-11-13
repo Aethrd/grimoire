@@ -451,6 +451,16 @@ section.block > h2 { margin-top: 18px; }
 .page-flow ::selection { background: var(--accent-300); color: var(--accent-900); }
 .page-flow p { margin: 0 0 var(--read-para); text-indent: var(--read-indent); }
 .page-flow p:first-of-type { text-indent: 0; }
+/* A chapter spaced by its own blank lines (parse.js, spacedByLines): no gap
+   after each line, no indent on top of the author's own full-width space --
+   the blank lines between its beats are its spacing, as on the site. */
+.page-flow .chapter.lines p { margin-bottom: 0; text-indent: 0; }
+/* Furigana: the reading small over its word, the line not pushed apart by it. */
+.page-flow ruby { ruby-position: over; }
+.page-flow rt { font-size: .5em; line-height: 1; }
+/* Emphasis dots (傍点): dots over each character, upright -- not italics. */
+.page-flow em.dots { font-style: normal; -webkit-text-emphasis: filled sesame; text-emphasis: filled sesame;
+  -webkit-text-emphasis-position: over right; text-emphasis-position: over right; }
 .page-flow h1, .page-flow h2, .page-flow h3 {
   font-family: var(--font-heading); font-weight: 800; line-height: 1.2;
   margin: 1.4em 0 .5em; text-indent: 0; text-align: left;

@@ -676,6 +676,49 @@ const KOREAN_EPISODE = /(?:제\s*)?(\d+(?:\.\d+)?)\s*(?:화|회|장)(?![가-힣]
  * Only what cannot be a page is skipped: a jump within this page, a script,
  * an email address.
  */
+/* ── Kakuyomu: the contents from the page's own data ─────────────────
+ *
+ * A Kakuyomu work's page draws its contents from data it carries with it
+ * (Next.js's __NEXT_DATA__, Apollo's store): every episode of every chapter
+ * (章), in order -- where the page itself shows a long work's chapters
+ * folded, each opened only by a tap. Read from there, the whole list comes
+ * from the one page already asked for: nothing more is asked of the site,
+ * and no chapter is missed for being folded away. Its other links (the
+ * author, the site's menus) are kept as they were found. A page without the
+ * data, or with it in another shape, is read as any other.
+ */
+function kakuyomuContents(doc, pageUrl) {
+  let page;
+  try { page = new URL(pageUrl); } catch { return null; }
+  if (!/(^|\.)kakuyomu\.jp$/i.test(page.hostname)) return null;
+  const work = /^\/works\/(\d+)/.exec(page.pathname)?.[1];
+  const script = work && doc.querySelector('script#__NEXT_DATA__');
+  if (!script) return null;
+  let state;
+  try { state = JSON.parse(script.textContent)?.props?.pageProps?.__APOLLO_STATE__; } catch { return null; }
+  if (!state || typeof state !== 'object') return null;
+  const deref = (value) => (value && typeof value === 'object' && value.__ref ? state[value.__ref] : value);
+  const book = state[`Work:${work}`];
+  if (!book) return null;
+  // Its contents: the list on the work whose entries hold episodes (tableOfContents, or as it is next named).
+  const holds = (entry) => Array.isArray(entry?.episodeUnions) || Array.isArray(entry?.episodes);
+  const contents = Object.values(book).find((value) => Array.isArray(value) && value.length && value.map(deref).every(holds));
+  if (!contents) return null;
+  const links = [];
+  const seen = new Set();
+  for (const entry of contents.map(deref)) {
+    const chapter = deref(entry.chapter);
+    for (const episode of (entry.episodeUnions || entry.episodes).map(deref)) {
+      if (!episode?.id || !episode.title || seen.has(episode.id)) continue;
+      seen.add(episode.id);
+      const url = `${page.origin}/works/${work}/episodes/${episode.id}`;
+      links.push({ url, text: tidy(String(episode.title)), chrome: false, kind: fileKind(`/works/${work}/episodes/${episode.id}`), post: false,
+        ...(chapter?.title ? { section: tidy(String(chapter.title)) } : {}) });
+    }
+  }
+  return links.length ? links : null;
+}
+
 export function linksOf(html, pageUrl) {
   const doc = parseHtml(html);
   const declared = doc.querySelector('base[href]')?.getAttribute('href');
@@ -722,6 +765,16 @@ export function linksOf(html, pageUrl) {
     const link = { url: href, text, chrome: !post && inChrome(anchor), kind: fileKind(url.pathname), post };
     seen.set(href, link);
     links.push(link);
+  }
+  /* Kakuyomu: every episode, from the page's own data, in its order -- in
+   * place of those its folded contents happened to show. */
+  const fromData = kakuyomuContents(doc, pageUrl);
+  if (fromData) {
+    const episodes = new Set(fromData.map((link) => link.url));
+    const isEpisode = (link) => episodes.has(link.url) || /\/works\/\d+\/episodes\/\d+/.test(new URL(link.url).pathname);
+    const others = links.filter((link) => !isEpisode(link));
+    links.length = 0;
+    links.push(...others, ...fromData);
   }
   const wordpress = isWordPress(doc, html);
   const list = wordpress && isWordPressList(doc, pageUrl);

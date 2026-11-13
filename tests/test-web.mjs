@@ -461,6 +461,39 @@ await t('a chapter number in odd digits ("第十⑨章") is read as its number, 
   assert.deepEqual(web.inReadingOrder([...links].reverse(), () => true).links.map((l) => l.text), links.map((l) => l.text));
 });
 
+await t('Kakuyomu: every episode, from the works page\'s own data, though its contents are folded', async () => {
+  const work = '1177354054881165840';
+  const ep = (id, title) => ({ __typename: 'Episode', id, title, publishedAt: '2024-01-01T00:00:00Z' });
+  const state = {
+    [`Work:${work}`]: { __typename: 'Work', id: work, title: '魔法の国', tableOfContents: [{ __ref: 'TableOfContentsChapter:a' }, { __ref: 'TableOfContentsChapter:b' }] },
+    'TableOfContentsChapter:a': { __typename: 'TableOfContentsChapter', chapter: { __ref: 'Chapter:1' }, episodeUnions: [{ __ref: 'Episode:11' }, { __ref: 'Episode:12' }] },
+    'TableOfContentsChapter:b': { __typename: 'TableOfContentsChapter', chapter: { __ref: 'Chapter:2' }, episodeUnions: [{ __ref: 'Episode:21' }, { __ref: 'Episode:22' }, { __ref: 'Episode:23' }] },
+    'Chapter:1': { __typename: 'Chapter', id: '1', level: 1, title: '第一章　旅立ち' },
+    'Chapter:2': { __typename: 'Chapter', id: '2', level: 1, title: '第二章　王都' },
+    'Episode:11': ep('11', '第1話　始まり'), 'Episode:12': ep('12', '第2話　森'),
+    'Episode:21': ep('21', '第3話　門'), 'Episode:22': ep('22', '第4話　城'), 'Episode:23': ep('23', '第5話　夜'),
+  };
+  // The page shows the first chapter's two only, the second folded away.
+  const html = `<html lang="ja"><head><title>魔法の国 - カクヨム</title></head><body>
+    <nav><a href="/">カクヨム</a><a href="/users/someone">作者</a></nav>
+    <div class="toc"><a href="/works/${work}/episodes/11">第1話　始まり</a><a href="/works/${work}/episodes/12">第2話　森</a>
+    <button>第二章　王都</button></div>
+    <script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { __APOLLO_STATE__: state } } })}</script></body></html>`;
+  const found = web.linksOf(html, `https://kakuyomu.jp/works/${work}`);
+  const episodes = found.links.filter((l) => /\/episodes\//.test(l.url));
+  assert.deepEqual(episodes.map((l) => l.text), ['第1話　始まり', '第2話　森', '第3話　門', '第4話　城', '第5話　夜'].map((t) => t.replace(/\s+/g, ' ')));
+  assert.deepEqual(episodes.map((l) => l.url.split('/').pop()), ['11', '12', '21', '22', '23']);
+  assert.deepEqual(episodes.map((l) => l.section), ['第一章 旅立ち', '第一章 旅立ち', '第二章 王都', '第二章 王都', '第二章 王都']);
+  // Its other links kept as they were.
+  assert.ok(found.links.some((l) => l.url === 'https://kakuyomu.jp/users/someone'));
+  // Elsewhere, or without the data: read as any page is.
+  assert.equal(web.linksOf(html, `https://example.com/works/${work}`).links.filter((l) => /\/episodes\//.test(l.url)).length, 2);
+  assert.equal(web.linksOf(html.replace(/<script id="__NEXT_DATA__"[\s\S]*?<\/script>/, ''), `https://kakuyomu.jp/works/${work}`).links.filter((l) => /\/episodes\//.test(l.url)).length, 2);
+  // The list under another name is still found; entries of another shape are not guessed at.
+  assert.equal(web.linksOf(html.replace('"tableOfContents"', '"toc"'), `https://kakuyomu.jp/works/${work}`).links.filter((l) => /\/episodes\//.test(l.url)).length, 5);
+  assert.equal(web.linksOf(html.replaceAll('"episodeUnions"', '"items"'), `https://kakuyomu.jp/works/${work}`).links.filter((l) => /\/episodes\//.test(l.url)).length, 2);
+});
+
 await t('missing chapters get a placeholder each, labelled, and the site is never asked for one', async () => {
   const link = (n) => ({ url: `${SITE}chapter-${n}`, text: `Chapter ${n}` });
   // 1, 2, 3, 6, 7: 4 and 5 kept a place, in order.

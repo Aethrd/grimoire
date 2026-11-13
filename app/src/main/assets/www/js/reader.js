@@ -15,7 +15,7 @@
  */
 
 import * as store from './store.js';
-import { countWords, chapterHtml } from './parse.js';
+import { countWords, chapterHtml, spacedByLines } from './parse.js';
 import { pool } from './blobs.js';
 import * as translate from './translate.js';
 import * as frames from './frame.js';
@@ -494,7 +494,10 @@ function chapterSection(chapter) {
   const section = document.createElement('section');
   section.className = 'chapter';
   section.dataset.chapter = String(chapter.index);
-  section.innerHTML = chapterHtml(chapter);
+  const html = chapterHtml(chapter);
+  section.innerHTML = html;
+  // Its blank lines its spacing (see spacedByLines): no gap after each line, nor an indent added.
+  if (spacedByLines(html)) section.classList.add('lines');
   flattenLayoutIndents(section);
   hydrateImages(section, chapter.index);
   paintMarks(section, chapter.index);

@@ -1095,6 +1095,51 @@ await t('a book can be written back out as a real EPUB', async () => {
   assert.match(parse.chapterHtml(again.chapters[0]), /harbour kept its own accounts/);
 });
 
+await t('a Japanese web novel is written out as it reads: furigana, emphasis dots, its blank lines its spacing', async () => {
+  const JSZip = (await import('jszip')).default;
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const epub = await import(new URL('../app/src/main/assets/www/js/epub.js', import.meta.url).href);
+  const parse = await import(new URL('../app/src/main/assets/www/js/parse.js', import.meta.url).href);
+  // As a Kakuyomu episode is: a line to a paragraph, empty ones between its beats.
+  const page = new DOMParser().parseFromString(`<div class="widget-episodeBody js-episode-body">${[
+    '<p id="p1">　<ruby><rb>魔法</rb><rp>（</rp><rt>まほう</rt><rp>）</rp></ruby>の国。</p>',
+    '<p id="p2" class="blank"><br /></p>',
+    '<p id="p3">「<em class="emphasisDots"><span>本</span><span>当</span></em>に？」</p>',
+    '<p id="p4"><ruby>剣<rt>つるぎ</rt></ruby>を抜く。</p>',
+    ...Array.from({ length: 10 }, (_, i) => (i % 3 === 2 ? '<p class="blank"><br /></p>' : `<p>　彼は歩いた、${i}。</p>`)),
+  ].join('')}</div>`, 'text/html');
+  const { html, text } = parse.readChapter(page.querySelector('.widget-episodeBody'), () => null);
+  // Furigana kept as ruby, its brackets written round every reading alike; its reading not counted as words.
+  assert.match(html, /<ruby><rb>魔法<\/rb><rp>（<\/rp><rt>まほう<\/rt><rp>）<\/rp><\/ruby>/);
+  assert.match(html, /<ruby>剣<rp>（<\/rp><rt>つるぎ<\/rt><rp>）<\/rp><\/ruby>/);
+  assert.ok(!/まほう|つるぎ/.test(text), 'the reading counted as words');
+  // Emphasis dots kept as dots, not italics.
+  assert.match(html, /<em class="dots"><span>本<\/span><span>当<\/span><\/em>/);
+  assert.equal(parse.spacedByLines(html), true);
+  assert.equal(parse.spacedByLines('<p>One.</p><p>Two.</p>'.repeat(10)), false);
+
+  const bookId = await store.add('books', { title: '魔法の国', lang: 'ja', addedAt: Date.now() });
+  await store.put('chapters', { bookId, index: 0, title: '第1話　始まり', html, words: 40 });
+  const { blob } = await epub.buildEpub(bookId);
+  const bytes = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(Buffer.from(reader.result));
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(blob);
+  });
+  const archive = await JSZip.loadAsync(bytes);
+  const chapter = await archive.file('OEBPS/text/ch0001.xhtml').async('string');
+  assert.match(chapter, /xml:lang="ja"/);
+  assert.match(chapter, /<section epub:type="chapter" class="lines">/);
+  assert.match(chapter, /<rt>まほう<\/rt>/);
+  assert.match(chapter, /<em class="dots">/);
+  const css = await archive.file('OEBPS/style.css').async('string');
+  assert.match(css, /section\.lines p \{ margin: 0; text-indent: 0; \}/);
+  assert.match(css, /em\.dots \{ font-style: normal;[^}]*text-emphasis: filled sesame/);
+  assert.match(css, /rt \{ font-size: 0\.5em; \}/);
+  await store.deleteBook(bookId);
+});
+
 await t('a written book is compressed', async () => {
   /* An EPUB is a zip, and a zip that stores rather than deflates is just a
    * container: a book came out roughly the size of its own markup. The
