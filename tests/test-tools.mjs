@@ -2326,6 +2326,28 @@ await t('a blurred book is blurred in Continue reading too', async () => {
   assert.ok(!el('continue-card').hasAttribute('data-blur'), 'the blur stayed after the cover was shown again');
 });
 
+await t('the shelf drawn twice at once ends drawn from the library as it is now', async () => {
+  // As the queue does, while a book is read: a drawing under way, the book written, another asked for.
+  const books = (await store.all('books')).filter((b) => !b.binnedAt && !b.transient && b.bundleId == null && !b.inVault && !b.status && !b.finishedAt);
+  const [first, second] = books;
+  assert.ok(first && second, 'two books to draw');
+  const at = Date.now() + 1e9;
+  await store.put('books', { ...(await store.get('books', first.id)), lastOpenedAt: at });
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));      // a drawing, reading the library
+  const written = store.put('books', { ...(await store.get('books', second.id)), folder: first.folder, lastOpenedAt: at + 1000 });
+  // Another asked for before the first is done (away and back, without waiting).
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await written;
+  await settle(800);
+  assert.equal(el('continue-title').textContent, library.displayTitle(await store.get('books', second.id)),
+    'the shelf was left as an older drawing had it');
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /if \(shelfDrawing\) \{\s+shelfAgain = true;\s+return shelfDrawing;\s+\}/);
+});
+
 /* ── the picture frame ───────────────────────────────────────────────── */
 
 console.log('\nthe picture frame');

@@ -295,7 +295,32 @@ async function putQuietOnHold() {
   heldNote(count, (await store.settings()).autoHoldDays ?? 5);
 }
 
-async function refreshShelf() {
+/* Drawn one at a time, the last always from the library as it is now.
+ *
+ * With novels downloading, the shelf is drawn again and again -- each book
+ * coming in, each change in what is unfinished -- and a drawing reads every
+ * book before it draws. Two at once, the one that read the library first
+ * could finish last and draw over the other: back from a book, its "last
+ * read" and status came up as they were before it was read. A drawing asked
+ * for while one is under way now waits for it, and one more is drawn after,
+ * from what the library is then; any number asked for meanwhile are that one. */
+let shelfDrawing = null;
+let shelfAgain = false;
+function refreshShelf() {
+  if (shelfDrawing) {
+    shelfAgain = true;
+    return shelfDrawing;
+  }
+  shelfDrawing = (async () => {
+    do {
+      shelfAgain = false;
+      await drawShelf();
+    } while (shelfAgain);
+  })().finally(() => { shelfDrawing = null; });
+  return shelfDrawing;
+}
+
+async function drawShelf() {
   await library.renderShelf({
     onOpen: onTileTap, onLongPress: onTileHold, selection,
     selecting: selectMode, folder: activeFolder,
