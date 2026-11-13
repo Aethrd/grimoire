@@ -1324,7 +1324,10 @@ body[data-view="reader"] .stepper {
 :root { --strip-h: 0px; }
 body.jobs-up { --strip-h: 30px; }
 .import-progress { position: fixed; left: 0; right: 0; z-index: 20;
-  bottom: calc(var(--safe-bottom) + var(--tabbar-h) + 1px); }
+  /* On the tab bar: its real height, kept by app.js (seat) as it shows, hides
+     and changes -- 0 when hidden, so the strip is at the foot, above the
+     phone's own bar. Its usual height until that is first known. */
+  bottom: max(var(--safe-bottom), var(--tabbar-real, calc(var(--safe-bottom) + var(--tabbar-h) + 1px))); }
 .import-progress[hidden] { display: none; }
 
 .jobs-strip { display: flex; align-items: center; gap: 8px; width: 100%;

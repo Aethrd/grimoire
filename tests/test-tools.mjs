@@ -2012,6 +2012,22 @@ await t('made small, the progress page lets go of a tap that was waiting -- it d
   host.hidden = true;
 });
 
+await t('the progress strip sits on the tab bar by its real height, and at the foot when the bar is hidden', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const css = read('app/src/main/assets/www/css/app.css');
+  // No position measured off the window: the bar's own height, kept as it shows, hides and changes.
+  assert.ok(!/window\.innerHeight - bar\.getBoundingClientRect\(\)\.top/.test(app), 'still measured off the window');
+  assert.match(app, /const height = bar && !bar\.hidden && bar\.getClientRects\(\)\.length \? bar\.offsetHeight : 0;\s+document\.documentElement\.style\.setProperty\('--tabbar-real', `\$\{height\}px`\);/);
+  assert.match(app, /new MutationObserver\(seat\)\.observe\(bar, \{ attributes: true, attributeFilter: \['hidden', 'class', 'style'\] \}\)/);
+  assert.match(css, /\.import-progress \{ position: fixed;[^}]*bottom: max\(var\(--safe-bottom\), var\(--tabbar-real, calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\) \+ 1px\)\)\); \}/);
+  // In the harness: hidden, it is 0 -- the strip at the foot.
+  el('tabbar').hidden = true;
+  await settle(30);
+  assert.equal(document.documentElement.style.getPropertyValue('--tabbar-real'), '0px');
+  el('tabbar').hidden = false;
+  await settle(30);
+});
+
 await t('a second notice joins the first instead of replacing it', async () => {
   const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
   el('toast').hidden = true;

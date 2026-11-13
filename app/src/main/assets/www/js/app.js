@@ -2530,14 +2530,20 @@ const progress = (() => {
    * really is, not by the height it was meant to have -- a bar a few pixels
    * taller or shorter on a phone (its labels, its system inset) left a gap,
    * or an overlap, between the two. Again whenever the bar's size changes. */
+  /* Seated on the tab bar by the bar's own height, not by where the bar was
+   * measured to be: both are held to the foot of the screen, so the strip is
+   * on the bar whatever the screen does -- the keyboard up, the phone's own
+   * bars, a screen changed. Worked out from the window's height at one
+   * moment, it was left where the bar had been: over it, or in the air. The
+   * bar hidden (books being picked, a book open), it is at the foot. On a
+   * book's page it is a pill at the top instead (app.css, body.on-page). */
   function seat() {
-    const host = panel();
     const bar = el('tabbar');
-    if (!host) return;
-    // On the reading page it floats at the top; beside the book (search, contents) the tab bar is there, and it sits on it.
-    const free = host.classList.contains('open') || document.body.classList.contains('on-page');
-    const shown = bar && !bar.hidden && bar.getClientRects().length;
-    host.style.bottom = !free && shown ? `${Math.max(0, Math.round(window.innerHeight - bar.getBoundingClientRect().top))}px` : '';
+    const height = bar && !bar.hidden && bar.getClientRects().length ? bar.offsetHeight : 0;
+    document.documentElement.style.setProperty('--tabbar-real', `${height}px`);
+    // An older build's own placement, gone.
+    const host = panel();
+    if (host) host.style.bottom = '';
   }
   let seated = false;
   function watchSeat() {
@@ -2545,7 +2551,10 @@ const progress = (() => {
     seated = true;
     window.addEventListener('resize', seat);
     const bar = el('tabbar');
-    if (bar && typeof ResizeObserver === 'function') new ResizeObserver(seat).observe(bar);
+    if (!bar) return;
+    // Its height as it changes, and its showing and hiding -- each said the moment it happens.
+    if (typeof ResizeObserver === 'function') new ResizeObserver(seat).observe(bar);
+    if (typeof MutationObserver === 'function') new MutationObserver(seat).observe(bar, { attributes: true, attributeFilter: ['hidden', 'class', 'style'] });
   }
 
   /** Open: the page of every row. Small (as each starts): the strip. */

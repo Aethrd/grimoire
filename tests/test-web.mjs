@@ -3165,8 +3165,8 @@ await t('a book with more to download is marked on its cover; the strip sits on 
   assert.match(css, /\.tile-unfinished svg \{[^}]*width: 60%;/);
   assert.match(css, /\.tile-unfinished \.mark-fill \{\s*filter: saturate\(1\.9\) brightness\(1\.25\)/);
   assert.match(css, /\.tile-unfinished \.mark-fill \{[^}]*clip-path: inset\(calc\(\(3\.6 \+ 15\.9 \* \(1 - var\(--done, 0\)\)\) \/ 24 \* 100% - 2px\) 0 0 0\);/);
-  // The strip placed by where the tab bar's top really is.
-  assert.match(app, /host\.style\.bottom = !free && shown \? `\$\{Math\.max\(0, Math\.round\(window\.innerHeight - bar\.getBoundingClientRect\(\)\.top\)\)\}px` : '';/);
+  // The strip seated on the tab bar by its real height (see the tools tests).
+  assert.match(app, /setProperty\('--tabbar-real', `\$\{height\}px`\)/);
   assert.match(app, /new ResizeObserver\(seat\)\.observe\(bar\)/);
 });
 
