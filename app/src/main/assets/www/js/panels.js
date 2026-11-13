@@ -2065,6 +2065,9 @@ export async function openVault(onVaultChange, host) {
       if (!file) return;
       try {
         const report = await store.importBackup(JSON.parse(await readText(file)));
+        // The look comes back at once -- accent, gradient, its direction and roles -- not at the next launch.
+        theme.apply(await store.settings());
+        refreshTheme();
         // Said plainly, including what could not be matched: a backup restored
         // before the books are back is half a restore, and should say so.
         toast(report.missing

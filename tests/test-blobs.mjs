@@ -254,6 +254,26 @@ await t('a backup carries everything except the books', async () => {
   assert.equal(backup.books.find((x) => x.fingerprint === 'b:2').bundleLeader, 'a:1');
 });
 
+await t('the look goes in a backup and comes back: gradient colours and shares, direction, solid or gradient, the queue animation', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const before = await store.settings();
+  const look = {
+    gradient: { from: '#3fc1c0', to: '#8a7bd6', stops: [{ color: '#3fc1c0', share: 40 }, { color: '#d6a2ae', share: 70 }, { color: '#8a7bd6', share: 30 }] },
+    gradientDir: 'down-right', colourStyle: 'gradient', queueSceneOpacity: 55,
+  };
+  await store.saveSettings(look);
+  const backup = JSON.parse(JSON.stringify(await store.exportBackup()));
+  for (const key of Object.keys(look)) assert.deepEqual(backup.settings[key], look[key], `${key} left out of the backup`);
+  // Changed since, then restored: as it was in the backup.
+  await store.saveSettings({ gradient: null, gradientDir: 'auto', colourStyle: 'solid', queueSceneOpacity: 22 });
+  await store.importBackup(backup);
+  const after = await store.settings();
+  for (const key of Object.keys(look)) assert.deepEqual(after[key], look[key], `${key} not restored`);
+  // The look is put on at once after a restore, not at the next launch.
+  assert.match(read('app/src/main/assets/www/js/panels.js'), /await store\.importBackup\([^\n]*\n[^\n]*\n\s+theme\.apply\(await store\.settings\(\)\);\s+refreshTheme\(\);/);
+  await store.saveSettings({ gradient: before.gradient ?? null, gradientDir: before.gradientDir ?? 'auto', colourStyle: before.colourStyle ?? 'solid', queueSceneOpacity: before.queueSceneOpacity ?? 22 });
+});
+
 await t('restoring matches books by file, not by id', async () => {
   const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
   const backup = await store.exportBackup();
