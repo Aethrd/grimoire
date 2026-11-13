@@ -187,6 +187,8 @@ export const DEFAULT_SETTINGS = {
   gradient: null,
   // Its direction everywhere: 'auto' (each place its own) or one of theme.GRADIENT_DIRS.
   gradientDir: 'auto',
+  // The app's buttons and edges in the gradient's colours, each solid by its role, or in the gradient itself.
+  colourStyle: 'solid',
   // Fonts of your own, to read in: [{ id, name }] (the files themselves kept apart, see fonts.js).
   fonts: [],
   veil: 0.62,                     // 62% in dark, 28% in light

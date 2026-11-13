@@ -442,7 +442,7 @@ t('a theme is the look as a whole, written out and read back', () => {
   const settings = { themeMode: 'dark', accent: '#b4b0d6', heatRamp: 'ink', backgroundImage: null, veil: 0.62, columns: 3 };
   const look = theme.themeOf(settings, '  Night  ');
   // The gradient goes with it: null, following the accent, when none of your own is set.
-  assert.deepEqual(look, { name: 'Night', themeMode: 'dark', accent: '#b4b0d6', heatRamp: 'ink', backgroundImage: null, veil: 0.62, gradient: null, gradientDir: null });
+  assert.deepEqual(look, { name: 'Night', themeMode: 'dark', accent: '#b4b0d6', heatRamp: 'ink', backgroundImage: null, veil: 0.62, gradient: null, gradientDir: null, colourStyle: null });
   const file = theme.themeFile(look);
   assert.equal(file.format, 'quire-theme');
   assert.deepEqual(theme.readThemes(JSON.parse(JSON.stringify(file))), [look]);

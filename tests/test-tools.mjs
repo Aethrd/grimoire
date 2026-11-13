@@ -2171,6 +2171,52 @@ await t('the theme gradient: the accent by default, two to five colours of your 
   theme.apply(await store.settings());
 });
 
+await t('the gradient colours the app: ranked by share into roles, the largest leading as the accent; solid or the gradient itself', async () => {
+  const theme = await import(new URL('../app/src/main/assets/www/js/theme.js', import.meta.url).href);
+  const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  const root = document.documentElement.style;
+  // Ranked by share, level ones in their order; fewer than five go round again.
+  assert.deepEqual(theme.rolesOf([{ color: '#111111', share: 40 }, { color: '#222222', share: 70 }, { color: '#333333', share: 40 }]),
+    ['#222222', '#111111', '#333333', '#222222', '#111111']);
+  // Colours of your own: the largest share is the accent the whole app is drawn from.
+  const own = { stops: [{ color: '#3fc1c0', share: 40 }, { color: '#d6a2ae', share: 70 }, { color: '#8a7bd6', share: 30 }] };
+  theme.apply({ ...(await store.settings()), gradient: theme.gradientOf(own), colourStyle: 'solid' });
+  const steps = theme.ramp('#d6a2ae');
+  assert.equal(root.getPropertyValue('--accent'), steps[3]);
+  assert.equal(root.getPropertyValue('--role-1'), steps[3]);
+  assert.equal(root.getPropertyValue('--role-2'), '#3fc1c0');
+  assert.equal(root.getPropertyValue('--role-3'), '#8a7bd6');
+  assert.ok(root.getPropertyValue('--role-2-ink'));
+  assert.equal(document.documentElement.dataset.colourStyle, 'solid');
+  // Following the accent, the accent is the one chosen.
+  theme.apply({ ...(await store.settings()), gradient: null });
+  assert.equal(root.getPropertyValue('--accent'), theme.ramp((await store.settings()).accent)[3]);
+  // Its parts: solid in their roles, or the gradient filling and edging them.
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /:root \.btn\.ghost \{ border-color: color-mix\(in srgb, var\(--role-2/);
+  assert.match(css, /:root \.card, :root \.build-leftover \{ border-color: color-mix\(in srgb, var\(--role-3/);
+  assert.match(css, /\[data-colour-style="solid"\] \.play-btn svg circle \{ stroke: var\(--role-2-ink\); \}/);
+  assert.match(css, /\[data-colour-style="gradient"\] \.btn\.primary,[\s\S]{0,300}\{ background: var\(--grad-bar\); color: var\(--on-grad\);/);
+  // Kept with a theme; a style that is not one is not taken.
+  assert.ok(theme.THEME_KEYS.includes('colourStyle'));
+  assert.equal(theme.readThemes({ name: 'G', colourStyle: 'gradient' })[0].colourStyle, 'gradient');
+  assert.equal('colourStyle' in theme.readThemes({ name: 'G', accent: '#112233', colourStyle: 'neon' })[0], false);
+  // In Appearance: what each colour colours, and the choice of solid or gradient.
+  await store.saveSettings({ gradient: theme.gradientOf(own), colourStyle: 'solid' });
+  const host = document.createElement('div');
+  await panels.openAppearance(host);
+  const roles = [...host.querySelectorAll('.gradient-roles li')];
+  assert.equal(roles.length, 5);
+  assert.match(roles[0].textContent, /Primary/);
+  assert.match(roles[1].textContent, /Secondary.*Pause and resume/);
+  host.querySelector('.gradient-style [data-style="gradient"]').click();
+  await settle(50);
+  assert.equal((await store.settings()).colourStyle, 'gradient');
+  assert.equal(document.documentElement.dataset.colourStyle, 'gradient');
+  await store.saveSettings({ gradient: null, colourStyle: 'solid' });
+  theme.apply(await store.settings());
+});
+
 await t('the opening scene: only for a slow open, faded in and out, faint behind the queue, calm when motion is reduced', async () => {
   const opening = await import(new URL('../app/src/main/assets/www/js/opening.js', import.meta.url).href);
   // Where no canvas can be drawn on (here), it starts nothing and stops cleanly.

@@ -222,6 +222,37 @@ export function gradientSvg(id, place) {
   return `<linearGradient id="${id}" data-grad="${place}" gradientUnits="${spot.units}" x1="${line.x1}" y1="${line.y1}" x2="${line.x2}" y2="${line.y2}">${stops}</linearGradient>`;
 }
 
+/* ── roles: the gradient as the app's colours ─────────────────────────────
+ *
+ * The gradient's colours, ranked by their share (the larger first; level
+ * shares in the order they stand): primary, secondary, tertiary, and a fourth
+ * and fifth. With colours of your own the primary leads the whole app -- it is
+ * the accent everything else is drawn from -- and each of the rest is given a
+ * part to colour:
+ *   primary    main buttons, sliders, switches, what is selected, the tab you are on
+ *   secondary  pause and resume, outlined buttons, an icon that is on
+ *   tertiary   the edges of cards and chips
+ *   fourth     small headings over a screen's title
+ *   fifth      the lines between rows
+ * Fewer than five colours: the roles go round them again. Following the
+ * accent, they are steps of its ramp. Drawn solid in them, or in the
+ * gradient itself (colourStyle).
+ */
+export const ROLE_NAMES = ['Primary', 'Secondary', 'Tertiary', 'Fourth', 'Fifth'];
+export const ROLE_PARTS = [
+  'Main buttons, sliders, switches, what is selected, the tab you are on',
+  'Pause and resume, outlined buttons, an icon that is on',
+  'Edges of cards and chips',
+  'Small headings over a title',
+  'Lines between rows',
+];
+export const COLOUR_STYLES = { solid: 'Solid colours', gradient: 'The gradient' };
+/** The colours by rank: the larger share first, level ones in their order. */
+export function rolesOf(stops) {
+  const ranked = stops.map((stop, i) => ({ ...stop, i })).sort((a, b) => b.share - a.share || a.i - b.i).map((stop) => stop.color);
+  return ROLE_NAMES.map((_, i) => ranked[i % ranked.length]);
+}
+
 /** Push the whole computed theme onto :root as custom properties. */
 export function apply(settings) {
   const mode = settings.themeMode === 'system'
@@ -229,7 +260,10 @@ export function apply(settings) {
     : settings.themeMode;
   const dark = mode === 'dark';
   const ground = GROUNDS[mode];
-  const steps = ramp(settings.accent);
+  // Colours of your own: the one with the largest share is the accent (see roles, above).
+  const gradient = gradientOf(settings.gradient);
+  const accent = gradient ? rolesOf(gradient.stops)[0] : settings.accent;
+  const steps = ramp(accent);
   const root = document.documentElement.style;
 
   document.documentElement.dataset.mode = mode;
@@ -248,7 +282,6 @@ export function apply(settings) {
 
   /* The theme's gradient -- the download mark, pause and resume: from a
    * light step of the accent to a deep one, or two colours of your own. */
-  const gradient = gradientOf(settings.gradient);
   const stops = gradient ? gradient.stops
     : [{ color: steps[STEP_NAMES.indexOf(300)], share: 50 }, { color: steps[STEP_NAMES.indexOf(600)], share: 50 }];
   const placed = placeStops(stops);
@@ -259,6 +292,19 @@ export function apply(settings) {
   root.setProperty('--grad-bar', gradientCss(placed, gradientDir));
   if (gradient) document.documentElement.dataset.gradient = 'own';
   else delete document.documentElement.dataset.gradient;
+  // What on it reads best, the whole length across: light or dark.
+  const onGrad = ['#ffffff', '#1b1a20'].map((ink) => ({ ink, worst: Math.min(...placed.map((p) => contrast(p.color, ink))) }))
+    .sort((a, b) => b.worst - a.worst)[0].ink;
+  root.setProperty('--on-grad', onGrad);
+  // Thin things (a slider's track) run across whatever the direction: left to right, or right to left.
+  root.setProperty('--grad-across', gradientCss(placed, gradientDir === 'left' ? 'left' : 'right'));
+  // The roles, each with an ink for words and marks on the page's ground.
+  const roles = gradient ? rolesOf(gradient.stops) : [base, steps[2], steps[5], steps[1], steps[6]];
+  roles.forEach((colour, i) => {
+    root.setProperty(`--role-${i + 1}`, i === 0 ? base : colour);
+    root.setProperty(`--role-${i + 1}-ink`, guard(i === 0 ? base : colour, ground.bg, 3).ink);
+  });
+  document.documentElement.dataset.colourStyle = COLOUR_STYLES[settings.colourStyle] ? settings.colourStyle : 'solid';
   // The marks already drawn turn with it.
   for (const g of document.querySelectorAll('linearGradient[data-grad]')) {
     const line = gradientLine(g.dataset.grad);
@@ -299,7 +345,7 @@ export function apply(settings) {
     (a, b) => contrast(b, ground.bg) - contrast(a, ground.bg))[0];
   root.setProperty('--translated-ink', strongest || fallbackInk);
 
-  const heat = heatRamp(settings.heatRamp, settings.accent, dark);
+  const heat = heatRamp(settings.heatRamp, accent, dark);
   heat.forEach((c, i) => root.setProperty(`--heat-${i}`, c));
 
   root.setProperty('--tap-zone', `${Math.round(settings.tapZone * 100)}%`);
@@ -412,7 +458,7 @@ const matrixFor = ([r, g, b]) => [
  * to bring back after a reinstall. The picture travels inside the file.
  */
 
-export const THEME_KEYS = ['themeMode', 'accent', 'heatRamp', 'backgroundImage', 'veil', 'gradient', 'gradientDir'];
+export const THEME_KEYS = ['themeMode', 'accent', 'heatRamp', 'backgroundImage', 'veil', 'gradient', 'gradientDir', 'colourStyle'];
 /** What a theme file says it is, so that one can be told from any other JSON. */
 export const THEME_FORMAT = 'quire-theme';
 
@@ -463,6 +509,7 @@ export function readThemes(data, fallbackName = 'Imported theme') {
     if (raw.gradient === null) theme.gradient = null;
     else if (gradientOf(raw.gradient)) theme.gradient = gradientOf(raw.gradient);
     if (raw.gradientDir === null || (typeof raw.gradientDir === 'string' && GRADIENT_DIRS[raw.gradientDir])) theme.gradientDir = raw.gradientDir;
+    if (raw.colourStyle === null || (typeof raw.colourStyle === 'string' && COLOUR_STYLES[raw.colourStyle])) theme.colourStyle = raw.colourStyle;
     const veil = Number(raw.veil);
     if (raw.veil != null && Number.isFinite(veil)) theme.veil = Math.max(0, Math.min(0.95, veil));
     if (!THEME_KEYS.some((key) => key in theme)) return;

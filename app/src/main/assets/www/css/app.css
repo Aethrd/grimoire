@@ -2826,3 +2826,46 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
   filter: saturate(1.9) brightness(1.25) drop-shadow(0 0 4px color-mix(in srgb, var(--accent-400) 55%, transparent));
   clip-path: inset(calc((3.6 + 15.9 * (1 - var(--done, 0))) / 24 * 100% - 2px) 0 0 0);
   transition: clip-path var(--motion) var(--ease); }
+
+/* ── roles: the gradient's colours, given parts (theme.js, roles) ──────────
+   Primary leads as the accent (everything drawn in --accent follows it).
+   The others, each for its own part -- solid by default, or, with
+   data-colour-style="gradient", the gradient itself. Progress bars and the
+   download mark keep the gradient either way: that is what they show. */
+:root .btn.ghost { border-color: color-mix(in srgb, var(--role-2, var(--hairline)) 75%, transparent); }
+:root .icon-btn[aria-pressed="true"] { color: var(--role-2-ink, var(--accent-ink)); }
+:root .card, :root .build-leftover { border-color: color-mix(in srgb, var(--role-3, var(--divider)) 50%, transparent); }
+:root .chip:not([aria-pressed="true"]):not(.dashed) { border-color: color-mix(in srgb, var(--role-3, var(--divider)) 45%, transparent); }
+:root .eyebrow { color: color-mix(in srgb, var(--role-4-ink, var(--muted)) 60%, var(--muted)); }
+:root { --divider: color-mix(in srgb, var(--role-5, #efeef3) 22%, transparent); }
+/* Pause and resume, solid: the secondary colour, ring and mark alike. */
+[data-colour-style="solid"] .play-btn svg { filter: none; }
+[data-colour-style="solid"] .play-btn svg circle { stroke: var(--role-2-ink); }
+[data-colour-style="solid"] .play-btn svg g { fill: var(--role-2-ink); }
+[data-colour-style="solid"] .play-btn svg g path { stroke: var(--role-2-ink); }
+
+/* In the gradient: what is filled, filled with it; edges drawn in it. */
+[data-colour-style="gradient"] .btn.primary,
+[data-colour-style="gradient"] .chip[aria-pressed="true"],
+[data-colour-style="gradient"] .pill[aria-pressed="true"],
+[data-colour-style="gradient"] .seg button[aria-pressed="true"],
+[data-colour-style="gradient"] .switch[aria-pressed="true"] { background: var(--grad-bar); color: var(--on-grad); border-color: transparent; }
+[data-colour-style="gradient"] .btn.primary:active { background: var(--grad-bar); filter: brightness(.88); }
+[data-colour-style="gradient"] .btn.ghost { border-color: transparent;
+  background: linear-gradient(var(--surface), var(--surface)) padding-box, var(--grad-bar) border-box; }
+[data-colour-style="gradient"] .card,
+[data-colour-style="gradient"] .build-leftover { border-color: transparent;
+  background: linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(color-mix(in srgb, var(--surface) 45%, transparent), color-mix(in srgb, var(--surface) 45%, transparent)) border-box,
+    var(--grad-bar) border-box; }
+[data-colour-style="gradient"] .queue-slider input[type="range"]::-webkit-slider-runnable-track,
+[data-colour-style="gradient"] .gradient-stop input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(to right, transparent var(--filled, 0%), color-mix(in srgb, var(--text) 18%, var(--surface)) var(--filled, 0%)), var(--grad-across); }
+
+/* Appearance: the roles, each colour by what it colours. */
+.gradient-style { margin: 4px 0 10px; }
+.gradient-roles { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 6px; }
+.gradient-roles li { display: grid; grid-template-columns: 18px auto 1fr; align-items: center; gap: 10px; font-size: 13px; }
+.gradient-roles i { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--divider); }
+.gradient-roles b { font-family: var(--font-heading); font-weight: 600; }
+.gradient-roles span { color: var(--muted); font-size: 12px; }

@@ -89,7 +89,9 @@ export async function openAppearance(host) {
   // pair that would put body text under 4.5:1 on the resulting ground.
   const accents = document.createElement('div');
   accents.className = 'field';
-  accents.innerHTML = '<label><span>Accent</span><span class="muted">Builds the whole ramp</span></label>';
+  accents.innerHTML = theme.gradientOf(settings.gradient)
+    ? '<label><span>Accent</span><span class="muted">Led by your gradient\'s main colour for now (below)</span></label>'
+    : '<label><span>Accent</span><span class="muted">Builds the whole ramp</span></label>';
   const swatches = document.createElement('div');
   swatches.className = 'swatches';
   for (const [name, hex] of theme.ACCENT_PRESETS) {
@@ -227,7 +229,7 @@ function gradientField(settings, redraw) {
   const dir = theme.GRADIENT_DIRS[settings.gradientDir] ? settings.gradientDir : 'auto';
   const field = document.createElement('div');
   field.className = 'field gradient-field';
-  field.innerHTML = `<label><span>Gradient</span><span class="muted">${own ? `Your own ${stops.length} colours` : 'Follows the accent'}</span></label>`;
+  field.innerHTML = `<label><span>Gradient</span><span class="muted">${own ? `Your own ${stops.length} colours, colouring the app by share` : 'Follows the accent'}</span></label>`;
   const preview = document.createElement('div');
   preview.className = 'gradient-preview';
   const paint = () => {
@@ -261,6 +263,41 @@ function gradientField(settings, redraw) {
     ways.appendChild(button);
   }
   field.appendChild(ways);
+
+  // The app's buttons and edges: each solid in its role's colour, or in the gradient itself.
+  const style = theme.COLOUR_STYLES[settings.colourStyle] ? settings.colourStyle : 'solid';
+  const styles = document.createElement('div');
+  styles.className = 'seg gradient-style';
+  styles.setAttribute('role', 'group');
+  styles.setAttribute('aria-label', 'Buttons and edges drawn in');
+  for (const [key, label] of Object.entries(theme.COLOUR_STYLES)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.style = key;
+    button.textContent = label;
+    button.setAttribute('aria-pressed', String(key === style));
+    button.onclick = () => { if (key !== style) keep({ colourStyle: key }); };
+    styles.appendChild(button);
+  }
+  field.appendChild(styles);
+
+  // What each colour colours: ranked by share, the largest leading the app.
+  const roles = document.createElement('ul');
+  roles.className = 'gradient-roles';
+  roles.setAttribute('aria-label', 'What each colour is used for');
+  const ranked = own ? theme.rolesOf(stops) : [steps[3], steps[2], steps[5], steps[1], steps[6]];
+  theme.ROLE_NAMES.forEach((name, i) => {
+    const item = document.createElement('li');
+    const dot = document.createElement('i');
+    dot.style.background = ranked[i];
+    const label = document.createElement('b');
+    label.textContent = name;
+    const part = document.createElement('span');
+    part.textContent = theme.ROLE_PARTS[i];
+    item.append(dot, label, part);
+    roles.appendChild(item);
+  });
+  field.appendChild(roles);
 
   // Each colour: its own, its share, and taken out (while more than two).
   const list = document.createElement('div');
