@@ -1002,8 +1002,12 @@ const unfinishedMark = (book) => {
   // A book being made now: as far as its record says it has got.
   const making = !unfinished.has(book.id) && book.building;
   const have = making ? book.building.at?.chapters || 0 : book.chapters || 0;
+  /* Still to come: the website's chapters less those come so far in this
+   * part -- not less every chapter the book has, which (a book carried on
+   * after a pause already had some) left it at nothing to come too early. */
+  const came = book.building?.at?.came;
   const left = making
-    ? Math.max(0, (book.building.webParts || []).reduce((sum, part) => sum + (part.links?.length || 0), 0) - have)
+    ? Math.max(0, (book.building.webParts || []).reduce((sum, part) => sum + (part.links?.length || 0), 0) - (Number.isFinite(came) ? came : have))
     : unfinished.get(book.id);
   const done = unfinishedDone(have, left);
   const id = `uf-${String(book.id).replace(/[^\w-]/g, '')}`;

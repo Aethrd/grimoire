@@ -185,7 +185,7 @@ export const DEFAULT_SETTINGS = {
   // The theme's gradient (marks, pause and resume, progress): null follows the accent,
   // else { from, to, stops: [{ color, share }] } -- two to five colours (theme.gradientOf).
   gradient: null,
-  // Its direction everywhere: 'auto' (each place its own) or one of theme.GRADIENT_DIRS.
+  // Its direction everywhere: 'auto' (each place its own), or an angle in degrees, 0 to 359 (theme.gradientAngle).
   gradientDir: 'auto',
   // The app's buttons and edges in the gradient's colours, each solid by its role, or in the gradient itself.
   colourStyle: 'solid',

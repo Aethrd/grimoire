@@ -1113,9 +1113,15 @@ body[data-view="reader"] .stepper {
 }
 /* Every progress bar in the theme's gradient (Appearance, Gradient): a
    download's, the strip's line, the reading progress, a cover's. A finished
-   or failed download keeps its own plain colour (below). */
+   or failed download keeps its own plain colour (below). The gradient runs
+   the whole length of the track -- what is filled and what is still to be --
+   and the fill uncovers its share of it: sized to the track (each track a
+   container, 100cqw its width), not squeezed into the part filled so far.
+   Along the bar's length whatever the angle, as thin things are. */
+.tile-bar, .bar, .progress-track, .jobs-strip { container-type: inline-size; }
 .bar-fill, .progress-fill, .tile-bar > span, .jobs-strip-fill {
-  background: var(--grad-bar, linear-gradient(90deg, var(--grad-from, var(--accent-300)), var(--grad-to, var(--accent))));
+  background: var(--grad-across, linear-gradient(90deg, var(--grad-from, var(--accent-300)), var(--grad-to, var(--accent))));
+  background-size: 100cqw 100%; background-repeat: no-repeat;
 }
 .scrub-thumb { transition: top var(--motion) var(--ease); }
 /* Except while being dragged, where lag is the opposite of what you want. */
@@ -2719,9 +2725,22 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 /* Appearance: the gradient's preview and its two ends; your fonts, each in its own face. */
 .gradient-preview { height: 48px; border-radius: var(--radius-md); margin: 2px 0 10px; }
 /* Its direction, a row of arrows; each colour a row: the colour, its share, what share that is. */
-.gradient-dirs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-.gradient-dirs .chip { min-width: 40px; justify-content: center; }
+.gradient-dirs { display: grid; grid-template-columns: auto 44px 1fr 44px; align-items: center; gap: 10px; margin-bottom: 10px; }
+.gradient-dirs .chip { justify-content: center; }
 .gradient-dirs .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.gradient-dirs output { font: 600 13px var(--font-ui); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+/* The dial: an arrow pointing the way the gradient runs, turned by dragging round. */
+.gradient-dial { width: 44px; height: 44px; touch-action: none; cursor: grab; }
+.gradient-dial svg { width: 44px; height: 44px; display: block; }
+.gradient-dial circle { stroke: var(--divider); stroke-width: 1.5; fill: var(--surface); }
+.gradient-dial path { stroke: var(--accent); stroke-width: 2.4; }
+.gradient-dirs input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; min-width: 0;
+  height: 28px; margin: 0; background: transparent; touch-action: pan-y; }
+.gradient-dirs input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px;
+  background: linear-gradient(to right, var(--accent) var(--filled, 0%), color-mix(in srgb, var(--text) 18%, transparent) var(--filled, 0%)); }
+.gradient-dirs input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+  width: 22px; height: 22px; margin-top: -8px; border-radius: 50%; background: var(--accent);
+  border: 3px solid var(--surface); box-shadow: 0 1px 4px rgb(0 0 0 / .35); }
 .gradient-stops { display: grid; gap: 4px; margin-bottom: 8px; }
 .gradient-stop { display: grid; grid-template-columns: 40px 1fr 44px 36px; align-items: center; gap: 10px; min-height: 44px; }
 .gradient-stop input[type="color"] { width: 40px; height: 32px; padding: 0; border: 1px solid var(--divider); border-radius: 8px; background: none; }

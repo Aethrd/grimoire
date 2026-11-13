@@ -219,21 +219,21 @@ export async function openAppearance(host) {
  * the length -- and in one direction everywhere, or each place its own. Kept
  * with the theme, so a saved or sent theme carries it.
  */
-const DIR_ARROWS = { auto: 'Auto', right: '→', left: '←', down: '↓', up: '↑', 'down-right': '↘', 'up-right': '↗' };
 function gradientField(settings, redraw) {
   const steps = theme.ramp(settings.accent);
   const own = theme.gradientOf(settings.gradient);
   // The accent's own, as it is drawn (theme.apply: its 300 and 600 steps).
   let stops = own ? own.stops.map((stop) => ({ ...stop }))
     : [{ color: steps[2], share: 50 }, { color: steps[5], share: 50 }];
-  const dir = theme.GRADIENT_DIRS[settings.gradientDir] ? settings.gradientDir : 'auto';
+  // Its angle in degrees, or null for Auto (each place its own).
+  let angle = theme.gradientAngle(settings.gradientDir);
   const field = document.createElement('div');
   field.className = 'field gradient-field';
   field.innerHTML = `<label><span>Gradient</span><span class="muted">${own ? `Your own ${stops.length} colours, colouring the app by share` : 'Follows the accent'}</span></label>`;
   const preview = document.createElement('div');
   preview.className = 'gradient-preview';
   const paint = () => {
-    preview.style.background = theme.gradientCss(theme.placeStops(stops), dir === 'auto' ? 'right' : dir);
+    preview.style.background = theme.gradientCss(theme.placeStops(stops), angle);
     const total = stops.reduce((sum, stop) => sum + stop.share, 0) || 1;
     field.querySelectorAll('.gradient-stop output').forEach((out, i) => { out.textContent = `${Math.round((stops[i].share / total) * 100)}%`; });
   };
@@ -246,23 +246,58 @@ function gradientField(settings, redraw) {
   };
   const keepStops = () => keep({ gradient: theme.gradientOf({ stops }) });
 
-  // Its direction: one for everything, or Auto.
+  /* Its direction, turned by degree: a dial to drag round (it settles on the
+   * eighths when close to one), a slider for the exact angle, and Auto. Seen
+   * in the preview as it turns; kept when let go. */
   const ways = document.createElement('div');
   ways.className = 'gradient-dirs';
   ways.setAttribute('role', 'group');
   ways.setAttribute('aria-label', 'Gradient direction');
-  for (const [key, label] of Object.entries(DIR_ARROWS)) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'chip';
-    button.dataset.dir = key;
-    button.textContent = label;
-    button.setAttribute('aria-label', key === 'auto' ? 'Auto: each place its own direction' : theme.GRADIENT_DIRS[key].name);
-    button.setAttribute('aria-pressed', String(key === dir));
-    button.onclick = () => { if (key !== dir) keep({ gradientDir: key }); };
-    ways.appendChild(button);
-  }
+  const auto = document.createElement('button');
+  auto.type = 'button';
+  auto.className = 'chip';
+  auto.dataset.dir = 'auto';
+  auto.textContent = 'Auto';
+  auto.setAttribute('aria-label', 'Auto: each place its own direction');
+  auto.setAttribute('aria-pressed', String(angle === null));
+  auto.onclick = () => { if (angle !== null) keep({ gradientDir: 'auto' }); };
+  const dial = document.createElement('div');
+  dial.className = 'gradient-dial';
+  dial.setAttribute('aria-hidden', 'true');
+  dial.innerHTML = '<svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="18"/><g><path d="M20 30V10M14 16l6-6 6 6"/></g></svg>';
+  const turn = document.createElement('input');
+  turn.type = 'range';
+  turn.min = '0';
+  turn.max = '359';
+  turn.step = '1';
+  turn.setAttribute('aria-label', 'Gradient angle, in degrees');
+  const said = document.createElement('output');
+  const show = () => {
+    const at = angle ?? 90;
+    turn.value = String(at);
+    turn.style.setProperty('--filled', `${(at / 359) * 100}%`);
+    dial.querySelector('g').setAttribute('transform', `rotate(${at} 20 20)`);
+    said.textContent = angle === null ? 'Auto' : `${angle}°`;
+    paint();
+  };
+  turn.oninput = () => { angle = Number(turn.value); show(); };
+  turn.onchange = () => { angle = Number(turn.value); keep({ gradientDir: angle }); };
+  const fromPointer = (event) => {
+    const box = dial.getBoundingClientRect();
+    const dx = event.clientX - (box.left + box.width / 2), dy = event.clientY - (box.top + box.height / 2);
+    let at = Math.round((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
+    const eighth = Math.round(at / 45) * 45;
+    if (Math.abs(at - eighth) <= 4) at = eighth % 360;
+    angle = at;
+    show();
+  };
+  let turning = false;
+  dial.onpointerdown = (event) => { turning = true; dial.setPointerCapture?.(event.pointerId); fromPointer(event); };
+  dial.onpointermove = (event) => { if (turning) fromPointer(event); };
+  dial.onpointerup = dial.onpointercancel = () => { if (!turning) return; turning = false; keep({ gradientDir: angle }); };
+  ways.append(auto, dial, turn, said);
   field.appendChild(ways);
+  queueMicrotask(show);
 
   // The app's buttons and edges: each solid in its role's colour, or in the gradient itself.
   const style = theme.COLOUR_STYLES[settings.colourStyle] ? settings.colourStyle : 'solid';

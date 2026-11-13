@@ -120,15 +120,18 @@ export function heatRamp(name, accent, dark) {
  * mark down, pause and resume corner to corner).
  */
 export const GRADIENT_MAX = 5;
-export const GRADIENT_DIRS = {
-  auto: { name: 'Auto', css: 'to right' },
-  right: { name: 'Left to right', css: 'to right', line: [0, 0.5, 1, 0.5] },
-  left: { name: 'Right to left', css: 'to left', line: [1, 0.5, 0, 0.5] },
-  down: { name: 'Top to bottom', css: 'to bottom', line: [0.5, 0, 0.5, 1] },
-  up: { name: 'Bottom to top', css: 'to top', line: [0.5, 1, 0.5, 0] },
-  'down-right': { name: 'Corner to corner, down', css: 'to bottom right', line: [0, 0, 1, 1] },
-  'up-right': { name: 'Corner to corner, up', css: 'to top right', line: [0, 1, 1, 0] },
-};
+/* Its direction: an angle, turned by degrees as CSS reads one (0 points up,
+ * 90 right, 180 down), or Auto -- each place its own: bars across, the
+ * download mark down, pause and resume corner to corner. The arrows an older
+ * build kept are read as their angles. */
+const OLD_DIRS = { right: 90, left: 270, down: 180, up: 0, 'down-right': 135, 'up-right': 45 };
+/** The angle set, 0 to 359, or null for Auto. */
+export function gradientAngle(value) {
+  if (typeof value === 'string' && value in OLD_DIRS) return OLD_DIRS[value];
+  if (value === null || value === undefined || value === 'auto' || value === '') return null;
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) ? ((n % 360) + 360) % 360 : null;
+}
 const STOP_HEX = /^#[0-9a-f]{6}$/i;
 const shareOf = (value) => {
   const n = Math.round(Number(value));
@@ -184,10 +187,9 @@ export function colourAt(placed, t) {
   return placed[placed.length - 1].color;
 }
 
-/** As a CSS background, in the direction given. */
-export function gradientCss(placed, dir = 'auto') {
-  const way = (GRADIENT_DIRS[dir] || GRADIENT_DIRS.auto).css;
-  return `linear-gradient(${way}, ${placed.map((p) => `${p.color} ${(p.at * 100).toFixed(1)}%`).join(', ')})`;
+/** As a CSS background, at the angle given (degrees; Auto is across, 90). */
+export function gradientCss(placed, angle = null) {
+  return `linear-gradient(${angle ?? 90}deg, ${placed.map((p) => `${p.color} ${(p.at * 100).toFixed(1)}%`).join(', ')})`;
 }
 
 /* Drawn marks (the download mark, pause and resume) take the gradient as
@@ -197,18 +199,22 @@ export function gradientCss(placed, dir = 'auto') {
 export const GRADIENT_SAMPLES = 17;
 const SVG_PLACES = {
   // The download mark, in its own 24-unit box: by default, down.
-  mark: { units: 'userSpaceOnUse', box: [4.4, 3.6, 19.6, 19.5], auto: 'down' },
+  mark: { units: 'userSpaceOnUse', box: [4.4, 3.6, 19.6, 19.5], auto: 180 },
   // Pause and resume, across their own box: by default, corner to corner.
-  icon: { units: 'objectBoundingBox', box: [0, 0, 1, 1], auto: 'down-right' },
+  icon: { units: 'objectBoundingBox', box: [0, 0, 1, 1], auto: 135 },
 };
-let gradientDir = 'auto';
+let gradientTurn = null;
+/* Its line through a box at the angle, as CSS draws one: through the middle,
+ * long enough that the box's far corners take the two ends. */
 function gradientLine(place) {
   const spot = SVG_PLACES[place] || SVG_PLACES.icon;
-  const dir = gradientDir === 'auto' ? spot.auto : gradientDir;
+  const angle = (gradientTurn ?? spot.auto) * Math.PI / 180;
   const [x0, y0, x1, y1] = spot.box;
-  const [a, b, c, d] = GRADIENT_DIRS[dir].line;
+  const w = x1 - x0, h = y1 - y0, cx = x0 + w / 2, cy = y0 + h / 2;
+  const dx = Math.sin(angle), dy = -Math.cos(angle);
+  const half = (Math.abs(w * dx) + Math.abs(h * dy)) / 2;
   const r = (v) => Number(v.toFixed(2));
-  return { x1: r(x0 + (x1 - x0) * a), y1: r(y0 + (y1 - y0) * b), x2: r(x0 + (x1 - x0) * c), y2: r(y0 + (y1 - y0) * d) };
+  return { x1: r(cx - dx * half), y1: r(cy - dy * half), x2: r(cx + dx * half), y2: r(cy + dy * half) };
 }
 /** The <linearGradient> for a drawn mark: `place` is 'mark' or 'icon'. */
 export function gradientSvg(id, place) {
@@ -288,16 +294,18 @@ export function apply(settings) {
   root.setProperty('--grad-from', stops[0].color);
   root.setProperty('--grad-to', stops[stops.length - 1].color);
   for (let k = 0; k < GRADIENT_SAMPLES; k += 1) root.setProperty(`--grad-s${k}`, colourAt(placed, k / (GRADIENT_SAMPLES - 1)));
-  gradientDir = GRADIENT_DIRS[settings.gradientDir] ? settings.gradientDir : 'auto';
-  root.setProperty('--grad-bar', gradientCss(placed, gradientDir));
+  gradientTurn = gradientAngle(settings.gradientDir);
+  root.setProperty('--grad-bar', gradientCss(placed, gradientTurn));
   if (gradient) document.documentElement.dataset.gradient = 'own';
   else delete document.documentElement.dataset.gradient;
   // What on it reads best, the whole length across: light or dark.
   const onGrad = ['#ffffff', '#1b1a20'].map((ink) => ({ ink, worst: Math.min(...placed.map((p) => contrast(p.color, ink))) }))
     .sort((a, b) => b.worst - a.worst)[0].ink;
   root.setProperty('--on-grad', onGrad);
-  // Thin things (a slider's track) run across whatever the direction: left to right, or right to left.
-  root.setProperty('--grad-across', gradientCss(placed, gradientDir === 'left' ? 'left' : 'right'));
+  /* Thin things -- a progress bar, a slider's track -- run along their length
+   * whatever the angle: left to right, or right to left where it points left. */
+  const leftward = gradientTurn !== null && Math.sin(gradientTurn * Math.PI / 180) < -1e-6;
+  root.setProperty('--grad-across', gradientCss(placed, leftward ? 270 : 90));
   // The roles, each with an ink for words and marks on the page's ground.
   const roles = gradient ? rolesOf(gradient.stops) : [base, steps[2], steps[5], steps[1], steps[6]];
   roles.forEach((colour, i) => {
@@ -508,7 +516,8 @@ export function readThemes(data, fallbackName = 'Imported theme') {
     // The gradient: two to five colours with their shares, or following the accent; and its direction.
     if (raw.gradient === null) theme.gradient = null;
     else if (gradientOf(raw.gradient)) theme.gradient = gradientOf(raw.gradient);
-    if (raw.gradientDir === null || (typeof raw.gradientDir === 'string' && GRADIENT_DIRS[raw.gradientDir])) theme.gradientDir = raw.gradientDir;
+    if (raw.gradientDir === null || raw.gradientDir === 'auto') theme.gradientDir = raw.gradientDir;
+    else if (gradientAngle(raw.gradientDir) !== null) theme.gradientDir = gradientAngle(raw.gradientDir);
     if (raw.colourStyle === null || (typeof raw.colourStyle === 'string' && COLOUR_STYLES[raw.colourStyle])) theme.colourStyle = raw.colourStyle;
     const veil = Number(raw.veil);
     if (raw.veil != null && Number.isFinite(veil)) theme.veil = Math.max(0, Math.min(0.95, veil));

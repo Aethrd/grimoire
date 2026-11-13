@@ -2079,7 +2079,7 @@ await t('the theme gradient: the accent by default, two to five colours of your 
   assert.equal(root.getPropertyValue('--grad-from'), '#ff8800');
   assert.equal(root.getPropertyValue('--grad-to'), '#3355ff');
   assert.equal(document.documentElement.dataset.gradient, 'own');
-  assert.equal(root.getPropertyValue('--grad-bar'), 'linear-gradient(to right, #ff8800 0.0%, #ff8800 0.0%, #3355ff 100.0%, #3355ff 100.0%)');
+  assert.equal(root.getPropertyValue('--grad-bar'), 'linear-gradient(90deg, #ff8800 0.0%, #ff8800 0.0%, #3355ff 100.0%, #3355ff 100.0%)');
   // A larger share holds its colour solid for longer before it blends.
   const placed = theme.placeStops([{ color: '#ff0000', share: 70 }, { color: '#0000ff', share: 30 }]);
   assert.deepEqual(placed.map((p) => [p.color, Number(p.at.toFixed(3))]), [['#ff0000', 0], ['#ff0000', 0.4], ['#0000ff', 1], ['#0000ff', 1]]);
@@ -2105,14 +2105,20 @@ await t('the theme gradient: the accent by default, two to five colours of your 
   theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 'right' });
   const g = holder.querySelector('linearGradient');
   assert.deepEqual(['x1', 'y1', 'x2', 'y2'].map((k) => g.getAttribute(k)), ['4.4', '11.55', '19.6', '11.55']);
-  assert.match(root.getPropertyValue('--grad-bar'), /^linear-gradient\(to right,/);
-  theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 'up' });
-  assert.match(root.getPropertyValue('--grad-bar'), /^linear-gradient\(to top,/);
+  assert.match(root.getPropertyValue('--grad-bar'), /^linear-gradient\(90deg,/);
+  // Turned by degree: any angle, the marks' lines through their boxes as CSS draws one.
+  theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 200 });
+  assert.match(root.getPropertyValue('--grad-bar'), /^linear-gradient\(200deg,/);
+  // Thin bars run along their length: pointing left of straight down, right to left.
+  assert.match(root.getPropertyValue('--grad-across'), /^linear-gradient\(270deg,/);
+  assert.deepEqual([theme.gradientAngle('up'), theme.gradientAngle(-30), theme.gradientAngle(725), theme.gradientAngle('auto'), theme.gradientAngle('sideways')], [0, 330, 5, null, null]);
   holder.remove();
   // Every progress bar in it too -- and nothing later in the stylesheet painting one plain over it.
   const css = read('app/src/main/assets/www/css/app.css');
-  assert.match(css, /\.bar-fill, \.progress-fill, \.tile-bar > span, \.jobs-strip-fill \{\s+background: var\(--grad-bar, linear-gradient\(90deg, var\(--grad-from, var\(--accent-300\)\), var\(--grad-to, var\(--accent\)\)\)\);/);
-  const gradientRule = css.indexOf('.jobs-strip-fill {\n  background: var(--grad-bar');
+  // Spread over the whole track -- filled and still to fill -- the fill uncovering its share.
+  assert.match(css, /\.bar-fill, \.progress-fill, \.tile-bar > span, \.jobs-strip-fill \{\s+background: var\(--grad-across, linear-gradient\(90deg, var\(--grad-from, var\(--accent-300\)\), var\(--grad-to, var\(--accent\)\)\)\);\s+background-size: 100cqw 100%; background-repeat: no-repeat;/);
+  assert.match(css, /\.tile-bar, \.bar, \.progress-track, \.jobs-strip \{ container-type: inline-size; \}/);
+  const gradientRule = css.indexOf('.jobs-strip-fill {\n  background: var(--grad-across');
   assert.ok(gradientRule > 0);
   const after = css.slice(css.indexOf('}', gradientRule) + 1);
   for (const name of ['.bar-fill', '.progress-fill', '.tile-bar > span', '.jobs-strip-fill']) {
@@ -2123,7 +2129,7 @@ await t('the theme gradient: the accent by default, two to five colours of your 
   assert.ok(theme.THEME_KEYS.includes('gradient') && theme.THEME_KEYS.includes('gradientDir'));
   const [read1] = theme.readThemes({ name: 'Sunset', gradient: { from: '#FF8800', to: '#3355ff' }, gradientDir: 'down' });
   assert.deepEqual(read1.gradient, { from: '#ff8800', to: '#3355ff', stops: [{ color: '#ff8800', share: 50 }, { color: '#3355ff', share: 50 }] });
-  assert.equal(read1.gradientDir, 'down');
+  assert.equal(read1.gradientDir, 180);
   const odd = theme.readThemes({ name: 'Odd', accent: '#112233', gradient: { from: 'red', to: '#3355ff' }, gradientDir: 'sideways' })[0];
   assert.equal('gradient' in odd, false);
   assert.equal('gradientDir' in odd, false);
@@ -2159,10 +2165,19 @@ await t('the theme gradient: the accent by default, two to five colours of your 
   field().querySelectorAll('.gradient-drop')[1].click();
   await settle(50);
   assert.equal((await store.settings()).gradient.stops.length, theme.GRADIENT_MAX - 1);
-  field().querySelector('.gradient-dirs [data-dir="down"]').click();
+  // Turned by degree: seen as it moves, kept when let go; Auto no longer pressed.
+  const turn = field().querySelector('.gradient-dirs input[type="range"]');
+  turn.value = '200';
+  turn.dispatchEvent(new window.Event('input'));
+  assert.equal(field().querySelector('.gradient-dirs output').textContent, '200°');
+  assert.match(field().querySelector('.gradient-dial g').getAttribute('transform'), /rotate\(200 20 20\)/);
+  turn.dispatchEvent(new window.Event('change'));
   await settle(50);
-  assert.equal((await store.settings()).gradientDir, 'down');
-  assert.equal(field().querySelector('.gradient-dirs [data-dir="down"]').getAttribute('aria-pressed'), 'true');
+  assert.equal((await store.settings()).gradientDir, 200);
+  assert.equal(field().querySelector('.gradient-dirs [data-dir="auto"]').getAttribute('aria-pressed'), 'false');
+  field().querySelector('.gradient-dirs [data-dir="auto"]').click();
+  await settle(50);
+  assert.equal((await store.settings()).gradientDir, 'auto');
   button(/Follow the accent/).click();
   await settle(50);
   assert.equal((await store.settings()).gradient, null);
@@ -2215,6 +2230,22 @@ await t('the gradient colours the app: ranked by share into roles, the largest l
   assert.equal(document.documentElement.dataset.colourStyle, 'gradient');
   await store.saveSettings({ gradient: null, colourStyle: 'solid' });
   theme.apply(await store.settings());
+});
+
+await t('a book resumed after a pause: its cover mark goes on from where it was, not from nothing', async () => {
+  const app = await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const job = { links: new Array(60).fill('x') };
+  // 40 chapters before the pause, 60 to come: 40% at the start of the run, not 0.
+  assert.equal(app.jobDone(job, { had: 40, at: -1, parts: 2 }), 0.4);
+  // Copying the book so far in first: its counts are not the website's.
+  assert.equal(app.jobDone(job, { had: 40, at: 0, parts: 2, done: 30, total: 40 }), 0.4);
+  // On the website part: 30 of its 60 come -- 70 of 100.
+  assert.equal(app.jobDone(job, { had: 40, at: 1, parts: 2, done: 30, total: 60 }), 0.7);
+  // A first run, nothing before it: as it was.
+  assert.equal(app.jobDone(job, { had: 0, at: 0, parts: 1, done: 15, total: 60 }), 0.25);
+  // Drawn from its record: still to come is the links less this part's own, not less every chapter it has.
+  assert.match(read('app/src/main/assets/www/js/library.js'), /- \(Number\.isFinite\(came\) \? came : have\)\)/);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /book\.building\.at = \{ part: at, next, chapters: index, words, came: streamed \};/);
 });
 
 await t('the opening scene: only for a slow open, faded in and out, faint behind the queue, calm when motion is reduced', async () => {

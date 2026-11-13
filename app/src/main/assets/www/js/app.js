@@ -7263,6 +7263,8 @@ async function runJob(job) {
     if (before) part.seamless = true;
     parts.push(part);
     under.run = {
+      // `had`: the chapters the book carried on already has -- its mark goes on from there, not from nothing.
+      had: before?.chapters || 0,
       at: -1, total: undefined, done: undefined, parts: parts.length, samples: [], shown: null, startedAt: Date.now(),
       delays: parts.map((p) => (p.web ? { gap: p.web.gap, jitter: p.web.jitter, chapters: p.web.links.length } : null)),
     };
@@ -8026,6 +8028,20 @@ async function coversOnQueuedBooks() {
 }
 
 let unfinishedKey = '';
+/* A queued book under way: its website chapters come so far in this run, and
+ * how many this run is for. Counts are the part's own, so they are the
+ * website's only once the run is on its website part (a book carried on is
+ * copied in first, and its counts then are of that). */
+function runCounts(job, run) {
+  const onWeb = run && run.at === run.parts - 1 && Number.isFinite(run.total) && run.total > 0;
+  return { came: onWeb ? run.done || 0 : 0, of: onWeb ? run.total : job.links?.length || 0 };
+}
+/** How far a queued book is, over the whole book: what it had before this run, and this run's share. */
+export function jobDone(job, run) {
+  const { came, of } = runCounts(job, run);
+  const had = run?.had || 0;
+  return had + of > 0 ? Math.min(1, Math.max(0, (had + came) / (had + of))) : 0;
+}
 function markUnfinished() {
   // Each book, with how many chapters are still to come for it.
   const left = new Map();
@@ -8035,17 +8051,20 @@ function markUnfinished() {
     if (job.status === 'done') continue;
     const run = queueJobs.get(job.id)?.run;
     // Under way: what its own count says is still to come; else every link it holds.
-    add(job.bookId, run && Number.isFinite(run.total) ? Math.max(0, run.total - (run.done || 0)) : job.links?.length);
+    const { came, of } = runCounts(job, run);
+    add(job.bookId, run ? Math.max(0, of - came) : job.links?.length);
   }
   library.setUnfinished(left);
-  // Downloading now: each one's mark filled as far as it has come, in place.
+  /* Downloading now: each one's mark filled as far as the book has come --
+   * the chapters it had before this run counted, so a book resumed after a
+   * pause goes on from where it was rather than from nothing. */
   for (const job of webQueue) {
     const run = queueJobs.get(job.id)?.run;
-    if (job.status !== 'running' || !run || !Number.isFinite(run.total) || !run.total) continue;
+    if (job.status !== 'running' || !run) continue;
     const mark = [...document.querySelectorAll('.tile[data-job]')]
       .find((node) => node.dataset.job === String(job.id))?.querySelector('.tile-unfinished');
     if (!mark) continue;
-    const done = Math.min(1, Math.max(0, (run.done || 0) / run.total));
+    const done = jobDone(job, run);
     mark.style.setProperty('--done', done.toFixed(3));
     mark.setAttribute('aria-label', `Not finished downloading: ${Math.round(done * 100)}%`);
   }

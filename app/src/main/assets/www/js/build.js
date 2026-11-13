@@ -559,7 +559,8 @@ export async function build({
       notedAt = now;
       const book = await store.get('books', bookId);
       if (book?.building) {
-        book.building.at = { part: at, next, chapters: index, words };
+        // `came`: this part's own chapters so far -- apart from any a book carried on already had.
+        book.building.at = { part: at, next, chapters: index, words, came: streamed };
         await store.put('books', book);
       }
     } : null;
