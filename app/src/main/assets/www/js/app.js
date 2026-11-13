@@ -7031,7 +7031,10 @@ function playIcon(kind) {
   const id = `play-grad-${++playIcons}`;
   const inner = kind === 'pause'
     ? '<rect x="9" y="8" width="2.2" height="8" rx="1.1"/><rect x="12.8" y="8" width="2.2" height="8" rx="1.1"/>'
-    : '<path d="M10 8.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1l-6.1-3.8a.6.6 0 0 0-.9.5z"/>';
+    /* Centred as the eye takes it: halfway between its span's middle and its
+     * centre of mass sits on the ring's centre (x = 12) -- its span's middle
+     * alone put it to the right. Corners rounded by a stroke of its own fill. */
+    : `<path d="M9.4 8.1L15.8 12L9.4 15.9Z" stroke="url(#${id})" stroke-width="1.3" stroke-linejoin="round"/>`;
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><defs>'
     + `<linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">`
     + '<stop offset="0" style="stop-color:var(--accent-300)"/><stop offset="1" style="stop-color:var(--accent-600, var(--accent))"/>'
