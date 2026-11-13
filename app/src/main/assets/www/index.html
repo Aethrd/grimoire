@@ -575,13 +575,25 @@
           <span>ms</span></label>
         <!-- Where the book is filed: the folder the shelf was open at, or another. -->
         <div class="web-folder" id="web-folder"></div>
-        <div class="chip-row web-tools">
-          <button class="chip" id="web-likely" title="Tick the links that look like chapters, untick the rest">Just the chapters</button>
-          <button class="chip" id="web-all">Tick shown</button>
-          <button class="chip" id="web-none">Untick shown</button>
-          <button class="chip" id="web-menus">Untick menus</button>
-          <button class="chip" id="web-reverse" aria-pressed="false">Reverse order</button>
-          <button class="chip" id="web-pictures" aria-pressed="true" title="Whether the pictures on each page are downloaded too. Remembered for every site.">Pictures: on</button>
+        <!-- What is ticked, and how it comes: every button in view, none behind a
+             sideways scroll -- two to a row on a phone, all four across when wide. -->
+        <div class="web-tools">
+          <div class="web-tools-group" role="group" aria-labelledby="web-tick-label">
+            <span class="web-tools-label" id="web-tick-label">Tick</span>
+            <div class="web-tools-grid">
+              <button class="chip" id="web-likely" title="Tick the links that look like chapters, untick the rest">Just the chapters</button>
+              <button class="chip" id="web-all">Tick shown</button>
+              <button class="chip" id="web-none">Untick shown</button>
+              <button class="chip" id="web-menus">Untick menus</button>
+            </div>
+          </div>
+          <div class="web-tools-group" role="group" aria-labelledby="web-get-label">
+            <span class="web-tools-label" id="web-get-label">Download</span>
+            <div class="web-tools-grid two">
+              <button class="chip" id="web-reverse" aria-pressed="false">Reverse order</button>
+              <button class="chip" id="web-pictures" aria-pressed="true" title="Whether the pictures on each page are downloaded too. Remembered for every site.">Pictures: on</button>
+            </div>
+          </div>
         </div>
         <!-- Chapters missing from the ticked ones' numbers: said, so nobody has to
              comb 400 numbers for the one that is not there. -->

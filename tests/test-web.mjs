@@ -2612,6 +2612,12 @@ await t('a queue of websites: books of their own, several at once but never two 
   assert.match(app, /\.\.\.\(job\.status === 'running' \? \{ status: 'queued' \} : \{\}\),/);
   // Queued from the Website screen with its own ticks and title; not for pages carrying a book on.
   assert.match(html, /id="web-queue"/);
+  // The chapter tools all in view: grouped, wrapping two to a row -- no sideways scroll.
+  const tools = html.slice(html.indexOf('<div class="web-tools">'), html.indexOf('<p class="web-gaps"'));
+  for (const id of ['web-likely', 'web-all', 'web-none', 'web-menus', 'web-reverse', 'web-pictures']) assert.match(tools, new RegExp(`id="${id}"`));
+  assert.ok(!/chip-row/.test(tools), 'still a sideways-scrolling row');
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\.web-tools-grid \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
   assert.match(app, /el\('web-queue'\)\.onclick = queueWeb;/);
   assert.match(app, /queue\.hidden = !queueing && !!\(webState\.leftover \|\| webState\.carryOn != null \|\| webState\.updating != null\);/);
   // Each at the settings as they are when its turn comes -- the same for all.
