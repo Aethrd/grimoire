@@ -11622,6 +11622,22 @@ async function offerPicture(blob, { title = '', href = '' } = {}) {
   sheet.hidden = false;
 }
 
+/* A back while typing is the keyboard's, not the screen's. The keyboard takes
+ * a back to close itself before it reaches the page; one that slips past it --
+ * Samsung's clipboard, as its items are deleted, hides the keyboard for a
+ * moment -- reached the page and left the screen being typed in. So with a
+ * field being typed in, a back while the keyboard shows, or within a moment
+ * of its last showing, is let go: the typing, and the clipboard, stay as they
+ * were. A back after the keyboard has been closed goes on as ever. */
+const TYPING_BACK_MS = 1200;
+function backWhileTyping() {
+  const field = document.activeElement;
+  const typing = field && (field.isContentEditable || field.tagName === 'TEXTAREA'
+    || (field.tagName === 'INPUT' && !/^(checkbox|radio|range|button|submit|reset|color|file|image)$/i.test(field.type || '')));
+  if (!typing) return false;
+  return !!window.GrimoireIme || Date.now() - (window.GrimoireImeAt || 0) < TYPING_BACK_MS;
+}
+
 window.Grimoire = {
   /** Called from Java once a file has been written where it was asked for. */
   exportSaved(name) { toast(`Saved ${name}`, 5000); },
@@ -11659,6 +11675,7 @@ window.Grimoire = {
 
   /** Return true to swallow the back gesture. */
   onBack() {
+    if (backWhileTyping()) return true;
     if (progress.close()) return true;
     if (frames.closeFrameEditor()) return true;
     // Above everything else, so it is the first thing back leaves.

@@ -1644,7 +1644,7 @@ await t('Pause & keep is on Build\'s footer; the progress panel takes no taps', 
   assert.match(css, /margin-bottom: calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\) \+ var\(--strip-h\)\); \}/);
   // Tapped, a page of every row; made small again by its button, or Back.
   assert.match(app, /if \(strip && !strip\.onclick\) strip\.onclick = \(\) => setOpen\(true\);/);
-  assert.match(app, /onBack\(\) \{\s+if \(progress\.close\(\)\) return true;/);
+  assert.match(app, /onBack\(\) \{\s+if \(backWhileTyping\(\)\) return true;\s+if \(progress\.close\(\)\) return true;/);
   // Build's own button is Pause & keep while a website downloads.
   assert.match(app, /el\('build-go'\)\.onclick = \(\) => \(buildRun \? pauseBuild\(\) : runBuild\(\)\);/);
   assert.match(app, /go\.textContent = run\.pausing \? 'Pausing…' : run\.online \? 'Pause & keep' : 'Building…';/);

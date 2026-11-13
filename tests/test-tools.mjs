@@ -1177,6 +1177,29 @@ await t('what finishes while you read waits for the book to be put down', async 
   const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
   assert.match(activity, /public void handleOnBackPressed\(\) \{[\s\S]{0,500}?if \(keyboardUp\(\)\) return;/);
   assert.match(activity, /return insets != null && insets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\);/);
+  /* And one that comes as the keyboard hides for a moment (the clipboard,
+   * deleting): the page tells it by the keyboard's last showing, pushed with
+   * the insets, and lets it go while a field is being typed in. */
+  assert.match(activity, /pushInsets\(bars, windowInsets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\)\);/);
+  assert.match(activity, /var ime=%b;if\(ime\|\|window\.GrimoireIme\)window\.GrimoireImeAt=Date\.now\(\);window\.GrimoireIme=ime;/);
+  const field = document.createElement('input');
+  field.type = 'search';
+  document.body.appendChild(field);
+  field.focus();
+  const where = [...document.querySelectorAll('.view')].filter((v) => !v.hidden).map((v) => v.id).join();
+  window.GrimoireIme = true;
+  assert.equal(window.Grimoire.onBack(), true, 'a back with the keyboard up left');
+  // Hidden a moment ago (the clipboard): still let go, the screen as it was.
+  window.GrimoireIme = false;
+  window.GrimoireImeAt = Date.now() - 300;
+  assert.equal(window.Grimoire.onBack(), true, 'a back as the keyboard hid for a moment left');
+  assert.equal([...document.querySelectorAll('.view')].filter((v) => !v.hidden).map((v) => v.id).join(), where);
+  assert.equal(document.activeElement, field, 'the typing was ended');
+  // Long closed, or a box that is not typed in: back as ever.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /return !!window\.GrimoireIme \|\| Date\.now\(\) - \(window\.GrimoireImeAt \|\| 0\) < TYPING_BACK_MS;/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /onBack\(\) \{\s+if \(backWhileTyping\(\)\) return true;/);
+  field.remove();
+  window.GrimoireImeAt = 0;
 });
 
 await t('the copy button\'s amount part is about a fifth of the copy part', async () => {

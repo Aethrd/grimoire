@@ -257,7 +257,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 contentReady = true;
-                pushInsets(lastInsets);
+                pushInsets(lastInsets, keyboardUp());
                 if (pendingNotice != null) {
                     tellReader("window.Grimoire.notice(" + JSONObject.quote(pendingNotice) + ")");
                     pendingNotice = null;
@@ -371,23 +371,28 @@ public class MainActivity extends AppCompatActivity {
                             | WindowInsetsCompat.Type.displayCutout()
                             | WindowInsetsCompat.Type.ime());
             lastInsets = bars;
-            pushInsets(bars);
+            pushInsets(bars, windowInsets.isVisible(WindowInsetsCompat.Type.ime()));
             return WindowInsetsCompat.CONSUMED;
         });
     }
 
-    private void pushInsets(Insets i) {
+    /* With them, whether the keyboard shows -- and the last moment it did
+     * (GrimoireImeAt), for the page to tell a back that slipped past the
+     * keyboard (Samsung's clipboard, as its items are deleted, hides it for a
+     * moment) from one meant for the screen. */
+    private void pushInsets(Insets i, boolean ime) {
         if (webView == null) return;
         float d = getResources().getDisplayMetrics().density;
         String js = String.format(
                 java.util.Locale.US,
                 "(function(){var r=document.documentElement.style;" +
+                        "var ime=%b;if(ime||window.GrimoireIme)window.GrimoireImeAt=Date.now();window.GrimoireIme=ime;" +
                         "r.setProperty('--safe-top','%.1fpx');" +
                         "r.setProperty('--safe-right','%.1fpx');" +
                         "r.setProperty('--safe-bottom','%.1fpx');" +
                         "r.setProperty('--safe-left','%.1fpx');" +
                         "window.dispatchEvent(new CustomEvent('grimoire:insets'));})();",
-                i.top / d, i.right / d, i.bottom / d, i.left / d);
+                ime, i.top / d, i.right / d, i.bottom / d, i.left / d);
         webView.evaluateJavascript(js, null);
     }
 
