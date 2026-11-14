@@ -2233,6 +2233,14 @@ await t('a site\'s needs are learned one at a time, a longer wait only once two 
   // Everything let in was learned at once; the longer wait once two pages had needed it.
   assert.deepEqual(web.siteNeedsOf('https://slowsite.example/x'), { open: true, level: 1 });
   assert.deepEqual(asks.filter((ask) => ask.startsWith('/novel/1/6 ')), ['/novel/1/6 1o']);
+  // The longer wait wears off: an hour on with nothing needing it, the site is asked without it.
+  const realNow = Date.now;
+  Date.now = () => realNow() + 61 * 60 * 1000;
+  try { assert.deepEqual(web.siteNeedsOf('https://slowsite.example/x'), { open: true, level: 0 }); } finally { Date.now = realNow; }
+  // A page saying the site could not load it teaches no longer wait.
+  const before = web.siteNeedsOf('https://slowsite.example/x');
+  web.notLoadedYet('https://slowsite.example/novel/1/9', '불러오지 못했습니다.');
+  assert.deepEqual(web.siteNeedsOf('https://slowsite.example/x'), before);
   delete window.GrimoireWeb;
 });
 

@@ -201,7 +201,24 @@ const keepSiteNeeds = () => {
     globalThis.localStorage?.removeItem('grimoire.siteNeeds');
   } catch { /* this sitting only */ }
 };
-const needsOf = (url, list) => ({ open: false, wait: 0, waitSeen: 0, ...siteNeeds.get(needKey(url, list)) });
+/* What a site was learned to need, wearing off: a level of waiting a site
+ * needed in a bad hour -- its server slow, or down -- kept until the app was
+ * closed made every page after it slower for nothing (43 s a chapter of
+ * marumaru, after its outage). One level less for every hour since it was
+ * last needed; a site that still needs it is soon taught it again. */
+const WEARS_OFF = 60 * 60 * 1000;
+const needsOf = (url, list) => {
+  const known = { open: false, wait: 0, waitSeen: 0, ...siteNeeds.get(needKey(url, list)) };
+  const since = known.neededAt || known.at;
+  if (known.wait > 0 && since) {
+    const steps = Math.floor((Date.now() - since) / WEARS_OFF);
+    if (steps > 0) {
+      known.wait = Math.max(0, known.wait - steps);
+      known.neededAt = since + steps * WEARS_OFF;   // what is left wears off from here
+    }
+  }
+  return known;
+};
 const askingWith = (url, list) => trying.get(url) || needsOf(url, list);
 /** As the renderer is told it: how much longer to wait, and "o" for everything let in. */
 const renderAsk = (url, list = false) => {
@@ -229,6 +246,8 @@ function learnSite(url, list = false) {
   if (used.wait > known.wait) {
     known.waitSeen += 1;
     if (known.waitSeen >= 2) { known.wait = used.wait; known.waitSeen = 0; }
+    // Needed, so far as anything can say: the wearing off starts again from now.
+    known.neededAt = Date.now();
   }
   known.at = Date.now();
   siteNeeds.set(needKey(url, list), known);
@@ -244,7 +263,6 @@ export const siteNeedsOf = (url, list = false) => {
  *  What the page did hold goes into the message -- a sign-in, an age check,
  *  a "loading…" -- since that is what says why. */
 export function notLoadedYet(url, held = '') {
-  askAgain(url, false);
   const text = tidy(held);
   const sample = text.length > 140 ? `${text.slice(0, 140)}…` : text;
   /* Not still loading: the site's own page saying it could not load the
@@ -254,8 +272,10 @@ export function notLoadedYet(url, held = '') {
    * not asked again seconds later. */
   const line = text.length < 600 && SITE_FAILED_LINE.exec(text);
   if (line) {
+    // Not a page to wait longer on: the site failed, so its pages are not taught to need more waiting.
     return Object.assign(new Error(`${SITE_FAILED} — its page said “${sample}”`), { notLoaded: true, siteFailed: true });
   }
+  askAgain(url, false);
   return Object.assign(new Error(`the chapter had not finished loading on the site (the page held ${text.length} characters${sample ? `: "${sample}"` : ''})`),
     { notLoaded: true });
 }
