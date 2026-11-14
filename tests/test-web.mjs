@@ -2244,12 +2244,15 @@ await t('a link cleared: its pages on their way stopped, what was learned of its
   assert.equal(web.forgetAddress(['https://clear.example/novel/7']), 2);
   await assert.rejects(list, (error) => error.cleared === true);
   await assert.rejects(page2, (error) => error.cleared === true);
-  assert.deepEqual(stoppedThere.sort(), ['https://clear.example/novel/7', 'https://clear.example/novel/7/', 'https://clear.example/novel/7/page/2']);
+  // The renderer is told to leave only those list pages -- never the chapter a queued download is on.
+  assert.deepEqual(stoppedThere.sort(), ['https://clear.example/novel/7/', 'https://clear.example/novel/7/page/2']);
   // The chapter, from the same site, is still on its way.
   let settled = false;
   chapter.then(() => { settled = true; }, () => { settled = true; });
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(settled, false, 'a chapter of the same site was stopped too');
+  // Nor is the queue's own state touched: its paced turns, its site's chapter needs.
+  assert.deepEqual(web.siteNeedsOf('https://clear.example/x'), { open: false, level: 0 });
   assert.deepEqual(web.siteNeedsOf('https://clear.example/x', true), { open: false, level: 0 });
   web.stopAll();
   await chapter.catch(() => {});

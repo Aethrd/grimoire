@@ -319,7 +319,8 @@ export function forgetAddress(addresses) {
    * ("page 2 of 4", at their own addresses) as well as the one typed.
    * Chapters are never asked for as a list, so a download is not touched. */
   const hosts = new Set(list.map(hostOf).filter(Boolean));
-  const leave = new Set(list);
+  // Only pages it was asking for as a contents list: nothing a download in the queue is reading is told to stop.
+  const leave = new Set();
   let stopped = 0;
   for (const [id, entry] of [...pending]) {
     if (id.startsWith('s') || !entry.list || !(stems.has(stem(entry.url)) || hosts.has(hostOf(entry.url)))) continue;

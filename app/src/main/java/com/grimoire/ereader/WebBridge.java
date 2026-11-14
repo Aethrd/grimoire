@@ -301,6 +301,7 @@ public class WebBridge {
          * to every chapter, each then coming only at the third try. */
         final boolean skipHeavy = ownSiteOnly;
         final int askedAt = stops.get();
+        final long requestedAt = System.currentTimeMillis();
         renderer.execute(() -> {
             String safeId = id == null ? "x" : id.replaceAll("[^A-Za-z0-9_-]", "_");
             File target = new File(dir(), safeId);
@@ -321,9 +322,11 @@ public class WebBridge {
                 // One page of a site at a time: another of its pages waits its turn here.
                 String siteKey = job.site == null ? address : job.site;
                 synchronized (renderingSites) {
-                    while (renderingSites.contains(siteKey) && stops.get() == askedAt) renderingSites.wait();
+                    while (renderingSites.contains(siteKey) && stops.get() == askedAt && !clearedSince(address, requestedAt)) renderingSites.wait();
                     // Paused while it waited: not opened.
                     if (stops.get() != askedAt) throw new IOException("paused");
+                    // Its address cleared on the page while it waited: not opened either -- no request the reader no longer wants.
+                    if (clearedSince(address, requestedAt)) throw new IOException("cleared");
                     renderingSites.add(siteKey);
                 }
                 try {
@@ -759,12 +762,27 @@ public class WebBridge {
     public void stopAddress(final String address) {
         if (address == null) return;
         final String wanted = stemOf(address);
+        // A page of it still waiting its turn is not opened at all (see render).
+        synchronized (renderingSites) {
+            cleared.put(wanted, System.currentTimeMillis());
+            renderingSites.notifyAll();
+        }
         main.post(() -> {
             for (Browser each : browsers) {
                 Rendering job = each.current;
                 if (job != null && wanted.equals(stemOf(job.address))) job.fail("cleared");
             }
         });
+    }
+
+    /** Addresses cleared on the page, and when: a page of one asked for before then is not opened. */
+    private final Map<String, Long> cleared = new HashMap<>();
+
+    private boolean clearedSince(String address, long requestedAt) {
+        synchronized (renderingSites) {
+            Long at = cleared.get(stemOf(address));
+            return at != null && at >= requestedAt;
+        }
     }
 
     private static String stemOf(String address) {
