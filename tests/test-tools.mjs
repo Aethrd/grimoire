@@ -2283,6 +2283,23 @@ await t('the gradient colours the app: ranked by share into roles, the largest l
   theme.apply(await store.settings());
 });
 
+await t('a file picker made for the moment is held in the page until what is chosen comes back', async () => {
+  await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const picker = document.createElement('input');
+  picker.type = 'file';
+  assert.equal(picker.isConnected, false);
+  picker.click();
+  assert.equal(picker.isConnected, true, 'a loose picker was left loose while choosing');
+  assert.equal(picker.hidden, true);
+  picker.dispatchEvent(new window.Event('change'));
+  await settle(10);
+  assert.equal(picker.isConnected, false, 'the picker was left in the page after the choosing');
+  // One already in the page is left as it is.
+  const kept = el('file-input');
+  kept.click();
+  assert.equal(kept.parentNode !== null, true);
+});
+
 await t('the strip holds still while a field is typed in (the system\u2019s Paste bubble is not taken away), and catches up after', async () => {
   const app = await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
   const field = document.createElement('input');

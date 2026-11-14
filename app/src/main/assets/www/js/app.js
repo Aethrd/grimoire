@@ -11784,6 +11784,27 @@ async function settleMisplacedOnce(settings) {
   }
 }
 
+/* A file picker made for the moment -- most of them are: a cover, a font, files
+ * for Build -- is put in the page and held there until what is chosen comes
+ * back (or the choosing is given up), then taken out. Left loose, it could be
+ * swept away while the system's file picker was open -- most of all with
+ * downloads running, the app busy and short of memory -- and what was chosen
+ * then had nowhere to go: Add files did nothing. Every picker, in one place. */
+const heldPickers = new Set();
+const InputType = globalThis.HTMLInputElement || globalThis.window?.HTMLInputElement;
+const pressFile = InputType?.prototype.click;
+if (InputType) InputType.prototype.click = function click() {
+  if (this.type === 'file' && !this.isConnected) {
+    this.hidden = true;
+    document.body.appendChild(this);
+    heldPickers.add(this);
+    const done = () => setTimeout(() => { heldPickers.delete(this); this.remove(); }, 0);
+    this.addEventListener('change', done, { once: true });
+    this.addEventListener('cancel', done, { once: true });
+  }
+  return pressFile.call(this);
+};
+
 /* A back while typing is the keyboard's, not the screen's. The keyboard takes
  * a back to close itself before it reaches the page; one that slips past it --
  * Samsung's clipboard, as its items are deleted, hides the keyboard for a
