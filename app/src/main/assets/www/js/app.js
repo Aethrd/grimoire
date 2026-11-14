@@ -1850,19 +1850,39 @@ function paintNotices() {
     list.appendChild(none);
     return;
   }
-  for (const entry of all) {
+  /* A kind turned off is out of the list too, not only kept from popping
+   * up: turned off and still listed read as the switch doing nothing. What
+   * was hidden can be shown again below. */
+  const off = new Set(screens.noticeTopicsOff());
+  const shown = noticesShowHidden ? all : all.filter((entry) => !off.has(entry.topic || 'other'));
+  const hidden = all.length - shown.length;
+  if (!shown.length) {
+    const none = document.createElement('p');
+    none.className = 'notices-empty';
+    none.textContent = 'Nothing of the kinds turned on in the last day.';
+    list.appendChild(none);
+  }
+  for (const entry of shown) {
     const row = document.createElement('div');
-    row.className = `notice-row${entry.kind ? ` ${entry.kind}` : ''}`;
+    row.className = `notice-row${entry.kind ? ` ${entry.kind}` : ''}${off.has(entry.topic || 'other') ? ' off' : ''}`;
     row.dataset.topic = entry.topic || 'other';
     row.innerHTML = `<span class="mark">${entry.kind === 'failed' ? '✕' : entry.kind === 'done' ? '✓' : '•'}</span>`
       + `<span class="text">${escapeText(entry.text)}${entry.repeat > 1 ? ` <span class="muted">(×${entry.repeat})</span>` : ''}</span>`
       + `<span class="when">${escapeText(noticeWhen(entry.at))}</span>`;
     list.appendChild(row);
   }
+  if (hidden || noticesShowHidden) {
+    const more = document.createElement('button');
+    more.className = 'btn ghost notices-hidden';
+    more.textContent = noticesShowHidden ? 'Hide the kinds turned off' : `Show ${hidden} of the kinds turned off`;
+    more.onclick = () => { noticesShowHidden = !noticesShowHidden; paintNotices(); };
+    list.appendChild(more);
+  }
 }
+let noticesShowHidden = false;
 
-/* The kinds of notice, each in its colour: pressed, it pops up as it comes;
- * let go, it is only kept here. */
+/* The kinds of notice, each in its colour: pressed, shown -- popping up as
+ * it comes and in the list; let go, neither (still kept, behind "Show"). */
 function paintNoticeTopics() {
   const row = el('notices-topics');
   row.innerHTML = '';
@@ -1873,13 +1893,14 @@ function paintNoticeTopics() {
     chip.dataset.topic = topic.key;
     const on = !off.has(topic.key);
     chip.setAttribute('aria-pressed', String(on));
-    chip.title = on ? `${topic.label}: pop up as they come` : `${topic.label}: only kept here`;
+    chip.title = on ? `${topic.label}: shown` : `${topic.label}: turned off — not popped up, not listed`;
     chip.innerHTML = `<span class="notice-swatch"></span>${escapeText(topic.label)}`;
     chip.onclick = async () => {
       if (on) off.add(topic.key); else off.delete(topic.key);
       screens.setNoticeTopicsOff([...off]);
       await store.saveSettings({ noticesOff: [...off] }).catch(() => {});
       paintNoticeTopics();
+      paintNotices();
     };
     row.appendChild(chip);
   }

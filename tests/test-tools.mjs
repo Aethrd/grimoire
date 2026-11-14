@@ -3286,6 +3286,21 @@ await t('notices that faded are kept a day: the bell on the Library, a notice he
   screensMod.toast('That file could not be read', 4000);
   assert.equal(el('toast').hidden, false);
   assert.equal(el('toast').dataset.topic, 'problem');
+  // Out of the list too: turned off and still listed read as the switch doing nothing. Shown again on asking.
+  el('notices-btn').click();
+  const listed = () => [...el('notices-list').querySelectorAll('.notice-row .text')].map((n) => n.textContent);
+  assert.ok(!listed().some((t) => /Queue (un)?locked/.test(t)), 'a kind turned off still listed');
+  assert.ok(listed().some((t) => /could not be read/.test(t)));
+  const more = el('notices-list').querySelector('.notices-hidden');
+  assert.match(more.textContent, /Show \d+ of the kinds turned off/);
+  more.click();
+  assert.ok(listed().some((t) => /Queue unlocked/.test(t)));
+  el('notices-list').querySelector('.notices-hidden').click();
+  // Turned on again from the list: shown at once.
+  el('notices-topics').querySelector('[data-topic="downloads"]').click();
+  await settle(50);
+  assert.ok(listed().some((t) => /Queue unlocked/.test(t)));
+  el('notices-close').click();
   screensMod.setNoticeTopicsOff([]);
   await store.saveSettings({ noticesOff: [] });
   const css = read('app/src/main/assets/www/css/app.css');

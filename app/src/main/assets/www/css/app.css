@@ -2966,3 +2966,5 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .notice-swatch { width: 10px; height: 10px; border-radius: 50%; background: var(--topic); flex: none; }
 .notice-topic[aria-pressed="true"], [data-colour-style="gradient"] .notice-topic[aria-pressed="true"] {
   background: color-mix(in srgb, var(--topic) 22%, transparent); color: var(--text); border-color: var(--topic); }
+.notice-row.off { opacity: .55; }
+.notices-hidden { width: 100%; margin-top: 8px; font-size: 13px; }
