@@ -2562,6 +2562,29 @@ await t('a copy from the shell that is not the same file is refused, not importe
   delete window.GrimoireNative;
 });
 
+await t('a copy the shell found by its name goes in, though Android gave an old size for it; every copy at an address of its own', async () => {
+  const fsMod = await import('node:fs');
+  const bytes = fsMod.readFileSync(path.join(root, 'tests/fixtures/comic.cbz'));
+  let how = null;
+  window.GrimoireNative = {
+    stageForRead(stageId) {
+      setTimeout(() => window.Grimoire.settleFile(stageId, true, 'handoff://s9-1-renewed volume.zip#named'), 10);
+    },
+  };
+  // The file in Downloads replaced by a fresh copy of itself: the picker's size is the old one.
+  globalThis.fetch = async (url, options) => { how = options; return { ok: true, status: 200, blob: async () => new window.Blob([bytes], { type: 'application/zip' }) }; };
+  pickFiles([refusing('renewed volume.zip', bytes.length + 321)]);
+  await untilIdle();
+  await settle(200);
+  assert.ok((await store.all('books')).find((b) => b.title === 'renewed volume'), 'the very file picked was refused');
+  assert.equal(how?.cache, 'no-store', 'a copy fetched from before could be handed back');
+  delete window.GrimoireNative;
+  // Named apart: a Korean title was all underscores, the same as others of its lengths.
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /String safe = id \+ "-" \+ System\.currentTimeMillis\(\) \+ "-"/);
+  assert.match(activity, /\(named \? "#named" : ""\)/);
+});
+
 /* ── blurred covers, kept ────────────────────────────────────────────── */
 
 console.log('\nblurred covers, kept');

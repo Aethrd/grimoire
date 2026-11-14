@@ -907,9 +907,16 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
-            String safe = (name == null || name.isEmpty() ? "file" : name)
-                    .replaceAll("[^A-Za-z0-9._\\- ]", "_");
+            /* A name of its own, every copy. Kept to the characters a path takes,
+             * a name in Korean or Japanese came out as underscores -- the same
+             * underscores for many a title of the same lengths -- and one copy
+             * written over another, or an earlier copy at the same address
+             * handed back, was a different book under this one's name. */
+            String safe = id + "-" + System.currentTimeMillis() + "-"
+                    + (name == null || name.isEmpty() ? "file" : name).replaceAll("[^A-Za-z0-9._\\- ]", "_");
             java.io.File target = new java.io.File(handoffDir(this), safe);
+            // Found by its name: the very file picked, whatever size the provider last said it was.
+            final boolean named = name != null && !name.isEmpty() && name.equals(pickedName(found));
 
             try (InputStream in = getContentResolver().openInputStream(found);
                  java.io.OutputStream out = new java.io.FileOutputStream(target)) {
@@ -925,8 +932,16 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
-            settleStage(id, true, ORIGIN + "/handoff/" + Uri.encode(safe));
+            settleStage(id, true, ORIGIN + "/handoff/" + Uri.encode(safe) + (named ? "#named" : ""));
         });
+    }
+
+    /** The name of a picked file, by its address. */
+    private String pickedName(Uri uri) {
+        java.util.List<Picked> all;
+        synchronized (picked) { all = new java.util.ArrayList<>(picked); }
+        for (Picked p : all) if (p.uri.equals(uri)) return nameOf(p);
+        return null;
     }
 
     private void settleStage(String id, boolean ok, String payload) {

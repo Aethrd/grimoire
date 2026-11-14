@@ -363,6 +363,13 @@
     </header>
 
     <div class="scroll pad" id="build-body">
+      <!-- Files from Syosetu's PDFs, rebuilt as they are added: one chapter an episode,
+           cleaned up (see syosetu.js). Pressed for such a novel; off again after. -->
+      <div class="build-modes">
+        <button class="chip" id="build-syosetu" aria-pressed="false"
+          title="For 小説家になろう (Syosetu) PDFs, or EPUBs made from them: one chapter an episode, page numbers and broken lines mended, vertical punctuation set right, notes kept.">Syosetu PDF</button>
+        <small class="muted" id="build-syosetu-note">Off — files are added as they are.</small>
+      </div>
       <!-- Above both views -- the book in Build and every novel -- so a book that
            stopped (or was cut off by an update) is never out of sight. -->
       <!-- Overnight: when the next try of a stopped build is, and a way to stop it. -->
@@ -757,6 +764,20 @@
 </div>
 
 <!-- Any picture in any of the books being built, as the built book's cover. -->
+<!-- A Syosetu novel whose episode list the site would not give: pasted from its 目次. -->
+<div class="sheet-scrim" id="syosetu-sheet" hidden>
+  <div class="sheet syosetu-sheet" role="dialog" aria-labelledby="syosetu-sheet-title">
+    <p class="eyebrow" id="syosetu-sheet-title">Syosetu · episode list</p>
+    <p class="muted" id="syosetu-sheet-what"></p>
+    <textarea id="syosetu-titles" rows="10" spellcheck="false"
+      placeholder="Paste the novel's 目次: a title a line. Dates are passed over; put “# ” before an arc's heading."></textarea>
+    <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
+      <button class="btn ghost" id="syosetu-skip">Add it as it is</button>
+      <button class="btn primary" id="syosetu-use">Use this list</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-scrim" id="cover-pick-sheet" hidden>
   <div class="sheet cover-pick">
     <p class="eyebrow">Cover from the books</p>

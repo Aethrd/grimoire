@@ -8,6 +8,7 @@ import * as screens from './screens.js';
 import * as panels from './panels.js';
 import * as fonts from './fonts.js';
 import { playScene } from './opening.js';
+import * as syosetu from './syosetu.js';
 import { nameWithFormat, chapterHtml, plainTextOf } from './parse.js';
 import * as glossary from './glossary.js';
 import * as build from './build.js';
@@ -3020,14 +3021,19 @@ async function rescueFile(file, job = null) {
   try {
     (job || progress).say(`Reading ${file.name} another way`);
     const url = await stageForRead(file);
-    const copy = await fetch(url);
+    // Each copy at an address of its own (MainActivity.stageForRead), and never one kept from before.
+    const copy = await fetch(url, { cache: 'no-store' });
     if (!copy.ok) throw new Error(`could not fetch the staged copy (${copy.status})`);
     const blob = await copy.blob();
     /* The same file, or nothing. The shell finds the file by its name and
      * size; a copy that comes back a different size is some other file, and
      * imported under this one's name it was a duplicate of a book already
-     * on the shelf wearing the wrong title. */
-    if (file.size > 0 && blob.size !== file.size) {
+     * on the shelf wearing the wrong title. Unless the shell found it by its
+     * name ("#named"): then it is the file picked, and only the size Android
+     * last gave for it was out of date -- a file replaced in Downloads by a
+     * fresh copy of itself, picked again, was refused for that. */
+    const named = /#named$/.test(url);
+    if (!named && file.size > 0 && blob.size !== file.size) {
       throw new Error('the copy Android handed back was a different file');
     }
     return new File([blob], file.name, { type: file.type || blob.type });
@@ -6850,6 +6856,82 @@ const QUEUE_MAX_STOPS = 5;
 const queueJobs = new Map();   // id -> { pausing, finish, run } for the jobs under way
 let runBuild = async () => {};
 
+/* ── Syosetu's PDFs, rebuilt as they are added (syosetu.js) ───────────
+ *
+ * Pressed for such a novel, on Build; off again by a press. Each EPUB added
+ * while it is on is rebuilt -- one chapter an episode, cleaned up, checked
+ * -- before it goes in as any file does. Its episode list from the site, by
+ * the Nコード it carries, at the site's own delay for lists; or, where the
+ * site will not give it, as pasted. One that is not such a PDF, or does not
+ * rebuild whole, goes in as it came, and why is said.
+ */
+let syosetuOn = false;
+function paintSyosetu() {
+  const button = el('build-syosetu');
+  if (!button) return;
+  button.setAttribute('aria-pressed', String(syosetuOn));
+  el('build-syosetu-note').textContent = syosetuOn
+    ? 'On — each Syosetu PDF (or an EPUB made from one) is rebuilt as it is added: a chapter an episode.'
+    : 'Off — files are added as they are.';
+}
+/** A page of the site, at its own delay for lists: one asked for after another, never together. */
+let syosetuLast = 0;
+async function syosetuPage(url) {
+  let site = '';
+  try { site = siteKey(new URL(url).host); } catch { /* said by the fetch */ }
+  const { listGap, listJitter } = delaysFor(site);
+  const gap = Math.max(0, (Number(listGap) || 0) + (Math.random() * 2 - 1) * (Number(listJitter) || 0));
+  const wait = syosetuLast + gap - Date.now();
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  try {
+    const page = await web.download(url, { list: true });
+    return web.decodePage(new Uint8Array(await page.blob.arrayBuffer()), page.type || '');
+  } finally {
+    syosetuLast = Date.now();
+  }
+}
+/** The episode list, pasted: the sheet, until it is used or put aside. */
+function askSyosetuTitles({ ncode, title }) {
+  return new Promise((resolve) => {
+    const sheet = el('syosetu-sheet');
+    const text = el('syosetu-titles');
+    el('syosetu-sheet-what').textContent = `“${title}”${ncode ? ` (${ncode})` : ''}: its episode list could not be had from Syosetu. `
+      + 'Paste it from the novel\u2019s 目次 page to split it into episodes.';
+    text.value = '';
+    sheet.hidden = false;
+    const done = (value) => { sheet.hidden = true; el('syosetu-use').onclick = null; el('syosetu-skip').onclick = null; resolve(value); };
+    el('syosetu-use').onclick = () => done(text.value.trim() || null);
+    el('syosetu-skip').onclick = () => done(null);
+  });
+}
+async function rebuildSyosetu(files) {
+  const out = [];
+  for (const file of files) {
+    if (!/\.(epub|pdf)$/i.test(file.name || '') && !/^application\/(epub\+zip|pdf)$/.test(file.type || '')) { out.push(file); continue; }
+    const finish = progress.start(`Syosetu · ${file.name}`);
+    try {
+      finish.say(/\.pdf$/i.test(file.name || '') ? 'Reading the PDF\u2019s pages' : 'Reading the episode list from Syosetu', null);
+      const made = await syosetu.rebuild(file, {
+        fetchText: syosetuPage,
+        askTitles: askSyosetuTitles,
+        // A PDF's pages are read first; the list after.
+        onProgress: (fraction) => (fraction < 1 ? finish.say('Reading the PDF\u2019s pages', fraction) : finish.say('Reading the episode list from Syosetu', null)),
+      });
+      out.push(made.file);
+      if (!el('build-author').value.trim() && made.author) el('build-author').value = made.author;
+      toast(`“${made.title}” rebuilt — ${made.chapters} episode${made.chapters === 1 ? '' : 's'}`
+        + (made.missing.length ? `; not in the PDF: ${made.missing.slice(0, 3).join(', ')}${made.missing.length > 3 ? ` and ${made.missing.length - 3} more` : ''}` : '')
+        + '.', made.missing.length ? 9000 : 5000);
+    } catch (error) {
+      out.push(file);
+      toast(`“${file.name}” added as it is: ${error.message || 'it could not be rebuilt'}.`, 8000);
+    } finally {
+      finish();
+    }
+  }
+  return out;
+}
+
 /* Build seen as the book in it, or as the index of every novel -- that one
  * as a card, the queue's, and another to add (see index.html). */
 let buildIndex = false;
@@ -7374,7 +7456,10 @@ async function runJob(job) {
       },
     });
     // The book so far, carried on: the shorter one goes to the Bin.
-    if (before && before.id !== book.id) await library.binBooks([before.id]).catch(() => {});
+    if (before && before.id !== book.id) {
+      await library.binBooks([before.id]).catch(() => {});
+      job.earlier = [...new Set([...(job.earlier || []), before.id])];
+    }
     job.bookId = book.id;
     // A chapter that came at the end, its placeholder further back: put in its place.
     await build.settleMisplaced(book.id).catch(() => 0);
@@ -7395,10 +7480,25 @@ async function runJob(job) {
   }
   // Stepped back for a book resumed by hand: back in line, not paused.
   settleJob(job, outcome, under.pausing && !under.siteStop && !under.yielding);
+  if (job.status === 'done') await purgeEarlier(job).catch(() => 0);
   await refreshShelf().catch(() => {});
   saveQueue();
   if (queueState.running) pumpQueue();
   else letScreenGo();
+}
+
+/**
+ * The book whole: the shorter versions of it -- each pause and resume left
+ * the one before in the Bin -- deleted for good. They were only ever kept in
+ * case the download went no further; it has gone all the way.
+ */
+async function purgeEarlier(job) {
+  if (job.bookId == null) return 0;
+  const carried = new Set(job.earlier || []);
+  const earlier = (await library.binnedBooks())
+    .filter((book) => book.id !== job.bookId && (carried.has(book.id) || book.queueJob === job.id));
+  delete job.earlier;
+  return earlier.length ? library.destroyBooks(earlier.map((book) => book.id)) : 0;
 }
 
 /** Where a book of the queue stands after a try: done, paused, held for the reader, or to try again. */
@@ -7829,7 +7929,7 @@ function paintQueue() {
 const OVERNIGHT_MS = 15 * 60 * 1000;
 const OVERNIGHT_SAME_STOPS = 5;
 let overnight = false;
-const night = { timer: null, at: 0, run: null, why: '', lastStop: '', sameStops: 0, made: new Set(), skipped: [] };
+const night = { timer: null, at: 0, run: null, why: '', lastStop: '', sameStops: 0, made: new Set(), earlier: new Map(), skipped: [] };
 store.settings().then((settings) => {
   overnight = settings.buildOvernight === true;
   const box = el('build-overnight');
@@ -8293,7 +8393,10 @@ async function rescueCutBuilds() {
     if (!job) continue;
     const links = entry.rest.flatMap((part) => part.links || []).map(keptLink);
     // A book it was carrying on is superseded by this one.
-    if (job.bookId != null && job.bookId !== entry.book.id) await library.binBooks([job.bookId]).catch(() => {});
+    if (job.bookId != null && job.bookId !== entry.book.id) {
+      await library.binBooks([job.bookId]).catch(() => {});
+      job.earlier = [...new Set([...(job.earlier || []), job.bookId])];
+    }
     Object.assign(job, { bookId: entry.book.id, done: entry.book.chapters, links, status: links.length ? 'queued' : 'done' });
     entry.queued = true;
     await coverOnJobBook(job).catch(() => {});
@@ -8518,8 +8621,10 @@ function wireWorkshop() {
      */
     picker.accept = '*/*';
     picker.onchange = async () => {
-      const files = [...(picker.files || [])];
+      let files = [...(picker.files || [])];
       if (!files.length) return;
+      // Syosetu's PDFs, rebuilt first where that is on.
+      if (syosetuOn) files = await rebuildSyosetu(files);
 
       const finish = progress.start('Reading the files');
       try {
@@ -8532,6 +8637,8 @@ function wireWorkshop() {
     picker.click();
   };
 
+  el('build-syosetu').onclick = () => { syosetuOn = !syosetuOn; paintSyosetu(); };
+  paintSyosetu();
   el('build-title').oninput = () => {
     buildTitleTouched = el('build-title').value.trim().length > 0;
     el('build-eyebrow').textContent = el('build-title').value || 'Join files into one';
@@ -8693,7 +8800,18 @@ function wireWorkshop() {
        * the shelf, while it worked, you are not taken out of that. */
       if (overnight && superseded.length) {
         await library.binBooks(superseded).catch(() => {});
+        // Remembered against the book that carries them on, with the ones they carried on in turn.
+        night.earlier.set(book.id, superseded.flatMap((id) => [id, ...(night.earlier.get(id) || [])]));
         await refreshShelf();
+      }
+      /* Whole at last: the shorter versions of it this night made along the
+       * way, in the Bin, deleted for good (as the queue's are). Only those:
+       * anything else in the Bin was put there by hand. */
+      if (overnight && !failed.length && night.earlier.has(book.id)) {
+        const chain = new Set(night.earlier.get(book.id));
+        night.earlier.delete(book.id);
+        const earlier = (await library.binnedBooks()).filter((each) => chain.has(each.id));
+        if (earlier.length) await library.destroyBooks(earlier.map((each) => each.id)).catch(() => 0);
       }
       const again = overnightAfter({ book, failed, kept, paused });
       // A notification's title is a few words -- the popup shows one line of

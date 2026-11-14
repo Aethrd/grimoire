@@ -300,6 +300,136 @@ await t('a chapter sent to the end, its placeholder further back: put in its pla
   assert.equal(await build.settleMisplaced(bookId), 0);
 });
 
+await t('a Syosetu PDF made into an EPUB, rebuilt: a chapter an episode, cleaned up, checked -- as syosetu_pdf2epub.py does', async () => {
+  const syosetu = await import(new URL('../app/src/main/assets/www/js/syosetu.js', import.meta.url).href);
+  const JSZip = (await import('jszip')).default;
+  // As Syosetu's PDF comes out as an EPUB: its pages one run, numbered, set vertically.
+  const pages = [
+    ['テスト小説', '︻Ｎコード︼', 'Ｎ１２３４ＡＢ', '︻作者名︼', '山田太郎', '︻あらすじ︼', 'これはテストのあらすじです︒', '注意事項 このＰＤＦは'],
+    ['第一部', '始まりの朝', '朝が来た︒ 彼は目を覚ました︒ ﹁おはよう︒﹂ と母が言った︒', 'そして彼は学校へ向かって歩き'],
+    ['出した︒ 空は青かった︒', '＜ｉ12345｜6789＞', '絵の後の文︒', '始まりの朝（後書き） 読んでくれてありがとう︒'],
+    ['二日目（前書き） 今回は短いです︒', '二日目', '二日目の話︵前編︶だ︒ ﹁行くぞ！﹂ ﹁うん︕﹂', 'ーーと言った︒'],
+    ['最後の話', 'これで終わり︒', 'テスト小説', '発行 https://ncode.syosetu.com/n1234ab/'],
+  ];
+  const paras = pages.flatMap((page, i) => [...page, String(i + 1)]);
+  const zip = new JSZip();
+  zip.file('mimetype', 'application/epub+zip');
+  zip.file('META-INF/container.xml', '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
+  zip.file('OEBPS/content.opf', '<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:test:1</dc:identifier><dc:title>テスト小説</dc:title></metadata><manifest><item id="p1" href="text.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="p1"/></spine></package>');
+  zip.file('OEBPS/text.xhtml', `<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>${paras.map((p) => `<p>${p}</p>`).join('')}</body></html>`);
+  const input = new File([await zip.generateAsync({ type: 'uint8array' })], 'in.epub', { type: 'application/epub+zip' });
+  const toc = '# 第一部\n始まりの朝\n2015/03/24 00:00\n二日目\n最後の話\n';
+  const made = await syosetu.rebuild(input, { askTitles: async () => toc });
+  assert.deepEqual({ title: made.title, author: made.author, chapters: made.chapters, missing: made.missing, illustrations: made.illustrations, notes: made.notes, joined: made.joined },
+    { title: 'テスト小説', author: '山田太郎', chapters: 3, missing: [], illustrations: 1, notes: 2, joined: 3 });
+  const bytesOf = (blob) => new Promise((resolve) => { const reader = new window.FileReader(); reader.onload = () => resolve(reader.result); reader.readAsArrayBuffer(blob); });
+  const out = await JSZip.loadAsync(await bytesOf(made.file));
+  const page = async (n) => out.file(`OEBPS/text/${n}`).async('string');
+  // The same pages syosetu_pdf2epub.py writes for it (checked against the script itself).
+  const one = await page('ep0001.xhtml');
+  assert.match(one, /<p class="chapter-arc">第一部<\/p><p class="chapter-number">第1話<\/p><h1 class="chapter-title">始まりの朝<\/h1>/);
+  assert.match(one, /<p class="gap">朝が来た。<\/p>\n<p>彼は目を覚ました。<\/p>\n<p>「おはよう。」<\/p>\n<p>と母が言った。<\/p>/);
+  assert.match(one, /<p class="gap">そして彼は学校へ向かって歩き出した。<\/p>\n<p>空は青かった。<\/p>/, 'a sentence cut by a page break not joined back');
+  assert.match(one, /<p class="illust">［挿絵］<\/p>/);
+  assert.match(one, /<aside class="note"><p class="note-label">後書き<\/p>\n<p class="gap">読んでくれてありがとう。<\/p>/);
+  const two = await page('ep0002.xhtml');
+  assert.match(two, /<aside class="note"><p class="note-label">前書き<\/p>\n<p class="gap">今回は短いです。<\/p>/);
+  assert.match(two, /<p class="gap">二日目の話（前編）だ。<\/p>\n<p>「行くぞ！」<\/p>\n<p>「うん！」ーーと言った。<\/p>/);
+  const three = await page('ep0003.xhtml');
+  assert.ok(!/発行|syosetu\.com/.test(three), 'the closing 発行 line kept');
+  assert.match(await page('intro.xhtml'), /これはテストのあらすじです。/);
+  assert.match(await out.file('OEBPS/content.opf').async('string'), /<dc:creator>山田太郎<\/dc:creator>\n<dc:language>ja<\/dc:language>/);
+  assert.equal(out.file('OEBPS/'), null, 'folder entries in the zip');
+  // An episode the PDF lacks: said, the rest still made.
+  const short = await syosetu.rebuild(input, { askTitles: async () => `${toc}番外編\n` });
+  assert.deepEqual(short.missing, ['第4話 番外編']);
+  // Not such a PDF: left as it came, saying why.
+  const plain = new File([fs.readFileSync(new URL('./fixtures/salt-almanac.epub', import.meta.url))], 'salt.epub');
+  await assert.rejects(syosetu.rebuild(plain, { askTitles: async () => null }), (error) => error instanceof syosetu.NotSyosetu);
+  // The site's contents page, new layout: arcs and episodes in order, its "read from the start" link not an episode.
+  const listed = syosetu.parseTocHtml('<div class="p-eplist__chapter-title">第一部</div><a href="/n1234ab/1/" class="p-eplist__subtitle">始まりの朝</a>'
+    + '<a href="/n1234ab/1/">1話目から読む</a><a href="/n1234ab/2/" class="p-eplist__subtitle">二日目</a>', 'n1234ab');
+  assert.deepEqual(listed, [{ kind: 'arc', text: '第一部', no: null }, { kind: 'ep', text: '始まりの朝', no: 1 }, { kind: 'ep', text: '二日目', no: 2 }]);
+  // In Build: pressed for such a novel; its EPUBs rebuilt before they go in, as any file.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /if \(syosetuOn\) files = await rebuildSyosetu\(files\);/);
+  assert.match(app, /el\('build-syosetu'\)\.onclick = \(\) => \{ syosetuOn = !syosetuOn; paintSyosetu\(\); \};/);
+});
+
+await t('a Syosetu PDF itself, read by its columns: paragraphs, blank lines, page breaks mended, furigana and page numbers out', async () => {
+  const syosetu = await import(new URL('../app/src/main/assets/www/js/syosetu.js', import.meta.url).href);
+  const JSZip = (await import('jszip')).default;
+  // Laid out as Syosetu's PDFs are (pdf.js runs): 14pt columns, right to left
+  // 22.7 apart, 30 characters from the top at 510.2, a paragraph's first one
+  // a character down, a blank line a column left empty.
+  const S = 14; const TOP = 510.2; const P = 22.7; const RIGHT = 748.4;
+  const col = (slot, text, { indent = false, header = false } = {}) => {
+    const runs = [];
+    let y = header ? 496.3 : indent ? TOP - S : TOP;
+    const x = header ? 742.7 : RIGHT - slot * P;
+    for (const piece of text.split(/( )/)) {
+      if (!piece) continue;
+      const h = piece === ' ' ? S : [...piece].length * S;
+      runs.push({ str: piece, x, y, w: piece === ' ' ? 0 : S, h, size: S });
+      y -= h;
+    }
+    return runs;
+  };
+  const number = (n) => ({ str: String(n), x: 391.2, y: 56.7, w: 7.4, h: 12, size: 12 });
+  const filler = (n) => 'いろはにほへとちりぬるを'.repeat(10).slice(0, n);
+  // A paragraph of full columns from `from` to `to`, its last column ending in `last`.
+  const para = (from, to, last) => {
+    const runs = [col(from, filler(29), { indent: true })];
+    for (let s = from + 1; s < to; s += 1) runs.push(col(s, filler(30)));
+    runs.push(col(to, filler(30 - [...last].length) + last));
+    return runs.flat();
+  };
+  const runs = [
+    [{ str: 'テスト小説', x: 300, y: 400, w: 100, h: 20, size: 20 }, { str: '山田', x: 320, y: 300, w: 24, h: 12, size: 12 }, { str: ' ', x: 344, y: 300, w: 12, h: 0, size: 12 }, { str: '太郎', x: 356, y: 300, w: 24, h: 12, size: 12 }],
+    [number(1), ...col(0, '︻作品タイトル︼'), ...col(1, 'テスト小説', { indent: true }), ...col(3, '︻Ｎコード︼'), ...col(4, 'Ｎ１２３４ＡＢ', { indent: true }),
+      ...col(6, '︻作者名︼'), ...col(7, '山田 太郎', { indent: true }), ...col(9, '︻あらすじ︼'), ...col(10, 'これはテストのあらすじです︒', { indent: true })],
+    [number(2), ...col(0, '始まりの朝', { header: true }), ...col(4, '朝が来た︒', { indent: true }), ...col(5, '﹁おはよう︕ 元気︖﹂'),
+      { str: 'るび', x: RIGHT - 5 * P + 11.3, y: 480, w: 7, h: 14, size: 7 }, ...para(7, 29, '歩き')],
+    [number(3), ...col(0, '出した︒'), ...col(2, '絵の後の文︒', { indent: true }), ...para(4, 29, '終えた︒')],
+    [number(4), ...col(0, '新しい段落︒', { indent: true }), ...para(2, 29, '終わり︒')],
+    [number(5), ...col(0, '始まりの朝︵後書き︶', { header: true }), ...col(4, '読んでくれてありがとう︒', { indent: true })],
+    [number(6), ...col(0, '二日目', { header: true }), ...col(4, '二日目の話︒', { indent: true }), ...para(6, 29, 'だった︒')],
+    [{ str: 'テスト小説', x: 425, y: 107.7, w: 70, h: 12, size: 12 }, { str: '2025年1月1日発行', x: 425, y: 85, w: 100, h: 12, size: 12 },
+      { str: 'https://ncode.syosetu.com/n1234ab/', x: 428, y: 132.8, w: 200, h: 12, size: 12 }],
+  ];
+  const pages = syosetu.pagesFromPdf(runs);
+  assert.deepEqual(pages[7], [], 'the closing 発行 page kept');
+  assert.ok(!pages.flat().some((b) => /^\s*\d+\s*$/.test(b)), 'a page number kept');
+  assert.ok(!pages.flat().join('').includes('るび'), 'furigana kept in the text');
+
+  const input = new File(['%PDF-1.4 as Syosetu makes it'], 'N1234AB.pdf', { type: 'application/pdf' });
+  let progressed = 0;
+  const made = await syosetu.rebuild(input, {
+    askTitles: async () => '始まりの朝\n二日目\n',
+    readPdf: async (file, onProgress) => { onProgress?.(1); return runs; },
+    onProgress: () => { progressed += 1; },
+  });
+  assert.equal(progressed, 1);
+  assert.deepEqual({ title: made.title, author: made.author, chapters: made.chapters, missing: made.missing, name: made.file.name },
+    { title: 'テスト小説', author: '山田 太郎', chapters: 2, missing: [], name: 'N1234AB.epub' });
+  const bytesOf = (blob) => new Promise((resolve) => { const reader = new window.FileReader(); reader.onload = () => resolve(reader.result); reader.readAsArrayBuffer(blob); });
+  const out = await JSZip.loadAsync(await bytesOf(made.file));
+  const one = await out.file('OEBPS/text/ep0001.xhtml').async('string');
+  // A blank line is a gap; paragraphs with none between follow on; the text's own space kept, full width.
+  assert.match(one, /<p class="gap">朝が来た。<\/p>\n<p>「おはよう！　元気？」<\/p>\n<p class="gap">いろは/);
+  // Cut by a page break, mid-sentence: one paragraph again, no space where the column wrapped.
+  assert.match(one, /をいろは[^<]*歩き出した。<\/p>\n<p class="gap">絵の後の文。<\/p>/);
+  // A page ending on a full column and a sentence, the next starting a paragraph: two paragraphs, no gap.
+  assert.match(one, /終えた。<\/p>\n<p>新しい段落。<\/p>\n<p class="gap">いろは/);
+  assert.match(one, /<aside class="note"><p class="note-label">後書き<\/p>\n<p class="gap">読んでくれてありがとう。<\/p>/);
+  assert.ok(!/[\u2007\u2028\u2029\uFE10-\uFE4F]/.test(one), 'a marker or a vertical form left in');
+  const two = await out.file('OEBPS/text/ep0002.xhtml').async('string');
+  assert.ok(!/発行|syosetu\.com/.test(two));
+  assert.match(two, /<p class="gap">二日目の話。<\/p>/);
+  // In Build: PDFs too, the pages read with a bar.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /if \(!\/\\\.\(epub\|pdf\)\$\/i\.test/);
+});
+
 await t('the look goes in a backup and comes back: gradient colours and shares, direction, solid or gradient, the queue animation', async () => {
   const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
   const before = await store.settings();

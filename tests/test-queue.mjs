@@ -207,6 +207,9 @@ await t('started, it builds every book: two at once, never two from one site', a
   // D carried on: one book of four chapters, the cut-off one binned.
   const d = books.filter((each) => each.title === 'D' && each.chapters === 4);
   assert.equal(d.length, 1, JSON.stringify(books.filter((each) => each.title === 'D').map((each) => [each.id, each.chapters, each.binnedAt || each.inBin || ''])));
+  // Whole now: the cut-off one it carried on, which went to the Bin, deleted for good -- and nothing else in the Bin touched.
+  assert.equal(await store.get('books', cut), undefined, 'the shorter version kept in the Bin after the book came whole');
+  assert.ok(!books.some((each) => each.title === 'D' && each.binnedAt));
   for (const name of ['A', 'B', 'C, renamed']) {
     const book = books.find((each) => each.title === name);
     assert.ok(book, `no book ${name}`);

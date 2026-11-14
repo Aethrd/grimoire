@@ -2608,7 +2608,7 @@ await t('a queue of websites: books of their own, several at once but never two 
   const run = app.slice(app.indexOf('async function runJob('), app.indexOf('\nfunction settleJob('));
   assert.match(run, /if \(before\) parts\.push\(\{ \.\.\.build\.bookPart\(before\), seamless: true \}\);/);
   assert.match(run, /await build\.build\(\{\s+parts, tag: job\.id,/);
-  assert.match(run, /if \(before && before\.id !== book\.id\) await library\.binBooks\(\[before\.id\]\)/);
+  assert.match(run, /if \(before && before\.id !== book\.id\) \{\s+await library\.binBooks\(\[before\.id\]\)/);
   assert.match(read('app/src/main/assets/www/js/build.js'), /\.\.\.\(tag \? \{ queueJob: tag \} : \{\}\),/);
   // A queued book cut off when the app closed goes back to its job, not to Build's leftovers.
   assert.match(app, /const job = entry\.book\.queueJob && jobs\.find\(\(each\) => each\.id === entry\.book\.queueJob\);/);
