@@ -11560,6 +11560,24 @@ function webDelay() {
   return Number.isFinite(value) ? Math.max(0, Math.min(60000, value)) : 250;
 }
 
+/**
+ * The link cleared for a fresh start: a search still running stopped, every
+ * try the app made at it let go (web.forgetAddress), and the screen emptied
+ * as Clear does -- the address with it.
+ */
+function resetWebLink() {
+  const addresses = web.addressesIn(el('web-address').value);
+  webSearch += 1;   // a search under way: its answers are no longer wanted
+  holdSearch(false);
+  el('web-find').textContent = 'Find links';
+  web.forgetAddress(addresses);
+  clearWeb();
+  paintMore();
+  const host = (() => { try { return new URL(addresses[0]).host; } catch { return ''; } })();
+  toast(host ? `Cleared. ${host} is read afresh when the link is given again.` : 'Cleared.', 4000, { topic: 'other' });
+  el('web-address').focus();
+}
+
 function clearWeb() {
   Object.assign(webState, {
     links: [], title: '', author: '', cover: '', coverData: '', folder: null, sources: [], reversed: false, titleTouched: false, authorTouched: false, leftover: null, pickListed: null,
@@ -11578,6 +11596,7 @@ function clearWeb() {
 
 function wireWeb() {
   el('web-find').onclick = findWebLinks;
+  el('web-reset').onclick = resetWebLink;
   el('web-more').onclick = searchMore;
   el('web-open').onclick = openSiteToPass;
   el('web-forget').onclick = () => {

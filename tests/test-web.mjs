@@ -264,7 +264,8 @@ await t('the native side fetches only web addresses, and only when asked', () =>
   // (And Pause & keep's: leave the page the renderer is on.)
   // (And a site's cookies forgotten, which only ever clears.)
   // (And the site shown to pick chapters from by hand.)
-  assert.deepEqual(entries.sort(), ['fetch', 'forgetSite', 'pickFromSite', 'release', 'render', 'showSite', 'stopAll']);
+  // (And a cleared link's page left, which only ever stops.)
+  assert.deepEqual(entries.sort(), ['fetch', 'forgetSite', 'pickFromSite', 'release', 'render', 'showSite', 'stopAddress', 'stopAll']);
   assert.equal(java.match(/if \(!scheme\.equals\("http"\) && !scheme\.equals\("https"\)\)/g).length, 3);
   // Cookies are the browser's own, kept as it keeps them: nothing of the app's own store.
   assert.ok(!/SharedPreferences|getSharedPreferences/.test(java));
@@ -2205,6 +2206,39 @@ await t('a chapter is taken as soon as its story is there and still, not when th
   // Only that it needs everything let in: a longer wait, learned wrongly, would slow a fortnight.
   assert.match(web, /if \(need\?\.open && fresh\(need\.at\)\) siteNeeds\.set\(key, \{ open: true, wait: 0, waitSeen: 0, at: need\.at \}\);/);
   assert.match(web, /known\.at = Date\.now\(\);\s+siteNeeds\.set\(needKey\(url, list\), known\);\s+keepSiteNeeds\(\);/);
+});
+
+await t('a link cleared: its pages on their way stopped, what was learned of its list forgotten, chapters left alone', async () => {
+  const asked = [];
+  const stoppedThere = [];
+  window.GrimoireWeb = {
+    fetch: (id, address) => asked.push(['fetch', id, address]),
+    render: (id, address) => asked.push(['render', id, address]),
+    stopAddress: (address) => stoppedThere.push(address),
+    release() {},
+  };
+  const list = web.download('https://clear.example/novel/7/', { list: true });
+  const chapter = web.download('https://clear.example/novel/7/1');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(web.forgetAddress(['https://clear.example/novel/7']), 1);
+  await assert.rejects(list, (error) => error.cleared === true);
+  assert.deepEqual(stoppedThere, ['https://clear.example/novel/7']);
+  // The chapter, from the same site, is still on its way.
+  let settled = false;
+  chapter.then(() => { settled = true; }, () => { settled = true; });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(settled, false, 'a chapter of the same site was stopped too');
+  assert.deepEqual(web.siteNeedsOf('https://clear.example/x', true), { open: false, level: 0 });
+  web.stopAll();
+  await chapter.catch(() => {});
+  // In the app: Clear link, beside Paste.
+  const html = fs.readFileSync(new URL('../app/src/main/assets/www/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="web-paste">Paste<\/button>[\s\S]{0,200}id="web-reset"/);
+  const appSource = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(appSource, /function resetWebLink\(\) \{[\s\S]{0,200}webSearch \+= 1;[\s\S]{0,200}web\.forgetAddress\(addresses\);\s+clearWeb\(\);/);
+  const java = fs.readFileSync(new URL('../app/src/main/java/com/grimoire/ereader/WebBridge.java', import.meta.url), 'utf8');
+  assert.match(java, /public void stopAddress\(final String address\)/);
+  delete window.GrimoireWeb;
 });
 
 await t('a site\'s needs are learned one at a time, a longer wait only once two pages need it', async () => {

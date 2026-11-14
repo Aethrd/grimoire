@@ -753,6 +753,30 @@ public class WebBridge {
         });
     }
 
+    /** An address cleared on the page, to be typed again: a page of it the renderer is on, left now.
+     *  (Its answer is ignored; nothing else the renderer is doing is touched.) */
+    @JavascriptInterface
+    public void stopAddress(final String address) {
+        if (address == null) return;
+        final String wanted = stemOf(address);
+        main.post(() -> {
+            for (Browser each : browsers) {
+                Rendering job = each.current;
+                if (job != null && wanted.equals(stemOf(job.address))) job.fail("cleared");
+            }
+        });
+    }
+
+    private static String stemOf(String address) {
+        try {
+            Uri uri = Uri.parse(address);
+            String path = uri.getPath() == null ? "" : uri.getPath().replaceAll("/+$", "");
+            return (uri.getHost() == null ? "" : uri.getHost()) + path;
+        } catch (Exception e) {
+            return address;
+        }
+    }
+
     /** A site's cookies forgotten -- the browser's and the plain fetches' -- so it sees
      *  someone new: for a site stuck on a check, or one the reader would rather. */
     @JavascriptInterface

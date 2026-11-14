@@ -299,6 +299,43 @@ export const canOpenSite = () => typeof window.GrimoireWeb?.showSite === 'functi
 /** A site's cookies forgotten (they are otherwise kept from launch to launch,
  *  as a browser keeps them): it sees someone new, and a check it puts up is
  *  passed again. False where this copy of the app cannot. */
+/**
+ * An address cleared, to be typed again: everything the app has done towards
+ * it let go. Its pages still on their way are stopped (the renderer leaves
+ * them), what its pages were being asked with is forgotten, and so is what
+ * its site's contents pages were learned to need -- read afresh, as if never
+ * tried. Chapters downloading from the same site are left alone, and so are
+ * its cookies (Forget this site's cookies, for those). Returns how many pages
+ * were stopped.
+ */
+export function forgetAddress(addresses) {
+  const list = (Array.isArray(addresses) ? addresses : [addresses]).filter(Boolean);
+  const stem = (address) => {
+    try { const u = new URL(address); return `${u.host}${u.pathname.replace(/\/+$/, '')}`; } catch { return ''; }
+  };
+  const stems = new Set(list.map(stem).filter(Boolean));
+  if (!stems.size) return 0;
+  let stopped = 0;
+  for (const [id, entry] of [...pending]) {
+    if (id.startsWith('s') || !entry.list || !stems.has(stem(entry.url))) continue;
+    pending.delete(id);
+    clearInterval(entry.timer);
+    entry.reject(Object.assign(new Error('cleared'), { paused: true, cleared: true, tries: 1 }));
+    try { window.GrimoireWeb?.release?.(id); } catch { /* cleared with the next run */ }
+    stopped += 1;
+  }
+  for (const address of list) {
+    try { window.GrimoireWeb?.stopAddress?.(address); } catch { /* an older build: its answer is ignored */ }
+  }
+  for (const url of [...trying.keys()]) if (stems.has(stem(url))) trying.delete(url);
+  for (const host of new Set(list.map(hostOf).filter(Boolean))) {
+    siteNeeds.delete(`${host}|list`);
+    listRenderedHosts.delete(host);
+  }
+  keepSiteNeeds();
+  return stopped;
+}
+
 export function forgetSite(url) {
   if (typeof window.GrimoireWeb?.forgetSite !== 'function') return false;
   window.GrimoireWeb.forgetSite(url);
@@ -437,6 +474,8 @@ function fetchNative(method, url, { timeout = 90000, list = false, textOnly = fa
     pending.set(id, {
       timer,
       reject,
+      url,
+      list,
       resolve: async (payload) => {
         try {
           const info = typeof payload === 'string' ? JSON.parse(payload) : payload;
