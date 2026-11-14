@@ -132,6 +132,9 @@ const renderedHosts = new Set();
 /** Which sites the reader has said to read in the browser (app.js keeps them, by site). */
 let readInBrowser = () => false;
 export function setReadInBrowser(test) { readInBrowser = typeof test === 'function' ? test : () => false; }
+/** Sites whose scrambled text the reader has said to keep as it comes (app.js keeps them). */
+let keepScrambled = () => false;
+export function setKeepScrambled(test) { keepScrambled = typeof test === 'function' ? test : () => false; }
 /** Which sites the reader has said to read by OCR, and how: 'auto', 'always', or null (app.js keeps them). */
 let ocrMode = () => null;
 export function setOcrMode(test) { ocrMode = typeof test === 'function' ? test : () => null; }
@@ -2314,8 +2317,9 @@ export async function readPage(link, index, {
     }
   }
   let { html: body, text } = read[0];
-  // Text the site has scrambled is not kept: a book of it would be unreadable.
-  if (isScrambled(text)) throw new Error(SCRAMBLED_REASON);
+  // Text the site has scrambled is not kept: a book of it would be unreadable --
+  // unless the reader has said to keep it for this site ("Download anyway").
+  if (isScrambled(text) && !keepScrambled(hostOf(link.url))) throw new Error(SCRAMBLED_REASON);
   /* Taken while it still said to wait -- "Verifying access…" where the chapter
    * goes: no chapter, and never kept as one. Read again, more patiently; if it
    * never comes, the download stops there, saying so. */

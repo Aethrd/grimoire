@@ -7768,7 +7768,30 @@ function paintQueue() {
         if (web.wantsCheck(job.note) && web.canOpenSite()) {
           row.appendChild(word('Open site', async () => { await web.openSite(job.sources?.[0] || job.links[0]?.url).catch(() => {}); }));
         }
-        row.appendChild(word('Retry', () => { job.status = 'queued'; job.stops = 0; job.halted = false; saveQueue(); if (queueState.running) pumpQueue(); }));
+        const retry = () => { job.status = 'queued'; job.stops = 0; job.halted = false; saveQueue(); if (queueState.running) pumpQueue(); else resumeJob(job); };
+        /* Stopped for scrambled text: read by OCR (from the page as it shows), or
+         * downloaded anyway, its scrambled characters kept as gaps -- for the site. */
+        if (web.scrambled(job.note)) {
+          const site = siteOfJob(job);
+          if (site && !ocrSites[site]) {
+            row.appendChild(word('Read by OCR', () => {
+              ocrSites[site] = 'always';
+              delete scrambledSites[site];
+              store.saveSettings({ ocrSites, scrambledSites }).catch(() => {});
+              toast(`${site}: chapters read by OCR, from the page as it shows — slower. Off again from OCR on the website screen.`, 6000);
+              retry();
+            }));
+          }
+          row.appendChild(word('Download anyway', () => {
+            if (site) {
+              scrambledSites[site] = true;
+              delete ocrSites[site];
+              store.saveSettings({ ocrSites, scrambledSites }).catch(() => {});
+            }
+            toast(`${site || 'This site'}: its scrambled text kept as it comes — it shows as gaps in the book. Turn OCR on for the site to read it instead.`, 7000);
+            retry();
+          }));
+        } else row.appendChild(word('Retry', retry));
       } else if (job.status === 'retry') {
         row.appendChild(word('Now', () => { job.retryAt = 0; saveQueue(); pumpQueue(); }));
       }
@@ -11065,6 +11088,11 @@ web.setReadInBrowser((host) => !!browserSites[siteKey(host)]);
 let ocrSites = {};
 const OCR_MODES = [null, 'auto', 'always'];
 web.setOcrMode((host) => ocrSites[siteKey(host)] || null);
+/* Sites whose scrambled text is kept as it comes, by the reader's say ("Download
+ * anyway", on a book stopped for it): its scrambled characters show as gaps. Read
+ * by OCR instead, once that is turned on for the site. */
+let scrambledSites = {};
+web.setKeepScrambled((host) => !!scrambledSites[siteKey(host)] && !ocrSites[siteKey(host)]);
 function paintOcr() {
   const button = el('web-ocr');
   if (!button) return;
@@ -11173,7 +11201,9 @@ function wireWeb() {
     const mode = OCR_MODES[(OCR_MODES.indexOf(ocrSites[site] || null) + 1) % OCR_MODES.length];
     if (mode) ocrSites[site] = mode;
     else delete ocrSites[site];
-    store.saveSettings({ ocrSites }).catch(() => {});
+    // Read by OCR now: its scrambled text no longer kept as it comes.
+    if (mode && scrambledSites[site]) delete scrambledSites[site];
+    store.saveSettings({ ocrSites, scrambledSites }).catch(() => {});
     paintOcr();
     toast(mode === 'always' ? `${site}: every chapter read by OCR, from the page as it shows — slower, text only.`
       : mode === 'auto' ? `${site}: a chapter whose text comes out garbled is read by OCR instead. Its chapters are read in the browser.`
@@ -11193,6 +11223,7 @@ function wireWeb() {
     if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
     if (settings.siteDelays && typeof settings.siteDelays === 'object') siteDelays = { ...settings.siteDelays, ...siteDelays };
     if (settings.browserSites && typeof settings.browserSites === 'object') browserSites = { ...settings.browserSites, ...browserSites };
+    if (settings.scrambledSites && typeof settings.scrambledSites === 'object') scrambledSites = { ...settings.scrambledSites, ...scrambledSites };
     if (settings.ocrSites && typeof settings.ocrSites === 'object') {
       ocrSites = Object.fromEntries(Object.entries({ ...settings.ocrSites, ...ocrSites }).filter(([, mode]) => OCR_MODES.includes(mode) && mode));
     }

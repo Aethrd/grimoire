@@ -3069,6 +3069,17 @@ await t('a site that scrambles its text (its own font draws it): stopped and sai
   assert.equal(asked.filter((url) => url.endsWith('/1')).length, 1, 'a scrambled page was asked again');
   // The queue holds such a book for the reader, as it does a block.
   assert.match(read('app/src/main/assets/www/js/app.js'), /const queueHalts = \(reason\) => [^\n]*web\.scrambled\(reason\);/);
+  // Unless the reader said to download it anyway, for the site: then kept as it comes.
+  web.setKeepScrambled((host) => host === 'fanqie.example');
+  const kept = await web.readPages(links, { fetchPage: site, gap: 0, patience: { retry: 0, refresh: [0], backoff: [0, 0], cool: 0 } });
+  assert.equal(kept.chapters.length, 3);
+  web.setKeepScrambled(null);
+  /* Its row in the queue: read by OCR (turned on for the site), or downloaded
+   * anyway -- for the site; turning OCR on for it takes the "anyway" back. */
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /if \(web\.scrambled\(job\.note\)\) \{[\s\S]{0,200}row\.appendChild\(word\('Read by OCR'/);
+  assert.match(app, /row\.appendChild\(word\('Download anyway', \(\) => \{\s+if \(site\) \{\s+scrambledSites\[site\] = true;/);
+  assert.match(app, /web\.setKeepScrambled\(\(host\) => !!scrambledSites\[siteKey\(host\)\] && !ocrSites\[siteKey\(host\)\]\);/);
 });
 
 await t("a site's name stamped into its chapters is taken out; a site read in the browser, on the reader's say", async () => {
