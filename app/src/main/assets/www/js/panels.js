@@ -11,7 +11,7 @@ import {
   setVaultUnlocked, vaultUnlocked, countWorks, workOf, onShelf, hiddenBy, hiddenFolderList,
   collapseBundles, displayTitle, naturalOrder,
 } from './library.js';
-import { toast } from './screens.js';
+import { toast, setNoticeTopicsOff } from './screens.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
 import * as frames from './frame.js';
@@ -2102,6 +2102,8 @@ export async function openVault(onVaultChange, host) {
         const report = await store.importBackup(JSON.parse(await readText(file)));
         // The look comes back at once -- accent, gradient, its direction and roles -- not at the next launch.
         theme.apply(await store.settings());
+        // And which kinds of notice pop up.
+        setNoticeTopicsOff((await store.settings()).noticesOff);
         refreshTheme();
         // Said plainly, including what could not be matched: a backup restored
         // before the books are back is half a restore, and should say so.
@@ -2153,6 +2155,7 @@ export async function openVault(onVaultChange, host) {
         const count = await store.importSettings(JSON.parse(await readText(file)));
         const next = await store.settings();
         theme.apply(next);
+        setNoticeTopicsOff(next.noticesOff);
         refreshTheme();
         toast(`${count} setting${count === 1 ? '' : 's'} imported`, 4000);
       } catch (error) {

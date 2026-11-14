@@ -312,6 +312,41 @@ export function apply(settings) {
     root.setProperty(`--role-${i + 1}`, i === 0 ? base : colour);
     root.setProperty(`--role-${i + 1}-ink`, guard(i === 0 ? base : colour, ground.bg, 3).ink);
   });
+  /* The kinds of notice (screens.js), one colour each from these, in order of
+   * how much they matter. Fewer colours than kinds -- a gradient of two --
+   * and the rest are those turned round the wheel, so no two kinds look
+   * alike and a problem never looks like a download. */
+  // One colour of your own (no gradient): its shades are too alike to tell apart at a glance, so it alone is the start.
+  // The first is the accent itself, standing for the first colour; the others only where they are other colours.
+  const distinct = [base.toLowerCase()];
+  if (gradient) {
+    for (const colour of roles.slice(1)) {
+      const c = colour.toLowerCase();
+      if (c !== roles[0].toLowerCase() && !distinct.includes(c)) distinct.push(c);
+    }
+  }
+  const hueOf = (hex) => rgbToHsl(...hexToRgb(hex))[0];
+  const apart = (a, b) => { const d = Math.abs(a - b) % 360; return Math.min(d, 360 - d); };
+  const chosen = [];
+  for (let i = 0; i < 5; i += 1) {
+    let colour = distinct[i];
+    if (!colour) {
+      // The turn of one of them that stands furthest from every colour already given.
+      let best = null; let far = -1;
+      for (const from of distinct) {
+        const [h, sat, l] = rgbToHsl(...hexToRgb(from));
+        for (const turn of [-150, -110, -70, -40, 40, 70, 110, 150, 180]) {
+          const hue = (h + turn + 360) % 360;
+          const near = Math.min(...chosen.map((c) => apart(hueOf(c), hue)));
+          if (near > far) { far = near; best = hslToHex(hue, Math.max(sat, 0.35), l); }
+        }
+      }
+      colour = best;
+    }
+    chosen.push(colour);
+    root.setProperty(`--notice-${i + 1}`, colour);
+    root.setProperty(`--notice-${i + 1}-ink`, guard(colour, ground.bg, 3).ink);
+  }
   document.documentElement.dataset.colourStyle = COLOUR_STYLES[settings.colourStyle] ? settings.colourStyle : 'solid';
   // The marks already drawn turn with it.
   for (const g of document.querySelectorAll('linearGradient[data-grad]')) {

@@ -163,7 +163,7 @@ async function enter(name) {
     case 'web': return renderWeb();
     case 'divide': return renderDivide();
     case 'remove': return renderRemove();
-    case 'bin': return renderBin();
+    case 'bin': return purgeSuperseded().catch(() => 0).then(renderBin);
     // From the shelf, what it finds can be written out as the shelf's picks can.
     case 'find': if (cameFrom === 'reader') await bookReady(); return screens.initFind(goToMatch, cameFrom === 'reader', exportFound);
     // The book's own screens: drawn once the book being opened is in (see bookReady).
@@ -1868,6 +1868,7 @@ function paintNotices() {
   for (const entry of all) {
     const row = document.createElement('div');
     row.className = `notice-row${entry.kind ? ` ${entry.kind}` : ''}`;
+    row.dataset.topic = entry.topic || 'other';
     row.innerHTML = `<span class="mark">${entry.kind === 'failed' ? '✕' : entry.kind === 'done' ? '✓' : '•'}</span>`
       + `<span class="text">${escapeText(entry.text)}${entry.repeat > 1 ? ` <span class="muted">(×${entry.repeat})</span>` : ''}</span>`
       + `<span class="when">${escapeText(noticeWhen(entry.at))}</span>`;
@@ -1875,8 +1876,33 @@ function paintNotices() {
   }
 }
 
+/* The kinds of notice, each in its colour: pressed, it pops up as it comes;
+ * let go, it is only kept here. */
+function paintNoticeTopics() {
+  const row = el('notices-topics');
+  row.innerHTML = '';
+  const off = new Set(screens.noticeTopicsOff());
+  for (const topic of screens.NOTICE_TOPICS) {
+    const chip = document.createElement('button');
+    chip.className = 'chip notice-topic';
+    chip.dataset.topic = topic.key;
+    const on = !off.has(topic.key);
+    chip.setAttribute('aria-pressed', String(on));
+    chip.title = on ? `${topic.label}: pop up as they come` : `${topic.label}: only kept here`;
+    chip.innerHTML = `<span class="notice-swatch"></span>${escapeText(topic.label)}`;
+    chip.onclick = async () => {
+      if (on) off.add(topic.key); else off.delete(topic.key);
+      screens.setNoticeTopicsOff([...off]);
+      await store.saveSettings({ noticesOff: [...off] }).catch(() => {});
+      paintNoticeTopics();
+    };
+    row.appendChild(chip);
+  }
+}
+
 function openNotices() {
   const sheet = el('notices-sheet');
+  paintNoticeTopics();
   screens.dismissToast();   // they are all in the list; the one on screen would only cover it
   paintNotices();
   el('notices-list').scrollTop = 0;
@@ -7668,6 +7694,7 @@ async function runJob(job) {
   }
   // Stepped back for a book resumed by hand: back in line, not paused.
   settleJob(job, outcome, under.pausing && !under.siteStop && !under.yielding);
+  await purgeSuperseded().catch(() => 0);
   if (job.status === 'done') {
     await purgeEarlier(job).catch(() => 0);
     await binOutgrown(job).catch(() => 0);
@@ -7690,6 +7717,42 @@ async function purgeEarlier(job) {
     .filter((book) => book.id !== job.bookId && (carried.has(book.id) || book.queueJob === job.id));
   delete job.earlier;
   return earlier.length ? library.destroyBooks(earlier.map((book) => book.id)) : 0;
+}
+
+/**
+ * The shorter versions of a download, in the Bin, deleted for good.
+ *
+ * Each pause and resume carries the book on into a new one and puts the one
+ * before in the Bin -- every chapter of it already in the new one. Waiting
+ * for the download to finish before letting them go left the Bin filling
+ * with copies of books still downloading, holding their room for nothing.
+ * So a binned book that a book on the shelf (or one downloading) carries on,
+ * from the same website -- directly, or through the versions between -- is
+ * deleted as soon as that is seen: after each turn of the queue, when the
+ * Bin is opened, at start. A book put in the Bin by hand that nothing carries
+ * on is left alone, and so are books joined in Build from files.
+ */
+async function purgeSuperseded() {
+  const books = await store.all('books');
+  const byId = new Map(books.map((book) => [book.id, book]));
+  const doomed = new Set();
+  for (const book of books) {
+    if (book.binnedAt || book.transient || !book.webSources?.length) continue;
+    const seen = new Set([book.id]);
+    const stack = (book.builtFrom || []).map((part) => part.bookId).filter((id) => id != null);
+    while (stack.length) {
+      const id = stack.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const older = byId.get(id);
+      if (!older) continue;
+      if (older.binnedAt && (older.webSources || []).some((address) => book.webSources.includes(address))) doomed.add(id);
+      for (const part of older.builtFrom || []) if (part.bookId != null) stack.push(part.bookId);
+    }
+  }
+  if (!doomed.size) return 0;
+  await library.destroyBooks([...doomed]);
+  return doomed.size;
 }
 
 /**
@@ -12319,6 +12382,8 @@ async function boot() {
   // cleared before the shelf is drawn.
   const rescued = await rescueCutBuilds().catch(() => []);
   await library.sweepUnfinishedImports();
+  // Versions of a download already carried on, in the Bin: let go (not waited on).
+  purgeSuperseded().catch(() => 0);
   // Fonts of your own, loaded before any book is drawn in one (not waited on for long: a slow one is not the shelf's).
   await Promise.race([fonts.loadAll().catch(() => []), new Promise((resolve) => setTimeout(resolve, 1500))]);
   // Books left unread for days go On hold before the shelf shows them.
@@ -12345,6 +12410,7 @@ async function boot() {
   paintChapterPad(settings);
   screens.onLongPressBook(openBookMenu);
   // Recent notices: the bell on the Library, and a notice held down.
+  screens.setNoticeTopicsOff(settings.noticesOff);
   screens.onNotices(paintNoticesBell);
   screens.onToastHold(openNotices);
   el('notices-btn').onclick = openNotices;

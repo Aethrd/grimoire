@@ -2938,9 +2938,31 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .notice-row { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: start;
   padding: 10px 2px; border-bottom: 1px solid var(--divider); font-size: 13.5px; line-height: 1.45; }
 .notice-row .mark { font-weight: 700; text-align: center; color: var(--muted); }
-.notice-row.done .mark { color: var(--accent); }
-.notice-row.failed .mark { color: var(--danger, #d4544c); }
 .notice-row .text { overflow-wrap: anywhere; }
 .notice-row .when { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
 .notices-empty { padding: 18px 2px; color: var(--muted); }
 .notices-actions { flex: none; border: 0; background: none; padding: 10px 0 0; }
+
+/* Each kind of notice in one of the theme's colours (its roles: from the
+   gradient where there is one). The notice itself tinted, its line marked. */
+[data-topic="problem"] { --topic: var(--notice-1, var(--accent)); --topic-ink: var(--notice-1-ink, var(--accent-ink)); }
+[data-topic="done"] { --topic: var(--notice-2, var(--accent)); --topic-ink: var(--notice-2-ink, var(--accent-ink)); }
+[data-topic="files"] { --topic: var(--notice-3, var(--accent)); --topic-ink: var(--notice-3-ink, var(--accent-ink)); }
+[data-topic="downloads"] { --topic: var(--notice-4, var(--accent)); --topic-ink: var(--notice-4-ink, var(--accent-ink)); }
+[data-topic="other"] { --topic: var(--notice-5, var(--accent)); --topic-ink: var(--notice-5-ink, var(--accent-ink)); }
+.toast[data-topic] { border-left: 4px solid var(--topic); }
+.toast[data-topic]:not(.stack) { background: color-mix(in srgb, var(--topic) 22%, var(--accent-900)); }
+@supports (backdrop-filter: blur(6px)) or (-webkit-backdrop-filter: blur(6px)) {
+  .toast[data-topic]:not(.stack) { background: color-mix(in srgb, color-mix(in srgb, var(--topic) 22%, var(--accent-900)) 66%, transparent); }
+}
+.toast.stack[data-topic] { border-left-color: transparent; }
+.toast-line[data-topic] { border-left: 3px solid var(--topic); padding-left: 8px; margin-left: -6px; }
+.toast-line[data-topic] .toast-mark { color: var(--topic-ink); }
+.notice-row[data-topic] { border-left: 3px solid var(--topic); padding-left: 8px; }
+.notice-row[data-topic] .mark { color: var(--topic-ink); }
+.notices-topics { flex: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px; }
+.notice-topic { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.notice-topic[aria-pressed="false"] { opacity: .5; text-decoration: line-through; }
+.notice-swatch { width: 10px; height: 10px; border-radius: 50%; background: var(--topic); flex: none; }
+.notice-topic[aria-pressed="true"], [data-colour-style="gradient"] .notice-topic[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--topic) 22%, transparent); color: var(--text); border-color: var(--topic); }

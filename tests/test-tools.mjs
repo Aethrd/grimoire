@@ -143,7 +143,7 @@ await t('the bin survives a backup and a restore', async () => {
 await t('the bin has a seat on the bar and a screen of its own', async () => {
   assert.match(html, /data-screen="bin"/);
   assert.match(html, /data-go="bin"/);
-  assert.match(app, /case 'bin': return renderBin\(\)/);
+  assert.match(app, /case 'bin': return purgeSuperseded\(\)\.catch\(\(\) => 0\)\.then\(renderBin\)/);
   // Deleting for good is asked for in full, because it is the one delete in
   // the app that cannot be undone.
   assert.match(app, /cannot be undone/);
@@ -3244,6 +3244,32 @@ await t('notices that faded are kept a day: the bell on the Library, a notice he
   el('notices-clear').click();
   assert.equal(screensMod.notices().length, 0);
   el('notices-close').click();
+  // Each of a kind, in the theme's colours; a kind turned off is kept here but no longer pops up.
+  assert.equal(screensMod.topicOf('Queue locked — nothing in it can be removed or moved.'), 'downloads');
+  assert.equal(screensMod.topicOf('0 added · x.epub: the copy Android handed back was a different file', 'failed'), 'problem');
+  assert.equal(screensMod.topicOf('Nothing new to add · 1 already on your shelf'), 'files');
+  assert.equal(screensMod.topicOf('3 books added', 'done'), 'done');
+  assert.equal(screensMod.topicOf('Cover blurred', null, 'other'), 'other');
+  el('notices-btn').click();
+  const chip = el('notices-topics').querySelector('[data-topic="downloads"]');
+  assert.equal(chip.getAttribute('aria-pressed'), 'true');
+  chip.click();
+  await settle(50);
+  assert.deepEqual(screensMod.noticeTopicsOff(), ['downloads']);
+  assert.deepEqual((await store.settings()).noticesOff, ['downloads']);
+  el('notices-close').click();
+  screensMod.dismissToast();
+  screensMod.toast('Queue unlocked.');
+  assert.equal(el('toast').hidden, true, 'a kind turned off still popped up');
+  assert.equal(screensMod.notices()[0].text, 'Queue unlocked.');
+  screensMod.toast('That file could not be read', 4000);
+  assert.equal(el('toast').hidden, false);
+  assert.equal(el('toast').dataset.topic, 'problem');
+  screensMod.setNoticeTopicsOff([]);
+  await store.saveSettings({ noticesOff: [] });
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\[data-topic="problem"\] \{ --topic: var\(--notice-1/);
+  assert.match(read('app/src/main/assets/www/js/theme.js'), /root\.setProperty\(`--notice-\$\{i \+ 1\}`, colour\);/);
   // Memory only: nothing of it written anywhere, so a fresh start (or an update) has none.
   const source = read('app/src/main/assets/www/js/screens.js');
   const kept = source.slice(source.indexOf('const HISTORY_FOR'), source.indexOf('export function onToastHold'));

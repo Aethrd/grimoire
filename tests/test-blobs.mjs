@@ -481,19 +481,22 @@ await t('the look goes in a backup and comes back: gradient colours and shares, 
   const before = await store.settings();
   const look = {
     gradient: { from: '#3fc1c0', to: '#8a7bd6', stops: [{ color: '#3fc1c0', share: 40 }, { color: '#d6a2ae', share: 70 }, { color: '#8a7bd6', share: 30 }] },
-    gradientDir: 'down-right', colourStyle: 'gradient', queueSceneOpacity: 55,
+    gradientDir: 'down-right', colourStyle: 'gradient', queueSceneOpacity: 55, noticesOff: ['downloads', 'other'],
   };
   await store.saveSettings(look);
   const backup = JSON.parse(JSON.stringify(await store.exportBackup()));
   for (const key of Object.keys(look)) assert.deepEqual(backup.settings[key], look[key], `${key} left out of the backup`);
   // Changed since, then restored: as it was in the backup.
-  await store.saveSettings({ gradient: null, gradientDir: 'auto', colourStyle: 'solid', queueSceneOpacity: 22 });
+  await store.saveSettings({ gradient: null, gradientDir: 'auto', colourStyle: 'solid', queueSceneOpacity: 22, noticesOff: [] });
   await store.importBackup(backup);
   const after = await store.settings();
   for (const key of Object.keys(look)) assert.deepEqual(after[key], look[key], `${key} not restored`);
   // The look is put on at once after a restore, not at the next launch.
-  assert.match(read('app/src/main/assets/www/js/panels.js'), /await store\.importBackup\([^\n]*\n[^\n]*\n\s+theme\.apply\(await store\.settings\(\)\);\s+refreshTheme\(\);/);
-  await store.saveSettings({ gradient: before.gradient ?? null, gradientDir: before.gradientDir ?? 'auto', colourStyle: before.colourStyle ?? 'solid', queueSceneOpacity: before.queueSceneOpacity ?? 22 });
+  assert.match(read('app/src/main/assets/www/js/panels.js'), /await store\.importBackup\([^\n]*\n[^\n]*\n\s+theme\.apply\(await store\.settings\(\)\);\s+\/\/ And which kinds of notice pop up\.\s+setNoticeTopicsOff\(\(await store\.settings\(\)\)\.noticesOff\);\s+refreshTheme\(\);/);
+  // A settings file carries it too.
+  assert.equal(await store.importSettings({ noticesOff: ['other'] }), 1);
+  assert.deepEqual((await store.settings()).noticesOff, ['other']);
+  await store.saveSettings({ gradient: before.gradient ?? null, gradientDir: before.gradientDir ?? 'auto', colourStyle: before.colourStyle ?? 'solid', queueSceneOpacity: before.queueSceneOpacity ?? 22, noticesOff: before.noticesOff ?? [] });
 });
 
 await t('restoring matches books by file, not by id', async () => {

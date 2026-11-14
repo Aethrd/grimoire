@@ -189,6 +189,8 @@ export const DEFAULT_SETTINGS = {
   gradientDir: 'auto',
   // The app's buttons and edges in the gradient's colours, each solid by its role, or in the gradient itself.
   colourStyle: 'solid',
+  // Kinds of notice that do not pop up, only kept under the bell (screens.js NOTICE_TOPICS).
+  noticesOff: [],
   // Fonts of your own, to read in: [{ id, name }] (the files themselves kept apart, see fonts.js).
   fonts: [],
   veil: 0.62,                     // 62% in dark, 28% in light

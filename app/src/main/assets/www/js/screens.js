@@ -1217,6 +1217,38 @@ const MOST = 4;
  * Kept in memory only, and for a day at most: gone when the app is started
  * afresh, which an update also does. Nothing written anywhere.
  */
+/* ── what kind of notice, and which may pop up ────────────────────────────
+ *
+ * Each kind in one of the theme's colours -- its roles, which come from the
+ * gradient when there is one -- the most important in the primary. A kind
+ * turned off no longer pops up; it is still in the list under the bell.
+ * A notice can say its kind (options.topic); otherwise it is read from what
+ * it says.
+ */
+export const NOTICE_TOPICS = [
+  { key: 'problem', label: 'Problems', role: 1 },
+  { key: 'done', label: 'Finished', role: 2 },
+  { key: 'files', label: 'Library & files', role: 3 },
+  { key: 'downloads', label: 'Downloads & queue', role: 4 },
+  { key: 'other', label: 'Everything else', role: 5 },
+];
+const TOPIC_KEYS = new Set(NOTICE_TOPICS.map((t) => t.key));
+const PROBLEM = /could ?n['’]?o?t|failed|not saved|not added|went wrong|error|refused|would not|cannot|can['’]t|nothing came|stopped short|took too long|not let the app|unreadable|is not reachable/i;
+const DOWNLOADS = /queue|download|fetch|website|\bsite\b|paused|resum|scrap|\bOCR\b|carr(?:y|ied|ies) (?:it |the book )?on|chapters? (?:came|to come|left|again)|new chapters?/i;
+const FILES = /\bimport|\badded\b|already (?:on|in|here)|\bbin\b|deleted|written|\bsaved?\b|backup|backed up|restor|export|\bfiles?\b|folder|moved|cover|vault|built|rebuilt|divided|joined|replaced|taken out/i;
+export function topicOf(text, kind = null, topic = null) {
+  if (topic && TOPIC_KEYS.has(topic)) return topic;
+  if (kind === 'failed' || PROBLEM.test(text)) return 'problem';
+  if (kind === 'done') return 'done';
+  if (DOWNLOADS.test(text)) return 'downloads';
+  if (FILES.test(text)) return 'files';
+  return 'other';
+}
+let topicsOff = new Set();
+/** The kinds that do not pop up (settings.noticesOff). */
+export function setNoticeTopicsOff(list) { topicsOff = new Set((list || []).filter((key) => TOPIC_KEYS.has(key))); }
+export const noticeTopicsOff = () => [...topicsOff];
+
 const HISTORY_FOR = 24 * 60 * 60 * 1000;
 const HISTORY_MOST = 200;
 const history = [];
@@ -1229,12 +1261,12 @@ function prune(now = Date.now()) {
   while (history.length > HISTORY_MOST) history.shift();
 }
 
-function remember(text, kind, now) {
+function remember(text, kind, now, topic) {
   if (!text) return;
   const last = history[history.length - 1];
   // The same thing said again is one entry, said that many times, at the latest time.
   keptCount += 1;
-  if (last && last.text === text) { last.repeat += 1; last.at = now; last.n = keptCount; } else history.push({ text, kind, at: now, repeat: 1, n: keptCount });
+  if (last && last.text === text) { last.repeat += 1; last.at = now; last.n = keptCount; } else history.push({ text, kind, topic, at: now, repeat: 1, n: keptCount });
   prune(now);
   for (const fn of listeners) { try { fn(); } catch { /* a listener's trouble is its own */ } }
 }
@@ -1268,7 +1300,10 @@ export function toast(message, ms = 2200, options = {}) {
   if (!node) return;
   const now = Date.now();
   const text = String(message ?? '');
-  remember(text, options.kind || null, now);
+  const topic = topicOf(text, options.kind || null, options.topic || null);
+  remember(text, options.kind || null, now, topic);
+  // A kind turned off: kept under the bell, not popped up.
+  if (topicsOff.has(topic)) return;
 
   // Whatever is on screen is still on screen; a hidden banner starts afresh.
   if (node.hidden) lines.length = 0;
@@ -1280,7 +1315,7 @@ export function toast(message, ms = 2200, options = {}) {
     last.repeat += 1;
     last.until = Math.max(last.until, now + ms);
   } else {
-    lines.push({ text, kind: options.kind || null, repeat: 1, until: now + ms });
+    lines.push({ text, kind: options.kind || null, topic, repeat: 1, until: now + ms });
   }
   while (lines.length > MOST) lines.shift();
 
@@ -1313,6 +1348,8 @@ function paintToast(node) {
 
   const one = lines.length === 1 && !lines[0].kind;
   node.classList.toggle('stack', !one);
+  // Its colour: the kind of the one notice, or of the newest of several.
+  node.dataset.topic = lines[lines.length - 1].topic || 'other';
   if (one) {
     // A single plain notice looks exactly as it always did.
     node.textContent = lines[0].repeat > 1 ? `${lines[0].text} (×${lines[0].repeat})` : lines[0].text;
@@ -1321,6 +1358,7 @@ function paintToast(node) {
     for (const line of lines) {
       const row = document.createElement('div');
       row.className = `toast-line${line.kind ? ` ${line.kind}` : ''}`;
+      row.dataset.topic = line.topic || 'other';
       if (line.kind) {
         const mark = document.createElement('span');
         mark.className = 'toast-mark';

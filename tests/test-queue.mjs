@@ -494,5 +494,22 @@ await t('two settings saved at once both stay saved', async () => {
   console.log('ok  pause and resume drawn; a paused book resumes on its own');
 }
 
+await t('versions a download carried on, in the Bin, are deleted for good when the Bin opens -- not one put there by hand', async () => {
+  const site = ['https://sleepy.example/v/list'];
+  const v1 = await store.add('books', { title: 'V', fingerprint: 'built:v1', addedAt: 1, chapters: 2, webSources: site, binnedAt: 5 });
+  const v2 = await store.add('books', { title: 'V', fingerprint: 'built:v2', addedAt: 2, chapters: 4, webSources: site, binnedAt: 6, builtFrom: [{ name: 'V', bookId: v1 }, { name: 'V' }] });
+  const now = await store.add('books', { title: 'V', fingerprint: 'built:v3', addedAt: 3, chapters: 6, webSources: site, builtFrom: [{ name: 'V', bookId: v2 }, { name: 'V' }] });
+  const byHand = await store.add('books', { title: 'Mine', fingerprint: 'built:mine', addedAt: 1, chapters: 3, webSources: site, binnedAt: 7 });
+  const joined = await store.add('books', { title: 'A file', fingerprint: 'file.epub:9', addedAt: 1, binnedAt: 8 });
+  await store.add('books', { title: 'Joined', fingerprint: 'built:joined', addedAt: 4, builtFrom: [{ name: 'A file', bookId: joined }] });
+  document.querySelector('[data-go="bin"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(await store.get('books', v1), undefined, 'the first version is still in the Bin');
+  assert.equal(await store.get('books', v2), undefined, 'the second version is still in the Bin');
+  assert.ok(await store.get('books', now));
+  assert.ok((await store.get('books', byHand))?.binnedAt, 'a book binned by hand was deleted');
+  assert.ok((await store.get('books', joined))?.binnedAt, 'a file joined in Build was deleted');
+});
+
 console.log(`\n${pass} queue checks passed`);
 process.exit(0);
