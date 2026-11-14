@@ -145,6 +145,60 @@ export function textLines(xhtml) {
   return t.replaceAll('　', ' ').split('\n').map((l) => l.trim()).filter(Boolean);
 }
 
+/** A picture's place in an EPUB, from the page that names it, as the import keeps it (parse.js resolve). */
+function archivePath(base, src) {
+  const parts = base.split('/').slice(0, -1);
+  for (const bit of src.split('/')) {
+    if (bit === '..') parts.pop();
+    else if (bit && bit !== '.') parts.push(bit);
+  }
+  return parts.join('/');
+}
+
+/**
+ * A book as the app keeps it, read for the checks.
+ *
+ * A chapter made here (Build, the web) is kept as its HTML, its pictures by
+ * data-img; one of an imported EPUB is kept as the page it came as (source),
+ * its pictures by their place in the archive. Read only as HTML, every
+ * imported book's every chapter was "EMPTY".
+ *
+ * @param meta      { title, creator, language }
+ * @param chapters  the store's chapter records, in order
+ * @param pictures  Set of the hrefs of the pictures kept with the book
+ * @param every     (at) => awaited after each chapter (to let the page breathe)
+ */
+export async function fromStored({ meta, chapters, pictures }, { every } = {}) {
+  const out = [];
+  const missingImgs = [];
+  for (const [at, chapter] of chapters.entries()) {
+    const file = `chapter ${chapter.index + 1}`;
+    let imgs;
+    if (chapter.html) {
+      imgs = [...chapter.html.matchAll(/<img\b[^>]*\bdata-img="([^"]*)"/g)].map((m) => m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+      for (const href of imgs) if (!pictures.has(href)) missingImgs.push([file, href]);
+    } else {
+      // As the import read them (parse.js imageRefs): kept under that name, or not found in the archive.
+      imgs = [...String(chapter.source || '').matchAll(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']|<image\b[^>]*?\b(?:xlink:)?href\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1] || m[2]);
+      for (const src of imgs) {
+        if (/^(?:data|https?):/i.test(src)) continue;
+        if (!pictures.has(archivePath(chapter.base || '', src))) missingImgs.push([file, src]);
+      }
+    }
+    out.push({ file, index: chapter.index, title: String(chapter.title || ''), lines: textLines(chapter.html || chapter.source || ''), imgs: imgs.length });
+    if (every) await every(at);
+  }
+  return {
+    meta,
+    chapters: out,
+    // The app's contents are its chapters, each by its title.
+    toc: out.map((c) => [c.file, c.title]),
+    names: new Set(out.map((c) => c.file)),
+    missingImgs,
+    coverDupes: [],
+  };
+}
+
 /* ── analysis ──────────────────────────────────────────────────────────── */
 
 class Report {

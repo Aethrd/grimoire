@@ -1743,26 +1743,11 @@ async function openBookMenu(book) {
 async function bookForCheck(book, onProgress) {
   const chapters = (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
   const pictures = new Set((await store.byIndex('images', 'bookId', book.id).catch(() => [])).map((image) => image.href));
-  const out = [];
-  const missingImgs = [];
-  for (const [at, chapter] of chapters.entries()) {
-    const file = `chapter ${chapter.index + 1}`;
-    const html = chapter.html || '';
-    const imgs = [...html.matchAll(/<img\b[^>]*\bdata-img="([^"]*)"/g)].map((m) => m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
-    for (const href of imgs) if (!pictures.has(href)) missingImgs.push([file, href]);
-    out.push({ file, index: chapter.index, title: String(chapter.title || ''), lines: check.textLines(html), imgs: imgs.length });
+  const meta = { title: library.displayTitle(book) || book.title || '', creator: book.author || '', language: book.lang || '' };
+  return check.fromStored({ meta, chapters, pictures }, {
     // A long book is read without the screen locking up meanwhile.
-    if (at % 50 === 49) { onProgress?.((at + 1) / chapters.length); await new Promise((resolve) => setTimeout(resolve, 0)); }
-  }
-  return {
-    meta: { title: library.displayTitle(book) || book.title || '', creator: book.author || '', language: book.lang || '' },
-    chapters: out,
-    // The app's contents are its chapters, each by its title.
-    toc: out.map((c) => [c.file, c.title]),
-    names: new Set(out.map((c) => c.file)),
-    missingImgs,
-    coverDupes: [],
-  };
+    every: async (at) => { if (at % 50 === 49) { onProgress?.((at + 1) / chapters.length); await new Promise((resolve) => setTimeout(resolve, 0)); } },
+  });
 }
 
 async function checkBook(book) {

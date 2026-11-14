@@ -3212,6 +3212,27 @@ await t('a divided paragraph is made whole again, with its text as it was', asyn
   assert.equal(host.querySelectorAll('p').length, 1);
 });
 
+await t('an imported EPUB checked for problems is read from the pages it came as -- not every chapter "EMPTY"', async () => {
+  const check = await import(new URL('../app/src/main/assets/www/js/check.js', import.meta.url).href);
+  const fsMod = await import('node:fs');
+  const bytes = fsMod.readFileSync(path.join(root, 'tests/fixtures/salt-almanac.epub'));
+  const result = await library.importFiles([new File([bytes], 'checked almanac.epub')], {});
+  assert.equal(result.added, 1);
+  const book = (await store.all('books')).find((b) => b.fingerprint === `checked almanac.epub:${bytes.length}`);
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
+  // Kept as it came, not as HTML: what the check read as nothing.
+  assert.ok(chapters.every((c) => !c.html && c.source));
+  const pictures = new Set((await store.byIndex('images', 'bookId', book.id)).map((i) => i.href));
+  const got = await check.fromStored({ meta: { title: book.title, creator: book.author, language: book.lang }, chapters, pictures });
+  const res = check.analyse(got);
+  assert.ok(res.summary.totalChars > 0, 'no text read from the book');
+  assert.ok(!res.items.some((x) => /EMPTY chapter/.test(x.msg)), check.reportText(res));
+  assert.ok(!res.items.some((x) => /image missing/.test(x.msg)), check.reportText(res));
+  // The app reads its books through it.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /return check\.fromStored\(\{ meta, chapters, pictures \}/);
+  await store.deleteBook(book.id);
+});
+
 await t('notices that faded are kept a day: the bell on the Library, a notice held down, cleared', async () => {
   const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
   screensMod.clearNotices();
