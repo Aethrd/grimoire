@@ -2859,6 +2859,50 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   // Moved at once on a site that scrolls smoothly, and where the body is what scrolls.
   assert.match(java, /html,body,\*\{scroll-behavior:auto!important\}/);
   assert.match(java, /var scrollIn=function\(b,dy\)\{var t=b\|\|rootScroller\(\);/);
+  /* Picked across a list's pages: what is marked here is kept for the session, counted
+   * with the rest, marked again on coming back, and given with every page's. */
+  const kept = JSON.parse(w.sessionStorage.getItem('__gPickKept'));
+  assert.deepEqual(kept.order, ['https://k.example/b']);
+  assert.ok(kept.pages['https://k.example/b'].length > 0);
+  const second = new JSDOM(`<html><head></head><body><ul>${Array.from({ length: 5 }, (_, i) => `<li><a href="https://k.example/b/ep-${400 - i}">${400 - i}화 악은 삶을 바란다</a></li>`).join('')}</ul></body></html>`,
+    { runScripts: 'outside-only', url: 'https://k.example/b?page=2' });
+  const w2 = second.window;
+  w2.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 16);
+  w2.cancelAnimationFrame = (id) => clearTimeout(id);
+  w2.sessionStorage.setItem('__gPickKept', JSON.stringify(kept));   // the same session, the next page
+  w2.eval(script('PICKABLE'));
+  await new Promise((r) => setTimeout(r, 30));
+  const pagesBefore = kept.pages['https://k.example/b'].length;
+  const anchors2 = w2.document.querySelectorAll('li a');
+  let under2 = anchors2[0];
+  w2.document.elementFromPoint = () => under2;
+  assert.equal(w2.__gPick.holdAt(50, 100), true);
+  under2 = anchors2[1];
+  w2.__gPick.dragTo(50, 140);
+  w2.__gPick.release();
+  assert.equal(w2.document.getElementById('__gPickCount').textContent, `${pagesBefore + 2} picked · ${pagesBefore} on other pages`);
+  const both = JSON.parse(w2.eval(script('PICKED'))).map((l) => Number.parseInt(l.text, 10));
+  assert.equal(both.length, pagesBefore + 2);
+  assert.deepEqual(both.slice(-2), [400, 399]);
+  // Back on the first page: its marks put back as they were.
+  const again = new JSDOM(page.serialize().replace(/ class="__gPicked"/g, '').replace(/class="__gPicked /g, 'class="'), { runScripts: 'outside-only', url: 'https://k.example/b' });
+  const w3 = again.window;
+  w3.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 16);
+  w3.cancelAnimationFrame = (id) => clearTimeout(id);
+  w3.sessionStorage.setItem('__gPickKept', w2.sessionStorage.getItem('__gPickKept'));
+  w3.eval(script('PICKABLE'));
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(w3.document.querySelectorAll('.__gPicked').length, pagesBefore);
+  assert.equal(JSON.parse(w3.eval(script('LISTED'))).filter((n) => /^(399|400)화/.test(n)).length, 2, 'the other page\'s chapters not listed with these');
+  // A list's own page links are followed when tapped, never marked as chapters.
+  const pagerPage = new JSDOM(`<html><body><ul><li><a href="/b/ep-1">1화 처음</a></li><li><a href="/b/ep-2">2화 둘째</a></li></ul>
+<a href="/b?page=2">Next</a><a href="/b?page=2">2</a><a href="/b?page=9">398 to 447</a><a href="/b?page=0">이전</a><a href="/b/ep-3">3</a></body></html>`, { runScripts: 'outside-only', url: 'https://k.example/b' });
+  const pw = pagerPage.window;
+  pw.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 16);
+  pw.cancelAnimationFrame = (id) => clearTimeout(id);
+  pw.eval(script('PICKABLE'));
+  assert.deepEqual(JSON.parse(pw.eval(script('LISTED'))), ['1화 처음', '2화 둘째', '3']);
+  pw.close();
   // By time, deeper and longer held the faster.
   assert.match(java, /var sp=\(0\.5\+4\.5\*Math\.pow\(Math\.abs\(d\),1\.5\)\)\*\(1\+Math\.min\(2,\(now-zoneAt\)\/1200\)\);scrollIn\(box,Math\.round\(\(d>0\?1:-1\)\*sp\*dt\)\)/);
   assert.equal(JSON.parse(w.eval(script('PICKED'))).length, 8);
@@ -3009,7 +3053,7 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   assert.match(app, /title = picked\.title\.split\(\/\\s\+\[\|\\-–—·\]\\s\+\/\)\[0\] \|\| picked\.title;/);
   assert.match(java, /boolean closeShownIfOpen\(\) \{\s+if \(shown == null\) return false;\s+\/\/[^\n]*\n\s+shownPicking = false;/);
   // The pages made here closed, their timers with them.
-  for (const each of [w, rw, counted, still, odd]) each.close();
+  for (const each of [w, w2, w3, rw, counted, still, odd]) each.close();
 });
 
 await t("a book is named by what its page agrees on, never by the site's own name", () => {

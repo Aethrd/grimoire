@@ -442,8 +442,27 @@ public class WebBridge {
             + "var hrefOf=function(e){var h=e.getAttribute('href');return h!=null?h:(e.getAttribute('data-href')||e.getAttribute('data-url')||e.getAttribute('data-link')||'');};"
             + "var all=function(){return Array.prototype.slice.call(document.querySelectorAll(SEL)).filter(chapterish);};"
             + "var MORE=/^\\s*([+▼▽∨⌄]|(이전|다음)?\\s*(회차|목록)?\\s*(더\\s*보기|펼치기|펼쳐보기|전체\\s*보기|모두\\s*보기)|전체|show\\s*(more|all)|load\\s*more|view\\s*all|see\\s*all|more|expand|all\\s*chapters)\\s*[▼▽+…]*\\s*$/i;"
-            + "var chapterish=function(a){var h=hrefOf(a);if(!h||/^\\s*(#|javascript:)/i.test(h))return false;try{var u=new URL(h,location.href);if(!/^https?:$/.test(u.protocol))return false;if(u.origin+u.pathname+u.search===location.origin+location.pathname+location.search)return false;}catch(x){return false;}return !MORE.test((a.textContent||'').replace(/\\s+/g,' '));};"
-            + "var count=function(){var n=document.querySelectorAll('.__gPicked').length,b=document.getElementById('__gPickCount');if(!n){if(b)b.remove();return;}if(!b){b=document.createElement('div');b.id='__gPickCount';(document.body||document.documentElement).appendChild(b);}b.textContent=n+' picked';};"
+            + "var chapterish=function(a){var h=hrefOf(a);if(!h||/^\\s*(#|javascript:)/i.test(h))return false;try{var u=new URL(h,location.href);if(!/^https?:$/.test(u.protocol))return false;if(u.origin+u.pathname+u.search===location.origin+location.pathname+location.search)return false;}catch(x){return false;}var t=(a.textContent||'').replace(/\\s+/g,' ');return !MORE.test(t)&&!pager(t,h);};"
+            /* A list's own page links -- Next, Prev, a page's number, "398 to 447" -- are not
+             * chapters: a tap on one goes to that page (what is marked is kept), never marks it. */
+            + "var PAGER=/^\\s*(next|prev(ious)?|older|newer|first|last|[\u00ab\u00bb\u2039\u203a<>]+|\ub2e4\uc74c|\uc774\uc804|\ucc98\uc74c|\ub9c8\uc9c0\ub9c9|\u4e0b\u4e00?\u9875|\u4e0a\u4e00?\u9875|\u9996\u9875|\u5c3e\u9875|\u6b21\u3078|\u524d\u3078)(\\s*(page|\ud398\uc774\uc9c0|[\u00bb\u203a>]))?\\s*$/i;"
+            + "var pager=function(t,h){if(PAGER.test(t))return true;return /^\\s*\\d+(\\s*(to|~|-|\u2013)\\s*\\d+)?\\s*$/i.test(t)&&/[?&](page|p|pg)=\\d+|\\/page\\/\\d+/i.test(h);};"
+            + "var count=function(){var n=document.querySelectorAll('.__gPicked').length,k=restored?keep():kget(),o=others(k),b=document.getElementById('__gPickCount');if(!n&&!o){if(b)b.remove();return;}if(!b){b=document.createElement('div');b.id='__gPickCount';(document.body||document.documentElement).appendChild(b);}b.textContent=(n+o)+' picked'+(o?' \u00b7 '+o+' on other pages':'');};"
+            /* Picked across the pages of a list: what is marked on a page is kept (this
+             * window's session, so a new picking starts clean) when Next or a page number
+             * is pressed, marked again on coming back, and counted with the rest. Before,
+             * a list of nine pages could only be had one page at a time. */
+            + "var KP='__gPickKept';var kget=function(){try{return JSON.parse(sessionStorage.getItem(KP)||'null')||{pages:{},order:[],listed:{}};}catch(x){return{pages:{},order:[],listed:{}};}};"
+            + "var kset=function(v){try{sessionStorage.setItem(KP,JSON.stringify(v));}catch(x){}};"
+            + "var pageKey=function(){return location.origin+location.pathname+location.search;};"
+            + "var absOf=function(a){try{return new URL(hrefOf(a),location.href).href;}catch(x){return '';}};"
+            + "var keep=function(){var k=kget(),key=pageKey(),mine=[],seen={},shown={};k.listed=k.listed||{};all().forEach(function(a){shown[absOf(a)]=1;});Array.prototype.forEach.call(document.querySelectorAll('.__gPicked'),function(a){var u=absOf(a);if(!u||seen[u])return;seen[u]=1;mine.push({url:u,text:p.nameOf?p.nameOf(a).slice(0,200):''});});"
+            // One kept but not (yet) on the page -- a list still drawing itself -- stays kept; one shown and not marked was let go.
+            + "(k.pages[key]||[]).forEach(function(m){if(!seen[m.url]&&!shown[m.url]){seen[m.url]=1;mine.push(m);}});"
+            + "if(mine.length){k.pages[key]=mine;if(k.order.indexOf(key)<0)k.order.push(key);try{k.listed[key]=p.listed();}catch(x){}}else{delete k.pages[key];delete k.listed[key];k.order=k.order.filter(function(x){return x!==key;});}kset(k);return k;};"
+            + "var others=function(k){var key=pageKey(),n=0;k.order.forEach(function(x){if(x!==key&&k.pages[x])n+=k.pages[x].length;});return n;};"
+            + "var restored=false;var restore=function(){if(restored)return;var k=kget(),mine=k.pages[pageKey()],l=all();if(mine&&mine.length&&!l.length)return;restored=true;"
+            + "if(mine&&mine.length){var want={};mine.forEach(function(m){want[m.url]=1;});l.forEach(function(a){if(want[absOf(a)])a.classList.add('__gPicked');});}count();};"
             + "var cache=null;var mark=function(x,y){var l=cache||all(),i=l.indexOf(x),j=l.indexOf(y);if((i<0||j<0)&&cache){cache=all();l=cache;i=l.indexOf(x);j=l.indexOf(y);}if(i<0||j<0)return;if(i>j){var t=i;i=j;j=t;}l.forEach(function(a,k){var on=k>=i&&k<=j;if(a.classList.contains('__gPicked')!==on)a.classList.toggle('__gPicked',on);});count();};"
             + "var cover=null;"
             + "var under=function(x,y){if(cover)cover.style.pointerEvents='none';var e=document.elementFromPoint(x,y);if(cover)cover.style.pointerEvents='';return e;};"
@@ -512,7 +531,8 @@ public class WebBridge {
             + "cover.addEventListener('touchend',onUp);cover.addEventListener('touchcancel',onCancel);cover.addEventListener('contextmenu',function(e){e.preventDefault();});document.body.appendChild(cover);};"
             + "p.setMode=function(m){p.mode=m==='browse'?'browse':'pick';if(p.mode==='pick'){place();if(cover&&!cover.isConnected&&document.body)document.body.appendChild(cover);}else if(cover){cover.remove();cover=null;}};"
             + "if(document.body)place();else document.addEventListener('DOMContentLoaded',place);"
-            + "setInterval(function(){if(p.mode==='pick'&&document.body&&!down){if(!cover)place();else if(!cover.isConnected)document.body.appendChild(cover);}},1000);"
+            + "if(document.readyState!=='loading')setTimeout(restore,0);else document.addEventListener('DOMContentLoaded',function(){setTimeout(restore,0);});"
+            + "setInterval(function(){if(!restored)restore();if(p.mode==='pick'&&document.body&&!down){if(!cover)place();else if(!cover.isConnected)document.body.appendChild(cover);}},1000);"
             + "window.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest(SEL):null;"
             + "if(!a){var it=itemOf(e.target),pl=it&&placeOf(it);if(pl&&pl.texts.length>2){var l=lget();l.wait={i:pl.i,texts:pl.texts,from:location.href,at:Date.now()};lset(l);watchFrom(location.href);}return;}"
             + "if(p.mode!=='pick'||!chapterish(a))return;e.preventDefault();e.stopImmediatePropagation();if(Date.now()-p.at<400)return;tap(a);},true);})();";
@@ -537,6 +557,8 @@ public class WebBridge {
     /** The links marked (or, failing that, in the page's selection), in the page's
      *  order, as [{url, text}]. */
     private static final String PICKED = "(function(){try{var out=[],seen={},s=window.getSelection();"
+            // Picked on more than one page: every page's, as kept (see __gPickKept).
+            + "try{var k=JSON.parse(sessionStorage.getItem('__gPickKept')||'null');if(k&&k.order&&k.order.length){k.order.forEach(function(key){(k.pages[key]||[]).forEach(function(m){if(!seen[m.url]){seen[m.url]=1;out.push(m);}});});if(out.length)return JSON.stringify(out);}}catch(x){}"
             + "var as=document.querySelectorAll('a[href],[data-href],[data-url],[data-link]'),marked=document.querySelectorAll('.__gPicked').length>0;"
             + "if(!marked){try{var l=JSON.parse(sessionStorage.getItem('__gPickLearn')||'null');if(l&&l.made&&l.made.length)return JSON.stringify(l.made);}catch(x){}}"
             + "for(var i=0;i<as.length;i++){var a=as[i],u='';"
@@ -548,7 +570,10 @@ public class WebBridge {
             + "return JSON.stringify(out);}catch(e){return '[]';}})()";
 
     /** The names of every chapter the shown page lists (see __gPick.listed). */
-    private static final String LISTED = "(function(){try{return JSON.stringify(window.__gPick&&__gPick.listed?__gPick.listed():[]);}catch(e){return '[]';}})()";
+    private static final String LISTED = "(function(){try{var here=window.__gPick&&__gPick.listed?__gPick.listed():[],out=[],seen={};"
+            // With every page picked on, not this one alone.
+            + "try{var k=JSON.parse(sessionStorage.getItem('__gPickKept')||'null');if(k&&k.listed)Object.keys(k.listed).forEach(function(key){(k.listed[key]||[]).forEach(function(n){if(!seen[n]){seen[n]=1;out.push(n);}});});}catch(x){}"
+            + "here.forEach(function(n){if(!seen[n]){seen[n]=1;out.push(n);}});return JSON.stringify(out);}catch(e){return '[]';}})()";
 
     @SuppressLint("SetJavaScriptEnabled")
     private void openShown(final String id, final String address, final boolean pick) {

@@ -10901,8 +10901,9 @@ async function findWebLinks() {
       links = addresses.map((url) => ({ url, text: '', chrome: false, kind: null }));
     } else if (el('web-pick')?.checked && web.canPickSite()) {
       /* Picked by hand: the site shown, the chapters selected there by a
-       * long-press and a drag (or a tap on the first and the last). One page
-       * of a list at a time -- for lists all on one page. */
+       * long-press and a drag (or a tap on the first and the last), on as
+       * many of the list's pages as it has: what is marked on one is kept
+       * when Next is pressed, and all of it is given at Use selected. */
       button.textContent = 'Picking…';
       const picked = await web.pickSite(addresses[0]);
       if (!current()) return;
