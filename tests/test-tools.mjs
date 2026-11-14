@@ -143,7 +143,7 @@ await t('the bin survives a backup and a restore', async () => {
 await t('the bin has a seat on the bar and a screen of its own', async () => {
   assert.match(html, /data-screen="bin"/);
   assert.match(html, /data-go="bin"/);
-  assert.match(app, /case 'bin': return renderBin\(\)/);
+  assert.match(app, /case 'bin': return purgeSuperseded\(\)\.catch\(\(\) => 0\)\.then\(renderBin\)/);
   // Deleting for good is asked for in full, because it is the one delete in
   // the app that cannot be undone.
   assert.match(app, /cannot be undone/);
@@ -601,7 +601,8 @@ await t('search does not find deleted books', async () => {
   assert.match(panelsSource, /const visible = books\.filter\(\(b\) => onShelf\(b\)/);
   assert.match(app, /library\.shownOnShelf\.has\(book\.id\)/);
   const screensSource = read('app/src/main/assets/www/js/screens.js');
-  assert.equal((screensSource.match(/!b\.binnedAt/g) || []).length, 3);
+  // (A hidden folder's book found by its title is held to the same, in hiddenBooks.)
+  assert.equal((screensSource.match(/!b\.binnedAt/g) || []).length, 4);
 });
 
 
@@ -740,14 +741,35 @@ await t('a folder hidden from the shelf is only found under Folders', async () =
   assert.ok(shown.includes(kept) && shown.includes(nested), 'opening the folder does not show its books');
   assert.ok(!shown.includes(out));
 
-  // The shelf's search leaves it out too.
+  // The shelf's search leaves it out too -- typed as much as this, less than most of its title.
   screensMod.initFind(() => {}, false);
-  el('find-input').value = 'Brambleway';
+  el('find-input').value = 'Bramble';
   el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
   await settle(450);
   const found = [...el('find-results').querySelectorAll('[data-book]')].map((n) => Number(n.dataset.book));
   assert.ok(found.includes(out));
   assert.ok(!found.includes(kept) && !found.includes(nested), 'search finds a hidden folder');
+
+  // Unless most of its title is typed right: 60% of it, every word in it -- then found, and said where.
+  const findFor = async (text) => {
+    el('find-input').value = text;
+    el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+    await settle(450);
+    return [...el('find-results').querySelectorAll('[data-book]')].map((n) => Number(n.dataset.book));
+  };
+  assert.ok((await findFor('brambleway kep')).includes(kept), 'most of a hidden book\u2019s title typed right, not found');
+  assert.match(el('find-results').textContent, /in Private \(hidden\)/);
+  assert.ok(!(await findFor('kept')).includes(kept), 'a word of a hidden book\u2019s title found it');
+  assert.ok(!(await findFor('brambleway kepx')).includes(kept), 'a hidden book found by a title typed wrong');
+  assert.ok((await findFor('Brambleway Nested')).includes(nested));
+  const sweet = { id: -1, title: "A Sweet Girl Won't Be Fooled By The Villainess" };
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont be fooled by'), true);   // 24 of 37
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont be fooled'), false);     // 22 of 37: just short
+  assert.equal(library.titleTyped(sweet, 'sweet girl'), false);
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont be foolex by'), false);
+  assert.equal(library.titleTyped({ id: -2, title: '快穿女配：反派BOSS有毒' }, '快穿女配：反派BOSS'), true);
+  assert.equal(library.titleTyped({ id: -2, title: '快穿女配：反派BOSS有毒' }, '有毒'), false);
+  await findFor('');
 
   // Still listed under Folders, and marked.
   await panelsMod.openFolders(() => {});
@@ -913,7 +935,41 @@ await t('many books are written into one zip a book at a time, and it opens anyw
   const many = app.slice(app.indexOf('async function exportMany'), app.indexOf('function exportSink'));
   assert.ok(!/new JSZip|generateAsync/.test(many), 'the batch is still built whole in memory');
   assert.match(many, /await zip\.add\(entry, blob/);
-  assert.match(many, /await zip\.finish\(\);\s*await sink\.done\('application\/zip'\)/);
+  assert.match(many, /await zip\.finish\(\);\s*staged\.push\(sink\);/);
+  assert.match(many, /if \(staged\.length === 1\) await staged\[0\]\.done\('application\/zip'\);\s*else await exportSinksDone\(staged, 'application\/zip', startedReading\);/);
+});
+
+await t('many books written out in parts: even shares in folder order, a zip each, saved into one folder chosen once', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const fn = (name) => { const at = app.indexOf(`function ${name}(`); return app.slice(at, app.indexOf('\n}\n', at) + 3); };
+  const library = { displayTitle: (b) => b.title };
+  const shares = new Function('library', `${fn('exportShares')}; return exportShares;`)(library);
+  const books = [];
+  for (let i = 0; i < 250; i += 1) books.push({ title: `Novel ${i}`, folder: i % 3 ? 'Korean' : 'Chinese' });
+  const four = shares(books, 4);
+  assert.deepEqual(four.map((share) => share.length), [63, 62, 63, 62]);
+  assert.equal(four.flat().length, 250);
+  assert.equal(new Set(four.flat()).size, 250, 'a book written twice, or left out');
+  // In folder order, then by name (numbers counted): Chinese first, all together.
+  assert.ok(four[0].every((b) => b.folder === 'Chinese') && four.at(-1).every((b) => b.folder === 'Korean'));
+  assert.deepEqual(four[0].slice(0, 3).map((b) => b.title), ['Novel 0', 'Novel 3', 'Novel 6']);
+  // Never more zips than books, and one is one.
+  assert.equal(shares(books.slice(0, 3), 10).length, 3);
+  assert.equal(shares(books, 1).length, 1);
+  // Named in parts; each closed and saved together: one folder asked for, every part written into it.
+  assert.match(app, /const name = several \? `\$\{base\} \(\$\{part \+ 1\} of \$\{shares\.length\}\)\.zip` : `\$\{base\}\.zip`;/);
+  assert.match(app, /bridge\.finishExportSet\(JSON\.stringify\(closed\.map\(\(each\) => each\.made\)\), mimeType\);/);
+  assert.match(app, /return askExportParts\(books\);/);
+  assert.match(app, /store\.saveSettings\(\{ exportParts: parts \}\)/);
+  const java = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(java, /new Intent\(Intent\.ACTION_OPEN_DOCUMENT_TREE\)/);
+  assert.match(java, /DocumentsContract\.createDocument\(\s*getContentResolver\(\), folder, type, file\.getName\(\)\);/);
+  assert.match(java, /if \(written >= 0 && written != file\.length\(\)\)/);
+  // Kept should Android close the app while the folder is chosen; never dropped without a word.
+  assert.match(java, /\.putString\(STAGED_SET, files\.isEmpty\(\) \? null : paths\.toString\(\)\)/);
+  assert.match(java, /if \(stagedSet\.isEmpty\(\)\) restoreSet\(\);/);
+  assert.match(java, /Not saved — no folder was chosen/);
+  assert.match(read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java'), /public void finishExportSet\(String handles, String mimeType\)/);
 });
 
 await t('an export survives Android closing the app while the save screen is open', () => {
@@ -976,6 +1032,15 @@ await t('a book written out and given back is the same book, not a second copy',
   const theOriginal = await library.importFiles([original], {});
   assert.equal(theOriginal.added, 0, 'the original file came in beside its own export');
   assert.equal(theOriginal.already, 1);
+
+  /* A different book sharing that identity is not it. Books the queue built
+   * side by side once got one between them ("built:<time>"), and a file
+   * written out of one was said to be on the shelf as the other. */
+  await store.put('books', { ...now[0], title: '凶猛道侣也重生了', chapterCount: 4705 });
+  const notIt = await library.importFiles([new File([await bytesOf(blob)], 'given back.epub')], {});
+  assert.equal(notIt.added, 1, 'a file written out of one book was taken for another sharing its identity');
+  assert.ok(!notIt.already);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /fingerprint: `built:\$\{Date\.now\(\)\}:\$\{Math\.random\(\)/);
 });
 
 await t('a book sent from another app is opened once, not every time the app is', async () => {
@@ -1125,15 +1190,51 @@ await t('what finishes while you read waits for the book to be put down', async 
   assert.match(app, /function viewChanged\(\) \{\s*if \(current === 'reader'\) inBook = true;\s*else if \(!BESIDE_THE_BOOK\.has\(current\)\) inBook = false;/);
   assert.equal((app.match(/viewChanged\(\);/g) || []).length, 2, 'show() and back() both report the change');
   // A finished build opens its book only if Build is still on screen.
-  assert.match(app, /if \(made && current === 'workshop'\) await openBook\(made\);/);
-  assert.match(app, /whenNotReading\(\(\) => toast\(failed\.length/);
+  // (Overnight, not between tries: Build stays up, saying when the next is.)
+  assert.match(app, /if \(made && current === 'workshop' && !again\) await openBook\(made\);/);
+  assert.match(app, /whenNotReading\(\(\) => toast\(paused\s*\?[\s\S]{0,400}?: failed\.length/);
   // An import's report, and the save screen of an export, wait too.
   const importer = app.slice(app.indexOf('async function importNow('), app.indexOf('return results;\n}', app.indexOf('async function importNow(')));
   assert.ok(!/(?<![\w.])toast\(/.test(importer.slice(importer.indexOf('const besides'))), 'an import still reports over the page');
-  assert.equal((app.match(/await untilNotReading\(startedReading\);/g) || []).length, 2);
+  // (The save screen of one file, of parts saved together, and an import's report.)
+  assert.equal((app.match(/await untilNotReading\(startedReading\);/g) || []).length, 3);
   // And the progress panel is a pill in a book, gone with the bars.
   const css = fs.readFileSync(new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
-  assert.match(css, /body\.in-book\[data-chrome="none"\] \.import-progress/);
+  assert.match(css, /body\.on-page\[data-chrome="none"\] \.import-progress/);
+  // Beside the book (search, contents) the tab bar is there: the strip sits on it, not over their chips.
+  assert.ok(!/body\.in-book[^{]*\.import-progress/.test(css), 'the pill placed on screens beside the book too');
+  assert.match(read('app/src/main/assets/www/js/app.js'), /document\.body\.classList\.toggle\('on-page', current === 'reader'\);/);
+  // A back that slips past the keyboard (Samsung's clipboard, deleting its items) does not leave the screen typed in.
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /public void handleOnBackPressed\(\) \{[\s\S]{0,500}?if \(keyboardUp\(\)\) return;/);
+  assert.match(activity, /return insets != null && insets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\) && hasWindowFocus\(\);/);
+  /* And one that comes as the keyboard hides for a moment (the clipboard,
+   * deleting): the page tells it by the keyboard's last showing, pushed with
+   * the insets, and lets it go while a field is being typed in. */
+  assert.match(activity, /boolean ime = windowInsets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\) && hasWindowFocus\(\);/);
+  assert.match(activity, /pushInsets\(bars, ime\);/);
+  // Split screen: the keyboard counted only while this window has the focus, and again whenever that changes.
+  assert.match(activity, /public void onWindowFocusChanged\(boolean hasFocus\) \{[\s\S]{0,200}if \(lastWindowInsets != null\) pushFrom\(lastWindowInsets\);/);
+  assert.match(activity, /return insets != null && insets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\) && hasWindowFocus\(\);/);
+  assert.match(activity, /var ime=%b;if\(ime\|\|window\.GrimoireIme\)window\.GrimoireImeAt=Date\.now\(\);window\.GrimoireIme=ime;/);
+  const field = document.createElement('input');
+  field.type = 'search';
+  document.body.appendChild(field);
+  field.focus();
+  const where = [...document.querySelectorAll('.view')].filter((v) => !v.hidden).map((v) => v.id).join();
+  window.GrimoireIme = true;
+  assert.equal(window.Grimoire.onBack(), true, 'a back with the keyboard up left');
+  // Hidden a moment ago (the clipboard): still let go, the screen as it was.
+  window.GrimoireIme = false;
+  window.GrimoireImeAt = Date.now() - 300;
+  assert.equal(window.Grimoire.onBack(), true, 'a back as the keyboard hid for a moment left');
+  assert.equal([...document.querySelectorAll('.view')].filter((v) => !v.hidden).map((v) => v.id).join(), where);
+  assert.equal(document.activeElement, field, 'the typing was ended');
+  // Long closed, or a box that is not typed in: back as ever.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /return !!window\.GrimoireIme \|\| Date\.now\(\) - \(window\.GrimoireImeAt \|\| 0\) < TYPING_BACK_MS;/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /onBack\(\) \{\s+if \(backWhileTyping\(\)\) return true;/);
+  field.remove();
+  window.GrimoireImeAt = 0;
 });
 
 await t('the copy button\'s amount part is about a fifth of the copy part', async () => {
@@ -1539,7 +1640,7 @@ await t('opened at a folder, imports and builds are filed in it', async () => {
   // The app passes the folder the shelf is open at, captured when it is asked.
   const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
   assert.match(app, /const into = options\.transient \? '' : \(activeFolder \|\| ''\);/);
-  assert.match(app, /folder: activeFolder \|\| null,/);
+  assert.match(app, /folder: \(buildFolder \?\? activeFolder\) \|\| null,/);
   assert.match(app, /const where = into \? ` to “\$\{into\}”` : '';/);
   for (const b of [filed, zipped, glance, book, onto]) await store.deleteBook(b.id);
 });
@@ -1657,6 +1758,24 @@ await t('a bundle of editions is one book in every count', async () => {
   await panels.openStats();
   assert.deepEqual([...document.querySelectorAll('#stats-body .folder-list summary span')].map((x) => x.textContent),
     ['Novels', 'Novels / Done']);
+  // Copied: the whole list, each folder under its name and count, numbered as shown; or just one folder's.
+  let copied = null;
+  const clipboard = Object.getOwnPropertyDescriptor(window.navigator, 'clipboard');
+  Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: async (text) => { copied = text; } } });
+  const copyAll = document.querySelector('#stats-body .folder-lists-head .folder-copy');
+  assert.equal(copyAll.textContent, 'Copy list');
+  copyAll.click();
+  await settle(30);
+  assert.equal(copied, 'Novels (1)\n1. English (Raw)\n\nNovels / Done (1)\n1. Alone');
+  const boxes = [...document.querySelectorAll('#stats-body .folder-list')];
+  const wasOpen = boxes[1].open;
+  boxes[1].querySelector('summary .folder-copy').click();
+  await settle(30);
+  assert.equal(copied, 'Novels / Done (1)\n1. Alone');
+  // Copying from a folder's heading does not open or shut it.
+  assert.equal(boxes[1].open, wasOpen);
+  if (clipboard) Object.defineProperty(window.navigator, 'clipboard', clipboard);
+  else delete window.navigator.clipboard;
   moved.folder = 'Novels';
   await store.put('books', moved);
 
@@ -1925,6 +2044,363 @@ await t('two imports at once are two bars -- one running, one waiting -- and bot
   assert.equal(el('import-progress').hidden, true, 'the panel stayed up after both finished');
 });
 
+await t('made small, the progress page lets go of a tap that was waiting -- it does not open the file picker', async () => {
+  // Its buttons were wired when the imports above began; shown open, as a busy export leaves it.
+  const host = el('import-progress');
+  host.hidden = false;
+  host.classList.add('open');
+  const input = el('file-input');
+  let picked = 0;
+  const real = input.click;
+  input.click = () => { picked += 1; };
+  const importButton = document.querySelector('[data-import]');
+  assert.ok(importButton, 'no Import files button to land on');
+  // Made small, and a second tap -- held up while the app was busy -- arrives straight after.
+  el('import-minimise').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(host.classList.contains('open'), false);
+  importButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(picked, 0, 'the tap behind the minimise opened the file picker');
+  // The strip itself is never let go of: tapped again, it opens the page.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /if \(event\.target\?\.closest\?\.\('#jobs-strip'\)\) return;/);
+  // A moment later, taps are taps again.
+  await settle(600);
+  importButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(picked, 1);
+  input.click = real;
+  host.hidden = true;
+});
+
+await t('the progress strip sits on the tab bar by its real height, and at the foot when the bar is hidden', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const css = read('app/src/main/assets/www/css/app.css');
+  // No position measured off the window: the bar's own height, kept as it shows, hides and changes.
+  assert.ok(!/window\.innerHeight - bar\.getBoundingClientRect\(\)\.top/.test(app), 'still measured off the window');
+  // To the fraction of a pixel, and lapping the bar's top edge by one: no sliver of the shelf between them.
+  assert.match(app, /const shown = bar && !bar\.hidden && bar\.getClientRects\(\)\.length;\s+const height = shown \? Math\.max\(0, bar\.getBoundingClientRect\(\)\.height - 1\) : 0;[\s\S]{0,400}const value = shown \? `\$\{height\.toFixed\(2\)\}px` : '0px';/);
+  assert.ok(!/bar\.offsetHeight/.test(app.slice(app.indexOf('function seat()'), app.indexOf('function watchSeat()'))), 'still rounded to a whole pixel');
+  assert.match(app, /new MutationObserver\(seat\)\.observe\(bar, \{ attributes: true, attributeFilter: \['hidden', 'class', 'style'\] \}\)/);
+  assert.match(css, /\.import-progress \{ position: fixed;[^}]*bottom: max\(var\(--safe-bottom\), var\(--tabbar-real, calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\) \+ 1px\)\)\); \}/);
+  // In the harness: hidden, it is 0 -- the strip at the foot.
+  el('tabbar').hidden = true;
+  await settle(30);
+  assert.equal(document.documentElement.style.getPropertyValue('--tabbar-real'), '0px');
+  el('tabbar').hidden = false;
+  await settle(30);
+});
+
+await t('a font of your own: checked, kept apart from the settings, a face to read in, let go', async () => {
+  const fonts = await import(new URL('../app/src/main/assets/www/js/fonts.js', import.meta.url).href);
+  const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
+  const real = fs.readFileSync(new URL('../app/src/main/assets/www/fonts/archivo-latin-600-normal.woff2', import.meta.url));
+  assert.equal(fonts.looksLikeFont(real.buffer.slice(real.byteOffset, real.byteOffset + 8)), true);
+  assert.equal(fonts.looksLikeFont(new TextEncoder().encode('<html>').buffer), false);
+  assert.equal(fonts.nameOfFile('Noto_Serif_JP.ttf'), 'Noto Serif JP');
+  // Not a font: said so, nothing kept.
+  await assert.rejects(fonts.add(new window.File(['not a font at all'], 'notes.ttf')), /not a font/);
+  assert.deepEqual(await fonts.list(), []);
+  // A font: kept -- its file apart from the settings, only its name in them.
+  const font = await fonts.add(new window.File([real], 'My_Face.woff2', { type: 'font/woff2' }));
+  assert.equal(font.name, 'My Face');
+  assert.deepEqual((await fonts.list()).map((f) => f.name), ['My Face']);
+  const kept = await store.get('settings', `font:${font.id}`);
+  // (The test database keeps no Blob as a Blob -- as with covers here; the phone's does.)
+  assert.ok(kept?.blob && kept.name === 'My Face', 'the font file is not kept');
+  assert.ok(!JSON.stringify(await store.settings()).includes('wOF2'), 'the font file is in the settings');
+  // A face to read in, beside the app's two, set in its own face.
+  assert.equal(fonts.faceFamily(`font:${font.id}`), `"quire-font-${font.id}", var(--font-body)`);
+  assert.equal(fonts.faceFamily('Archivo'), 'var(--font-heading)');
+  assert.equal(fonts.faceFamily('Newsreader'), 'var(--font-body)');
+  reader.applyLayout({ size: 18, leading: 1.6, para: 8, margin: 20, vmargin: 16, justified: false, face: `font:${font.id}` });
+  assert.equal(document.documentElement.style.getPropertyValue('--read-face'), `"quire-font-${font.id}", var(--font-body)`);
+  // In Appearance, listed in its own face; and Add a font asks for fonts, not only "font/*".
+  const host = document.createElement('div');
+  await panels.openAppearance(host);
+  await settle(50);
+  assert.ok(!/not possible yet/.test(host.textContent));
+  assert.match(host.querySelector('.font-row .font-name').textContent, /My Face/);
+  assert.match(host.querySelector('.fonts-field input[type="file"]').accept, /\.ttf.*\.otf.*\.woff.*application\/octet-stream/);
+  // Let go: its file and its name.
+  await fonts.remove(font.id);
+  assert.deepEqual(await fonts.list(), []);
+  assert.equal(await store.get('settings', `font:${font.id}`), undefined);
+});
+
+await t('the theme gradient: the accent by default, two to five colours of your own with their shares, one direction, kept with a theme', async () => {
+  const theme = await import(new URL('../app/src/main/assets/www/js/theme.js', import.meta.url).href);
+  const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  const root = document.documentElement.style;
+  theme.apply({ ...(await store.settings()), gradient: null, gradientDir: 'auto' });
+  const steps = theme.ramp((await store.settings()).accent);
+  assert.equal(root.getPropertyValue('--grad-from'), steps[2]);
+  assert.equal(root.getPropertyValue('--grad-to'), steps[5]);
+  // An older two-colour gradient reads as two equal shares: the plain blend, end to end, as before.
+  theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' } });
+  assert.equal(root.getPropertyValue('--grad-from'), '#ff8800');
+  assert.equal(root.getPropertyValue('--grad-to'), '#3355ff');
+  assert.equal(document.documentElement.dataset.gradient, 'own');
+  assert.equal(root.getPropertyValue('--grad-bar'), 'linear-gradient(90deg, #ff8800 0.0%, #ff8800 0.0%, #3355ff 100.0%, #3355ff 100.0%)');
+  // A larger share holds its colour solid for longer before it blends.
+  const placed = theme.placeStops([{ color: '#ff0000', share: 70 }, { color: '#0000ff', share: 30 }]);
+  assert.deepEqual(placed.map((p) => [p.color, Number(p.at.toFixed(3))]), [['#ff0000', 0], ['#ff0000', 0.4], ['#0000ff', 1], ['#0000ff', 1]]);
+  // Three equal: each solid at its own place, blended between, never out of order.
+  const three = theme.placeStops([{ color: '#ff0000', share: 50 }, { color: '#00ff00', share: 50 }, { color: '#0000ff', share: 50 }]);
+  for (let i = 1; i < three.length; i += 1) assert.ok(three[i].at >= three[i - 1].at - 1e-9, 'stops out of order');
+  assert.equal(theme.colourAt(three, 0.5), '#00ff00');
+  // Five at most; a bad colour is passed over; shares kept 1 to 100.
+  const many = theme.gradientOf({ stops: [1, 2, 3, 4, 5, 6].map((n) => ({ color: `#0${n}0${n}0${n}`, share: n * 30 })).concat([{ color: 'red', share: 5 }]) });
+  assert.equal(many.stops.length, 5);
+  assert.deepEqual(many.stops.map((s) => s.share), [30, 60, 90, 100, 100]);
+  assert.equal(theme.gradientOf({ stops: [{ color: '#112233' }] }), null);
+  // The marks and pause and resume drawn in samples of it, in the direction set -- turned when it changes.
+  assert.match(read('app/src/main/assets/www/js/library.js'), /gradientSvg\(id, 'mark'\)/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /theme\.gradientSvg\(id, 'icon'\)/);
+  const svg = theme.gradientSvg('g1', 'icon');
+  assert.equal((svg.match(/<stop /g) || []).length, theme.GRADIENT_SAMPLES);
+  assert.match(svg, /x1="0" y1="0" x2="1" y2="1"/);
+  const holder = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  holder.innerHTML = theme.gradientSvg('g2', 'mark');
+  document.body.appendChild(holder);
+  assert.match(holder.innerHTML, /x1="12" y1="3.6" x2="12" y2="19.5"/);
+  theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 'right' });
+  const g = holder.querySelector('linearGradient');
+  assert.deepEqual(['x1', 'y1', 'x2', 'y2'].map((k) => g.getAttribute(k)), ['4.4', '11.55', '19.6', '11.55']);
+  assert.match(root.getPropertyValue('--grad-bar'), /^linear-gradient\(90deg,/);
+  // Turned by degree: any angle, the marks' lines through their boxes as CSS draws one.
+  theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 200 });
+  assert.match(root.getPropertyValue('--grad-bar'), /^linear-gradient\(200deg,/);
+  // Thin bars run along their length: pointing left of straight down, right to left.
+  assert.match(root.getPropertyValue('--grad-across'), /^linear-gradient\(270deg,/);
+  assert.deepEqual([theme.gradientAngle('up'), theme.gradientAngle(-30), theme.gradientAngle(725), theme.gradientAngle('auto'), theme.gradientAngle('sideways')], [0, 330, 5, null, null]);
+  holder.remove();
+  // Every progress bar in it too -- and nothing later in the stylesheet painting one plain over it.
+  const css = read('app/src/main/assets/www/css/app.css');
+  // Spread over the whole track -- filled and still to fill -- the fill uncovering its share.
+  assert.match(css, /\.bar-fill, \.progress-fill, \.tile-bar > span, \.jobs-strip-fill \{\s+background: var\(--grad-across, linear-gradient\(90deg, var\(--grad-from, var\(--accent-300\)\), var\(--grad-to, var\(--accent\)\)\)\);\s+background-size: 100cqw 100%; background-repeat: no-repeat;/);
+  assert.match(css, /\.tile-bar, \.bar, \.progress-track, \.jobs-strip \{ container-type: inline-size; \}/);
+  const gradientRule = css.indexOf('.jobs-strip-fill {\n  background: var(--grad-across');
+  assert.ok(gradientRule > 0);
+  const after = css.slice(css.indexOf('}', gradientRule) + 1);
+  for (const name of ['.bar-fill', '.progress-fill', '.tile-bar > span', '.jobs-strip-fill']) {
+    const later = [...after.matchAll(new RegExp(`(^|\\n)${name.replace(/[.>]/g, (c) => `\\${c}`)} \\{[^}]*background:`, 'g'))];
+    assert.equal(later.length, 0, `${name} painted plain after the gradient`);
+  }
+  // Kept with a theme, read back from a file; a bad colour or direction is not taken.
+  assert.ok(theme.THEME_KEYS.includes('gradient') && theme.THEME_KEYS.includes('gradientDir'));
+  const [read1] = theme.readThemes({ name: 'Sunset', gradient: { from: '#FF8800', to: '#3355ff' }, gradientDir: 'down' });
+  assert.deepEqual(read1.gradient, { from: '#ff8800', to: '#3355ff', stops: [{ color: '#ff8800', share: 50 }, { color: '#3355ff', share: 50 }] });
+  assert.equal(read1.gradientDir, 180);
+  const odd = theme.readThemes({ name: 'Odd', accent: '#112233', gradient: { from: 'red', to: '#3355ff' }, gradientDir: 'sideways' })[0];
+  assert.equal('gradient' in odd, false);
+  assert.equal('gradientDir' in odd, false);
+
+  // In Appearance: each colour with its share, more added, one taken out, a direction, and back to the accent's.
+  await store.saveSettings({ gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 'auto' });
+  const host = document.createElement('div');
+  await panels.openAppearance(host);
+  const field = () => host.querySelector('.gradient-field');
+  let colours = field().querySelectorAll('.gradient-stop input[type="color"]');
+  assert.deepEqual([...colours].map((i) => i.value), ['#ff8800', '#3355ff']);
+  assert.deepEqual([...field().querySelectorAll('.gradient-stop output')].map((o) => o.textContent), ['50%', '50%']);
+  assert.equal(field().querySelectorAll('.gradient-drop').length, 0, 'two colours cannot lose one');
+  colours[1].value = '#00aa66';
+  colours[1].dispatchEvent(new window.Event('change'));
+  await settle(50);
+  assert.deepEqual((await store.settings()).gradient.stops.map((s) => s.color), ['#ff8800', '#00aa66']);
+  const shares = field().querySelectorAll('.gradient-stop input[type="range"]');
+  shares[0].value = '75';
+  shares[0].dispatchEvent(new window.Event('input'));
+  assert.deepEqual([...field().querySelectorAll('.gradient-stop output')].map((o) => o.textContent), ['60%', '40%']);
+  shares[0].dispatchEvent(new window.Event('change'));
+  await settle(50);
+  assert.deepEqual((await store.settings()).gradient.stops.map((s) => s.share), [75, 50]);
+  const button = (re) => [...field().querySelectorAll('button')].find((b) => re.test(b.textContent));
+  for (let n = 3; n <= theme.GRADIENT_MAX; n += 1) { button(/Add a colour/).click(); await settle(50); }
+  assert.equal((await store.settings()).gradient.stops.length, theme.GRADIENT_MAX);
+  assert.equal(button(/Add a colour/), undefined, 'more than five could be added');
+  // Added in before the last, ends unchanged.
+  colours = field().querySelectorAll('.gradient-stop input[type="color"]');
+  assert.equal(colours[0].value, '#ff8800');
+  assert.equal(colours[colours.length - 1].value, '#00aa66');
+  field().querySelectorAll('.gradient-drop')[1].click();
+  await settle(50);
+  assert.equal((await store.settings()).gradient.stops.length, theme.GRADIENT_MAX - 1);
+  // Turned by degree: seen as it moves, kept when let go; Auto no longer pressed.
+  const turn = field().querySelector('.gradient-dirs input[type="range"]');
+  turn.value = '200';
+  turn.dispatchEvent(new window.Event('input'));
+  assert.equal(field().querySelector('.gradient-dirs output').textContent, '200°');
+  assert.match(field().querySelector('.gradient-dial g').getAttribute('transform'), /rotate\(200 20 20\)/);
+  turn.dispatchEvent(new window.Event('change'));
+  await settle(50);
+  assert.equal((await store.settings()).gradientDir, 200);
+  assert.equal(field().querySelector('.gradient-dirs [data-dir="auto"]').getAttribute('aria-pressed'), 'false');
+  field().querySelector('.gradient-dirs [data-dir="auto"]').click();
+  await settle(50);
+  assert.equal((await store.settings()).gradientDir, 'auto');
+  button(/Follow the accent/).click();
+  await settle(50);
+  assert.equal((await store.settings()).gradient, null);
+  assert.equal(document.documentElement.dataset.gradient, undefined);
+  await store.saveSettings({ gradientDir: 'auto' });
+  theme.apply(await store.settings());
+});
+
+await t('the gradient colours the app: ranked by share into roles, the largest leading as the accent; solid or the gradient itself', async () => {
+  const theme = await import(new URL('../app/src/main/assets/www/js/theme.js', import.meta.url).href);
+  const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  const root = document.documentElement.style;
+  // Ranked by share, level ones in their order; fewer than five go round again.
+  assert.deepEqual(theme.rolesOf([{ color: '#111111', share: 40 }, { color: '#222222', share: 70 }, { color: '#333333', share: 40 }]),
+    ['#222222', '#111111', '#333333', '#222222', '#111111']);
+  // Colours of your own: the largest share is the accent the whole app is drawn from.
+  const own = { stops: [{ color: '#3fc1c0', share: 40 }, { color: '#d6a2ae', share: 70 }, { color: '#8a7bd6', share: 30 }] };
+  theme.apply({ ...(await store.settings()), gradient: theme.gradientOf(own), colourStyle: 'solid' });
+  const steps = theme.ramp('#d6a2ae');
+  assert.equal(root.getPropertyValue('--accent'), steps[3]);
+  assert.equal(root.getPropertyValue('--role-1'), steps[3]);
+  assert.equal(root.getPropertyValue('--role-2'), '#3fc1c0');
+  assert.equal(root.getPropertyValue('--role-3'), '#8a7bd6');
+  assert.ok(root.getPropertyValue('--role-2-ink'));
+  assert.equal(document.documentElement.dataset.colourStyle, 'solid');
+  // Following the accent, the accent is the one chosen.
+  theme.apply({ ...(await store.settings()), gradient: null });
+  assert.equal(root.getPropertyValue('--accent'), theme.ramp((await store.settings()).accent)[3]);
+  // Its parts: solid in their roles, or the gradient filling and edging them.
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /:root \.btn\.ghost \{ border-color: color-mix\(in srgb, var\(--role-2/);
+  assert.match(css, /:root \.card, :root \.build-leftover \{ border-color: color-mix\(in srgb, var\(--role-3/);
+  assert.match(css, /\[data-colour-style="solid"\] \.play-btn svg circle \{ stroke: var\(--role-2-ink\); \}/);
+  assert.match(css, /\[data-colour-style="gradient"\] \.btn\.primary,[\s\S]{0,300}\{ background: var\(--grad-bar\); color: var\(--on-grad\);/);
+  // Kept with a theme; a style that is not one is not taken.
+  assert.ok(theme.THEME_KEYS.includes('colourStyle'));
+  assert.equal(theme.readThemes({ name: 'G', colourStyle: 'gradient' })[0].colourStyle, 'gradient');
+  assert.equal('colourStyle' in theme.readThemes({ name: 'G', accent: '#112233', colourStyle: 'neon' })[0], false);
+  // In Appearance: what each colour colours, and the choice of solid or gradient.
+  await store.saveSettings({ gradient: theme.gradientOf(own), colourStyle: 'solid' });
+  const host = document.createElement('div');
+  await panels.openAppearance(host);
+  const roles = [...host.querySelectorAll('.gradient-roles li')];
+  assert.equal(roles.length, 5);
+  assert.match(roles[0].textContent, /Primary/);
+  assert.match(roles[1].textContent, /Secondary.*Pause and resume/);
+  host.querySelector('.gradient-style [data-style="gradient"]').click();
+  await settle(50);
+  assert.equal((await store.settings()).colourStyle, 'gradient');
+  assert.equal(document.documentElement.dataset.colourStyle, 'gradient');
+  await store.saveSettings({ gradient: null, colourStyle: 'solid' });
+  theme.apply(await store.settings());
+});
+
+await t('a file picker made for the moment is held in the page until what is chosen comes back', async () => {
+  await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const picker = document.createElement('input');
+  picker.type = 'file';
+  assert.equal(picker.isConnected, false);
+  picker.click();
+  assert.equal(picker.isConnected, true, 'a loose picker was left loose while choosing');
+  assert.equal(picker.hidden, true);
+  picker.dispatchEvent(new window.Event('change'));
+  await settle(10);
+  assert.equal(picker.isConnected, false, 'the picker was left in the page after the choosing');
+  // One already in the page is left as it is.
+  const kept = el('file-input');
+  kept.click();
+  assert.equal(kept.parentNode !== null, true);
+});
+
+await t('the strip holds still while a field is typed in (the system\u2019s Paste bubble is not taken away), and catches up after', async () => {
+  const app = await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const field = document.createElement('input');
+  field.type = 'search';
+  document.body.appendChild(field);
+  const finish = app.progress.start('Holding still');
+  finish.say('Reading', 0.1);
+  await settle(20);
+  const summary = el('jobs-summary');
+  const before = summary.textContent;
+  field.focus();
+  finish.say('Reading', 0.6);
+  await settle(20);
+  assert.equal(summary.textContent, before, 'the strip changed under the field');
+  field.blur();
+  await settle(20);
+  assert.notEqual(summary.textContent, before, 'the strip did not catch up once the field was left');
+  finish();
+  field.remove();
+  // The page's root property set only when it changes.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /if \(value !== seatedAt\) \{\s+seatedAt = value;\s+document\.documentElement\.style\.setProperty\('--tabbar-real', value\);/);
+});
+
+await t('a book resumed after a pause: its cover mark goes on from where it was, not from nothing', async () => {
+  const app = await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const job = { links: new Array(60).fill('x') };
+  // 40 chapters before the pause, 60 to come: 40% at the start of the run, not 0.
+  assert.equal(app.jobDone(job, { had: 40, at: -1, parts: 2 }), 0.4);
+  // Copying the book so far in first: its counts are not the website's.
+  assert.equal(app.jobDone(job, { had: 40, at: 0, parts: 2, done: 30, total: 40 }), 0.4);
+  // On the website part: 30 of its 60 come -- 70 of 100.
+  assert.equal(app.jobDone(job, { had: 40, at: 1, parts: 2, done: 30, total: 60 }), 0.7);
+  // A first run, nothing before it: as it was.
+  assert.equal(app.jobDone(job, { had: 0, at: 0, parts: 1, done: 15, total: 60 }), 0.25);
+  // Drawn from its record: still to come is the links less this part's own, not less every chapter it has.
+  assert.match(read('app/src/main/assets/www/js/library.js'), /- \(Number\.isFinite\(came\) \? came : have\)\)/);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /book\.building\.at = \{ part: at, next, chapters: index, words, came: streamed \};/);
+});
+
+await t('the opening scene: only for a slow open, faded in and out, faint behind the queue, calm when motion is reduced', async () => {
+  const opening = await import(new URL('../app/src/main/assets/www/js/opening.js', import.meta.url).href);
+  // Where no canvas can be drawn on (here), it starts nothing and stops cleanly.
+  const scene = opening.playScene(document.createElement('canvas'), { glyphs: 'Test' });
+  assert.equal(typeof scene.stop, 'function');
+  scene.stop();
+  assert.doesNotThrow(() => opening.playScene(null).stop());
+  const src = read('app/src/main/assets/www/js/opening.js');
+  // Four times in ten the circle lies dark; otherwise one effect of six, at random.
+  assert.match(src, /Math\.random\(\) < 0\.4 \? 'dark' : EFFECTS\[Math\.floor\(Math\.random\(\) \* EFFECTS\.length\)\]/);
+  assert.match(src, /const EFFECTS = \['shine', 'fluctuate', 'decay', 'erode', 'burn', 'freeze'\];/);
+  // A quarter faster than it was; reduced motion read from the phone; an effect handed over from where it was.
+  assert.match(src, /const WRITE_SPEED = 37\.5;/);
+  assert.match(src, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
+  assert.match(src, /const b = effectLook\(c\.was, c, seed, now, c\.wasT \|\| 0\);/);
+  // Every circle is put together at random, and the pages are plain (no grain).
+  for (const part of ["'spiked'", "'crescents'", "'broken'", "'script'", "'petals'", "'orbit'", "'hexagram'"]) assert.ok(src.includes(part), part);
+  assert.ok(!/grain(Pattern)?\b/.test(src.replace(/no grain/g, '')), 'no paper grain left');
+  const app = read('app/src/main/assets/www/js/app.js');
+  // Only for an open that takes more than a moment; stays long enough not to blink; faded out.
+  assert.match(app, /const SOON_MS = 330;\s+const STAY_MS = 600;/);
+  assert.match(app, /const opened = openingScreen\.soon\(book\);[\s\S]{0,200}finally \{\s+ready\(\);\s+opened\(\);/);
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\.opening \{[^}]*background: var\(--bg\); opacity: 0;\s+transition: opacity \.4s/);
+  assert.match(css, /\.import-progress\.open \.jobs-scene \{[^}]*opacity: var\(--jobs-scene-opacity, \.22\);/);
+  // Its strength is the person's: 0 stops it; a change of faintness starts it afresh.
+  assert.match(app, /host\.classList\.contains\('open'\) && sceneOpacity > 0;/);
+  assert.match(app, /if \(scene && \(!showing \|\| faint !== sceneFaint\)\) \{ scene\.stop\(\); scene = null; \}/);
+  assert.match(app, /store\.saveSettings\(\{ queueSceneOpacity: sceneOpacity \}\)/);
+  // From the queue page's head: a slider, seen as it moves, kept once let go. (Wired when the imports above began.)
+  const button = el('jobs-scene-btn'), row = el('jobs-scene-row'), range = el('jobs-scene-opacity');
+  assert.equal(row.hidden, true);
+  button.click();
+  assert.equal(row.hidden, false);
+  assert.equal(button.getAttribute('aria-expanded'), 'true');
+  range.value = '65';
+  range.dispatchEvent(new window.Event('input'));
+  assert.equal(document.documentElement.style.getPropertyValue('--jobs-scene-opacity'), '0.65');
+  assert.equal(el('jobs-scene-shown').textContent, '65%');
+  range.value = '0';
+  range.dispatchEvent(new window.Event('change'));
+  await settle(30);
+  assert.equal(el('jobs-scene-shown').textContent, 'Off');
+  assert.equal((await store.settings()).queueSceneOpacity, 0);
+  range.value = '22';
+  range.dispatchEvent(new window.Event('change'));
+  await settle(30);
+  button.click();
+  assert.equal(row.hidden, true);
+  // A book that opens at once never shows it.
+  assert.equal(el('opening').hidden, true);
+});
+
 await t('a second notice joins the first instead of replacing it', async () => {
   const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
   el('toast').hidden = true;
@@ -2095,6 +2571,48 @@ await t('a copy from the shell that is not the same file is refused, not importe
   delete window.GrimoireNative;
 });
 
+await t('a copy the shell found by its name goes in, though Android keeps an old size for it; every copy at an address of its own', async () => {
+  const fsMod = await import('node:fs');
+  const bytes = fsMod.readFileSync(path.join(root, 'tests/fixtures/comic.cbz'));
+  let how = null;
+  window.GrimoireNative = {
+    stageForRead(stageId) {
+      setTimeout(() => window.Grimoire.settleFile(stageId, true, 'handoff://s9-1-renewed volume.zip#named'), 10);
+    },
+  };
+  // Saved over with a fresh copy: the size Android gives is the old one.
+  globalThis.fetch = async (url, options) => { how = options; return { ok: true, status: 200, blob: async () => new window.Blob([bytes], { type: 'application/zip' }) }; };
+  pickFiles([refusing('renewed volume.zip', bytes.length + 321)]);
+  await untilIdle();
+  await settle(200);
+  assert.ok((await store.all('books')).find((b) => b.title === 'renewed volume'), 'the rescued file never came in');
+  assert.equal(how?.cache, 'no-store', 'a copy fetched from before could be handed back');
+  delete window.GrimoireNative;
+  // Named apart: a Korean title was all underscores, the same as others of its lengths.
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /String safe = id \+ "-" \+ System\.currentTimeMillis\(\) \+ "-"/);
+  assert.match(activity, /\(named \? "#named" : ""\)/);
+});
+
+await t('picked again while a copy is here but off the shelf: where it is, by the title it has here', async () => {
+  delete window.GrimoireNative;
+  const file = queuedFile('tucked away', 'Kept in a hidden folder.');
+  pickFiles([file]);
+  await untilIdle();
+  const book = (await store.all('books')).find((b) => b.fingerprint === `${file.name}:${file.size}`);
+  assert.ok(book);
+  await store.put('books', { ...book, folder: 'Private/Old', title: '숨은 책' });
+  const before = await store.settings();
+  await store.saveSettings({ hiddenFolders: ['Private'] });
+  pickFiles([queuedFile('tucked away', 'Kept in a hidden folder.')]);
+  await untilIdle();
+  await settle(100);
+  const said = el('toast').textContent;
+  assert.match(said, /Nothing new to add · 1 already on your shelf · “숨은 책” — in “Private”, a folder hidden from the shelf/);
+  await store.saveSettings({ hiddenFolders: before.hiddenFolders || [] });
+  await store.deleteBook(book.id);
+});
+
 /* ── blurred covers, kept ────────────────────────────────────────────── */
 
 console.log('\nblurred covers, kept');
@@ -2221,6 +2739,76 @@ await t('a blurred book is blurred in Continue reading too', async () => {
   tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
   await settle(400);
   assert.ok(!el('continue-card').hasAttribute('data-blur'), 'the blur stayed after the cover was shown again');
+});
+
+await t('a novel downloading now is on the shelf from the start, in its folder, marked -- not yet a book to open or change', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const links = Array.from({ length: 40 }, (_, i) => ({ url: `https://novel.example/c/${i + 1}`, text: `Chapter ${i + 1}` }));
+  // The book it carries on, from where it paused.
+  const before = await store.add('books', { title: 'Carried', folder: 'Novels', addedAt: 1, chapters: 10, lastOpenedAt: 1 });
+  const making = await store.add('books', {
+    title: 'Carried', folder: 'Novels', addedAt: 2, importing: true, queueJob: 'job-x',
+    coverBlob: new window.Blob(['x'], { type: 'image/png' }), coverBytes: 1,
+    builtFrom: [{ name: 'Carried', bookId: before }, { name: 'Carried' }],
+    building: { webParts: [{ at: 1, links }], at: { part: 1, next: 12, chapters: 22, words: 0 } },
+  });
+  // Something else half read in (an import cut short) is still not a book.
+  const half = await store.add('books', { title: 'Half', folder: 'Novels', addedAt: 3, importing: true });
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(500);
+  const tileOf = (id) => document.querySelector(`.tile[data-book="${id}"]`);
+  assert.ok(tileOf(making), 'the downloading novel is not on the shelf');
+  assert.ok(tileOf(making).hasAttribute('data-downloading'));
+  assert.equal(tileOf(making).dataset.job, 'job-x');
+  assert.ok(tileOf(making).querySelector('.tile-cover img'), 'its cover is not shown');
+  const mark = tileOf(making).querySelector('.tile-unfinished');
+  assert.ok(mark, 'no wash and mark on it');
+  assert.equal(Number(mark.style.getPropertyValue('--done')).toFixed(2), (22 / 40).toFixed(2));
+  assert.equal(tileOf(before), null, 'the book it carries on is shown beside it');
+  assert.equal(tileOf(half), null, 'an import cut short is on the shelf');
+  // Tapped or held: said how far it has come, not opened, not picked.
+  el('toast').hidden = true;
+  tileOf(making).click();
+  await settle(100);
+  assert.notEqual(document.body.dataset.view, 'reader');
+  assert.match(el('toast').textContent, /still downloading — 22 of 40 chapters/);
+  // Never caught up in Select all.
+  assert.equal(library.isDownloading(await store.get('books', making)), true);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /library\.shownOnShelf\.has\(book\.id\) && !library\.isDownloading\(book\)/);
+  // Not counted as a book anywhere else until it is one.
+  assert.equal(library.onShelf(await store.get('books', making)), false);
+  for (const id of [before, making, half]) await store.deleteBook(id);
+});
+
+await t('the soft accent behind text is a deep tint on a dark ground, not the palest step under light text', async () => {
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.ok(!/background: var\(--accent-100\)/.test(css), 'the palest step still sits behind text');
+  assert.match(css, /\.list-row\.current \{ background: var\(--accent-soft\);/);
+  assert.match(css, /:root\[data-mode="dark"\] \{ --accent-soft: color-mix\(in srgb, var\(--accent\) 26%, var\(--surface\)\); \}/);
+});
+
+await t('the shelf drawn twice at once ends drawn from the library as it is now', async () => {
+  // As the queue does, while a book is read: a drawing under way, the book written, another asked for.
+  const books = (await store.all('books')).filter((b) => !b.binnedAt && !b.transient && b.bundleId == null && !b.inVault && !b.status && !b.finishedAt);
+  const [first, second] = books;
+  assert.ok(first && second, 'two books to draw');
+  const at = Date.now() + 1e9;
+  await store.put('books', { ...(await store.get('books', first.id)), lastOpenedAt: at });
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));      // a drawing, reading the library
+  const written = store.put('books', { ...(await store.get('books', second.id)), folder: first.folder, lastOpenedAt: at + 1000 });
+  // Another asked for before the first is done (away and back, without waiting).
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await written;
+  await settle(800);
+  assert.equal(el('continue-title').textContent, library.displayTitle(await store.get('books', second.id)),
+    'the shelf was left as an older drawing had it');
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /if \(shelfDrawing\) \{\s+shelfAgain = true;\s+return shelfDrawing;\s+\}/);
 });
 
 /* ── the picture frame ───────────────────────────────────────────────── */
@@ -2569,7 +3157,7 @@ await t("margins are every book's, and a book keeps only what was changed in it"
 
 await t("the book's own indents give way to the reader's margins", async () => {
   const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
-  assert.match(src, /section\.innerHTML = chapterHtml\(chapter\);\n  flattenLayoutIndents\(section\);/);
+  assert.match(src, /section\.innerHTML = html;\n[^\n]*\n  if \(spacedByLines\(html\)\) section\.classList\.add\('lines'\);\n  flattenLayoutIndents\(section\);/);
   const css = fs.readFileSync(new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
   assert.match(css, /\.page-flow \.book-indent \{ margin: 0 !important; padding: 0 !important; border: 0 !important; \}/);
   // Top and bottom margins: the page's padding when paged, the edges of the
@@ -2622,6 +3210,70 @@ await t('a divided paragraph is made whole again, with its text as it was', asyn
   p.normalize();
   assert.equal(host.textContent, text);
   assert.equal(host.querySelectorAll('p').length, 1);
+});
+
+await t('notices that faded are kept a day: the bell on the Library, a notice held down, cleared', async () => {
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  screensMod.clearNotices();
+  el('notices-sheet').hidden = true;
+  assert.equal(el('notices-btn').hidden, true, 'a bell with nothing behind it');
+  screensMod.toast('Nothing new to add · 1 already on your shelf · “Somewhere”', 7000);
+  screensMod.toast('3 books added', 6000, { kind: 'done' });
+  screensMod.toast('3 books added', 6000, { kind: 'done' });
+  assert.equal(el('notices-btn').hidden, false);
+  assert.equal(el('notices-dot').hidden, false, 'no sign of unread notices');
+  el('notices-btn').click();
+  assert.equal(el('notices-sheet').hidden, false);
+  const rows = [...el('notices-list').querySelectorAll('.notice-row')];
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /3 books added \(×2\)/);
+  assert.match(rows[1].textContent, /already on your shelf · “Somewhere”/);
+  assert.ok(rows[0].classList.contains('done'));
+  assert.equal(el('notices-dot').hidden, true, 'still unread once read');
+  el('notices-close').click();
+  // Held down, a notice opens the same list.
+  screensMod.toast('One more', 4000);
+  el('toast').dispatchEvent(new window.Event('pointerdown'));
+  await settle(650);
+  assert.equal(el('notices-sheet').hidden, false);
+  assert.equal(el('toast').hidden, true);
+  // A day on, gone.
+  const realNow = Date.now;
+  Date.now = () => realNow() + 25 * 60 * 60 * 1000;
+  try { assert.equal(screensMod.notices().length, 0); } finally { Date.now = realNow; }
+  el('notices-clear').click();
+  assert.equal(screensMod.notices().length, 0);
+  el('notices-close').click();
+  // Each of a kind, in the theme's colours; a kind turned off is kept here but no longer pops up.
+  assert.equal(screensMod.topicOf('Queue locked — nothing in it can be removed or moved.'), 'downloads');
+  assert.equal(screensMod.topicOf('0 added · x.epub: the copy Android handed back was a different file', 'failed'), 'problem');
+  assert.equal(screensMod.topicOf('Nothing new to add · 1 already on your shelf'), 'files');
+  assert.equal(screensMod.topicOf('3 books added', 'done'), 'done');
+  assert.equal(screensMod.topicOf('Cover blurred', null, 'other'), 'other');
+  el('notices-btn').click();
+  const chip = el('notices-topics').querySelector('[data-topic="downloads"]');
+  assert.equal(chip.getAttribute('aria-pressed'), 'true');
+  chip.click();
+  await settle(50);
+  assert.deepEqual(screensMod.noticeTopicsOff(), ['downloads']);
+  assert.deepEqual((await store.settings()).noticesOff, ['downloads']);
+  el('notices-close').click();
+  screensMod.dismissToast();
+  screensMod.toast('Queue unlocked.');
+  assert.equal(el('toast').hidden, true, 'a kind turned off still popped up');
+  assert.equal(screensMod.notices()[0].text, 'Queue unlocked.');
+  screensMod.toast('That file could not be read', 4000);
+  assert.equal(el('toast').hidden, false);
+  assert.equal(el('toast').dataset.topic, 'problem');
+  screensMod.setNoticeTopicsOff([]);
+  await store.saveSettings({ noticesOff: [] });
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\[data-topic="problem"\] \{ --topic: var\(--notice-1/);
+  assert.match(read('app/src/main/assets/www/js/theme.js'), /root\.setProperty\(`--notice-\$\{i \+ 1\}`, colour\);/);
+  // Memory only: nothing of it written anywhere, so a fresh start (or an update) has none.
+  const source = read('app/src/main/assets/www/js/screens.js');
+  const kept = source.slice(source.indexOf('const HISTORY_FOR'), source.indexOf('export function onToastHold'));
+  assert.doesNotMatch(kept, /localStorage|sessionStorage|store\.|indexedDB/);
 });
 
 console.log(`\n${pass} assertions passed`);

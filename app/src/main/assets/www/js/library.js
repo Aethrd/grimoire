@@ -10,6 +10,7 @@ import { planBooks } from './group.js';
 import { isRar, rarToZip, zipNameFor } from './rar.js';
 import * as translate from './translate.js';
 import * as mix from './mix.js';
+import { gradientSvg } from './theme.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -163,6 +164,8 @@ export function countWorks(books, among = books) {
 
 /** Whether a book is on the shelf: not in the bin, not half-imported, not only passing through. */
 export const onShelf = (book) => !book.binnedAt && !book.importing && !book.transient;
+/** A novel being downloaded from a website now: on the shelf as it comes, not yet a book to open or change. */
+export const isDownloading = (book) => !!(book?.importing && book.building?.webParts?.length);
 
 /**
  * Reduce a list to one entry per bundle.
@@ -818,7 +821,13 @@ export async function importFiles(files, { onProgress, onDone, transient = false
           ...(await store.byIndex('books', 'fingerprint', parsed.sourceId)),
           ...(await exportedFrom()).get(parsed.sourceId) || [],
         ].filter((book) => book.id !== bookId);
-        const here = same.find((book) => !book.binnedAt && !book.transient && !book.importing);
+        /* The same book by its name or its length too, not by that identity
+         * alone: books built side by side once shared one ("built:<time>"),
+         * and a file written out of one was taken for the other -- said to be
+         * on the shelf as a book it is not. */
+        const like = (book) => sameTitle(book.title, parsed.title)
+          || (book.chapterCount != null && book.chapterCount === parsed.chapters.length);
+        const here = same.find((book) => !book.binnedAt && !book.transient && !book.importing && like(book));
         if (here) {
           await store.deleteBook(bookId);
           if (here.inVault) results.inVault = (results.inVault || 0) + 1;
@@ -827,7 +836,7 @@ export async function importFiles(files, { onProgress, onDone, transient = false
           results.existing.push(here.id);
           continue;
         }
-        const binned = same.filter((book) => book.binnedAt);
+        const binned = same.filter((book) => book.binnedAt && like(book));
         if (binned.length) {
           await destroyBooks(binned.map((book) => book.id));
           results.replaced = (results.replaced || 0) + binned.length;
@@ -980,6 +989,40 @@ const justHeld = () => Date.now() - heldAt < 800;
 let buildOrder = null;   // Map(book id -> { place, already })
 export function setBuildOrder(order) { buildOrder = order || null; }
 
+/* Books whose download was paused or stopped short, with the rest still to
+ * come (a leftover, or a queued book carrying it on): marked on the cover. */
+/* Each with how many chapters are still to come, for its mark to fill by. */
+let unfinished = new Map();   // book id -> chapters still to come
+export function setUnfinished(left) { unfinished = left instanceof Map ? left : new Map((left || []).map((id) => [id, 0])); }
+
+/** How far a book is, by its chapters had and still to come: what its mark's tray fills to. */
+export function unfinishedDone(have, left) {
+  const total = (Number(have) || 0) + (Number(left) || 0);
+  return total > 0 ? Math.min(1, Math.max(0, (Number(have) || 0) / total)) : 0;
+}
+
+/* The download mark, twice over: faint, and over it the same mark in the
+ * theme's own colours, shown from the bottom up as far as the book has come. */
+const MARK = '<path d="M12 3.6v11.2M7.4 10.4l4.6 4.6 4.6-4.6M4.4 14.6v4.9h15.2v-4.9"/>';
+const unfinishedMark = (book) => {
+  // A book being made now: as far as its record says it has got.
+  const making = !unfinished.has(book.id) && book.building;
+  const have = making ? book.building.at?.chapters || 0 : book.chapters || 0;
+  /* Still to come: the website's chapters less those come so far in this
+   * part -- not less every chapter the book has, which (a book carried on
+   * after a pause already had some) left it at nothing to come too early. */
+  const came = book.building?.at?.came;
+  const left = making
+    ? Math.max(0, (book.building.webParts || []).reduce((sum, part) => sum + (part.links?.length || 0), 0) - (Number.isFinite(came) ? came : have))
+    : unfinished.get(book.id);
+  const done = unfinishedDone(have, left);
+  const id = `uf-${String(book.id).replace(/[^\w-]/g, '')}`;
+  return `<span class="tile-unfinished" role="img" aria-label="Not finished downloading: ${Math.round(done * 100)}%" data-have="${have}" style="--done:${done.toFixed(3)}">`
+    + `<svg class="mark-base" viewBox="0 0 24 24">${MARK}</svg>`
+    + `<svg class="mark-fill" viewBox="0 0 24 24"><defs>${gradientSvg(id, 'mark')}</defs>`
+    + `<g stroke="url(#${id})">${MARK}</g></svg></span>`;
+};
+
 function tile(book, onOpen, onLongPress, selection, selecting) {
   const coverUrl = coverUrlFor(book);
   const placed = buildOrder?.get(book.id);
@@ -987,6 +1030,11 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
   node.className = selection?.has(book.id) ? 'tile selected' : 'tile';
   if (book.bundle) node.classList.add('bundled');
   node.dataset.book = String(book.id);
+  // Downloading now: its queue job's, so the mark can be filled in place as chapters come (app.js, markUnfinished).
+  if (isDownloading(book)) {
+    node.dataset.downloading = '';
+    if (book.queueJob != null) node.dataset.job = String(book.queueJob);
+  }
   // A cover you would rather not have on screen. Nothing is changed in the
   // file; it is the tile that is blurred.
   if (book.coverBlur) node.dataset.blur = '';
@@ -995,6 +1043,7 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
       ${coverUrl
         ? `<img src="${coverUrl}" alt="${escape(book.title)}">`
         : `<span class="tile-title">${escape(displayTitle(book))}</span>`}
+      ${unfinished.has(book.id) || (book.importing && book.building) ? unfinishedMark(book) : ''}
       <span class="tile-badge">${escape(book.format || '?')}</span>
       ${placed ? `<span class="tile-order${placed.already ? ' already' : ''}">${placed.place}</span>` : ''}
       <span class="tile-bar"><span style="width:${Math.round((book.percent || 0) * 100)}%"></span></span>
@@ -1098,8 +1147,16 @@ export async function renderShelf(handlers) {
   // same filter is applied in search, the reel and the stats totals.
   // A hard kill during import leaves a row with no chapters behind it. It is
   // not a book yet, so it does not belong on the shelf.
+  /* A novel downloading now is on the shelf from its first chapter -- its
+   * cover, in its folder, washed grey with the mark filling as it comes --
+   * not only once it is paused or done. (Queued and not yet begun, it has no
+   * book.) The book it carries on, while it does, is not shown beside it:
+   * the same novel twice. Anything else still being read in is not a book yet. */
+  const carriedOn = new Set(all.filter(isDownloading)
+    .flatMap((b) => (b.builtFrom || []).map((part) => part.bookId).filter((id) => id != null)));
   let visible = all.filter((b) =>
-    !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
+    (!b.importing || isDownloading(b)) && !carriedOn.has(b.id)
+    && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
 
   // The main shelf leaves out hidden folders. Opened from Folders, a folder
   // shows what is in it, hidden or not -- that is the way in.
@@ -1431,6 +1488,12 @@ export const naturalOrder = (a, b) => String(a || '').localeCompare(String(b || 
  */
 
 export const isBinned = (book) => !!book?.binnedAt;
+
+/** Two titles the same, give or take case, spacing and width. */
+export const sameTitle = (a, b) => {
+  const plain = (s) => String(s || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  return !!plain(a) && plain(a) === plain(b);
+};
 
 /**
  * Whether a book from a text file was imported by the old reading of text:
@@ -2176,6 +2239,35 @@ function scoreBook(book, words, only) {
   const phrase = words.join(' ');
   if (fields.title.includes(phrase) || fields.shown.includes(phrase)) score += 8;
   return score;
+}
+
+/**
+ * Whether what was typed is most of a book's title, typed right: every word of it in
+ * the title (its own or the one the shelf shows), and those words together making up
+ * at least `share` of the title's letters and numbers -- case, accents, spaces and
+ * stops aside. "a sweet girl wont be fooled by" is most of "A Sweet Girl Won't Be Fooled
+ * By The Villainess" (24 of its 37); "sweet girl" is not. How a book in a folder hidden from the shelf
+ * is still found: by someone who knows its name, not by a search anyone could type.
+ */
+export const TITLE_SHARE = 0.6;
+const bare = (text) => fold(text).replace(/[^\p{L}\p{N}]+/gu, '');
+export function titleTyped(book, query, share = TITLE_SHARE) {
+  const words = fold(query).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (!words.length) return false;
+  return [book.title, displayTitle(book)].some((title) => {
+    const whole = bare(title);
+    if (!whole) return false;
+    const covered = new Uint8Array(whole.length);
+    for (const word of words) {
+      let at = whole.indexOf(word);
+      if (at < 0) return false;
+      // The first place it is not yet counted, so a word typed twice is not counted once.
+      while (at >= 0 && covered[at]) at = whole.indexOf(word, at + 1);
+      if (at < 0) at = whole.indexOf(word);
+      covered.fill(1, at, at + word.length);
+    }
+    return covered.reduce((n, c) => n + c, 0) >= whole.length * share;
+  });
 }
 
 /** Which field a book matched on, so a result can say why it is there. */

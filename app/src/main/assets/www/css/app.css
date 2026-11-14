@@ -140,7 +140,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor;
 .screen[data-active] { display: flex; }
 
 .scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
-          -webkit-overflow-scrolling: touch; padding-bottom: calc(var(--safe-bottom) + 68px); }
+          -webkit-overflow-scrolling: touch; padding-bottom: calc(var(--safe-bottom) + 68px + var(--strip-h)); }
 .scroll.pad { padding-left: 16px; padding-right: 16px; }
 .pad-x { padding-left: 16px; padding-right: 16px; }
 
@@ -155,7 +155,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 .icon-btn { width: 42px; height: 42px; flex: none; display: grid; place-items: center;
             border-radius: var(--radius-md); color: var(--text); }
-.icon-btn:active { background: var(--accent-100); }
+.icon-btn:active { background: var(--accent-soft); }
 .icon-btn.accent { background: var(--accent); color: var(--on-accent); }
 .icon-btn.accent:active { background: var(--accent-600); }
 .icon-btn[aria-pressed="true"] { color: var(--accent-ink); }
@@ -166,7 +166,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .btn.primary { background: var(--accent); color: var(--on-accent); }
 .btn.primary:active { background: var(--accent-600); }
 .btn.ghost { border: 1px solid var(--hairline); color: var(--text); }
-.btn.ghost:active { background: var(--accent-100); }
+.btn.ghost:active { background: var(--accent-soft); }
 .btn.block { width: 100%; }
 .btn[disabled] { opacity: .45; }
 
@@ -451,6 +451,16 @@ section.block > h2 { margin-top: 18px; }
 .page-flow ::selection { background: var(--accent-300); color: var(--accent-900); }
 .page-flow p { margin: 0 0 var(--read-para); text-indent: var(--read-indent); }
 .page-flow p:first-of-type { text-indent: 0; }
+/* A chapter spaced by its own blank lines (parse.js, spacedByLines): no gap
+   after each line, no indent on top of the author's own full-width space --
+   the blank lines between its beats are its spacing, as on the site. */
+.page-flow .chapter.lines p { margin-bottom: 0; text-indent: 0; }
+/* Furigana: the reading small over its word, the line not pushed apart by it. */
+.page-flow ruby { ruby-position: over; }
+.page-flow rt { font-size: .5em; line-height: 1; }
+/* Emphasis dots (傍点): dots over each character, upright -- not italics. */
+.page-flow em.dots { font-style: normal; -webkit-text-emphasis: filled sesame; text-emphasis: filled sesame;
+  -webkit-text-emphasis-position: over right; text-emphasis-position: over right; }
 .page-flow h1, .page-flow h2, .page-flow h3 {
   font-family: var(--font-heading); font-weight: 800; line-height: 1.2;
   margin: 1.4em 0 .5em; text-indent: 0; text-align: left;
@@ -852,7 +862,7 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
 .list-row { display: flex; align-items: flex-start; gap: 10px; width: 100%;
             padding: 13px 16px; border-bottom: 1px solid var(--divider);
             text-align: left; min-height: 48px; }
-.list-row.current { background: var(--accent-100);
+.list-row.current { background: var(--accent-soft);
                     box-shadow: inset 3px 0 0 var(--accent); }
 .list-row .lead { flex: none; width: 26px; font-size: 11px; color: var(--muted);
                   padding-top: 2px; }
@@ -878,7 +888,7 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
   border: 2px solid var(--divider);
   box-sizing: border-box;
 }
-.list-row[aria-pressed="true"] { background: var(--accent-100);
+.list-row[aria-pressed="true"] { background: var(--accent-soft);
                                  box-shadow: inset 3px 0 0 var(--accent); }
 .list-row[aria-pressed="true"] .body b { color: var(--accent-ink); }
 .list-row[aria-pressed="true"]::after {
@@ -926,7 +936,7 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
               dividing -- had its buttons drawn underneath the bar and could
               not be pressed. */
            padding-bottom: 10px;
-           margin-bottom: calc(var(--safe-bottom) + var(--tabbar-h)); }
+           margin-bottom: calc(var(--safe-bottom) + var(--tabbar-h) + var(--strip-h)); }
 
 /* In the reader the bar is hidden, so the footer keeps the space instead. */
 body[data-view="reader"] .stepper {
@@ -999,8 +1009,13 @@ body[data-view="reader"] .stepper {
 
 /* The one piece of chrome allowed to appear in NONE. */
 .toast { position: fixed; left: 50%; transform: translateX(-50%);
-         bottom: calc(var(--safe-bottom) + 82px); z-index: 50;
-         max-width: 78%; padding: 11px 16px; border-radius: var(--radius-md);
+         bottom: calc(var(--safe-bottom) + 82px + var(--strip-h)); z-index: 50;
+         /* As wide as its words, up to nearly the screen: placed from the
+            middle, a box sized by itself only had half the screen to fill,
+            and a long notice stood as a narrow column. The longest scroll. */
+         width: max-content; max-width: min(92vw, 560px); box-sizing: border-box;
+         max-height: 42vh; overflow-y: auto; overscroll-behavior: contain;
+         padding: 11px 16px; border-radius: var(--radius-md);
          color: var(--accent-100);
          font-size: 13px; text-align: center;
 
@@ -1087,7 +1102,7 @@ body[data-view="reader"] .stepper {
 .tile:active, .continue-card:active { transform: scale(.975); }
 .chip:active, .pill:active, .btn:active, .swatch:active { transform: scale(.96); }
 .icon-btn:active { transform: scale(.9); }
-.list-row:active { background: var(--accent-100); }
+.list-row:active { background: var(--accent-soft); }
 
 .tile-cover { transition: box-shadow var(--motion) var(--ease); }
 .tile:active .tile-cover { box-shadow: 0 0 0 2px var(--accent-400); }
@@ -1095,6 +1110,18 @@ body[data-view="reader"] .stepper {
 /* Progress and scrub track their value rather than jumping to it. */
 .bar-fill, .progress-fill, .tile-bar > span {
   transition: width var(--motion) var(--ease);
+}
+/* Every progress bar in the theme's gradient (Appearance, Gradient): a
+   download's, the strip's line, the reading progress, a cover's. A finished
+   or failed download keeps its own plain colour (below). The gradient runs
+   the whole length of the track -- what is filled and what is still to be --
+   and the fill uncovers its share of it: sized to the track (each track a
+   container, 100cqw its width), not squeezed into the part filled so far.
+   Along the bar's length whatever the angle, as thin things are. */
+.tile-bar, .bar, .progress-track, .jobs-strip { container-type: inline-size; }
+.bar-fill, .progress-fill, .tile-bar > span, .jobs-strip-fill {
+  background: var(--grad-across, linear-gradient(90deg, var(--grad-from, var(--accent-300)), var(--grad-to, var(--accent))));
+  background-size: 100cqw 100%; background-repeat: no-repeat;
 }
 .scrub-thumb { transition: top var(--motion) var(--ease); }
 /* Except while being dragged, where lag is the opposite of what you want. */
@@ -1166,7 +1193,7 @@ body[data-view="reader"] .stepper {
                       padding: 12px 4px; border-radius: var(--radius-md);
                       transition: background-color var(--motion-fast) var(--ease),
                                   transform var(--motion-fast) var(--ease); }
-.action-grid button:active { background: var(--accent-100); transform: scale(.96); }
+.action-grid button:active { background: var(--accent-soft); transform: scale(.96); }
 .action-grid button svg { width: 23px; height: 23px; }
 .action-grid button span { font-size: 11px; font-family: var(--font-heading);
                            font-weight: 600; }
@@ -1234,7 +1261,7 @@ body[data-view="reader"] .stepper {
 .sheet-list button { text-align: left; padding: 13px 4px; font-size: 14px;
                      border-bottom: 1px solid var(--divider); display: flex;
                      justify-content: space-between; gap: 10px; }
-.sheet-list button:active { background: var(--accent-100); }
+.sheet-list button:active { background: var(--accent-soft); }
 .sheet-list button span:last-child { color: var(--muted); font-size: 12px; }
 
 
@@ -1248,7 +1275,7 @@ body[data-view="reader"] .stepper {
                      border-radius: var(--radius-md); color: var(--muted);
                      transition: background-color var(--motion-fast) var(--ease),
                                  color var(--motion-fast) var(--ease); }
-.icon-strip button[aria-pressed="true"] { background: var(--accent-100);
+.icon-strip button[aria-pressed="true"] { background: var(--accent-soft);
                                           color: var(--accent-ink); }
 .icon-strip button svg { width: 21px; height: 21px; }
 /* Labelled, because six unlabelled glyphs is a guessing game -- and the one
@@ -1299,34 +1326,76 @@ body[data-view="reader"] .stepper {
 .facts small { color: var(--muted); font-size: 12px; word-break: break-word; }
 
 
-/* ── import progress ─────────────────────────────────────────────────── */
+/* ── what is running ──────────────────────────────────────────────────── */
 
-.import-progress {
-  position: fixed; left: 12px; right: 12px; z-index: 30;
-  bottom: calc(var(--safe-bottom) + 74px);
-  padding: 10px 12px; border-radius: var(--radius-lg);
-  background: var(--surface); border: 1px solid var(--hairline);
-  animation: chrome-in var(--motion-fast) var(--ease) both;
-  /* Importing a shelf takes minutes, and nothing about it should stop the
-     shelf being used meanwhile. The panel reports; it does not take taps. */
-  pointer-events: none;
-}
-/* Except the one control on it. */
-.import-progress .icon-btn { pointer-events: auto; }
+/* Small: a strip of its own, the width of the screen, just above the tab
+   bar. The screens make room for it (--strip-h), so it covers no button --
+   and what opens over the bottom of a screen (a book's actions, selecting,
+   a sheet) opens over it. Tapped, it is a page of its own: every row,
+   scrolled, and made small again from its top, or by Back. */
+:root { --strip-h: 0px; }
+/* The accent's soft wash behind text -- the chapter being read in the index,
+   a pressed button, a chosen option. Its palest step on a light ground; on a
+   dark one that step is near white under light text, so the dark ground
+   takes a deeper tint of the accent instead. */
+:root { --accent-soft: var(--accent-100); }
+:root[data-mode="dark"] { --accent-soft: color-mix(in srgb, var(--accent) 26%, var(--surface)); }
+body.jobs-up { --strip-h: 30px; }
+.import-progress { position: fixed; left: 0; right: 0; z-index: 20;
+  /* On the tab bar: its real height, kept by app.js (seat) as it shows, hides
+     and changes -- 0 when hidden, so the strip is at the foot, above the
+     phone's own bar. Its usual height until that is first known. */
+  bottom: max(var(--safe-bottom), var(--tabbar-real, calc(var(--safe-bottom) + var(--tabbar-h) + 1px))); }
 .import-progress[hidden] { display: none; }
 
-/* Room on the right for the minimise control, so no row runs under it. */
-.import-progress { padding-right: 46px; }
-.jobs-minimise { position: absolute; top: 4px; right: 4px; }
+.jobs-strip { display: flex; align-items: center; gap: 8px; width: 100%;
+  height: 30px; padding: 0 12px; position: relative;
+  background: var(--surface); border-top: 1px solid var(--divider);
+  color: var(--muted); text-align: left; }
+.jobs-strip svg { width: 16px; height: 16px; flex: none; }
+.jobs-strip-fill { position: absolute; left: 0; top: -1px; height: 2px; width: 0;
+  transition: width var(--motion) var(--ease); }   /* its colour: the theme gradient, with every progress bar */
+.jobs-summary { flex: 1; min-width: 0; font-size: 12px; font-family: var(--font-heading);
+  font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.jobs-page { display: none; }
+.import-progress.open { top: 0; bottom: 0; z-index: 48; background: var(--bg);
+  display: flex; flex-direction: column;
+  padding: var(--safe-top) var(--safe-right) 0 var(--safe-left);
+  animation: sheet-in var(--motion) var(--ease) both; }
+.import-progress.open .jobs-strip { display: none; }
+.import-progress.open .jobs-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.jobs-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 8px 10px 16px;
+  border-bottom: 1px solid var(--divider); }
+.jobs-head strong { flex: 1; min-width: 0; font-family: var(--font-heading); font-size: 17px; }
+.import-progress .jobs { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 14px 16px calc(var(--safe-bottom) + 24px); }
 
 /* A row per operation. */
-.job + .job { margin-top: 10px; }
+.job + .job { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--divider); }
 .job[hidden] { display: none; }
 .import-line { display: flex; justify-content: space-between; gap: 10px;
-               font-size: 12px; margin-bottom: 6px; }
-.import-line span:first-child { white-space: nowrap; overflow: hidden;
-                                text-overflow: ellipsis; min-width: 0; }
-.job-count { flex: none; }
+               font-size: 13px; margin-bottom: 6px; }
+/* Said in full, over as many lines as it takes: a book's whole name and
+   why a page failed are what is being read, and "…" cut off both. */
+.import-line span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.job-count { flex: none; max-width: 45%; text-align: right; }
+
+/* What it is doing right now, apart from how far it has got: under the
+   bar, smaller, with a tag that says which -- waiting out the delay,
+   reading a page, another try -- and the page it is about. */
+.job-activity { display: flex; align-items: baseline; gap: 8px; margin-top: 7px;
+                font-size: 12px; color: var(--muted); min-width: 0; }
+.job-activity[hidden] { display: none; }
+.job-tag { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 10px;
+           font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+           background: var(--accent-soft); color: var(--accent-ink); }
+.job-activity.wait .job-tag { background: transparent; color: var(--muted);
+                              box-shadow: inset 0 0 0 1px currentColor; }
+.job-activity.retry .job-tag, .job-activity.failed .job-tag { background: transparent; color: var(--text);
+                                                            box-shadow: inset 0 0 0 1px currentColor; }
+.job-now { min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
+.job.done .job-activity, .job.failed .job-activity { display: none; }
 
 /* Finished, it stays a moment, marked, rather than vanishing mid-glance. */
 .job.done .job-label::before { content: "✓ "; color: var(--accent-ink); }
@@ -1334,32 +1403,20 @@ body[data-view="reader"] .stepper {
 .job.failed .job-label::before { content: "✕ "; }
 .job.failed .job-label { color: var(--muted); }
 .job.failed .bar-fill { background: var(--muted); }
+
 .job.done, .job.failed { opacity: .72; transition: opacity var(--motion) var(--ease); }
 
-.jobs-more { margin: 8px 0 0; font-size: 11px; }
-
-/* Shown only when minimised: the panel becomes a pill saying how many are
-   running, or how far the one is. */
-.jobs-summary { display: none; font-size: 12px; font-family: var(--font-heading);
-                font-weight: 600; white-space: nowrap; }
-.import-progress.minimised { left: auto; padding: 8px 46px 8px 14px; min-height: 46px;
-                             display: flex; align-items: center; }
-.import-progress.minimised .jobs,
-.import-progress.minimised .jobs-more { display: none; }
-.import-progress.minimised .jobs-summary { display: block; }
-
-/* In a book, the panel keeps to a small pill under the top bar -- not a
-   card over the page -- and is gone altogether when the bars are hidden for
-   reading. What it reports is still there when the book is put down. */
-body.in-book .import-progress { left: auto; right: 12px; bottom: auto;
-  top: calc(var(--safe-top) + 62px); padding: 8px 46px 8px 14px; min-height: 46px;
-  display: flex; align-items: center; }
-body.in-book .import-progress[hidden],
-body.in-book[data-chrome="none"] .import-progress,
-body.in-book[data-chrome="copy"] .import-progress { display: none; }
-body.in-book .import-progress .jobs,
-body.in-book .import-progress .jobs-more { display: none; }
-body.in-book .import-progress .jobs-summary { display: block; }
+/* On a book's page there is no tab bar: small, it is a pill under the top bar --
+   not a card over the page -- and gone when the bars are hidden for reading.
+   Beside the book (its search, its contents) the tab bar is there, and the
+   strip sits on it as everywhere else: a pill at the top lay over their chips. */
+body.on-page { --strip-h: 0px; }
+body.on-page .import-progress:not(.open) { left: auto; right: 12px; bottom: auto;
+  top: calc(var(--safe-top) + 62px); }
+body.on-page .import-progress:not(.open) .jobs-strip { width: auto; max-width: 70vw; height: 36px;
+  border: 1px solid var(--hairline); border-radius: 999px; overflow: hidden; }
+body.on-page[data-chrome="none"] .import-progress:not(.open),
+body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 
 
 /* Fifty-odd languages behind a disclosure, so the handful your library
@@ -1528,7 +1585,7 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .annotate-styles button { flex: 1; padding: 7px 4px; border-radius: var(--radius-md);
                           border: 1px solid var(--hairline); font-size: 10px;
                           font-family: var(--font-heading); font-weight: 600; }
-.annotate-styles button[aria-pressed="true"] { background: var(--accent-100);
+.annotate-styles button[aria-pressed="true"] { background: var(--accent-soft);
                                                color: var(--accent-ink); }
 .annotate-colours { justify-content: space-between; }
 /* A swatch was a 28px circle, which is about half what a finger needs -- the
@@ -1666,7 +1723,7 @@ body.in-book .import-progress .jobs-summary { display: block; }
              border-bottom: 1px solid var(--hairline); }
 .build-row:last-child { border-bottom: 0; }
 .build-num { flex: none; margin-top: 2px; width: 26px; height: 26px; border-radius: 50%;
-             display: grid; place-items: center; background: var(--accent-100);
+             display: grid; place-items: center; background: var(--accent-soft);
              color: var(--accent-ink); font-family: var(--font-heading);
              font-weight: 700; font-size: 11px; }
 .build-what { flex: 1; min-width: 0; }
@@ -2002,7 +2059,7 @@ body.in-book .import-progress .jobs-summary { display: block; }
                stroke: currentColor; stroke-width: 2;
                stroke-linecap: round; stroke-linejoin: round; }
 .pad-btn:disabled { opacity: .3; }
-.pad-btn:active { background: var(--accent-100); }
+.pad-btn:active { background: var(--accent-soft); }
 
 /* The grip, not the buttons.
    Dragging by a button means every slightly imprecise press moves the thing
@@ -2473,13 +2530,42 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .web-address:focus-visible { border-color: var(--accent); }
 .web-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -4px 0 10px; }
 .web-row #web-find { margin-left: auto; }
+/* Under Find links, on a line of its own, at the same edge. */
+.web-row #web-more { flex-basis: 100%; max-width: max-content; margin-left: auto; }
+.web-row #web-more[hidden] { display: none; }
+.web-row #web-open { flex-basis: 100%; max-width: max-content; margin-left: auto; }
+.web-row #web-open[hidden] { display: none; }
+.web-row #web-forget { flex-basis: 100%; max-width: max-content; margin-left: auto; font-size: 12px; min-height: 36px; }
+.web-row #web-forget[hidden] { display: none; }
 .web-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
              color: var(--muted); min-height: 40px; }
 .web-check input { accent-color: var(--accent); width: 18px; height: 18px; }
+.build-notify { display: flex; margin: 14px 0 4px; font-size: 13px; }
+.build-notify[hidden] { display: none; }
+.build-notify + .build-notify { margin-top: 2px; }
 .web-note { font-size: 12px; line-height: 1.55; margin: 0 0 14px; }
+.web-site-delays { font-size: 12px; line-height: 1.5; margin: -4px 0 12px; }
 .web-note.problem { color: #c0553f; }
 #web-filter { width: 100%; margin: 0 0 4px; }
-.web-tools { padding: 8px 0 4px; margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
+.web-tools { display: grid; gap: 10px; padding: 8px 0 10px; }
+/* Build's way of taking files in: Syosetu's PDFs rebuilt as they come. */
+.build-modes { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 12px; }
+.build-modes .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-soft); }
+.build-modes small { flex: 1; min-width: 160px; }
+.syosetu-sheet textarea { width: 100%; box-sizing: border-box; min-height: 180px; margin-top: 8px; padding: 10px;
+  font: 14px/1.5 var(--font-ui); color: var(--text); background: var(--surface-2, var(--surface));
+  border: 1px solid var(--divider); border-radius: var(--radius-md); resize: vertical; }
+.web-tools-group { display: grid; gap: 6px; }
+.web-tools-label { font: 600 11px var(--font-heading); letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted); }
+/* Two to a row on a phone, four across where there is room; each the full
+   width of its cell, its words wrapping rather than pushing the row wide. */
+.web-tools-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.web-tools-grid .chip { width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: center;
+  text-align: center; white-space: normal; line-height: 1.25; }
+@media (min-width: 640px) { .web-tools-grid:not(.three) { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.web-tools-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.web-tools-grid .chip:disabled { opacity: .45; }
 .web-hint { font-size: 11px; line-height: 1.5; margin: 0 0 6px; }
 
 .web-list { list-style: none; margin: 0; padding: 0; }
@@ -2504,7 +2590,7 @@ body.in-book .import-progress .jobs-summary { display: block; }
            text-transform: uppercase; color: var(--muted); border: 1px solid var(--hairline);
            border-radius: var(--radius-sm); padding: 2px 5px; }
 .web-link.likely .web-tag { color: var(--accent-ink); border-color: var(--accent-300); }
-.web-link.got .web-tag { background: var(--accent-100); color: var(--accent-ink); }
+.web-link.got .web-tag { background: var(--accent-soft); color: var(--accent-ink); }
 .web-link.lost .web-tag { color: #c0553f; border-color: currentColor; }
 .web-list.painting .web-link { cursor: ns-resize; }
 
@@ -2525,6 +2611,8 @@ body.in-book .import-progress .jobs-summary { display: block; }
 
 /* How gently a site is asked: a pause between one page and the next. */
 .web-rate { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px; font-size: 13px; }
+.web-list-rate { margin: -2px 0 6px; }
+.web-list-rate .web-rate { margin: 4px 0 0; }
 .web-rate span:first-child { flex: 1; color: var(--muted); }
 .web-rate input { width: 92px; padding: 8px 10px; border-radius: var(--radius-md);
   border: 1px solid var(--hairline); background: var(--surface); color: var(--text);
@@ -2538,6 +2626,11 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .tile-order.already { background: rgba(0,0,0,.6); color: #fff; }
 
 /* The stats page's list of what is in each folder. */
+.folder-lists-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.folder-lists-head h2 { margin: 0; }
+.folder-lists-head { margin: 0 0 10px; }
+.folder-list summary .folder-copy, .folder-lists-head .folder-copy { flex: none; align-self: center; }
+.folder-list summary .folder-copy { padding: 4px 10px; min-height: 0; font-size: 12px; }
 .folder-list { border-top: 1px solid var(--hairline); }
 .folder-list summary { display: flex; align-items: baseline; gap: 8px; padding: 10px 0; cursor: pointer;
   font-family: var(--font-heading); font-weight: 600; font-size: 14px; list-style: none; }
@@ -2615,3 +2708,261 @@ body.in-book .import-progress .jobs-summary { display: block; }
 .glossary-row .glossary-remove { flex: none; min-width: 36px; min-height: 36px; border-radius: 50%; color: var(--muted); }
 .glossary-row.fresh { background: var(--surface); }
 .glossary-empty { padding: 16px 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+/* Below the parts: books from the shelf, picked there. */
+.build-from-shelf { display: block; margin: 12px 0 4px; }
+/* Build's index: the novel in Build as a card, the queue, another to add. */
+.build-index-card { display: block; width: 100%; text-align: left; padding: 14px 16px; margin: 4px 0 12px;
+  border: 1px solid var(--hairline); border-radius: 14px; background: transparent; color: inherit; font: inherit; }
+.build-index-card[hidden] { display: none; }
+.build-index-card b { display: block; overflow-wrap: anywhere; }
+.build-index-card small { display: block; margin-top: 4px; }
+.build-index-add { display: block; width: 100%; margin: 14px 0 8px; }
+.build-index-note { font-size: 12px; line-height: 1.5; }
+.job-chapters { margin: 4px 0 8px; line-height: 1.5; overflow-wrap: anywhere; }
+/* A queued novel not yet started: tapped to open it. */
+.build-queue-list li .col.editable { cursor: pointer; }
+.build-queue-list li .col.editable b::after { content: ' ›'; opacity: .55; font-weight: 400; }
+/* The queue: websites waiting their turn on Build, one book each. */
+.build-queue-head { display: flex; align-items: center; gap: 10px; }
+.build-queue-head strong { flex: 1; min-width: 0; }
+.build-queue-lock[aria-pressed="true"] svg { fill: none; }
+.build-queue-lock[aria-pressed="true"] svg rect { fill: currentColor; }
+.build-queue-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.build-queue-list li { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-top: 1px solid var(--divider); }
+.build-queue-list li .col { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.build-queue-list li small { display: block; }
+.build-queue-list .icon-btn { flex: none; }
+.build-queue-list .chip { flex: none; }
+/* Pause and resume: a ring and its mark in the theme's gradient, no word. */
+.play-btn { flex: none; width: 44px; height: 44px; min-height: 0; padding: 0; display: grid; place-items: center;
+  border: 0; border-radius: 50%; background: none; box-shadow: none; }
+.play-btn svg { width: 34px; height: 34px; filter: saturate(1.4) brightness(1.15); }
+.play-btn:active { background: var(--accent-soft); }
+.play-btn:disabled { opacity: .35; }
+/* Appearance: the gradient's preview and its two ends; your fonts, each in its own face. */
+.gradient-preview { height: 48px; border-radius: var(--radius-md); margin: 2px 0 10px; }
+/* Its direction, a row of arrows; each colour a row: the colour, its share, what share that is. */
+.gradient-dirs { display: grid; grid-template-columns: auto 44px 1fr 44px; align-items: center; gap: 10px; margin-bottom: 10px; }
+.gradient-dirs .chip { justify-content: center; }
+.gradient-dirs .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.gradient-dirs output { font: 600 13px var(--font-ui); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+/* The dial: an arrow pointing the way the gradient runs, turned by dragging round. */
+.gradient-dial { width: 44px; height: 44px; touch-action: none; cursor: grab; }
+.gradient-dial svg { width: 44px; height: 44px; display: block; }
+.gradient-dial circle { stroke: var(--divider); stroke-width: 1.5; fill: var(--surface); }
+.gradient-dial path { stroke: var(--accent); stroke-width: 2.4; }
+.gradient-dirs input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; min-width: 0;
+  height: 28px; margin: 0; background: transparent; touch-action: pan-y; }
+.gradient-dirs input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px;
+  background: linear-gradient(to right, var(--accent) var(--filled, 0%), color-mix(in srgb, var(--text) 18%, transparent) var(--filled, 0%)); }
+.gradient-dirs input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+  width: 22px; height: 22px; margin-top: -8px; border-radius: 50%; background: var(--accent);
+  border: 3px solid var(--surface); box-shadow: 0 1px 4px rgb(0 0 0 / .35); }
+.gradient-stops { display: grid; gap: 4px; margin-bottom: 8px; }
+.gradient-stop { display: grid; grid-template-columns: 40px 1fr 44px 36px; align-items: center; gap: 10px; min-height: 44px; }
+.gradient-stop input[type="color"] { width: 40px; height: 32px; padding: 0; border: 1px solid var(--divider); border-radius: 8px; background: none; }
+.gradient-stop output { font: 600 13px var(--font-ui); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.gradient-stop .gradient-drop { width: 36px; height: 36px; }
+.gradient-stop input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; min-width: 0;
+  height: 28px; margin: 0; background: transparent; touch-action: pan-y; }
+.gradient-stop input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px;
+  background: linear-gradient(to right, var(--accent) var(--filled, 0%), color-mix(in srgb, var(--text) 18%, transparent) var(--filled, 0%)); }
+.gradient-stop input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+  width: 22px; height: 22px; margin-top: -8px; border-radius: 50%; background: var(--accent);
+  border: 3px solid var(--surface); box-shadow: 0 1px 4px rgb(0 0 0 / .35); }
+.gradient-ends { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* While a book opens, if it takes more than a moment: over the page, on the
+   app's own ground, faded in and out -- never a flash (app.js, openingScreen). */
+.opening { position: fixed; inset: 0; z-index: 45; background: var(--bg); opacity: 0;
+  transition: opacity .4s var(--ease); pointer-events: none; }
+.opening.shown { opacity: 1; pointer-events: auto; }
+.opening.leaving { transition-duration: .3s; }
+.opening-scene { position: absolute; inset: 0; width: 100%; height: 100%; }
+.opening-caption { position: absolute; left: 16px; right: 16px; bottom: calc(var(--safe-bottom) + 9%); display: grid; gap: 4px;
+  text-align: center; font-family: var(--font-heading); }
+.opening-caption b { font-weight: 600; font-size: 16px; color: var(--text); opacity: .92; overflow-wrap: anywhere; }
+.opening-caption small { font-size: 12px; color: var(--muted); }
+/* The same scene behind the queue's progress, faint, in the space under its books. */
+.import-progress.open .jobs-page { position: relative; }
+.jobs-scene { display: none; }
+.import-progress.open .jobs-scene { display: block; position: absolute; left: 0; right: 0; bottom: 0; height: 62%; width: 100%;
+  opacity: var(--jobs-scene-opacity, .22); pointer-events: none; z-index: 0; }
+/* Its strength, set from the page's head: a slider row under it, while asked for. */
+.jobs-scene-row { flex: none; grid-template-columns: auto 1fr 44px; padding: 6px 16px; min-height: 44px;
+  border-bottom: 1px solid var(--divider); position: relative; z-index: 1; }
+.jobs-scene-row[hidden] { display: none; }
+#jobs-scene-btn[aria-expanded="true"] svg { stroke: var(--accent); }
+.import-progress.open .jobs { position: relative; z-index: 1; }
+.find-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px 4px; font-size: 13px; }
+.font-list { display: grid; gap: 6px; margin-bottom: 10px; }
+.font-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--divider); }
+.font-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.font-name { font-size: 17px; overflow-wrap: anywhere; }
+.font-text small { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A gradient of your own is shown as chosen: not brightened as the accent's is. */
+[data-gradient="own"] .play-btn svg { filter: none; }
+[data-gradient="own"] .tile-unfinished .mark-fill { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--grad-to) 55%, transparent)); }
+.build-queue-list li { flex-wrap: wrap; }
+.build-queue-list li[data-status="attention"] small { color: var(--danger, #e08a8a); }
+.build-queue-list li[data-status="done"] { opacity: .7; }
+.job-stopped { margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.45;
+  background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); overflow-wrap: anywhere; }
+.build-queue-once { margin: 10px 0 0; align-items: center; gap: 4px 6px; flex-wrap: wrap; overflow: visible; padding: 0; }
+/* At once and Per site: a slider a row, the full width, its number beside it. */
+.queue-slider { display: grid; grid-template-columns: 64px 1fr 24px; align-items: center; gap: 12px;
+  flex: 1 1 100%; min-height: 40px; }
+.queue-slider .muted { font-size: 13px; }
+.queue-slider output { font: 700 15px var(--font-ui); color: var(--text); text-align: right;
+  font-variant-numeric: tabular-nums; }
+.queue-slider input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; min-width: 0;
+  height: 28px; margin: 0; background: transparent; touch-action: pan-y; }
+.queue-slider input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px;
+  background: linear-gradient(to right, var(--accent) var(--filled, 0%), color-mix(in srgb, var(--text) 18%, transparent) var(--filled, 0%)); }
+.queue-slider input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+  width: 22px; height: 22px; margin-top: -8px; border-radius: 50%; background: var(--accent);
+  border: 3px solid var(--surface); box-shadow: 0 1px 4px rgb(0 0 0 / .35); }
+.queue-slider input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent-300); outline-offset: 2px; }
+.build-queue-once .chip { margin-top: 4px; }
+/* Chapters missing from the numbers of those ticked. */
+.web-gaps { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--accent-300); border-radius: var(--radius-md);
+  font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.web-gaps[hidden] { display: none; }
+#web-queue[hidden], #web-go[hidden], #build-minimise[hidden] { display: none; }
+.build-from-shelf[hidden] { display: none; }
+
+/* Automatic backups, under Save a backup. */
+.auto-backup { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--divider); }
+.auto-backup .chip-row { align-items: center; gap: 6px; margin: 6px 0; }
+.auto-backup .chip-row > .muted { font-size: 12px; min-width: 44px; }
+.auto-backup-note { font-size: 12px; line-height: 1.55; margin: 0 0 6px; }
+
+/* Read a site's chapters in the browser: a box and its reason, under the delays. */
+.web-in-browser { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 12px; font-size: 14px; }
+.web-in-browser[hidden] { display: none; }
+.web-in-browser input { margin-top: 3px; flex: none; }
+.web-in-browser small { display: block; font-size: 12px; line-height: 1.45; margin-top: 2px; }
+
+/* A book with more still to download (paused, or stopped short): a grey
+   wash over its cover -- darker at the top, paler at the bottom, the cover
+   still seen through it -- and a download mark in the middle, 60% of the
+   cover wide: faint, and filled from the bottom up in the theme's own colours
+   as far as the book has come (--done, 0 to 1). The fill is cut to the mark's
+   own height (y 3.6 to 19.5 of 24), so 50% is half the mark. */
+.tile-unfinished { position: absolute; inset: 0; pointer-events: none;
+  /* A little darker than it was, the cover still plain through it. */
+  background: linear-gradient(to bottom, rgb(18 18 20 / .76), rgb(150 150 156 / .26)); }
+.tile-unfinished svg { position: absolute; left: 20%; width: 60%; height: auto; top: 50%;
+  transform: translateY(-50%); fill: none; stroke-width: 2.3;
+  stroke-linecap: round; stroke-linejoin: round; }
+.tile-unfinished .mark-base { stroke: rgb(255 255 255 / .42);
+  filter: drop-shadow(0 1px 3px rgb(0 0 0 / .45)); }
+/* The theme's colours made livelier and lighter: they read on the grey, in any theme. */
+.tile-unfinished .mark-fill {
+  filter: saturate(1.9) brightness(1.25) drop-shadow(0 0 4px color-mix(in srgb, var(--accent-400) 55%, transparent));
+  clip-path: inset(calc((3.6 + 15.9 * (1 - var(--done, 0))) / 24 * 100% - 2px) 0 0 0);
+  transition: clip-path var(--motion) var(--ease); }
+
+/* ── roles: the gradient's colours, given parts (theme.js, roles) ──────────
+   Primary leads as the accent (everything drawn in --accent follows it).
+   The others, each for its own part -- solid by default, or, with
+   data-colour-style="gradient", the gradient itself. Progress bars and the
+   download mark keep the gradient either way: that is what they show. */
+:root .btn.ghost { border-color: color-mix(in srgb, var(--role-2, var(--hairline)) 75%, transparent); }
+:root .icon-btn[aria-pressed="true"] { color: var(--role-2-ink, var(--accent-ink)); }
+:root .card, :root .build-leftover { border-color: color-mix(in srgb, var(--role-3, var(--divider)) 50%, transparent); }
+:root .chip:not([aria-pressed="true"]):not(.dashed) { border-color: color-mix(in srgb, var(--role-3, var(--divider)) 45%, transparent); }
+:root .eyebrow { color: color-mix(in srgb, var(--role-4-ink, var(--muted)) 60%, var(--muted)); }
+:root { --divider: color-mix(in srgb, var(--role-5, #efeef3) 22%, transparent); }
+/* Pause and resume, solid: the secondary colour, ring and mark alike. */
+[data-colour-style="solid"] .play-btn svg { filter: none; }
+[data-colour-style="solid"] .play-btn svg circle { stroke: var(--role-2-ink); }
+[data-colour-style="solid"] .play-btn svg g { fill: var(--role-2-ink); }
+[data-colour-style="solid"] .play-btn svg g path { stroke: var(--role-2-ink); }
+
+/* In the gradient: what is filled, filled with it; edges drawn in it. */
+[data-colour-style="gradient"] .btn.primary,
+[data-colour-style="gradient"] .chip[aria-pressed="true"],
+[data-colour-style="gradient"] .pill[aria-pressed="true"],
+[data-colour-style="gradient"] .seg button[aria-pressed="true"],
+[data-colour-style="gradient"] .switch[aria-pressed="true"] { background: var(--grad-bar); color: var(--on-grad); border-color: transparent; }
+[data-colour-style="gradient"] .btn.primary:active { background: var(--grad-bar); filter: brightness(.88); }
+[data-colour-style="gradient"] .btn.ghost { border-color: transparent;
+  background: linear-gradient(var(--surface), var(--surface)) padding-box, var(--grad-bar) border-box; }
+[data-colour-style="gradient"] .card,
+[data-colour-style="gradient"] .build-leftover { border-color: transparent;
+  background: linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(color-mix(in srgb, var(--surface) 45%, transparent), color-mix(in srgb, var(--surface) 45%, transparent)) border-box,
+    var(--grad-bar) border-box; }
+[data-colour-style="gradient"] .queue-slider input[type="range"]::-webkit-slider-runnable-track,
+[data-colour-style="gradient"] .gradient-stop input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(to right, transparent var(--filled, 0%), color-mix(in srgb, var(--text) 18%, var(--surface)) var(--filled, 0%)), var(--grad-across); }
+
+/* Appearance: the roles, each colour by what it colours. */
+.gradient-style { margin: 4px 0 10px; }
+.gradient-roles { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 6px; }
+.gradient-roles li { display: grid; grid-template-columns: 18px auto 1fr; align-items: center; gap: 10px; font-size: 13px; }
+.gradient-roles i { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--divider); }
+.gradient-roles b { font-family: var(--font-heading); font-weight: 600; }
+.gradient-roles span { color: var(--muted); font-size: 12px; }
+
+/* The check of a book: the list scrolls, its buttons stay. */
+#check-sheet .check-sheet { display: flex; flex-direction: column; max-height: 86%; overflow: hidden; }
+.check-summary { flex: none; margin: 2px 0 8px; font-size: 13px; }
+.check-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.check-head { font: 600 11px var(--font-heading); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); margin: 12px 0 4px; }
+.check-item { display: grid; grid-template-columns: 18px 1fr; gap: 2px 8px; width: 100%; text-align: left;
+  padding: 8px 2px; border-bottom: 1px solid var(--divider); font-size: 13px; color: var(--text); background: none; }
+.check-item .sev { font-weight: 700; text-align: center; }
+.check-item[data-sev="✗"] .sev { color: var(--danger, #d4544c); }
+.check-item[data-sev="?"] .sev { color: var(--accent); }
+.check-item[data-sev="·"] .sev { color: var(--muted); }
+.check-item .where { color: var(--muted); font-size: 12px; }
+.check-item .ex { grid-column: 2; font: 12px/1.45 var(--font-ui); color: var(--muted); white-space: pre-wrap;
+  overflow-wrap: anywhere; }
+.check-item.goes { cursor: pointer; }
+.check-ok { padding: 18px 2px; color: var(--muted); }
+.check-actions { flex: none; border: 0; background: none; padding: 10px 0 0; gap: 8px; flex-wrap: wrap; }
+
+/* Recent notices: the bell on the Library, and the list it opens. */
+.notices-btn { position: relative; }
+.notices-btn[hidden] { display: none; }
+.notices-dot { position: absolute; top: 9px; right: 9px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 2px var(--bg); }
+.notices-dot[hidden] { display: none; }
+#notices-sheet .notices-sheet { display: flex; flex-direction: column; max-height: 80%; overflow: hidden; }
+.notices-note { flex: none; margin: 2px 0 8px; font-size: 12px; }
+.notices-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.notice-row { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: start;
+  padding: 10px 2px; border-bottom: 1px solid var(--divider); font-size: 13.5px; line-height: 1.45; }
+.notice-row .mark { font-weight: 700; text-align: center; color: var(--muted); }
+.notice-row .text { overflow-wrap: anywhere; }
+.notice-row .when { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.notices-empty { padding: 18px 2px; color: var(--muted); }
+.notices-actions { flex: none; border: 0; background: none; padding: 10px 0 0; }
+
+/* Each kind of notice in one of the theme's colours (its roles: from the
+   gradient where there is one). The notice itself tinted, its line marked. */
+[data-topic="problem"] { --topic: var(--notice-1, var(--accent)); --topic-ink: var(--notice-1-ink, var(--accent-ink)); }
+[data-topic="done"] { --topic: var(--notice-2, var(--accent)); --topic-ink: var(--notice-2-ink, var(--accent-ink)); }
+[data-topic="files"] { --topic: var(--notice-3, var(--accent)); --topic-ink: var(--notice-3-ink, var(--accent-ink)); }
+[data-topic="downloads"] { --topic: var(--notice-4, var(--accent)); --topic-ink: var(--notice-4-ink, var(--accent-ink)); }
+[data-topic="other"] { --topic: var(--notice-5, var(--accent)); --topic-ink: var(--notice-5-ink, var(--accent-ink)); }
+.toast[data-topic] { border-left: 4px solid var(--topic); }
+.toast[data-topic]:not(.stack) { background: color-mix(in srgb, var(--topic) 22%, var(--accent-900)); }
+@supports (backdrop-filter: blur(6px)) or (-webkit-backdrop-filter: blur(6px)) {
+  .toast[data-topic]:not(.stack) { background: color-mix(in srgb, color-mix(in srgb, var(--topic) 22%, var(--accent-900)) 66%, transparent); }
+}
+.toast.stack[data-topic] { border-left-color: transparent; }
+.toast-line[data-topic] { border-left: 3px solid var(--topic); padding-left: 8px; margin-left: -6px; }
+.toast-line[data-topic] .toast-mark { color: var(--topic-ink); }
+.notice-row[data-topic] { border-left: 3px solid var(--topic); padding-left: 8px; }
+.notice-row[data-topic] .mark { color: var(--topic-ink); }
+.notices-topics { flex: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px; }
+.notice-topic { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.notice-topic[aria-pressed="false"] { opacity: .5; text-decoration: line-through; }
+.notice-swatch { width: 10px; height: 10px; border-radius: 50%; background: var(--topic); flex: none; }
+.notice-topic[aria-pressed="true"], [data-colour-style="gradient"] .notice-topic[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--topic) 22%, transparent); color: var(--text); border-color: var(--topic); }

@@ -182,6 +182,17 @@ export const DEFAULT_SETTINGS = {
   themeMode: 'dark',              // both themes are pastel; dark is default
   accent: '#b4b0d6',
   backgroundImage: null,
+  // The theme's gradient (marks, pause and resume, progress): null follows the accent,
+  // else { from, to, stops: [{ color, share }] } -- two to five colours (theme.gradientOf).
+  gradient: null,
+  // Its direction everywhere: 'auto' (each place its own), or an angle in degrees, 0 to 359 (theme.gradientAngle).
+  gradientDir: 'auto',
+  // The app's buttons and edges in the gradient's colours, each solid by its role, or in the gradient itself.
+  colourStyle: 'solid',
+  // Kinds of notice that do not pop up, only kept under the bell (screens.js NOTICE_TOPICS).
+  noticesOff: [],
+  // Fonts of your own, to read in: [{ id, name }] (the files themselves kept apart, see fonts.js).
+  fonts: [],
   veil: 0.62,                     // 62% in dark, 28% in light
   columns: 2,
   // Which folder the shelf is filtered to: null for everything, '' for
@@ -332,10 +343,17 @@ export async function settings() {
   return cache;
 }
 
+/* Each change put onto the settings as they are when it lands, and written in
+ * turn, the newest whole. Two saves at once -- the queue's and the leftovers',
+ * say -- each merged onto the same copy read before either, and whichever
+ * wrote last undid the other. */
+let settingsWrite = Promise.resolve();
 export async function saveSettings(patch) {
-  const current = await settings();
-  cache = Object.assign({}, current, patch);
-  await put('settings', { key: 'app', value: cache });
+  await settings();
+  cache = Object.assign({}, cache, patch);
+  const write = settingsWrite.then(() => put('settings', { key: 'app', value: cache }));
+  settingsWrite = write.catch(() => {});
+  await write;
   return cache;
 }
 

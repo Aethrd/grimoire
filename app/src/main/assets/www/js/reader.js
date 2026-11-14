@@ -15,10 +15,11 @@
  */
 
 import * as store from './store.js';
-import { countWords, chapterHtml } from './parse.js';
+import { countWords, chapterHtml, spacedByLines } from './parse.js';
 import { pool } from './blobs.js';
 import * as translate from './translate.js';
 import * as frames from './frame.js';
+import { faceFamily } from './fonts.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -494,7 +495,10 @@ function chapterSection(chapter) {
   const section = document.createElement('section');
   section.className = 'chapter';
   section.dataset.chapter = String(chapter.index);
-  section.innerHTML = chapterHtml(chapter);
+  const html = chapterHtml(chapter);
+  section.innerHTML = html;
+  // Its blank lines its spacing (see spacedByLines): no gap after each line, nor an indent added.
+  if (spacedByLines(html)) section.classList.add('lines');
   flattenLayoutIndents(section);
   hydrateImages(section, chapter.index);
   paintMarks(section, chapter.index);
@@ -786,6 +790,8 @@ export async function open(bookId, opts = {}) {
   const images = (await store.byIndex('images', 'bookId', bookId))
     .filter((image) => !image.removed);
   state.images = new Map(images.filter((i) => i.blob).map((i) => [i.href, i.blob]));
+  // The book and its chapters are in: its index and picture reel can be drawn (app.js, bookReady).
+  opts.onBook?.(book);
   state.layout = await store.layoutFor(bookId);
   applyLayout(state.layout, await store.settings());
 
@@ -1211,8 +1217,8 @@ export function applyLayout(layout, settings) {
   root.setProperty('--read-align', layout.justified ? 'justify' : 'left');
   // Justified text needs a first-line indent or the paragraph breaks vanish.
   root.setProperty('--read-indent', layout.justified ? '1.2em' : '0');
-  root.setProperty('--read-face', layout.face === 'Archivo'
-    ? 'var(--font-heading)' : 'var(--font-body)');
+  // Newsreader, Archivo, or a font of your own (fonts.js).
+  root.setProperty('--read-face', faceFamily(layout.face));
   if (layout.ink) root.setProperty('--read-ink', layout.ink);
   else root.removeProperty('--read-ink');
 

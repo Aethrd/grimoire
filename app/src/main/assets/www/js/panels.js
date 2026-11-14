@@ -11,10 +11,11 @@ import {
   setVaultUnlocked, vaultUnlocked, countWorks, workOf, onShelf, hiddenBy, hiddenFolderList,
   collapseBundles, displayTitle, naturalOrder,
 } from './library.js';
-import { toast } from './screens.js';
+import { toast, setNoticeTopicsOff } from './screens.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
 import * as frames from './frame.js';
+import * as fonts from './fonts.js';
 
 const el = (id) => document.getElementById(id);
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -88,7 +89,9 @@ export async function openAppearance(host) {
   // pair that would put body text under 4.5:1 on the resulting ground.
   const accents = document.createElement('div');
   accents.className = 'field';
-  accents.innerHTML = '<label><span>Accent</span><span class="muted">Builds the whole ramp</span></label>';
+  accents.innerHTML = theme.gradientOf(settings.gradient)
+    ? '<label><span>Accent</span><span class="muted">Led by your gradient\'s main colour for now (below)</span></label>'
+    : '<label><span>Accent</span><span class="muted">Builds the whole ramp</span></label>';
   const swatches = document.createElement('div');
   swatches.className = 'swatches';
   for (const [name, hex] of theme.ACCENT_PRESETS) {
@@ -127,6 +130,7 @@ export async function openAppearance(host) {
   check.textContent = `Body text contrast ${ratio.toFixed(1)}:1 — ${ratio >= 4.5 ? 'passes' : 'blocked, using nearest passing step'}`;
   accents.appendChild(check);
   body.appendChild(accents);
+  body.appendChild(gradientField(settings, () => openAppearance(body)));
 
   // Background image + veil.
   const bg = document.createElement('div');
@@ -179,16 +183,7 @@ export async function openAppearance(host) {
   paletteHost.id = 'auto-palette';
   body.appendChild(paletteHost);
 
-  // Font import needs a bridge the shell does not have yet, so say so rather
-  // than shipping a control that quietly does nothing.
-  const fonts = document.createElement('div');
-  fonts.className = 'card';
-  fonts.innerHTML = `
-    <h2>Font import</h2>
-    <p class="muted" style="font-size:12px;line-height:1.5;margin:0">
-      Archivo and Newsreader come with the app. Adding your own .ttf or .otf
-      fonts is not possible yet.</p>`;
-  body.appendChild(fonts);
+  body.appendChild(fontsField(() => openAppearance(body)));
 
   function renderPalette(palette) {
     paletteHost.innerHTML = '';
@@ -216,6 +211,268 @@ export async function openAppearance(host) {
   }
 }
 
+/* ── the theme's gradient ──────────────────────────────────────────────
+ *
+ * What the download mark fills with, pause and resume are drawn in and every
+ * progress bar runs through: from a light step of the accent to a deep one,
+ * unless colours of your own are chosen -- two to five, each with a share of
+ * the length -- and in one direction everywhere, or each place its own. Kept
+ * with the theme, so a saved or sent theme carries it.
+ */
+function gradientField(settings, redraw) {
+  const steps = theme.ramp(settings.accent);
+  const own = theme.gradientOf(settings.gradient);
+  // The accent's own, as it is drawn (theme.apply: its 300 and 600 steps).
+  let stops = own ? own.stops.map((stop) => ({ ...stop }))
+    : [{ color: steps[2], share: 50 }, { color: steps[5], share: 50 }];
+  // Its angle in degrees, or null for Auto (each place its own).
+  let angle = theme.gradientAngle(settings.gradientDir);
+  const field = document.createElement('div');
+  field.className = 'field gradient-field';
+  field.innerHTML = `<label><span>Gradient</span><span class="muted">${own ? `Your own ${stops.length} colours, colouring the app by share` : 'Follows the accent'}</span></label>`;
+  const preview = document.createElement('div');
+  preview.className = 'gradient-preview';
+  const paint = () => {
+    preview.style.background = theme.gradientCss(theme.placeStops(stops), angle);
+    const total = stops.reduce((sum, stop) => sum + stop.share, 0) || 1;
+    field.querySelectorAll('.gradient-stop output').forEach((out, i) => { out.textContent = `${Math.round((stops[i].share / total) * 100)}%`; });
+  };
+  field.appendChild(preview);
+  const keep = async (patch) => {
+    const next = await store.saveSettings(patch);
+    theme.apply(next);
+    refreshTheme();
+    redraw();
+  };
+  const keepStops = () => keep({ gradient: theme.gradientOf({ stops }) });
+
+  /* Its direction, turned by degree: a dial to drag round (it settles on the
+   * eighths when close to one), a slider for the exact angle, and Auto. Seen
+   * in the preview as it turns; kept when let go. */
+  const ways = document.createElement('div');
+  ways.className = 'gradient-dirs';
+  ways.setAttribute('role', 'group');
+  ways.setAttribute('aria-label', 'Gradient direction');
+  const auto = document.createElement('button');
+  auto.type = 'button';
+  auto.className = 'chip';
+  auto.dataset.dir = 'auto';
+  auto.textContent = 'Auto';
+  auto.setAttribute('aria-label', 'Auto: each place its own direction');
+  auto.setAttribute('aria-pressed', String(angle === null));
+  auto.onclick = () => { if (angle !== null) keep({ gradientDir: 'auto' }); };
+  const dial = document.createElement('div');
+  dial.className = 'gradient-dial';
+  dial.setAttribute('aria-hidden', 'true');
+  dial.innerHTML = '<svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="18"/><g><path d="M20 30V10M14 16l6-6 6 6"/></g></svg>';
+  const turn = document.createElement('input');
+  turn.type = 'range';
+  turn.min = '0';
+  turn.max = '359';
+  turn.step = '1';
+  turn.setAttribute('aria-label', 'Gradient angle, in degrees');
+  const said = document.createElement('output');
+  const show = () => {
+    const at = angle ?? 90;
+    turn.value = String(at);
+    turn.style.setProperty('--filled', `${(at / 359) * 100}%`);
+    dial.querySelector('g').setAttribute('transform', `rotate(${at} 20 20)`);
+    said.textContent = angle === null ? 'Auto' : `${angle}°`;
+    paint();
+  };
+  turn.oninput = () => { angle = Number(turn.value); show(); };
+  turn.onchange = () => { angle = Number(turn.value); keep({ gradientDir: angle }); };
+  const fromPointer = (event) => {
+    const box = dial.getBoundingClientRect();
+    const dx = event.clientX - (box.left + box.width / 2), dy = event.clientY - (box.top + box.height / 2);
+    let at = Math.round((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
+    const eighth = Math.round(at / 45) * 45;
+    if (Math.abs(at - eighth) <= 4) at = eighth % 360;
+    angle = at;
+    show();
+  };
+  let turning = false;
+  dial.onpointerdown = (event) => { turning = true; dial.setPointerCapture?.(event.pointerId); fromPointer(event); };
+  dial.onpointermove = (event) => { if (turning) fromPointer(event); };
+  dial.onpointerup = dial.onpointercancel = () => { if (!turning) return; turning = false; keep({ gradientDir: angle }); };
+  ways.append(auto, dial, turn, said);
+  field.appendChild(ways);
+  queueMicrotask(show);
+
+  // The app's buttons and edges: each solid in its role's colour, or in the gradient itself.
+  const style = theme.COLOUR_STYLES[settings.colourStyle] ? settings.colourStyle : 'solid';
+  const styles = document.createElement('div');
+  styles.className = 'seg gradient-style';
+  styles.setAttribute('role', 'group');
+  styles.setAttribute('aria-label', 'Buttons and edges drawn in');
+  for (const [key, label] of Object.entries(theme.COLOUR_STYLES)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.style = key;
+    button.textContent = label;
+    button.setAttribute('aria-pressed', String(key === style));
+    button.onclick = () => { if (key !== style) keep({ colourStyle: key }); };
+    styles.appendChild(button);
+  }
+  field.appendChild(styles);
+
+  // What each colour colours: ranked by share, the largest leading the app.
+  const roles = document.createElement('ul');
+  roles.className = 'gradient-roles';
+  roles.setAttribute('aria-label', 'What each colour is used for');
+  const ranked = own ? theme.rolesOf(stops) : [steps[3], steps[2], steps[5], steps[1], steps[6]];
+  theme.ROLE_NAMES.forEach((name, i) => {
+    const item = document.createElement('li');
+    const dot = document.createElement('i');
+    dot.style.background = ranked[i];
+    const label = document.createElement('b');
+    label.textContent = name;
+    const part = document.createElement('span');
+    part.textContent = theme.ROLE_PARTS[i];
+    item.append(dot, label, part);
+    roles.appendChild(item);
+  });
+  field.appendChild(roles);
+
+  // Each colour: its own, its share, and taken out (while more than two).
+  const list = document.createElement('div');
+  list.className = 'gradient-stops';
+  stops.forEach((stop, i) => {
+    const row = document.createElement('div');
+    row.className = 'gradient-stop';
+    const colour = document.createElement('input');
+    colour.type = 'color';
+    colour.value = stop.color;
+    colour.setAttribute('aria-label', `Gradient colour ${i + 1}`);
+    // Shown as it moves; kept once chosen.
+    colour.oninput = () => { stops[i].color = colour.value.toLowerCase(); paint(); };
+    colour.onchange = () => { stops[i].color = colour.value.toLowerCase(); keepStops(); };
+    const share = document.createElement('input');
+    share.type = 'range';
+    share.min = '1';
+    share.max = '100';
+    share.step = '1';
+    share.value = String(stop.share);
+    share.setAttribute('aria-label', `Share of colour ${i + 1}`);
+    const fill = () => share.style.setProperty('--filled', `${((Number(share.value) - 1) / 99) * 100}%`);
+    fill();
+    share.oninput = () => { stops[i].share = Number(share.value); fill(); paint(); };
+    share.onchange = () => { stops[i].share = Number(share.value); keepStops(); };
+    const shown = document.createElement('output');
+    row.append(colour, share, shown);
+    if (stops.length > 2) {
+      const drop = document.createElement('button');
+      drop.type = 'button';
+      drop.className = 'icon-btn gradient-drop';
+      drop.title = `Remove colour ${i + 1}`;
+      drop.setAttribute('aria-label', drop.title);
+      drop.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      drop.onclick = () => { stops.splice(i, 1); keepStops(); };
+      row.appendChild(drop);
+    }
+    list.appendChild(row);
+  });
+  field.appendChild(list);
+
+  const row = document.createElement('div');
+  row.className = 'gradient-ends';
+  if (stops.length < theme.GRADIENT_MAX) {
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'chip';
+    add.textContent = '+ Add a colour';
+    // In before the last, as the blend there already was -- so nothing jumps until it is changed.
+    add.onclick = () => {
+      const placed = theme.placeStops(stops);
+      const mid = (placed[placed.length - 3].at + placed[placed.length - 2].at) / 2;
+      stops.splice(stops.length - 1, 0, { color: theme.colourAt(placed, mid), share: 50 });
+      keepStops();
+    };
+    row.appendChild(add);
+  }
+  if (own) {
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'chip';
+    back.textContent = 'Follow the accent';
+    back.onclick = () => keep({ gradient: null });
+    row.appendChild(back);
+  }
+  field.appendChild(row);
+  paint();
+  return field;
+}
+
+/* ── fonts of your own ─────────────────────────────────────────────────
+ *
+ * Picked from the phone, checked to be a font, kept, and from then on a
+ * face to read in -- chosen in Layout beside Newsreader and Archivo. Each
+ * is listed in its own face, with a way to let it go.
+ */
+function fontsField(redraw) {
+  const field = document.createElement('div');
+  field.className = 'field fonts-field';
+  field.innerHTML = '<label><span>Fonts</span><span class="muted">Your own, to read in — .ttf, .otf, .woff</span></label>';
+  const listBox = document.createElement('div');
+  listBox.className = 'font-list';
+  field.appendChild(listBox);
+  fonts.list().then((kept) => {
+    if (!kept.length) {
+      listBox.innerHTML = '<p class="muted" style="font-size:12px;margin:0">Newsreader and Archivo come with the app. '
+        + 'Add a font, then choose it in Layout as you would those.</p>';
+      return;
+    }
+    for (const font of kept) {
+      const row = document.createElement('div');
+      row.className = 'font-row';
+      const name = document.createElement('span');
+      name.className = 'font-name';
+      name.style.fontFamily = fonts.faceFamily(`font:${font.id}`);
+      name.textContent = font.name;
+      const sample = document.createElement('small');
+      sample.className = 'muted';
+      sample.style.fontFamily = fonts.faceFamily(`font:${font.id}`);
+      sample.textContent = 'The quick brown fox · 永遠の物語 · 이야기';
+      const text = document.createElement('span');
+      text.className = 'font-text';
+      text.append(name, sample);
+      const remove = document.createElement('button');
+      remove.className = 'theme-remove';
+      remove.setAttribute('aria-label', `Remove ${font.name}`);
+      remove.textContent = '✕';
+      remove.onclick = async () => {
+        await fonts.remove(font.id);
+        toast(`${font.name} removed — books read in it go back to Newsreader`, 4000);
+        redraw();
+      };
+      row.append(text, remove);
+      listBox.appendChild(row);
+    }
+  }).catch(() => {});
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = fonts.FONT_ACCEPT;
+  input.hidden = true;
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    try {
+      const font = await fonts.add(file);
+      toast(`${font.name} added — choose it in Layout`, 4000);
+      redraw();
+    } catch (error) {
+      toast(error.message || 'That font could not be added.', 6000);
+    }
+  };
+  const add = document.createElement('button');
+  add.className = 'btn ghost block';
+  add.textContent = 'Add a font…';
+  add.onclick = () => input.click();
+  field.append(input, add);
+  return field;
+}
+
 /* ── themes ───────────────────────────────────────────────────────────
  *
  * The look, kept by name: saved from what is set now, switched between with
@@ -229,7 +486,8 @@ export async function openAppearance(host) {
  *  "some file", and a picker asked only for JSON greys those out. */
 const THEME_ACCEPT = `application/json,text/plain,application/octet-stream,.json,${blobs.COVER_ACCEPT}`;
 
-const sameLook = (a, b) => theme.THEME_KEYS.every((key) => (a[key] ?? null) === (b[key] ?? null));
+// A gradient is two colours: the same look when both are.
+const sameLook = (a, b) => theme.THEME_KEYS.every((key) => JSON.stringify(a[key] ?? null) === JSON.stringify(b[key] ?? null));
 
 function themesField(settings, redraw) {
   const field = document.createElement('div');
@@ -1461,10 +1719,53 @@ function entryOf(item) {
   return { book: item, title: displayTitle(first) || 'Untitled', also: others };
 }
 
+/* The list, as text to paste somewhere: a folder's, or all of them, each
+ * folder under its name and count, its books numbered in the order shown,
+ * a bundle's other titles beside its first. */
+const listLine = (entry, n) => `${n}. ${entry.title}${entry.also.length ? ` (${entry.also.join(' · ')})` : ''}`;
+const folderText = (name, entries) => [`${name} (${entries.length})`, ...entries.map((entry, i) => listLine(entry, i + 1))].join('\n');
+
+async function copyPlain(text) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('no clipboard');
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Older WebViews: the copy command, from a box made for it and taken away.
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    if (!ok) throw new Error('The phone would not take the copy');
+  }
+}
+
+function copyButton(label, text, said) {
+  const button = document.createElement('button');
+  button.className = 'chip folder-copy';
+  button.type = 'button';
+  button.textContent = label;
+  button.onclick = async (event) => {
+    // In a folder's heading: copies, and leaves the folder open or shut as it was.
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await copyPlain(text());
+      toast(said);
+    } catch (error) {
+      toast(`Could not copy — ${error.message}`);
+    }
+  };
+  return button;
+}
+
 function folderLists(shelf, hidden, onOpen) {
   const section = document.createElement('section');
   section.className = 'block folder-lists';
-  section.innerHTML = '<h2>In each folder</h2>';
+  section.innerHTML = '<div class="folder-lists-head"><h2>In each folder</h2></div>';
 
   const listed = shelf.filter((book) => !hiddenBy(book.folder || '', hidden));
   const away = new Set(shelf.filter((book) => hiddenBy(book.folder || '', hidden))
@@ -1484,16 +1785,25 @@ function folderLists(shelf, hidden, onOpen) {
   // Loose books first, then the folders by name, numbers in number order.
   const folders = [...byFolder.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : naturalOrder(a, b)));
   const total = [...byFolder.values()].reduce((n, list) => n + list.length, 0);
+  const nameOf = (folder) => (folder ? folder.split('/').join(' / ') : 'Not in a folder');
+  for (const folder of folders) byFolder.get(folder).sort((a, b) => naturalOrder(a.title, b.title));
+  // The whole list: every folder shown, as it is shown.
+  section.querySelector('.folder-lists-head').appendChild(copyButton('Copy list',
+    () => folders.map((folder) => folderText(nameOf(folder), byFolder.get(folder))).join('\n\n'),
+    `List copied · ${total} book${total === 1 ? '' : 's'} in ${folders.length} folder${folders.length === 1 ? '' : 's'}`));
   for (const folder of folders) {
-    const entries = byFolder.get(folder).sort((a, b) => naturalOrder(a.title, b.title));
+    const entries = byFolder.get(folder);
     const box = document.createElement('details');
     box.className = 'folder-list';
     // Open when the whole library is short enough to read at a glance.
     box.open = total <= 60;
     // The whole path: a folder inside another reads as where it is.
-    const name = folder ? folder.split('/').join(' / ') : 'Not in a folder';
+    const name = nameOf(folder);
     box.innerHTML = `<summary><span>${escape(name)}</span>`
       + `<small class="muted">${entries.length}</small></summary>`;
+    // Just this folder's.
+    box.querySelector('summary').appendChild(copyButton('Copy', () => folderText(name, entries),
+      `“${name}” copied · ${entries.length} book${entries.length === 1 ? '' : 's'}`));
     const list = document.createElement('ol');
     for (const entry of entries) {
       const row = document.createElement('li');
@@ -1774,6 +2084,7 @@ export async function openVault(onVaultChange, host) {
     backupRow.appendChild(button);
   }
   data.appendChild(backupRow);
+  if (backupHooks?.available()) data.appendChild(await autoBackupBlock());
 
   const restoreBtn = document.createElement('button');
   restoreBtn.className = 'btn ghost block';
@@ -1789,6 +2100,11 @@ export async function openVault(onVaultChange, host) {
       if (!file) return;
       try {
         const report = await store.importBackup(JSON.parse(await readText(file)));
+        // The look comes back at once -- accent, gradient, its direction and roles -- not at the next launch.
+        theme.apply(await store.settings());
+        // And which kinds of notice pop up.
+        setNoticeTopicsOff((await store.settings()).noticesOff);
+        refreshTheme();
         // Said plainly, including what could not be matched: a backup restored
         // before the books are back is half a restore, and should say so.
         toast(report.missing
@@ -1839,6 +2155,7 @@ export async function openVault(onVaultChange, host) {
         const count = await store.importSettings(JSON.parse(await readText(file)));
         const next = await store.settings();
         theme.apply(next);
+        setNoticeTopicsOff(next.noticesOff);
         refreshTheme();
         toast(`${count} setting${count === 1 ? '' : 's'} imported`, 4000);
       } catch (error) {
@@ -1928,11 +2245,13 @@ async function renderTextPane(body) {
   faces.innerHTML = '<p class="eyebrow">Face</p>';
   const faceRow = document.createElement('div');
   faceRow.className = 'chip-row wrap';
-  for (const [face, family] of [['Newsreader', 'var(--font-body)'], ['Archivo', 'var(--font-heading)']]) {
+  for (const [face, family, label] of [['Newsreader', 'var(--font-body)'], ['Archivo', 'var(--font-heading)'],
+    // Fonts of your own (Settings, Appearance): each chip set in its own face.
+    ...(await fonts.list()).map((font) => [`font:${font.id}`, fonts.faceFamily(`font:${font.id}`), font.name])]) {
     const chip = document.createElement('button');
     chip.className = 'chip';
     chip.style.cssText = `font-family:${family};text-transform:none`;
-    chip.textContent = face;
+    chip.textContent = label || face;
     chip.setAttribute('aria-pressed', String(layout.face === face));
     chip.onclick = async () => { await store.saveLayout(0, { face }); renderSettings(); };
     faceRow.appendChild(chip);
@@ -1991,6 +2310,79 @@ async function renderLayoutPane(body) {
 }
 
 let onWriteOut = null;
+
+/* Automatic backups, set here and run by the app (app.js): { available, state,
+ * set, chooseFolder, now }. */
+let backupHooks = null;
+export function onAutoBackup(hooks) { backupHooks = hooks; }
+
+/** How often, how many kept, into which folder, and when the last was made. */
+async function autoBackupBlock() {
+  const box = document.createElement('div');
+  box.className = 'auto-backup';
+  const paint = async () => {
+    const state = await backupHooks.state();
+    box.replaceChildren();
+    const head = document.createElement('p');
+    head.className = 'eyebrow';
+    head.textContent = 'Automatic backups';
+    box.appendChild(head);
+    const said = document.createElement('p');
+    said.className = 'muted auto-backup-note';
+    const when = state.lastAt ? new Date(state.lastAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+    said.textContent = !state.folder
+      ? 'Saved on their own into a folder you choose: on a schedule, or when the queue finishes. The newest few are kept, older ones removed; one you save by hand is never touched.'
+      : `${state.every || state.afterQueue ? 'On' : 'Off'} · into “${state.folder}” · the newest ${state.keep} kept`
+        + `${when ? ` · last ${when}` : ' · none yet'}${state.lastError ? ` · last try failed: ${state.lastError}` : ''}.`
+        + ' Made while the app is open (Android does not let it wake itself for this).';
+    box.appendChild(said);
+    const chips = (label, options, current, pick) => {
+      const row = document.createElement('div');
+      row.className = 'chip-row wrap';
+      const name = document.createElement('span');
+      name.className = 'muted';
+      name.textContent = label;
+      row.appendChild(name);
+      for (const [text, value] of options) {
+        const chip = document.createElement('button');
+        chip.className = 'chip';
+        chip.textContent = text;
+        chip.setAttribute('aria-pressed', String(value === current));
+        chip.onclick = async () => { await pick(value); paint(); };
+        row.appendChild(chip);
+      }
+      box.appendChild(row);
+    };
+    const needFolder = async () => state.folder || (await backupHooks.chooseFolder());
+    chips('Every', [['Off', null], ['Day', 'day'], ['Week', 'week']], state.every, async (every) => {
+      if (every && !(await needFolder())) return;
+      await backupHooks.set({ every });
+    });
+    chips('Also', [['When the queue finishes', true], ['No', false]], state.afterQueue, async (afterQueue) => {
+      if (afterQueue && !(await needFolder())) return;
+      await backupHooks.set({ afterQueue });
+    });
+    chips('Keep', [['3', 3], ['5', 5], ['10', 10], ['20', 20]], state.keep, (keep) => backupHooks.set({ keep }));
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;margin-top:6px';
+    const folder = document.createElement('button');
+    folder.className = 'btn ghost';
+    folder.style.flex = '1';
+    folder.textContent = state.folder ? 'Change folder' : 'Choose folder';
+    folder.onclick = async () => { await backupHooks.chooseFolder(); paint(); };
+    const now = document.createElement('button');
+    now.className = 'btn ghost';
+    now.style.flex = '1';
+    now.textContent = 'Back up now';
+    now.disabled = !state.folder;
+    now.onclick = async () => { now.disabled = true; await backupHooks.now(); };
+    row.append(folder, now);
+    box.appendChild(row);
+  };
+  backupHooks.repaint = paint;
+  await paint();
+  return box;
+}
 /** How a file leaves the app; supplied by the shell, which owns the bridge. */
 export function onWrite(fn) { onWriteOut = fn; }
 

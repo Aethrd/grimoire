@@ -12,7 +12,7 @@
  */
 
 import * as store from './store.js';
-import { chapterHtml } from './parse.js';
+import { chapterHtml, spacedByLines } from './parse.js';
 import { SIZES, shrinkPicture, describeSaving } from './shrink.js';
 
 const escapeXml = (text) => String(text ?? '')
@@ -184,6 +184,8 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
     const id = `ch${at + 1}`;
 
     let body = chapterHtml(chapter);
+    // Spaced by its own blank lines (parse.js): said on its section, for the stylesheet.
+    const lines = spacedByLines(body);
     // Point the markup at the renamed pictures, and drop any reference whose
     // picture is not here rather than writing a broken one.
     body = body.replace(/<img\b[^>]*\bdata-img="([^"]*)"[^>]*>/g, (whole, href) => {
@@ -205,7 +207,7 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
       + `<head><title>${escapeXml(chapter.title)}</title>`
       + '<meta charset="utf-8"/>'
       + '<link rel="stylesheet" type="text/css" href="../style.css"/></head>'
-      + `<body><section epub:type="chapter">${body}</section></body></html>`,
+      + `<body><section epub:type="chapter"${lines ? ' class="lines"' : ''}>${body}</section></body></html>`,
       TEXT);
 
     manifest.push(`<item id="${id}" href="${file}" media-type="application/xhtml+xml"/>`);
@@ -218,6 +220,18 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
     'body { margin: 0 5%; line-height: 1.5; }\n'
     + 'h1, h2, h3 { line-height: 1.25; }\n'
     + 'img { max-width: 100%; height: auto; }\n'
+    /* A chapter spaced by its own blank lines (a line to a paragraph, empty
+     * paragraphs between its beats -- Kakuyomu, Narou, most web serials):
+     * those lines its spacing, no gap after each line and no indent on top
+     * of the author's own full-width space. */
+    + 'section.lines p { margin: 0; text-indent: 0; }\n'
+    // Japanese and Chinese set a little more open, as their own books are.
+    + ':lang(ja) body, :lang(zh) body { line-height: 1.75; }\n'
+    // Furigana small over its word; emphasis dots (傍点) as dots, upright.
+    + 'ruby { ruby-position: over; -epub-ruby-position: over; }\n'
+    + 'rt { font-size: 0.5em; }\n'
+    + 'em.dots { font-style: normal; -webkit-text-emphasis: filled sesame; -epub-text-emphasis-style: filled sesame; '
+    + 'text-emphasis: filled sesame; -webkit-text-emphasis-position: over right; text-emphasis-position: over right; }\n'
     // A cover added in the app is a page of its own there, and here.
     + 'figure.grimoire-cover { margin: 0; text-align: center; page-break-after: always; break-after: page; }\n', TEXT);
 

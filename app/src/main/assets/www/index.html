@@ -37,6 +37,12 @@
         <h1>Library</h1>
         <p class="eyebrow" id="library-counts">No books yet</p>
       </div>
+      <!-- What the notices of the last day said: here only when there are some,
+           a dot while any is unread. A notice held down opens the same list. -->
+      <button class="icon-btn notices-btn" id="notices-btn" title="Recent notices" hidden>
+        <svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>
+        <span class="notices-dot" id="notices-dot" hidden></span>
+      </button>
       <button class="icon-btn" data-go="vault" title="Private vault">
         <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
       </button>
@@ -354,12 +360,87 @@
   <!-- The workshop: several files in, one book out. -->
   <section class="screen" data-screen="workshop">
     <header class="app-head">
+      <!-- The book being built, minimised: to the index of every novel, this one and the queue's. -->
+      <button class="icon-btn" id="build-minimise" hidden title="All the novels: this one and the queue">
+        <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
       <div class="app-head-title"><h1>Build a book</h1><p class="eyebrow" id="build-eyebrow">Join files into one</p></div>
       <button class="btn ghost" id="build-web" title="Chapters from a website">Website</button>
       <button class="btn primary" id="build-add">Add files</button>
     </header>
 
     <div class="scroll pad" id="build-body">
+      <!-- Files from Syosetu's PDFs, rebuilt as they are added: one chapter an episode,
+           cleaned up (see syosetu.js). Pressed for such a novel; off again after. -->
+      <div class="build-modes">
+        <button class="chip" id="build-syosetu" aria-pressed="false"
+          title="For 小説家になろう (Syosetu) PDFs, or EPUBs made from them: one chapter an episode, page numbers and broken lines mended, vertical punctuation set right, notes kept.">Syosetu PDF</button>
+        <small class="muted" id="build-syosetu-note">Off — files are added as they are.</small>
+      </div>
+      <!-- Above both views -- the book in Build and every novel -- so a book that
+           stopped (or was cut off by an update) is never out of sight. -->
+      <!-- Overnight: when the next try of a stopped build is, and a way to stop it. -->
+      <div class="build-leftover build-overnight-note" id="build-overnight-note" hidden></div>
+      <!-- Chapters a website would not give last time, kept to try again. -->
+      <div id="build-leftovers"></div>
+      <!-- Every novel at once: the one in Build (tap it to open it), the queue's,
+           and another to add -- queued, a book of its own. -->
+      <!-- A queued novel not yet started, opened from the index: named, given a
+           cover and its chapters changed, as a book in Build is. -->
+      <div id="build-job-edit" hidden>
+        <!-- Paused, waiting to try again, or held: where it stands, and why it stopped, in full. -->
+        <p class="job-stopped" id="job-stopped" hidden></p>
+        <label class="field"><span>Title</span>
+          <input class="query" id="job-title" type="text" autocomplete="off" placeholder="What the book will be called">
+        </label>
+        <label class="field"><span>Author</span>
+          <input class="query" id="job-author" type="text" autocomplete="off" placeholder="Optional">
+        </label>
+        <div class="field build-cover-field">
+          <span>Cover</span>
+          <div class="details-head">
+            <span class="details-cover" id="job-cover"></span>
+            <span class="col">
+              <button class="btn ghost" id="job-cover-site" aria-pressed="true">The site's cover</button>
+              <button class="btn ghost" id="job-cover-pick" aria-pressed="false">Choose a picture…</button>
+              <small class="muted" id="job-cover-note"></small>
+            </span>
+          </div>
+        </div>
+        <!-- Where it is filed once built: the folder the shelf was open at when it was queued, or another. -->
+        <div id="job-folder"></div>
+        <div class="field"><span>Chapters</span>
+          <p class="muted job-chapters" id="job-chapters"></p>
+          <button class="btn ghost" id="job-chapters-edit">Change chapters…</button>
+        </div>
+        <p class="muted build-index-note">Kept as you type. Back (top left) to every novel.</p>
+      </div>
+      <div id="build-index" hidden>
+        <button class="build-index-card" id="build-index-current" hidden>
+          <b id="build-index-name"></b><small class="muted" id="build-index-state"></small></button>
+      <!-- Websites waiting their turn, each with its own chapters ticked: built
+           into a book each, one after another, at the Website screen's settings. -->
+      <div class="build-leftover build-queue" id="build-queue" hidden>
+        <div class="build-queue-head">
+          <strong id="build-queue-title">Queue</strong>
+          <!-- Locked: nothing removed or moved by a slip of the finger. -->
+          <button class="icon-btn build-queue-lock" id="build-queue-lock" aria-pressed="false" title="Lock the queue"></button>
+          <!-- Start, pause all, resume all: drawn (app.js, playButton), named for a screen reader. -->
+          <button class="play-btn" id="build-queue-go" aria-label="Start queue"></button>
+        </div>
+        <small class="muted" id="build-queue-note"></small>
+        <!-- How many books side by side, and from one site (sliders); finished ones cleared. -->
+        <div class="chip-row build-queue-once" id="build-queue-once"></div>
+        <ol class="build-queue-list" id="build-queue-list"></ol>
+      </div>
+        <button class="btn primary build-index-add" id="build-index-add">Add a novel…</button>
+        <p class="muted build-index-note">
+          Each novel added here is queued as a book of its own, with its own chapters ticked.
+          Start queue downloads them, a few at once but never two from the same site, all at the
+          Website screen's delay and pictures. A book whose site says stop waits for you; the
+          others go on. One that stops for any other reason is tried again in 15 minutes.
+        </p>
+      </div>
+      <div id="build-detail">
       <div id="build-naming" hidden>
         <label class="field"><span>Title</span>
           <input class="query" id="build-title" type="text" autocomplete="off"
@@ -388,8 +469,6 @@
         </p>
       </div>
 
-      <!-- Chapters a website would not give last time, kept to try again. -->
-      <div id="build-leftovers"></div>
 
       <p class="muted" id="build-empty" style="line-height:1.6">
         Add the parts of a serial — volumes, chapters, image archives, or the
@@ -397,6 +476,20 @@
         comics, EPUBs, PDFs and websites all mix.
       </p>
       <div id="build-list"></div>
+      <!-- Books from the shelf, picked there in order: only when asked for, so
+           the Shelf tab mid-download is just the shelf. -->
+      <button class="btn ghost build-from-shelf" id="build-from-shelf">Add books from the shelf…</button>
+      <!-- A notification when it is built, paused or stopped: an hour of
+           downloading need not be watched. Remembered. -->
+      <label class="web-check build-notify" id="build-notify-row" hidden>
+        <input type="checkbox" id="build-notify"> Notify me when it's built or stops
+      </label>
+      <!-- Overnight: a website that stops is carried on every 15 minutes,
+           until it is all there. Remembered. -->
+      <label class="web-check build-notify" id="build-overnight-row" hidden>
+        <input type="checkbox" id="build-overnight"> Overnight: if it stops, carry on every 15 minutes until it's done
+      </label>
+      </div>
     </div>
 
     <footer class="stepper" id="build-foot" hidden>
@@ -423,20 +516,67 @@
       <div class="web-row">
         <button class="btn ghost" id="web-paste">Paste</button>
         <label class="web-check"><input type="checkbox" id="web-direct"> These are the chapters</label>
+        <!-- Picked by hand in the site itself: long-press a chapter and drag over the
+             rest. For a list all on one page; remembered. -->
+        <label class="web-check" id="web-pick-row" hidden><input type="checkbox" id="web-pick"> Pick in the browser</label>
         <button class="btn primary" id="web-find">Find links</button>
+        <!-- The same page read again, waiting longer: for a site whose list
+             arrives late. Shown once a search has been made. -->
+        <button class="btn ghost" id="web-more" hidden>Search for more</button>
+        <!-- The site itself, shown over the app: to pass a check it puts up
+             ("Just a moment…"), or to see it as the downloader does. -->
+        <button class="btn ghost" id="web-open" hidden>Open the site</button>
+        <!-- Its cookies, kept from launch to launch, forgotten: for a site stuck on a check. -->
+        <button class="btn ghost web-forget" id="web-forget" hidden>Forget this site's cookies</button>
       </div>
+      <!-- The contents list's own pace: paging through a list is quick work for a
+           reader, unlike reading a chapter, so it has its own, shorter delay. -->
+      <div class="web-list-rate">
+        <label class="web-rate"><span>Between list pages</span>
+          <input id="web-list-delay" type="number" inputmode="numeric" min="0" max="60000" step="250" value="4000">
+          <span>ms</span></label>
+        <label class="web-rate"><span>Give or take <small class="muted" id="web-list-range"></small></span>
+          <input id="web-list-jitter" type="number" inputmode="numeric" min="0" max="60000" step="250" value="2000">
+          <span>ms</span></label>
+      </div>
+      <!-- Which site the delays are for: each site's are remembered and come back with its address. -->
+      <p class="muted web-site-delays" id="web-site-delays" hidden></p>
+      <!-- A site whose pages its own script puts right: read as the browser shows them. Kept for the site. -->
+      <label class="web-check web-in-browser" id="web-in-browser-row" hidden>
+        <input type="checkbox" id="web-in-browser">
+        <span>Read this site's chapters in the browser
+          <small class="muted">For a site whose text comes out of order or jumbled: its own script puts it right, as you see it on the site. Slower; remembered for the site.</small></span>
+      </label>
       <p class="muted web-note" id="web-note">
         Paste the address of a book's contents page. Every link on it is listed
         — the chapters, and whatever else the site put there. Untick what is
         not the book, and the rest goes into Build as one part, a chapter a
         page, downloaded when you build. More than one address, one per line,
-        and their links are put together.
+        and their links are put together — the same book on other sites, after
+        the first, fills in the chapters the first is missing, and stands in for
+        any of its chapters that will not come.
       </p>
+      <!-- Where this book's download stopped last time: resume, or start over. -->
+      <div class="build-leftover web-resume" id="web-resume" hidden></div>
 
       <div id="web-picked" hidden>
         <label class="field"><span>Title</span>
           <input class="query" id="web-title" type="text" autocomplete="off" placeholder="What the book will be called">
         </label>
+        <label class="field"><span>Author</span>
+          <input class="query" id="web-author" type="text" autocomplete="off" placeholder="Who wrote it">
+        </label>
+        <div class="field build-cover-field" id="web-cover-field">
+          <span>Cover</span>
+          <div class="details-head">
+            <span class="details-cover empty" id="web-cover"><span>No cover yet</span></span>
+            <span class="col">
+              <button class="btn ghost" id="web-cover-site" aria-pressed="true">The site's cover</button>
+              <button class="btn ghost" id="web-cover-pick" aria-pressed="false">Choose a picture…</button>
+              <small class="muted" id="web-cover-note"></small>
+            </span>
+          </div>
+        </div>
         <input class="query" id="web-filter" type="search" autocomplete="off"
                placeholder="Show only links containing…">
         <label class="web-rate"><span>Delay between pages</span>
@@ -446,14 +586,34 @@
         <label class="web-rate"><span>Give or take <small class="muted" id="web-range"></small></span>
           <input id="web-jitter" type="number" inputmode="numeric" min="0" max="60000" step="50" value="0">
           <span>ms</span></label>
-        <div class="chip-row web-tools">
-          <button class="chip" id="web-likely" title="Tick the links that look like chapters, untick the rest">Just the chapters</button>
-          <button class="chip" id="web-all">Tick shown</button>
-          <button class="chip" id="web-none">Untick shown</button>
-          <button class="chip" id="web-menus">Untick menus</button>
-          <button class="chip" id="web-reverse" aria-pressed="false">Reverse order</button>
-          <button class="chip" id="web-pictures" aria-pressed="true">Pictures</button>
+        <!-- Where the book is filed: the folder the shelf was open at, or another. -->
+        <div class="web-folder" id="web-folder"></div>
+        <!-- What is ticked, and how it comes: every button in view, none behind a
+             sideways scroll -- two to a row on a phone, all four across when wide. -->
+        <div class="web-tools">
+          <div class="web-tools-group" role="group" aria-labelledby="web-tick-label">
+            <span class="web-tools-label" id="web-tick-label">Tick</span>
+            <div class="web-tools-grid">
+              <button class="chip" id="web-likely" title="Tick the links that look like chapters, untick the rest">Just the chapters</button>
+              <button class="chip" id="web-all">Tick shown</button>
+              <button class="chip" id="web-none">Untick shown</button>
+              <button class="chip" id="web-menus">Untick menus</button>
+            </div>
+          </div>
+          <div class="web-tools-group" role="group" aria-labelledby="web-get-label">
+            <span class="web-tools-label" id="web-get-label">Download</span>
+            <div class="web-tools-grid three">
+              <button class="chip" id="web-reverse" aria-pressed="false">Reverse order</button>
+              <button class="chip" id="web-pictures" aria-pressed="true" title="Whether the pictures on each page are downloaded too. Remembered for every site.">Pictures: on</button>
+              <!-- Off, Auto (only where a chapter's text comes out garbled), Always: kept for the site. -->
+              <button class="chip" id="web-ocr" aria-pressed="false" disabled
+                title="Read each chapter's words by OCR, from the page as it shows -- for a site whose text comes out garbled. Slower; remembered for the site. Tap: off, auto, always.">OCR: off</button>
+            </div>
+          </div>
         </div>
+        <!-- Chapters missing from the ticked ones' numbers: said, so nobody has to
+             comb 400 numbers for the one that is not there. -->
+        <p class="web-gaps" id="web-gaps" hidden></p>
         <ol class="web-list" id="web-list"></ol>
       </div>
     </div>
@@ -461,6 +621,8 @@
     <footer class="stepper" id="web-foot" hidden>
       <button class="btn ghost" id="web-clear">Clear</button>
       <span class="muted" id="web-count"></span>
+      <!-- Into the queue instead: a book of its own, built after the ones before it. -->
+      <button class="btn ghost" id="web-queue" title="Built as a book of its own, after the websites queued before it">Queue</button>
       <button class="btn primary" id="web-go">Add to Build</button>
     </footer>
   </section>
@@ -510,7 +672,9 @@
     </header>
     <div class="scroll pad" id="bin-body"></div>
     <footer class="stepper" id="bin-foot" hidden>
-      <button class="btn ghost" id="bin-restore-all">Put all back</button>
+      <!-- Picks every book, or puts the picked back. Never "put all back" at a
+           tap: nobody tips the bin out for one thing. -->
+      <button class="btn ghost" id="bin-restore-all">Select all</button>
       <span class="muted" id="bin-count"></span>
       <button class="btn danger" id="bin-destroy">Delete for good</button>
     </footer>
@@ -588,6 +752,11 @@
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
     <span>Details</span>
   </button>
+  <!-- Missing, repeated, cut-off or empty chapters, site text left in (check.js). -->
+  <button data-act="check">
+    <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/><path d="M7.5 10.5l2 2 3.5-4"/></svg>
+    <span>Check</span>
+  </button>
   <button data-act="vault">
     <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
     <span>Vault</span>
@@ -606,6 +775,49 @@
 </div>
 
 <!-- Any picture in any of the books being built, as the built book's cover. -->
+<!-- A Syosetu novel whose episode list the site would not give: pasted from its 目次. -->
+<div class="sheet-scrim" id="syosetu-sheet" hidden>
+  <div class="sheet syosetu-sheet" role="dialog" aria-labelledby="syosetu-sheet-title">
+    <p class="eyebrow" id="syosetu-sheet-title">Syosetu · episode list</p>
+    <p class="muted" id="syosetu-sheet-what"></p>
+    <textarea id="syosetu-titles" rows="10" spellcheck="false"
+      placeholder="Paste the novel's 目次: a title a line. Dates are passed over; put “# ” before an arc's heading."></textarea>
+    <div class="sheet-actions" style="border:0;background:none;padding:10px 0 0">
+      <button class="btn ghost" id="syosetu-skip">Add it as it is</button>
+      <button class="btn primary" id="syosetu-use">Use this list</button>
+    </div>
+  </div>
+</div>
+
+<!-- A book checked for missing or broken content (check.js): problems, things
+     to look at, notes; a chapter's line opens the book there. -->
+<div class="sheet-scrim" id="notices-sheet" hidden>
+  <div class="sheet notices-sheet" role="dialog" aria-labelledby="notices-title">
+    <p class="eyebrow" id="notices-title">Recent notices</p>
+    <p class="muted notices-note">The last day's, newest first. Gone when the app starts afresh.
+      Pop up as they come — tap a kind to keep it here only:</p>
+    <div class="notices-topics" id="notices-topics"></div>
+    <div class="notices-list" id="notices-list"></div>
+    <div class="sheet-actions notices-actions">
+      <button class="btn ghost" id="notices-clear">Clear</button>
+      <button class="btn primary" id="notices-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-scrim" id="check-sheet" hidden>
+  <div class="sheet check-sheet" role="dialog" aria-labelledby="check-sheet-title">
+    <p class="eyebrow" id="check-sheet-title">Check</p>
+    <p class="check-summary muted" id="check-summary"></p>
+    <div class="check-list" id="check-list"></div>
+    <div class="sheet-actions check-actions">
+      <button class="btn ghost" id="check-boundaries" title="Every chapter's last lines and the next one's first, as a text file">Boundaries</button>
+      <button class="btn ghost" id="check-save">Save report</button>
+      <button class="btn primary" id="check-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-scrim" id="cover-pick-sheet" hidden>
   <div class="sheet cover-pick">
     <p class="eyebrow">Cover from the books</p>
@@ -749,6 +961,27 @@
       <button class="btn ghost" id="export-cancel">Cancel</button>
       <button class="btn ghost" id="export-send">Send</button>
       <button class="btn primary" id="export-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Many books written out: as one zip, or in parts -- each a zip of its own,
+     all saved into one folder chosen once. -->
+<div class="sheet-scrim" id="export-many-sheet" hidden>
+  <div class="sheet">
+    <p class="eyebrow" id="export-many-title">Write out books</p>
+    <p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 10px">
+      A few hundred books in one zip is hard to move and to import. In parts,
+      each zip holds a share of them, in folder order, and all of them are
+      saved into one folder you choose once. Importing them, in any order,
+      gives each book back its folder and the rest from your backup as before.
+    </p>
+    <p class="eyebrow">How many zips</p>
+    <div class="chip-row wrap" id="export-many-parts"></div>
+    <p class="muted" id="export-many-note" style="font-size:12px;margin:6px 0 12px"></p>
+    <div class="sheet-actions" style="border:0;background:none;padding:0">
+      <button class="btn ghost" id="export-many-cancel">Cancel</button>
+      <button class="btn primary" id="export-many-go">Save</button>
     </div>
   </div>
 </div>
@@ -932,13 +1165,41 @@
      about how far along it is reads as a hang. -->
 <!-- A row per operation: two builds at once are two bars, each saying how far
      its own build has got. -->
+<!-- What is running: small, a strip of its own above the tab bar (the screens
+     make room for it, so it covers nothing); tapped, a page of its own with
+     every row, scrolled; made small again from its top, or by Back. -->
 <div class="import-progress" id="import-progress" hidden>
-  <div class="jobs" id="jobs"></div>
-  <p class="muted jobs-more" id="jobs-more" hidden></p>
-  <span class="jobs-summary" id="jobs-summary"></span>
-  <button class="icon-btn jobs-minimise" id="import-minimise" title="Get out of the way">
-    <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+  <button class="jobs-strip" id="jobs-strip" aria-label="Show everything running">
+    <span class="jobs-strip-fill" id="jobs-strip-fill"></span>
+    <span class="jobs-summary" id="jobs-summary"></span>
+    <svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>
   </button>
+  <div class="jobs-page" id="jobs-page">
+    <header class="jobs-head">
+      <strong id="jobs-title">Running</strong>
+      <button class="icon-btn" id="jobs-scene-btn" title="Animation" aria-label="Animation behind the queue" aria-expanded="false" aria-controls="jobs-scene-row">
+        <svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+      <button class="icon-btn jobs-minimise" id="import-minimise" title="Make small" aria-label="Make small">
+        <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+    </header>
+    <!-- How strongly the scene shows behind the queue: 0 (off) to 100. -->
+    <label class="queue-slider jobs-scene-row" id="jobs-scene-row" hidden>
+      <span class="muted">Animation</span>
+      <input type="range" id="jobs-scene-opacity" min="0" max="100" step="1" value="22" aria-label="Animation opacity">
+      <output id="jobs-scene-shown">22%</output>
+    </label>
+    <div class="jobs" id="jobs"></div>
+    <!-- The opening scene, faint, under the books' progress (opening.js). -->
+    <canvas class="jobs-scene" id="jobs-scene" aria-hidden="true"></canvas>
+  </div>
+</div>
+
+<!-- While a book takes more than a moment to open: the opening scene (opening.js). -->
+<div class="opening" id="opening" hidden>
+  <canvas class="opening-scene" id="opening-scene" aria-hidden="true"></canvas>
+  <div class="opening-caption" role="status"><b id="opening-title"></b><small id="opening-meta"></small></div>
 </div>
 
 <!-- Sits opposite Android's own selection menu, never over it. -->

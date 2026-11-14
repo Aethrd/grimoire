@@ -1139,7 +1139,9 @@ console.log('\nnot out to the shelf');
 
 await t('a finished build opens the book it made, not the shelf', () => {
   const app = read('app/src/main/assets/www/js/app.js');
-  const go = app.slice(app.indexOf("el('build-go').onclick"), app.indexOf("el('build-go').onclick") + 4500);
+  // The whole handler, to the next function: it grows (pause, notify).
+  const go = app.slice(app.indexOf("el('build-go').onclick"), app.indexOf('\nfunction wireReader('));
+  assert.ok(go.length > 1000 && go.length < 20000, 'the handler was not found');
   assert.ok(!/show\('library'\)/.test(go), 'building still ends on the shelf');
   assert.match(go, /openBook\(made\)/);
   const divide = app.slice(app.indexOf("el('divide-go').onclick"), app.indexOf("el('divide-go').onclick") + 1500);
@@ -1228,6 +1230,64 @@ await t('the reel holds to save, and the viewer saves the picture rather than it
   assert.match(java, /Environment\.DIRECTORY_PICTURES \+ File\.separator \+ "Quire"/);
   // No storage permission is asked for: before Android 10 it asks where.
   assert.match(java, /SDK_INT < Build\.VERSION_CODES\.Q\) \{\s*main\.offerExport\(file, mimeType, false\)/);
+});
+
+await t('the index and the reel tapped while a book is still opening wait for it, never "Open a book"', async () => {
+  const reader = await import(www('reader.js'));
+  const id = await comic(5);
+  // Back to the shelf, and the new book's tile drawn.
+  while (!el('tabbar').hidden && document.body.dataset.view !== 'library') tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(300);
+  // Opened, and Images tapped at once -- before the book is in.
+  tap(document.querySelector(`[data-book="${id}"]`));
+  tap(document.querySelector('[data-go="reel"]'));
+  await settle(600);
+  assert.equal(reader.state.book?.id, id);
+  assert.equal(document.body.dataset.view, 'reel');
+  assert.ok(!/Open a book/.test(el('reel-grid').textContent), el('reel-grid').textContent);
+  assert.equal(el('reel-grid').querySelectorAll('img').length, 5);
+  // And the index, the same way.
+  tap(document.querySelector('[data-back]') || el('tabbar'));
+  await settle(300);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /case 'toc':[\s\S]{0,200}return bookReady\(\)\.then\(\(\) => current === 'toc' && screens\.openToc\(goToChapter\)\);/);
+  assert.match(app, /if \(opening\) \{ el\('reel-grid'\)\.innerHTML = '<p class="muted" style="padding:24px 0">Opening the book…<\/p>'; return; \}/);
+});
+
+await t('the books a shelf search finds can be exported, as the shelf picks can', async () => {
+  // Two books sharing a word; searched for from the shelf, through the app's own way in.
+  const first = await comic(2);
+  const second = await comic(2);
+  for (const [id, title] of [[first, 'Lantern Road'], [second, 'Lantern Keeper']]) {
+    await store.put('books', { ...(await store.get('books', id)), title });
+  }
+  el('tabbar').hidden = false;
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle(200);
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(300);
+  assert.equal(document.body.dataset.view, 'library');
+  tap(document.querySelector('[data-screen="library"] [data-go="find"]') || document.querySelector('[data-go="find"]'));
+  await settle(200);
+  el('find-input').value = 'Lantern';
+  el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle(500);
+  const bar = el('find-results').querySelector('.find-actions');
+  assert.ok(bar, 'no export above what was found');
+  assert.match(bar.textContent, /2 books found/);
+  const button = bar.querySelector('button');
+  assert.equal(button.textContent, 'Export 2…');
+  tap(button);
+  await settle(200);
+  // The shelf's own choice for several: one zip, or in parts.
+  assert.equal(el('export-many-sheet').hidden, false, 'the export sheet did not open');
+  assert.match(el('export-many-title').textContent, /Write out 2 books/);
+  tap(el('export-many-cancel'));
+  // Inside a book, the search is the book's: nothing to export there.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /screens\.initFind\(goToMatch, cameFrom === 'reader', exportFound\)/);
 });
 
 console.log(`\n${pass} assertions passed`);
