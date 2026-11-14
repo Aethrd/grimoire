@@ -2856,6 +2856,11 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   // Dragging: the list kept for the drag, only a change of the chapter under the finger marks again, and the edge scrolls each frame.
   assert.match(java, /if\(a===lastTo\)return;lastTo=a;moved=true;mark\(p\.from,a\);/);
   assert.match(java, /roll=requestAnimationFrame\(tick\)/);
+  // Moved at once on a site that scrolls smoothly, and where the body is what scrolls.
+  assert.match(java, /html,body,\*\{scroll-behavior:auto!important\}/);
+  assert.match(java, /var scrollIn=function\(b,dy\)\{var t=b\|\|rootScroller\(\);/);
+  // By time, deeper and longer held the faster.
+  assert.match(java, /var sp=\(0\.5\+4\.5\*Math\.pow\(Math\.abs\(d\),1\.5\)\)\*\(1\+Math\.min\(2,\(now-zoneAt\)\/1200\)\);scrollIn\(box,Math\.round\(\(d>0\?1:-1\)\*sp\*dt\)\)/);
   assert.equal(JSON.parse(w.eval(script('PICKED'))).length, 8);
   // A tap through the cover: a chapter marked (not followed), first then last.
   const tapAt = (a) => { under = a; touch('touchstart', 100); touch('touchend', 100); };
