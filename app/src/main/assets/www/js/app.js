@@ -882,8 +882,8 @@ function paintSelection() {
   // Actions that only make sense for one book, or for any book at all.
   for (const button of el('select-actions').children) {
     const act = button.dataset.act;
-    // Details works for several books too: their folder and status.
-    const single = act === 'open';
+    // Details works for several books too: their folder and status. Check reads one book.
+    const single = act === 'open' || act === 'check';
     button.disabled = single ? count !== 1 : count === 0;
   }
 }
@@ -992,6 +992,11 @@ function wireSelection() {
      * They were two more buttons beside this one, doing part of what it does;
      * one book gets its whole details sheet, several get the part of it that
      * applies to all of them at once. */
+    // Checked for missing or broken content, one book at a time; a bundle asks which edition.
+    check: () => oneSelected({ text: 'Choose one book to check', verb: 'Check which edition?' }, (book) => {
+      clearSelection();
+      checkBook(book);
+    }),
     details: async () => {
       // One bundle: its leader's details, with folder and status for every
       // edition -- the title and cover are the leader's own.

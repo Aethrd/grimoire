@@ -393,6 +393,9 @@ await t('a book checked for what goes wrong in a download: gaps, typos, duplicat
   // Held down on a book: Check for problems, its report in a sheet, a chapter's line opening the book there.
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /choice\('Check for problems', [^\n]*\(\) => checkBook\(book\)\);/);
+  // And on the shelf, books selected by holding one: Check, in the actions under them.
+  assert.match(app, /check: \(\) => oneSelected\(\{ text: 'Choose one book to check'[^\n]*\n\s+clearSelection\(\);\n\s+checkBook\(book\);/);
+  assert.match(read('app/src/main/assets/www/index.html'), /<button data-act="check">/);
   assert.match(app, /row\.onclick = \(\) => \{ sheet\.hidden = true; openBook\(book, \{ chapter: chapter\.index \}\); \};/);
   assert.match(app, /check\.boundariesText\(res\)/);
   const html = read('app/src/main/assets/www/index.html');

@@ -120,7 +120,7 @@ t('actions are labelled, not a row of bare glyphs', () => {
   const acts = [...grid.matchAll(/data-act="(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(acts,
     ['open', 'bundle', 'merge', 'build', 'blur', 'trim', 'redact', 'export',
-      'details', 'vault', 'delete']);
+      'details', 'check', 'vault', 'delete']);
   // Folder and status are in Details, for one book or several -- not two
   // more buttons beside it doing part of the same job.
   assert.match(app, /if \(books\.length === 1\) return openDetails\(books\[0\]\);\s*if \(books\.length > 1\) return openGroupDetails\(books\);/);
