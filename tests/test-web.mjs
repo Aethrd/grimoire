@@ -1632,7 +1632,9 @@ await t('a rendered page that holds another chapter than the one asked for is no
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /renderer = Executors\.newFixedThreadPool\(RENDER_BROWSERS\)/);
   // A page asked for before a Pause, still waiting its turn, is not opened after it.
-  assert.match(java, /while \(renderingSites\.contains\(siteKey\) && stops\.get\(\) == askedAt\) renderingSites\.wait\(\);\s+\/\/[^\n]*\n\s+if \(stops\.get\(\) != askedAt\) throw new IOException\("paused"\);/);
+  assert.match(java, /while \(renderingSites\.contains\(siteKey\) && stops\.get\(\) == askedAt && !clearedSince\(address, requestedAt\)\) renderingSites\.wait\(\);\s+\/\/[^\n]*\n\s+if \(stops\.get\(\) != askedAt\) throw new IOException\("paused"\);/);
+  // A cleared link's list page still waiting its turn is never opened.
+  assert.match(java, /if \(clearedSince\(address, requestedAt\)\) throw new IOException\("cleared"\);\s+renderingSites\.add\(siteKey\);/);
   assert.match(java, /public void stopAll\(\) \{\s+stops\.incrementAndGet\(\);/);
   assert.match(java, /renderingSites\.remove\(siteKey\);\s+renderingSites\.notifyAll\(\);/);
   // A browser reading a page is not given another; its events go to its own page.
