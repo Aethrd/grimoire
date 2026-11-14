@@ -2041,7 +2041,7 @@ await t('the progress strip sits on the tab bar by its real height, and at the f
   // No position measured off the window: the bar's own height, kept as it shows, hides and changes.
   assert.ok(!/window\.innerHeight - bar\.getBoundingClientRect\(\)\.top/.test(app), 'still measured off the window');
   // To the fraction of a pixel, and lapping the bar's top edge by one: no sliver of the shelf between them.
-  assert.match(app, /const shown = bar && !bar\.hidden && bar\.getClientRects\(\)\.length;\s+const height = shown \? Math\.max\(0, bar\.getBoundingClientRect\(\)\.height - 1\) : 0;\s+document\.documentElement\.style\.setProperty\('--tabbar-real', shown \? `\$\{height\.toFixed\(2\)\}px` : '0px'\);/);
+  assert.match(app, /const shown = bar && !bar\.hidden && bar\.getClientRects\(\)\.length;\s+const height = shown \? Math\.max\(0, bar\.getBoundingClientRect\(\)\.height - 1\) : 0;[\s\S]{0,400}const value = shown \? `\$\{height\.toFixed\(2\)\}px` : '0px';/);
   assert.ok(!/bar\.offsetHeight/.test(app.slice(app.indexOf('function seat()'), app.indexOf('function watchSeat()'))), 'still rounded to a whole pixel');
   assert.match(app, /new MutationObserver\(seat\)\.observe\(bar, \{ attributes: true, attributeFilter: \['hidden', 'class', 'style'\] \}\)/);
   assert.match(css, /\.import-progress \{ position: fixed;[^}]*bottom: max\(var\(--safe-bottom\), var\(--tabbar-real, calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\) \+ 1px\)\)\); \}/);
@@ -2255,6 +2255,29 @@ await t('the gradient colours the app: ranked by share into roles, the largest l
   assert.equal(document.documentElement.dataset.colourStyle, 'gradient');
   await store.saveSettings({ gradient: null, colourStyle: 'solid' });
   theme.apply(await store.settings());
+});
+
+await t('the strip holds still while a field is typed in (the system\u2019s Paste bubble is not taken away), and catches up after', async () => {
+  const app = await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const field = document.createElement('input');
+  field.type = 'search';
+  document.body.appendChild(field);
+  const finish = app.progress.start('Holding still');
+  finish.say('Reading', 0.1);
+  await settle(20);
+  const summary = el('jobs-summary');
+  const before = summary.textContent;
+  field.focus();
+  finish.say('Reading', 0.6);
+  await settle(20);
+  assert.equal(summary.textContent, before, 'the strip changed under the field');
+  field.blur();
+  await settle(20);
+  assert.notEqual(summary.textContent, before, 'the strip did not catch up once the field was left');
+  finish();
+  field.remove();
+  // The page's root property set only when it changes.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /if \(value !== seatedAt\) \{\s+seatedAt = value;\s+document\.documentElement\.style\.setProperty\('--tabbar-real', value\);/);
 });
 
 await t('a book resumed after a pause: its cover mark goes on from where it was, not from nothing', async () => {

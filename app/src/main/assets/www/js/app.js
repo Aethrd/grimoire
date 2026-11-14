@@ -2634,7 +2634,7 @@ function pickFiles() {
  * bar. The panel is up while any row is. A finished row stays for a moment
  * marked done, rather than vanishing mid-glance, so you see it complete.
  */
-const progress = (() => {
+export const progress = (() => {
   const jobs = [];
   let counter = 0;
 
@@ -2660,11 +2660,19 @@ const progress = (() => {
      * the strip laps over the bar's top edge rather than stopping short of it. */
     const shown = bar && !bar.hidden && bar.getClientRects().length;
     const height = shown ? Math.max(0, bar.getBoundingClientRect().height - 1) : 0;
-    document.documentElement.style.setProperty('--tabbar-real', shown ? `${height.toFixed(2)}px` : '0px');
+    /* Set only when it has changed: a property on the page's root, set again, has the
+     * whole page worked out again -- once a second for each download, which took away
+     * the system's Paste bubble from under the finger (sometimes, while downloading). */
+    const value = shown ? `${height.toFixed(2)}px` : '0px';
+    if (value !== seatedAt) {
+      seatedAt = value;
+      document.documentElement.style.setProperty('--tabbar-real', value);
+    }
     // An older build's own placement, gone.
     const host = panel();
-    if (host) host.style.bottom = '';
+    if (host && host.style.bottom) host.style.bottom = '';
   }
+  let seatedAt = '';
   let seated = false;
   function watchSeat() {
     if (seated) return;
@@ -2753,9 +2761,24 @@ const progress = (() => {
     }
   }
 
+  /* While a field is being typed in, the strip is left as it is -- caught up the
+   * moment the field is left: anything moving on the page puts away the system's
+   * Paste bubble and selection handles, and with downloads running the strip
+   * moved every second. Its words and bar are changed only when they change. */
+  let paintHeld = false;
   function paint() {
     const host = panel();
     if (!host) return;
+    if (typingField(document.activeElement) && jobs.length) {
+      if (!paintHeld) {
+        paintHeld = true;
+        document.addEventListener('focusout', () => {
+          paintHeld = false;
+          setTimeout(paint, 0);
+        }, { once: true });
+      }
+      return;
+    }
     const live = jobs.filter((job) => !job.ended);
     host.hidden = jobs.length === 0;
     if (!jobs.length) host.classList.remove('open');
@@ -2767,16 +2790,19 @@ const progress = (() => {
     const summary = el('jobs-summary');
     const average = live.length ? live.reduce((sum, job) => sum + (job.fraction || 0), 0) / live.length : 1;
     if (summary) {
-      summary.textContent = live.length > 1
+      const said = live.length > 1
         ? `${live.length} running · ${Math.round(average * 100)}% on average · tap to see each`
         : live.length === 1
           ? `${live[0].label}${live[0].count ? ` · ${live[0].count}` : ` · ${Math.round((live[0].fraction || 0) * 100)}%`}`
           : 'Done';
+      if (summary.textContent !== said) summary.textContent = said;
     }
     const fill = el('jobs-strip-fill');
-    if (fill) fill.style.width = `${Math.round(average * 100)}%`;
+    const width = `${Math.round(average * 100)}%`;
+    if (fill && fill.style.width !== width) fill.style.width = width;
     const title = el('jobs-title');
-    if (title) title.textContent = live.length ? `Running · ${live.length}` : 'Done';
+    const named = live.length ? `Running · ${live.length}` : 'Done';
+    if (title && title.textContent !== named) title.textContent = named;
   }
 
   function makeRow(label) {
@@ -11722,11 +11748,13 @@ async function settleMisplacedOnce(settings) {
  * of its last showing, is let go: the typing, and the clipboard, stay as they
  * were. A back after the keyboard has been closed goes on as ever. */
 const TYPING_BACK_MS = 1200;
-function backWhileTyping() {
-  const field = document.activeElement;
-  const typing = field && (field.isContentEditable || field.tagName === 'TEXTAREA'
+/** A field words are typed into (not a checkbox, slider or button). */
+function typingField(field) {
+  return !!field && (field.isContentEditable || field.tagName === 'TEXTAREA'
     || (field.tagName === 'INPUT' && !/^(checkbox|radio|range|button|submit|reset|color|file|image)$/i.test(field.type || '')));
-  if (!typing) return false;
+}
+function backWhileTyping() {
+  if (!typingField(document.activeElement)) return false;
   return !!window.GrimoireIme || Date.now() - (window.GrimoireImeAt || 0) < TYPING_BACK_MS;
 }
 
