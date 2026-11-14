@@ -2571,17 +2571,18 @@ await t('a copy from the shell that is not the same file is refused, not importe
   delete window.GrimoireNative;
 });
 
-await t('a copy the shell stages is at an address of its own, never one fetched before', async () => {
+await t('a copy the shell found by its name goes in, though Android keeps an old size for it; every copy at an address of its own', async () => {
   const fsMod = await import('node:fs');
   const bytes = fsMod.readFileSync(path.join(root, 'tests/fixtures/comic.cbz'));
   let how = null;
   window.GrimoireNative = {
     stageForRead(stageId) {
-      setTimeout(() => window.Grimoire.settleFile(stageId, true, 'handoff://s9-1-renewed volume.zip'), 10);
+      setTimeout(() => window.Grimoire.settleFile(stageId, true, 'handoff://s9-1-renewed volume.zip#named'), 10);
     },
   };
+  // Saved over with a fresh copy: the size Android gives is the old one.
   globalThis.fetch = async (url, options) => { how = options; return { ok: true, status: 200, blob: async () => new window.Blob([bytes], { type: 'application/zip' }) }; };
-  pickFiles([refusing('renewed volume.zip', bytes.length)]);
+  pickFiles([refusing('renewed volume.zip', bytes.length + 321)]);
   await untilIdle();
   await settle(200);
   assert.ok((await store.all('books')).find((b) => b.title === 'renewed volume'), 'the rescued file never came in');
@@ -2590,8 +2591,7 @@ await t('a copy the shell stages is at an address of its own, never one fetched 
   // Named apart: a Korean title was all underscores, the same as others of its lengths.
   const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
   assert.match(activity, /String safe = id \+ "-" \+ System\.currentTimeMillis\(\) \+ "-"/);
-  // And a copy of another size is refused, whoever found it.
-  assert.doesNotMatch(read('app/src/main/assets/www/js/app.js'), /#named/);
+  assert.match(activity, /\(named \? "#named" : ""\)/);
 });
 
 await t('picked again while a copy is here but off the shelf: where it is, by the title it has here', async () => {
@@ -3210,6 +3210,44 @@ await t('a divided paragraph is made whole again, with its text as it was', asyn
   p.normalize();
   assert.equal(host.textContent, text);
   assert.equal(host.querySelectorAll('p').length, 1);
+});
+
+await t('notices that faded are kept a day: the bell on the Library, a notice held down, cleared', async () => {
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  screensMod.clearNotices();
+  el('notices-sheet').hidden = true;
+  assert.equal(el('notices-btn').hidden, true, 'a bell with nothing behind it');
+  screensMod.toast('Nothing new to add · 1 already on your shelf · “Somewhere”', 7000);
+  screensMod.toast('3 books added', 6000, { kind: 'done' });
+  screensMod.toast('3 books added', 6000, { kind: 'done' });
+  assert.equal(el('notices-btn').hidden, false);
+  assert.equal(el('notices-dot').hidden, false, 'no sign of unread notices');
+  el('notices-btn').click();
+  assert.equal(el('notices-sheet').hidden, false);
+  const rows = [...el('notices-list').querySelectorAll('.notice-row')];
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /3 books added \(×2\)/);
+  assert.match(rows[1].textContent, /already on your shelf · “Somewhere”/);
+  assert.ok(rows[0].classList.contains('done'));
+  assert.equal(el('notices-dot').hidden, true, 'still unread once read');
+  el('notices-close').click();
+  // Held down, a notice opens the same list.
+  screensMod.toast('One more', 4000);
+  el('toast').dispatchEvent(new window.Event('pointerdown'));
+  await settle(650);
+  assert.equal(el('notices-sheet').hidden, false);
+  assert.equal(el('toast').hidden, true);
+  // A day on, gone.
+  const realNow = Date.now;
+  Date.now = () => realNow() + 25 * 60 * 60 * 1000;
+  try { assert.equal(screensMod.notices().length, 0); } finally { Date.now = realNow; }
+  el('notices-clear').click();
+  assert.equal(screensMod.notices().length, 0);
+  el('notices-close').click();
+  // Memory only: nothing of it written anywhere, so a fresh start (or an update) has none.
+  const source = read('app/src/main/assets/www/js/screens.js');
+  const kept = source.slice(source.indexOf('const HISTORY_FOR'), source.indexOf('export function onToastHold'));
+  assert.doesNotMatch(kept, /localStorage|sessionStorage|store\.|indexedDB/);
 });
 
 console.log(`\n${pass} assertions passed`);

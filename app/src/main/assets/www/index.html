@@ -37,6 +37,12 @@
         <h1>Library</h1>
         <p class="eyebrow" id="library-counts">No books yet</p>
       </div>
+      <!-- What the notices of the last day said: here only when there are some,
+           a dot while any is unread. A notice held down opens the same list. -->
+      <button class="icon-btn notices-btn" id="notices-btn" title="Recent notices" hidden>
+        <svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>
+        <span class="notices-dot" id="notices-dot" hidden></span>
+      </button>
       <button class="icon-btn" data-go="vault" title="Private vault">
         <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
       </button>
@@ -780,6 +786,18 @@
 
 <!-- A book checked for missing or broken content (check.js): problems, things
      to look at, notes; a chapter's line opens the book there. -->
+<div class="sheet-scrim" id="notices-sheet" hidden>
+  <div class="sheet notices-sheet" role="dialog" aria-labelledby="notices-title">
+    <p class="eyebrow" id="notices-title">Recent notices</p>
+    <p class="muted notices-note">The last day's, newest first. Gone when the app starts afresh.</p>
+    <div class="notices-list" id="notices-list"></div>
+    <div class="sheet-actions notices-actions">
+      <button class="btn ghost" id="notices-clear">Clear</button>
+      <button class="btn primary" id="notices-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-scrim" id="check-sheet" hidden>
   <div class="sheet check-sheet" role="dialog" aria-labelledby="check-sheet-title">
     <p class="eyebrow" id="check-sheet-title">Check</p>

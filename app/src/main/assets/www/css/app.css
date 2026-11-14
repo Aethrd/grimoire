@@ -2925,3 +2925,22 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .check-item.goes { cursor: pointer; }
 .check-ok { padding: 18px 2px; color: var(--muted); }
 .check-actions { flex: none; border: 0; background: none; padding: 10px 0 0; gap: 8px; flex-wrap: wrap; }
+
+/* Recent notices: the bell on the Library, and the list it opens. */
+.notices-btn { position: relative; }
+.notices-btn[hidden] { display: none; }
+.notices-dot { position: absolute; top: 9px; right: 9px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 2px var(--bg); }
+.notices-dot[hidden] { display: none; }
+#notices-sheet .notices-sheet { display: flex; flex-direction: column; max-height: 80%; overflow: hidden; }
+.notices-note { flex: none; margin: 2px 0 8px; font-size: 12px; }
+.notices-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.notice-row { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: start;
+  padding: 10px 2px; border-bottom: 1px solid var(--divider); font-size: 13.5px; line-height: 1.45; }
+.notice-row .mark { font-weight: 700; text-align: center; color: var(--muted); }
+.notice-row.done .mark { color: var(--accent); }
+.notice-row.failed .mark { color: var(--danger, #d4544c); }
+.notice-row .text { overflow-wrap: anywhere; }
+.notice-row .when { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.notices-empty { padding: 18px 2px; color: var(--muted); }
+.notices-actions { flex: none; border: 0; background: none; padding: 10px 0 0; }

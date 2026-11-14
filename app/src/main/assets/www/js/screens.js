@@ -1208,6 +1208,54 @@ let toastTimer = null;
 const lines = [];
 const MOST = 4;
 
+/* ── what the notices said, for a while ─────────────────────────────────
+ *
+ * A notice fades on its own, often before it has been read -- the reason a
+ * book did not come in, which book "already here" meant. So each is kept,
+ * to be read again (the bell on the Library, or a notice held down).
+ *
+ * Kept in memory only, and for a day at most: gone when the app is started
+ * afresh, which an update also does. Nothing written anywhere.
+ */
+const HISTORY_FOR = 24 * 60 * 60 * 1000;
+const HISTORY_MOST = 200;
+const history = [];
+let seenUpTo = 0;   // the count of notices kept, when they were last read
+let keptCount = 0;
+const listeners = new Set();
+
+function prune(now = Date.now()) {
+  while (history.length && now - history[0].at > HISTORY_FOR) history.shift();
+  while (history.length > HISTORY_MOST) history.shift();
+}
+
+function remember(text, kind, now) {
+  if (!text) return;
+  const last = history[history.length - 1];
+  // The same thing said again is one entry, said that many times, at the latest time.
+  keptCount += 1;
+  if (last && last.text === text) { last.repeat += 1; last.at = now; last.n = keptCount; } else history.push({ text, kind, at: now, repeat: 1, n: keptCount });
+  prune(now);
+  for (const fn of listeners) { try { fn(); } catch { /* a listener's trouble is its own */ } }
+}
+
+/** What the notices of the last day said, newest first. */
+export function notices() {
+  prune();
+  return history.slice().reverse();
+}
+/** Read: the newest of them no longer counts as unseen. */
+export function noticesSeen() { seenUpTo = keptCount; for (const fn of listeners) { try { fn(); } catch { /* */ } } }
+export const unseenNotices = () => { prune(); return history.filter((entry) => entry.n > seenUpTo).length; };
+/** The notice on screen put away now (the list of them opened over it). */
+export function dismissToast() { lines.length = 0; clearTimeout(toastTimer); const node = el('toast'); if (node) node.hidden = true; }
+export function clearNotices() { history.length = 0; noticesSeen(); }
+/** Told whenever a notice is kept, read or cleared. */
+export function onNotices(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+/** What holding a notice down does (set by the app: the list of them). */
+let onHold = null;
+export function onToastHold(fn) { onHold = fn; }
+
 /**
  * @param message  what to say
  * @param ms       how long this line stays
@@ -1220,6 +1268,7 @@ export function toast(message, ms = 2200, options = {}) {
   if (!node) return;
   const now = Date.now();
   const text = String(message ?? '');
+  remember(text, options.kind || null, now);
 
   // Whatever is on screen is still on screen; a hidden banner starts afresh.
   if (node.hidden) lines.length = 0;
@@ -1239,6 +1288,18 @@ export function toast(message, ms = 2200, options = {}) {
     // Tapping it puts it away: four lines of notices over the page are worth
     // dismissing without waiting for them.
     node.onclick = () => { lines.length = 0; clearTimeout(toastTimer); node.hidden = true; };
+    // Held down: every notice of the last day, this one with them.
+    let hold = null;
+    const cancel = () => { clearTimeout(hold); hold = null; };
+    node.addEventListener('pointerdown', () => {
+      cancel();
+      hold = setTimeout(() => {
+        hold = null;
+        lines.length = 0; clearTimeout(toastTimer); node.hidden = true;
+        onHold?.();
+      }, 500);
+    });
+    for (const type of ['pointerup', 'pointercancel', 'pointerleave']) node.addEventListener(type, cancel);
   }
 
   paintToast(node);

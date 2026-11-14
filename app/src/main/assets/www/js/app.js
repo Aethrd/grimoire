@@ -1830,6 +1830,58 @@ function showCheck(book, res) {
   sheet.hidden = false;
 }
 
+/* ── recent notices (screens.js keeps them: a day, in memory) ───────────── */
+
+function paintNoticesBell() {
+  const button = el('notices-btn');
+  if (!button) return;
+  const all = screens.notices();
+  button.hidden = !all.length;
+  el('notices-dot').hidden = !screens.unseenNotices();
+  if (!el('notices-sheet').hidden) paintNotices();
+}
+
+const noticeWhen = (at) => {
+  const ago = Math.max(0, Date.now() - at);
+  const clock = new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (ago < 60000) return `just now · ${clock}`;
+  if (ago < 3600000) return `${Math.round(ago / 60000)} min ago · ${clock}`;
+  return `${Math.round(ago / 3600000)} h ago · ${clock}`;
+};
+
+function paintNotices() {
+  const list = el('notices-list');
+  list.innerHTML = '';
+  const all = screens.notices();
+  if (!all.length) {
+    const none = document.createElement('p');
+    none.className = 'notices-empty';
+    none.textContent = 'Nothing in the last day.';
+    list.appendChild(none);
+    return;
+  }
+  for (const entry of all) {
+    const row = document.createElement('div');
+    row.className = `notice-row${entry.kind ? ` ${entry.kind}` : ''}`;
+    row.innerHTML = `<span class="mark">${entry.kind === 'failed' ? '✕' : entry.kind === 'done' ? '✓' : '•'}</span>`
+      + `<span class="text">${escapeText(entry.text)}${entry.repeat > 1 ? ` <span class="muted">(×${entry.repeat})</span>` : ''}</span>`
+      + `<span class="when">${escapeText(noticeWhen(entry.at))}</span>`;
+    list.appendChild(row);
+  }
+}
+
+function openNotices() {
+  const sheet = el('notices-sheet');
+  screens.dismissToast();   // they are all in the list; the one on screen would only cover it
+  paintNotices();
+  el('notices-list').scrollTop = 0;
+  el('notices-clear').onclick = () => { screens.clearNotices(); paintNotices(); paintNoticesBell(); };
+  el('notices-close').onclick = () => { sheet.hidden = true; };
+  sheet.onclick = (event) => { if (event.target === sheet) sheet.hidden = true; };
+  sheet.hidden = false;
+  screens.noticesSeen();
+}
+
 /** The delete confirmation is shared, so it is put back the way it was. */
 function resetConfirm() {
   el('confirm-yes').textContent = 'Delete';
@@ -3157,9 +3209,14 @@ async function rescueFile(file, job = null) {
     /* The same file, or nothing. The shell finds the file by its name and
      * size; a copy that comes back a different size is some other file, and
      * imported under this one's name it was a duplicate of a book already
-     * on the shelf wearing the wrong title. Even where the shell found it by
-     * name: a copy of another size is not taken on trust. */
-    if (file.size > 0 && blob.size !== file.size) {
+     * on the shelf wearing the wrong title. Unless the shell found it by its
+     * name ("#named"): then it is the very file picked, and only the size
+     * Android keeps for it is out of date -- a file saved over with a fresh
+     * copy keeps its old size there, and the page, held to that size, cannot
+     * read it at all (which is why the shell was asked). Which book it then
+     * is, is the import's to say, by the file's own identity and title. */
+    const named = /#named$/.test(url);
+    if (!named && file.size > 0 && blob.size !== file.size) {
       throw new Error('the copy Android handed back was a different file');
     }
     return new File([blob], file.name, { type: file.type || blob.type });
@@ -12155,6 +12212,9 @@ window.Grimoire = {
     if (closeCoverPick()) return true;
     if (tags.closeTagPicker()) return true;
     if (!el('ocr-sheet').hidden) { closeOcr(); return true; }
+    if (!el('notices-sheet').hidden) { el('notices-sheet').hidden = true; return true; }
+    if (!el('check-sheet').hidden) { el('check-sheet').hidden = true; return true; }
+    if (!el('syosetu-sheet').hidden) { el('syosetu-skip').click(); return true; }
     if (!el('picture-sheet').hidden) { el('picture-sheet').hidden = true; return true; }
     if (!el('folder-actions').hidden) { el('folder-actions').hidden = true; return true; }
     if (!el('export-sheet').hidden) { el('export-sheet').hidden = true; return true; }
@@ -12279,6 +12339,11 @@ async function boot() {
   wireChapterPad();
   paintChapterPad(settings);
   screens.onLongPressBook(openBookMenu);
+  // Recent notices: the bell on the Library, and a notice held down.
+  screens.onNotices(paintNoticesBell);
+  screens.onToastHold(openNotices);
+  el('notices-btn').onclick = openNotices;
+  paintNoticesBell();
   refreshGuides();
 
   /* If the app died last time, say so.
