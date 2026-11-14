@@ -592,6 +592,14 @@ await t('a chapter short the same way twice is kept as the site has it, said so;
     /had not finished loading/);
   await assert.rejects(only(6, ''), /had not finished loading/);
   await assert.rejects(only(7, '<p>로딩 중...</p>'), /had not finished loading/);
+  // The site's page saying it could not load the chapter: never kept, however often; waited out as a slow-down, and it halts the queue's site.
+  await assert.rejects(only(8, '<p>불러오지 못했습니다.</p>'), (error) => web.siteFailed(error) && /the site could not load the chapter — its page said “[^”]*불러오지 못했습니다/.test(error.message));
+  assert.ok(web.siteFailed('329화 내일 (2): the site could not load the chapter — its page said “불러오지 못했습니다.”'));
+  assert.ok(!web.siteFailed(new Error('the chapter had not finished loading on the site (the page held 7 characters: "로딩 중...")')));
+  const appSource = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(appSource, /const queueHalts = \(reason\) => [^\n]*web\.siteFailed\(reason\)/);
+  const webSource = fs.readFileSync(new URL('../app/src/main/assets/www/js/web.js', import.meta.url), 'utf8');
+  assert.match(webSource, /waits = siteFailed\(error\) \? \[\.\.\.wait\.refresh\]/);
   // Read once only, it is not yet the same twice: a single short read still stops.
   await assert.rejects(web.readPages([{ url: 'https://m.example/c/2', text: '2화' }],
     { fetchPage, gap: 0, pictures: false, patience: { retry: 0, refresh: [0], backoff: [], cool: 0 } }), /had not finished loading/);

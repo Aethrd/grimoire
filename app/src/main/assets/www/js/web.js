@@ -247,9 +247,24 @@ export function notLoadedYet(url, held = '') {
   askAgain(url, false);
   const text = tidy(held);
   const sample = text.length > 140 ? `${text.slice(0, 140)}…` : text;
+  /* Not still loading: the site's own page saying it could not load the
+   * chapter ("불러오지 못했습니다"). Its reader asked its server and was
+   * refused or failed -- most often a site turning a reader away for asking
+   * too often, without saying so. Waited out as "too many requests" is,
+   * not asked again seconds later. */
+  const line = text.length < 600 && SITE_FAILED_LINE.exec(text);
+  if (line) {
+    return Object.assign(new Error(`${SITE_FAILED} — its page said “${sample}”`), { notLoaded: true, siteFailed: true });
+  }
   return Object.assign(new Error(`the chapter had not finished loading on the site (the page held ${text.length} characters${sample ? `: "${sample}"` : ''})`),
     { notLoaded: true });
 }
+
+/** A site's page saying it could not load the chapter, in the languages it might. */
+const SITE_FAILED_LINE = /불러오(?:지|기에?) ?(?:못|실패)|불러올 ?수 ?없|로드(?:하지)? ?(?:못|실패)|failed to load|could ?n['’]?o?t load|unable to load|error loading|加载失败|載入失敗|读取失败|讀取失敗|読み込み(?:に)?失敗|読み込めません/i;
+const SITE_FAILED = 'the site could not load the chapter';
+/** The site's page said it could not load the chapter: waited out like "too many requests". */
+export const siteFailed = (error) => !!error?.siteFailed || String(error?.message || error || '').includes(SITE_FAILED);
 
 /** Whether this address's site is one rendered page by page. */
 function renderedHere(url) {
@@ -2200,7 +2215,8 @@ export async function readPage(link, index, {
     const bare = story?.cloneNode(true);
     for (const heading of bare?.querySelectorAll('h1, h2, h3, h4') || []) heading.remove();
     const said = tidy(bare?.textContent);
-    const thin = story && (said || drawn) && !waitScreen(story.innerHTML) ? `${words.length}|${drawn}|${words.slice(0, 80)}` : '';
+    // Nor a page saying it could not load the chapter, however often it says so.
+    const thin = story && (said || drawn) && !waitScreen(story.innerHTML) && !(said.length < 600 && SITE_FAILED_LINE.test(said)) ? `${words.length}|${drawn}|${words.slice(0, 80)}` : '';
     if (!thin || thin !== thinAs) throw Object.assign(notLoadedYet(link.url, heldText), thin ? { thin } : {});
     const note = doc.createElement('p');
     note.className = 'thin-chapter';
@@ -2882,7 +2898,8 @@ export async function readPages(links, {
           // time -- not the minute and more a refusing site is given.
           // So is a page of a site rendered page by page: each try is a
           // whole browser's worth of waiting.
-          waits = error?.notLoaded || renderedHere(link.url) ? wait.backoff.slice(0, 2)
+          waits = siteFailed(error) ? [...wait.refresh]
+            : error?.notLoaded || renderedHere(link.url) ? wait.backoff.slice(0, 2)
             : gone(error) ? [wait.retry]
             : tooMany(error) ? [...wait.refresh]
             : [...wait.backoff];
@@ -2906,7 +2923,7 @@ export async function readPages(links, {
           `${nameOf(link, at)}: ${error?.message || 'could not be read'} — trying again`,
           { kind: 'failed', name: nameOf(link, at), reason: shortReason(error) });
         let nap = waits[tries];
-        if (tooMany(error)) {
+        if (tooMany(error) || siteFailed(error)) {
           /* "Too many requests" is the site saying it has noticed: asked
            * again only after a long pause -- what it asked for, if it said,
            * and never less than this try's own -- and every page after at
@@ -2915,8 +2932,8 @@ export async function readPages(links, {
           slower = Math.min(4, slower * 2);
           if (stats) stats.slower = slower;
           onProgress?.(Math.min(1, settled / links.length), Math.min(settled, links.length), links.length,
-            `the site asked to slow down — waiting ${Math.round(nap / 1000)} s before ${nameOf(link, at)}…`,
-            { kind: 'wait', name: nameOf(link, at), until: Date.now() + nap, why: 'the site asked to slow down' });
+            `${siteFailed(error) ? 'the site could not load it' : 'the site asked to slow down'} — waiting ${Math.round(nap / 1000)} s before ${nameOf(link, at)}…`,
+            { kind: 'wait', name: nameOf(link, at), until: Date.now() + nap, why: siteFailed(error) ? 'the site could not load it' : 'the site asked to slow down' });
         }
         if (stats) stats.napMs += nap;
         await napUnless(nap, pausing);
