@@ -364,16 +364,35 @@ public class MainActivity extends AppCompatActivity {
      * status bar, gesture bar and any display cutout are. We expose them as CSS
      * custom properties; env(safe-area-inset-*) is unreliable in WebView.
      */
+    private WindowInsetsCompat lastWindowInsets;
+
     private void applyInsetsToCss() {
         ViewCompat.setOnApplyWindowInsetsListener(webView, (v, windowInsets) -> {
-            Insets bars = windowInsets.getInsets(
-                    WindowInsetsCompat.Type.systemBars()
-                            | WindowInsetsCompat.Type.displayCutout()
-                            | WindowInsetsCompat.Type.ime());
-            lastInsets = bars;
-            pushInsets(bars, windowInsets.isVisible(WindowInsetsCompat.Type.ime()));
+            lastWindowInsets = windowInsets;
+            pushFrom(windowInsets);
             return WindowInsetsCompat.CONSUMED;
         });
+    }
+
+    /* The bars and cutout always; the keyboard only while this window has the
+     * focus -- in split screen the keyboard moved to the app beside it left its
+     * height here, stale, and the tab bar stood a keyboard's height up over an
+     * empty space. A window without the focus has no keyboard of its own. */
+    private void pushFrom(WindowInsetsCompat windowInsets) {
+        Insets bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+        boolean ime = windowInsets.isVisible(WindowInsetsCompat.Type.ime()) && hasWindowFocus();
+        if (ime) bars = Insets.max(bars, windowInsets.getInsets(WindowInsetsCompat.Type.ime()));
+        lastInsets = bars;
+        pushInsets(bars, ime);
+    }
+
+    /** The focus come or gone (split screen, a dialog, the notification shade): the keyboard counted again. */
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (webView == null) return;
+        if (lastWindowInsets != null) pushFrom(lastWindowInsets);
+        ViewCompat.requestApplyInsets(webView);
     }
 
     /* With them, whether the keyboard shows -- and the last moment it did
@@ -938,7 +957,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean keyboardUp() {
         if (webView == null) return false;
         WindowInsetsCompat insets = ViewCompat.getRootWindowInsets(webView);
-        return insets != null && insets.isVisible(WindowInsetsCompat.Type.ime());
+        return insets != null && insets.isVisible(WindowInsetsCompat.Type.ime()) && hasWindowFocus();
     }
 
     private void installBackHandler() {

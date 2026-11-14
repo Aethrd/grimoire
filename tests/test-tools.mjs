@@ -1198,11 +1198,15 @@ await t('what finishes while you read waits for the book to be put down', async 
   // A back that slips past the keyboard (Samsung's clipboard, deleting its items) does not leave the screen typed in.
   const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
   assert.match(activity, /public void handleOnBackPressed\(\) \{[\s\S]{0,500}?if \(keyboardUp\(\)\) return;/);
-  assert.match(activity, /return insets != null && insets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\);/);
+  assert.match(activity, /return insets != null && insets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\) && hasWindowFocus\(\);/);
   /* And one that comes as the keyboard hides for a moment (the clipboard,
    * deleting): the page tells it by the keyboard's last showing, pushed with
    * the insets, and lets it go while a field is being typed in. */
-  assert.match(activity, /pushInsets\(bars, windowInsets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\)\);/);
+  assert.match(activity, /boolean ime = windowInsets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\) && hasWindowFocus\(\);/);
+  assert.match(activity, /pushInsets\(bars, ime\);/);
+  // Split screen: the keyboard counted only while this window has the focus, and again whenever that changes.
+  assert.match(activity, /public void onWindowFocusChanged\(boolean hasFocus\) \{[\s\S]{0,200}if \(lastWindowInsets != null\) pushFrom\(lastWindowInsets\);/);
+  assert.match(activity, /return insets != null && insets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\) && hasWindowFocus\(\);/);
   assert.match(activity, /var ime=%b;if\(ime\|\|window\.GrimoireIme\)window\.GrimoireImeAt=Date\.now\(\);window\.GrimoireIme=ime;/);
   const field = document.createElement('input');
   field.type = 'search';
