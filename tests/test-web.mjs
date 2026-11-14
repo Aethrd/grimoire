@@ -3128,7 +3128,7 @@ await t("a site's name stamped into its chapters is taken out; a site read in th
   // Its fonts and its styles let in from anywhere (Fanqie's font is named in a stylesheet on its CDN),
   // and waited for before a screen is read.
   assert.match(bridge, /if \(job\.ocr && \(isFont\(request\) \|\| isStyle\(request\)\)\) return null;/);
-  assert.match(bridge, /fontsThen\(0, \(\) => view\.evaluateJavascript\(OCR_PREPARE/);
+  assert.match(bridge, /fontsThen\(0, \(\) -> view\.evaluateJavascript\(OCR_PREPARE/);
   assert.match(bridge, /document\.fonts\.status!=='loaded'/);
   // The reading's time is time on the page: taken off the delay after it, as the stay to confirm is.
   assert.match(bridge, /private void ocrDone\(Runnable then\) \{\s+if \(view == null\) return;\s+dwell \+= System\.currentTimeMillis\(\) - ocrBegan;/);
