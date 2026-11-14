@@ -433,7 +433,10 @@ export async function build({
     // moment it is made is named everywhere -- on the shelf, in its own
     // metadata, and in anything written out of it afterwards.
     author: author || null,
-    fingerprint: `built:${Date.now()}`,
+    /* Its own, always. The time alone was shared by books the queue started
+     * side by side in the same moment -- and a book written out carries this
+     * as who it is, so one of them given back was taken for the other. */
+    fingerprint: `built:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
     addedAt: Date.now(),
     words: 0,
     importing: true,

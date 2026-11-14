@@ -3157,12 +3157,9 @@ async function rescueFile(file, job = null) {
     /* The same file, or nothing. The shell finds the file by its name and
      * size; a copy that comes back a different size is some other file, and
      * imported under this one's name it was a duplicate of a book already
-     * on the shelf wearing the wrong title. Unless the shell found it by its
-     * name ("#named"): then it is the file picked, and only the size Android
-     * last gave for it was out of date -- a file replaced in Downloads by a
-     * fresh copy of itself, picked again, was refused for that. */
-    const named = /#named$/.test(url);
-    if (!named && file.size > 0 && blob.size !== file.size) {
+     * on the shelf wearing the wrong title. Even where the shell found it by
+     * name: a copy of another size is not taken on trust. */
+    if (file.size > 0 && blob.size !== file.size) {
       throw new Error('the copy Android handed back was a different file');
     }
     return new File([blob], file.name, { type: file.type || blob.type });
@@ -7609,7 +7606,10 @@ async function runJob(job) {
   }
   // Stepped back for a book resumed by hand: back in line, not paused.
   settleJob(job, outcome, under.pausing && !under.siteStop && !under.yielding);
-  if (job.status === 'done') await purgeEarlier(job).catch(() => 0);
+  if (job.status === 'done') {
+    await purgeEarlier(job).catch(() => 0);
+    await binOutgrown(job).catch(() => 0);
+  }
   await refreshShelf().catch(() => {});
   saveQueue();
   if (queueState.running) pumpQueue();
@@ -7628,6 +7628,34 @@ async function purgeEarlier(job) {
     .filter((book) => book.id !== job.bookId && (carried.has(book.id) || book.queueJob === job.id));
   delete job.earlier;
   return earlier.length ? library.destroyBooks(earlier.map((book) => book.id)) : 0;
+}
+
+/**
+ * Another copy of the same novel, now wholly inside this one: to the Bin.
+ *
+ * A download started afresh -- queued again, not carried on -- knows nothing
+ * of an earlier one stopped part-way, so both stood on the shelf: the old
+ * short copy beside the new one. Done, the new one holds every chapter the
+ * old one has (by the address each came from), and the old one is only in
+ * the way. Binned, not deleted: it can be put back.
+ */
+async function binOutgrown(job) {
+  const book = job.bookId != null ? await store.get('books', job.bookId) : null;
+  if (!book?.webSources?.length) return 0;
+  const sources = new Set(book.webSources);
+  const mine = new Set((await store.byIndex('chapters', 'bookId', book.id)).map((chapter) => chapter.from).filter(Boolean));
+  const others = (await store.all('books')).filter((other) => other.id !== book.id && !other.binnedAt && !other.importing
+    && !other.inVault && (other.webSources || []).some((address) => sources.has(address)));
+  const outgrown = [];
+  for (const other of others) {
+    const froms = (await store.byIndex('chapters', 'bookId', other.id)).map((chapter) => chapter.from);
+    if (froms.length && froms.every((from) => from && mine.has(from))) outgrown.push(other);
+  }
+  if (!outgrown.length) return 0;
+  await library.binBooks(outgrown.map((other) => other.id));
+  whenNotReading(() => toast(`“${library.displayTitle(book)}” is whole: the shorter copy of it that was also on the shelf is in the Bin`
+    + (outgrown.length > 1 ? ` (${outgrown.length} of them)` : ''), 8000));
+  return outgrown.length;
 }
 
 /** Where a book of the queue stands after a try: done, paused, held for the reader, or to try again. */

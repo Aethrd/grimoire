@@ -1032,6 +1032,15 @@ await t('a book written out and given back is the same book, not a second copy',
   const theOriginal = await library.importFiles([original], {});
   assert.equal(theOriginal.added, 0, 'the original file came in beside its own export');
   assert.equal(theOriginal.already, 1);
+
+  /* A different book sharing that identity is not it. Books the queue built
+   * side by side once got one between them ("built:<time>"), and a file
+   * written out of one was said to be on the shelf as the other. */
+  await store.put('books', { ...now[0], title: '凶猛道侣也重生了', chapterCount: 4705 });
+  const notIt = await library.importFiles([new File([await bytesOf(blob)], 'given back.epub')], {});
+  assert.equal(notIt.added, 1, 'a file written out of one book was taken for another sharing its identity');
+  assert.ok(!notIt.already);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /fingerprint: `built:\$\{Date\.now\(\)\}:\$\{Math\.random\(\)/);
 });
 
 await t('a book sent from another app is opened once, not every time the app is', async () => {
@@ -2562,27 +2571,27 @@ await t('a copy from the shell that is not the same file is refused, not importe
   delete window.GrimoireNative;
 });
 
-await t('a copy the shell found by its name goes in, though Android gave an old size for it; every copy at an address of its own', async () => {
+await t('a copy the shell stages is at an address of its own, never one fetched before', async () => {
   const fsMod = await import('node:fs');
   const bytes = fsMod.readFileSync(path.join(root, 'tests/fixtures/comic.cbz'));
   let how = null;
   window.GrimoireNative = {
     stageForRead(stageId) {
-      setTimeout(() => window.Grimoire.settleFile(stageId, true, 'handoff://s9-1-renewed volume.zip#named'), 10);
+      setTimeout(() => window.Grimoire.settleFile(stageId, true, 'handoff://s9-1-renewed volume.zip'), 10);
     },
   };
-  // The file in Downloads replaced by a fresh copy of itself: the picker's size is the old one.
   globalThis.fetch = async (url, options) => { how = options; return { ok: true, status: 200, blob: async () => new window.Blob([bytes], { type: 'application/zip' }) }; };
-  pickFiles([refusing('renewed volume.zip', bytes.length + 321)]);
+  pickFiles([refusing('renewed volume.zip', bytes.length)]);
   await untilIdle();
   await settle(200);
-  assert.ok((await store.all('books')).find((b) => b.title === 'renewed volume'), 'the very file picked was refused');
+  assert.ok((await store.all('books')).find((b) => b.title === 'renewed volume'), 'the rescued file never came in');
   assert.equal(how?.cache, 'no-store', 'a copy fetched from before could be handed back');
   delete window.GrimoireNative;
   // Named apart: a Korean title was all underscores, the same as others of its lengths.
   const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
   assert.match(activity, /String safe = id \+ "-" \+ System\.currentTimeMillis\(\) \+ "-"/);
-  assert.match(activity, /\(named \? "#named" : ""\)/);
+  // And a copy of another size is refused, whoever found it.
+  assert.doesNotMatch(read('app/src/main/assets/www/js/app.js'), /#named/);
 });
 
 await t('picked again while a copy is here but off the shelf: where it is, by the title it has here', async () => {

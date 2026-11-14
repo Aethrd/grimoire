@@ -2567,7 +2567,7 @@ export async function downloadBook({
   if (!links.length) throw new Error('Pick at least one link to download.');
   const bookId = await store.add('books', {
     title: title || 'Downloaded book', author: author || null, folder, importing: true,
-    fingerprint: `web:${sources[0] || links[0].url}:${Date.now()}`,
+    fingerprint: `web:${sources[0] || links[0].url}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
     format: 'WEB', addedAt: Date.now(), lastReadAt: null, finishedAt: null,
     percent: 0, inVault: false, tags: [], words: 0,
   });

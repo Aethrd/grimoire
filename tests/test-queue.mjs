@@ -49,6 +49,15 @@ const cut = await store.add('books', { title: 'D', fingerprint: 'built:d', added
 for (let i = 0; i < 2; i += 1) {
   await store.put('chapters', { bookId: cut, index: i, title: `${i + 1}화`, words: 20, html: `<p>D chapter ${i + 1}</p>`, from: `https://sleepy.example/d/D-${i + 1}` });
 }
+/* A, downloaded once before and stopped at two chapters -- not carried on by
+ * the job queued since, which starts afresh. And another book of that site
+ * with a chapter A does not have. */
+const oldA = await store.add('books', { title: 'A, stopped', fingerprint: 'built:old-a', addedAt: 1, chapters: 2, webSources: ['https://marumaru109.com/novel/1/list'] });
+const ownA = await store.add('books', { title: 'A, my own', fingerprint: 'built:own-a', addedAt: 1, chapters: 2, webSources: ['https://marumaru109.com/novel/1/list'] });
+for (let i = 0; i < 2; i += 1) {
+  await store.put('chapters', { bookId: oldA, index: i, title: `${i + 1}화`, words: 20, html: `<p>A ${i + 1}</p>`, from: `https://marumaru109.com/novel/1/A-${i + 1}` });
+  await store.put('chapters', { bookId: ownA, index: i, title: `${i + 1}화`, words: 20, html: `<p>A ${i + 1}</p>`, from: `https://marumaru109.com/novel/1/${i ? 'extra' : 'A-1'}` });
+}
 await store.saveSettings({
   webLeftovers: [{ id: 'left-1', name: 'D — from 3화', bookId: cut, bookTitle: 'D', author: '', sources: ['https://sleepy.example/d'],
     links: [{ url: 'https://sleepy.example/d/D-3', text: '3화' }, { url: 'https://sleepy.example/d/D-4', text: '4화' }],
@@ -210,6 +219,9 @@ await t('started, it builds every book: two at once, never two from one site', a
   // Whole now: the cut-off one it carried on, which went to the Bin, deleted for good -- and nothing else in the Bin touched.
   assert.equal(await store.get('books', cut), undefined, 'the shorter version kept in the Bin after the book came whole');
   assert.ok(!books.some((each) => each.title === 'D' && each.binnedAt));
+  // The copy of A from before, every chapter of it in the new A: to the Bin. One with a chapter of its own stays.
+  assert.ok((await store.get('books', oldA)).binnedAt, 'the shorter copy of A left on the shelf beside the whole one');
+  assert.ok(!(await store.get('books', ownA)).binnedAt, 'a copy with a chapter the new one lacks was binned');
   for (const name of ['A', 'B', 'C, renamed']) {
     const book = books.find((each) => each.title === name);
     assert.ok(book, `no book ${name}`);

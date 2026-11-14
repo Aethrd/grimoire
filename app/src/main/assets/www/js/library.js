@@ -821,7 +821,13 @@ export async function importFiles(files, { onProgress, onDone, transient = false
           ...(await store.byIndex('books', 'fingerprint', parsed.sourceId)),
           ...(await exportedFrom()).get(parsed.sourceId) || [],
         ].filter((book) => book.id !== bookId);
-        const here = same.find((book) => !book.binnedAt && !book.transient && !book.importing);
+        /* The same book by its name or its length too, not by that identity
+         * alone: books built side by side once shared one ("built:<time>"),
+         * and a file written out of one was taken for the other -- said to be
+         * on the shelf as a book it is not. */
+        const like = (book) => sameTitle(book.title, parsed.title)
+          || (book.chapterCount != null && book.chapterCount === parsed.chapters.length);
+        const here = same.find((book) => !book.binnedAt && !book.transient && !book.importing && like(book));
         if (here) {
           await store.deleteBook(bookId);
           if (here.inVault) results.inVault = (results.inVault || 0) + 1;
@@ -830,7 +836,7 @@ export async function importFiles(files, { onProgress, onDone, transient = false
           results.existing.push(here.id);
           continue;
         }
-        const binned = same.filter((book) => book.binnedAt);
+        const binned = same.filter((book) => book.binnedAt && like(book));
         if (binned.length) {
           await destroyBooks(binned.map((book) => book.id));
           results.replaced = (results.replaced || 0) + binned.length;
@@ -1482,6 +1488,12 @@ export const naturalOrder = (a, b) => String(a || '').localeCompare(String(b || 
  */
 
 export const isBinned = (book) => !!book?.binnedAt;
+
+/** Two titles the same, give or take case, spacing and width. */
+export const sameTitle = (a, b) => {
+  const plain = (s) => String(s || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  return !!plain(a) && plain(a) === plain(b);
+};
 
 /**
  * Whether a book from a text file was imported by the old reading of text:

@@ -915,8 +915,6 @@ public class MainActivity extends AppCompatActivity {
             String safe = id + "-" + System.currentTimeMillis() + "-"
                     + (name == null || name.isEmpty() ? "file" : name).replaceAll("[^A-Za-z0-9._\\- ]", "_");
             java.io.File target = new java.io.File(handoffDir(this), safe);
-            // Found by its name: the very file picked, whatever size the provider last said it was.
-            final boolean named = name != null && !name.isEmpty() && name.equals(pickedName(found));
 
             try (InputStream in = getContentResolver().openInputStream(found);
                  java.io.OutputStream out = new java.io.FileOutputStream(target)) {
@@ -932,16 +930,8 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
-            settleStage(id, true, ORIGIN + "/handoff/" + Uri.encode(safe) + (named ? "#named" : ""));
+            settleStage(id, true, ORIGIN + "/handoff/" + Uri.encode(safe));
         });
-    }
-
-    /** The name of a picked file, by its address. */
-    private String pickedName(Uri uri) {
-        java.util.List<Picked> all;
-        synchronized (picked) { all = new java.util.ArrayList<>(picked); }
-        for (Picked p : all) if (p.uri.equals(uri)) return nameOf(p);
-        return null;
     }
 
     private void settleStage(String id, boolean ok, String payload) {
