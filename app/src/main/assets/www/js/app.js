@@ -6786,11 +6786,14 @@ function paintTimes() {
     }
   }
   // Chapters, while a website downloads ("120 of 453"); otherwise which part of how many.
-  const count = Number.isFinite(run.total) && Number.isFinite(run.done) ? `${run.done} of ${run.total} · `
+  // A book carried on counts what it had: "320 of 561", not "0 of 241".
+  const onWeb = !!run.delays?.[run.at] && Number.isFinite(run.total) && Number.isFinite(run.done);
+  const had = onWeb ? run.had || 0 : 0;
+  const count = onWeb ? `${had + run.done} of ${had + run.total} · `
     : run.parts > 1 ? `part ${run.at + 1} of ${run.parts} · ` : '';
   run.finish?.say(null, null, `${count}${elapsed}${left ? ` · ${left}` : ''}`);
-  if (!run.pausing && Number.isFinite(run.total)) {
-    run.status = `${run.done} of ${run.total}${left ? ` · ${left}` : ''}`;
+  if (!run.pausing && onWeb) {
+    run.status = `${had + run.done} of ${had + run.total}${left ? ` · ${left}` : ''}`;
     paintBuildFoot();
   }
 }
@@ -7483,8 +7486,15 @@ function trackJob(job, under, message, at, now, counts) {
       left = ` · ~${span(run.shown)} left`;
     }
   }
-  const count = Number.isFinite(run.total) ? `${run.done} of ${run.total}${left}` : '';
-  finish.say(`Queue · ${job.name}`, chapters && Number.isInteger(at) ? Math.min(1, (before + (run.delays[at] ? counts?.done ?? 0 : 0)) / chapters) : null, count);
+  /* Over the whole book, the chapters it had before this run counted -- a book resumed
+   * after a pause goes on from where it was ("320 of 561"), its bar too, rather than
+   * from nothing ("0 of 241"), as its mark on the shelf does (jobDone). While the book
+   * so far is copied in first, it stands at what it had. */
+  const had = run.had || 0;
+  const onWeb = Number.isInteger(at) && !!run.delays[at] && Number.isFinite(run.total) && Number.isFinite(run.done);
+  const count = onWeb ? `${had + run.done} of ${had + run.total}${left}`
+    : had && chapters ? `${had} of ${had + chapters}` : '';
+  finish.say(`Queue · ${job.name}`, chapters && Number.isInteger(at) ? Math.min(1, (had + before + (run.delays[at] ? counts?.done ?? 0 : 0)) / (had + chapters)) : null, count);
   job.progress = count;
   /* Its own line, said again in place: the list is not drawn anew at every
    * step of a download -- a tap that landed on a row just replaced went
@@ -8555,7 +8565,9 @@ function wireWorkshop() {
     const delays = build.contents().map((part) => (part.web
       ? { gap: Math.max(0, Number(part.web.gap) || 0), jitter: Math.max(0, Number(part.web.jitter) || 0), chapters: part.web.links?.length || 0 }
       : null));
-    buildRun = { online, pausing: false, status: 'Starting…', finish, startedAt: Date.now(), at: -1, delays, samples: [] };
+    // A book carried on: the chapters it already has, counted in the bar and the count -- not from nothing.
+    const had = build.contents().filter((part) => part.seamless).reduce((sum, part) => sum + (part.chapterCount || 0), 0);
+    buildRun = { online, pausing: false, status: 'Starting…', finish, startedAt: Date.now(), at: -1, delays, samples: [], had };
     buildRun.ticker = setInterval(paintTimes, 1000);
     paintBuildFoot();
     try { window.GrimoireNative?.buildRunning?.(true); } catch { /* not in the app */ }
@@ -8576,7 +8588,8 @@ function wireWorkshop() {
           let bar = fraction;
           if (chapters && Number.isInteger(at)) {
             const before = web.slice(0, at).reduce((sum, part) => sum + (part?.chapters || 0), 0);
-            bar = Math.min(1, (before + (web[at] ? counts?.done ?? 0 : 0)) / chapters);
+            const had = buildRun?.had || 0;
+            bar = Math.min(1, (had + before + (web[at] ? counts?.done ?? 0 : 0)) / (had + chapters));
           }
           finish.say(message, bar);
           // What it is doing this moment, on its own line under the bar.

@@ -2084,8 +2084,13 @@ await t('how far it has got and what it is doing now are told apart', async () =
   assert.match(build, /`Downloading \$\{part\.name\}\$\{list\.length > 1 \? ` · part \$\{at \+ 1\} of \$\{list\.length\}` : ''\}`,\s+\(at \+ fraction\) \/ list\.length, at, list\.length, now, \{ done, total, stats: partStats \}\)/);
   // The bar goes by chapters downloaded across the build's websites, not by parts; the count is chapters.
   const appText = read('app/src/main/assets/www/js/app.js');
-  assert.match(appText, /bar = Math\.min\(1, \(before \+ \(web\[at\] \? counts\?\.done \?\? 0 : 0\)\) \/ chapters\);\s+\}\s+finish\.say\(message, bar\);/);
-  assert.match(appText, /const count = Number\.isFinite\(run\.total\) && Number\.isFinite\(run\.done\) \? `\$\{run\.done\} of \$\{run\.total\} · `/);
+  // A book carried on: the chapters it already had counted in, so neither starts again from nothing.
+  assert.match(appText, /bar = Math\.min\(1, \(had \+ before \+ \(web\[at\] \? counts\?\.done \?\? 0 : 0\)\) \/ \(had \+ chapters\)\);\s+\}\s+finish\.say\(message, bar\);/);
+  assert.match(appText, /const count = onWeb \? `\$\{had \+ run\.done\} of \$\{had \+ run\.total\} · `/);
+  assert.match(appText, /const had = build\.contents\(\)\.filter\(\(part\) => part\.seamless\)\.reduce\(\(sum, part\) => sum \+ \(part\.chapterCount \|\| 0\), 0\);/);
+  // And in the queue: its row's count and bar over the whole book.
+  assert.match(appText, /const count = onWeb \? `\$\{had \+ run\.done\} of \$\{had \+ run\.total\}\$\{left\}`/);
+  assert.match(appText, /Math\.min\(1, \(had \+ before \+ \(run\.delays\[at\] \? counts\?\.done \?\? 0 : 0\)\) \/ \(had \+ chapters\)\)/);
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /<div class="job-activity" hidden><span class="job-tag"><\/span><span class="job-now"><\/span><\/div>/);
   assert.match(app, /what\.textContent = `\$\{left\} s left \$\{now\.why \? `· \$\{now\.why\}` : 'of your delay'\}, then \$\{name\}`;/);
