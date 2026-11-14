@@ -3,6 +3,8 @@ package com.grimoire.ereader;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -23,6 +25,17 @@ import android.widget.FrameLayout;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
+import com.google.android.gms.tasks.Tasks;
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.text.Text;
+import com.google.mlkit.vision.text.TextRecognition;
+import com.google.mlkit.vision.text.TextRecognizer;
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
+import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions;
+import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions;
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
+
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONTokener;
@@ -40,6 +53,8 @@ import java.net.HttpCookie;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Collections;
 import java.util.Locale;
@@ -94,6 +109,9 @@ public class WebBridge {
      *  side by side no longer wait on one another's pages. */
     private static final int RENDER_BROWSERS = 4;
     private final ExecutorService renderer = Executors.newFixedThreadPool(RENDER_BROWSERS);
+    /** Chapters read by OCR: one picture at a time, off the main thread (see readStory). */
+    private final ExecutorService ocrReader = Executors.newSingleThreadExecutor();
+    private final Map<String, TextRecognizer> recognisers = new HashMap<>();
     private final java.util.Set<String> renderingSites = new java.util.HashSet<>();
     /** Counted up by each Pause (stopAll): a page asked for before it, still waiting its
      *  turn, is never opened -- its answer is no longer wanted, and opening it kept the
@@ -258,6 +276,11 @@ public class WebBridge {
         // "2", or "0o": a level, and "o" when the site has been found to need
         // nothing kept out (its pages come only with everything let in).
         String asked = String.valueOf(patience).trim();
+        // "x": the chapter's words read by OCR, from the page as it shows (see readStory);
+        // "a": so only where the words as sent come out garbled (see GARBLED).
+        final boolean ocr = (asked.endsWith("x") || asked.endsWith("a")) && !scroll;
+        final boolean ocrAuto = asked.endsWith("a");
+        if (asked.endsWith("x") || asked.endsWith("a")) asked = asked.substring(0, asked.length() - 1);
         boolean open = asked.endsWith("o");
         if (open) asked = asked.substring(0, asked.length() - 1);
         int level = 0;
@@ -293,6 +316,8 @@ public class WebBridge {
                 Rendering job = new Rendering(address, quietMs, maxMs, scroll, ownSiteOnly, skipHeavy, textOnly);
                 job.pressGap = pressGap;
                 job.pressJitter = pressJitter;
+                job.ocr = ocr;
+                job.ocrAuto = ocrAuto;
                 // One page of a site at a time: another of its pages waits its turn here.
                 String siteKey = job.site == null ? address : job.site;
                 synchronized (renderingSites) {
@@ -303,7 +328,7 @@ public class WebBridge {
                 }
                 try {
                     main.post(job::start);
-                    if (!job.done.await((pressGap >= 0 ? PRESS_MAX_MS : RENDER_WAIT_MS) + 20000, TimeUnit.MILLISECONDS)) {
+                    if (!job.done.await((pressGap >= 0 ? PRESS_MAX_MS : RENDER_WAIT_MS) + 20000 + (ocr ? OCR_MAX_MS : 0), TimeUnit.MILLISECONDS)) {
                         main.post(job::finish);
                         throw new IOException("the site took too long to answer");
                     }
@@ -341,6 +366,7 @@ public class WebBridge {
                 result.put("bytes", bytes.length);
                 result.put("rendered", true);
                 result.put("dwell", job.dwell);
+                if (ocr) result.put("ocr", job.ocrLines);
                 result.put("path", ORIGIN + "/handoff/web/" + Uri.encode(safeId));
                 settle(id, true, result.toString());
             } catch (Exception e) {
@@ -961,6 +987,9 @@ public class WebBridge {
             if (request.isForMainFrame()) return null;
             String host = request.getUrl().getHost();
             if (host == null || ALLOWED_ELSEWHERE.contains(host.toLowerCase(Locale.ROOT))) return null;
+            // Read by OCR: the page's own fonts, wherever they come from -- a site that
+            // scrambles its text into a font of its own reads right only in that font.
+            if (job.ocr && isFont(request)) return null;
             if (job.lean && isHeavy(request)) {
                 return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
             }
@@ -1034,6 +1063,11 @@ public class WebBridge {
         final boolean lean;
         /** A chapter wanted for its text alone (see STORY_WAIT_MS). */
         final boolean textOnly;
+        /** Its words read by OCR from the page as shown (see readStory); and how many lines were. */
+        boolean ocr;
+        /** Only if the story's words as sent come out garbled. */
+        boolean ocrAuto;
+        volatile int ocrLines;
         /** The page has finished loading (or been given long enough to). */
         private boolean finished;
         /** The page is on show (see onPageCommitVisible). */
@@ -1339,6 +1373,23 @@ public class WebBridge {
                 fail("that page does not exist (404)");
                 return;
             }
+            // Read by OCR first, where asked and the story is there: its words then put into the page.
+            /* Never a page that is not the chapter: one still behind a check, blocked, or
+             * empty is said so as ever, not read into something that looks like one. */
+            if (ocr && there && !checkingAccess) {
+                if (!ocrAuto) { readStory(this::copyPage); return; }
+                view.evaluateJavascript(GARBLED, (value) -> {
+                    if (view == null) return;
+                    if ("\"1\"".equals(value) || "1".equals(value)) readStory(this::copyPage);
+                    else copyPage();
+                });
+                return;
+            }
+            copyPage();
+        }
+
+        private void copyPage() {
+            if (view == null) return;
             view.evaluateJavascript(FLATTEN + "'<!DOCTYPE html>'+document.documentElement.outerHTML", (value) -> {
                 if (lastShape.contains("|checking|") && !there) {
                     error = "the site wants its browser check passed (a bot check) — tap Open the site, let the check pass there, then Done";
@@ -1354,6 +1405,158 @@ public class WebBridge {
         void fail(String why) {
             if (error == null && raw == null) error = why;
             finish();
+        }
+
+        /* ── read by OCR ──────────────────────────────────────────────────
+         *
+         * For a site whose text comes out garbled as sent -- scrambled into a
+         * font of its own, put in by its styles, shuffled by its script -- the
+         * words are read as a person reads them: from the page as it shows.
+         * The story is scrolled through a screen at a time, as a reader would;
+         * each screen's part of it drawn into a picture and read on the phone
+         * (ML Kit, its models in the app: nothing sent anywhere). A line cut by
+         * the foot of a screen is left for the next, which starts at it, so no
+         * line is read in halves or twice. The lines are made into paragraphs
+         * by how they sit -- a wider gap, an indent, a line that stops short --
+         * and put into the page in the story's place, so the chapter is read
+         * from them as from any page. Slower: hence asked for, site by site.
+         */
+        private final List<float[]> ocrBoxes = new ArrayList<>();   // top, bottom, left, right (story px)
+        private final List<String> ocrTexts = new ArrayList<>();
+        private int ocrScreens;
+        private long ocrBegan;
+        private String ocrScript = "latin";
+        /** The story's width on screen (CSS px): how far a full line reaches. */
+        private float ocrWidth;
+
+        private void readStory(Runnable then) {
+            ocrBegan = System.currentTimeMillis();
+            view.evaluateJavascript(OCR_PREPARE, (value) -> {
+                if (view == null) return;
+                ocrScreen(0f, then);
+            });
+        }
+
+        /** The story from `offset` (CSS pixels into it) at the top of the screen, drawn and read. */
+        private void ocrScreen(final float offset, final Runnable then) {
+            if (view == null) return;
+            view.evaluateJavascript(STORY_AT.replace("__O__", String.valueOf(offset)), (value) -> {
+                if (view == null) return;
+                JSONObject at;
+                try {
+                    Object parsed = new JSONTokener(value == null ? "null" : value).nextValue();
+                    at = new JSONObject(parsed instanceof String ? (String) parsed : "{}");
+                } catch (Exception e) {
+                    at = new JSONObject();
+                }
+                if (at.optInt("ok") != 1) { ocrDone(then); return; }
+                final JSONObject where = at;
+                if (ocrScreens == 0) {
+                    ocrScript = where.optString("script", "latin");
+                    ocrWidth = (float) where.optDouble("width", 0);
+                }
+                // A moment for the screen to be drawn where it was scrolled to.
+                main.postDelayed(() -> ocrCapture(offset, where, then), OCR_SETTLE_MS);
+            });
+        }
+
+        private void ocrCapture(final float offset, final JSONObject at, final Runnable then) {
+            if (view == null) return;
+            final int w = view.getWidth(), h = view.getHeight();
+            if (w <= 0 || h <= 0) { ocrDone(then); return; }
+            final float dpr = (float) at.optDouble("dpr", 1);
+            final float top = (float) at.optDouble("top", 0);
+            final float bottom = (float) at.optDouble("bottom", 0);
+            final boolean end = at.optInt("end") == 1;
+            int x0 = clamp(Math.round((float) at.optDouble("left", 0) * dpr), 0, w - 1);
+            int x1 = clamp(Math.round(((float) at.optDouble("left", 0) + (float) at.optDouble("width", 0)) * dpr), x0 + 1, w);
+            int y0 = clamp(Math.round(Math.max(0, top) * dpr), 0, h - 1);
+            int y1 = clamp(Math.round(Math.min(bottom, (float) at.optDouble("vh", h / dpr)) * dpr), y0 + 1, h);
+            if (y1 - y0 < 8 || x1 - x0 < 8) { ocrDone(then); return; }
+            final Bitmap part;
+            try {
+                Bitmap screen = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                Canvas canvas = new Canvas(screen);
+                canvas.drawColor(android.graphics.Color.WHITE);
+                view.draw(canvas);
+                part = Bitmap.createBitmap(screen, x0, y0, x1 - x0, y1 - y0);
+                if (part != screen) screen.recycle();
+            } catch (Throwable e) {
+                Log.w(TAG, "Could not draw the page to read it", e);
+                ocrDone(then);
+                return;
+            }
+            ocrScreens++;
+            final int partH = y1 - y0;
+            // Where in the story the picture's top row is (CSS px): the offset asked for,
+            // or further on where the page could not be scrolled that far (its foot).
+            final float base = offset + (Math.max(0, top) - top);
+            ocrReader.execute(() -> {
+                float next = -1;
+                try {
+                    Text text = Tasks.await(recogniser(ocrScript).process(InputImage.fromBitmap(part, 0)),
+                            OCR_SCREEN_MS, TimeUnit.MILLISECONDS);
+                    float cut = Float.MAX_VALUE;
+                    int seen = 0;
+                    for (Text.TextBlock block : text.getTextBlocks()) {
+                        for (Text.Line line : block.getLines()) {
+                            Rect box = line.getBoundingBox();
+                            if (box == null || line.getText().trim().isEmpty()) continue;
+                            seen++;
+                            // Touching the foot of a screen the story goes on past: cut, read next time.
+                            if (!end && box.bottom >= partH - Math.max(3, box.height() * 0.15f)) {
+                                cut = Math.min(cut, box.top);
+                                continue;
+                            }
+                            synchronized (ocrBoxes) {
+                                ocrBoxes.add(new float[]{base + box.top / dpr, base + box.bottom / dpr, box.left / dpr, box.right / dpr});
+                                ocrTexts.add(line.getText());
+                            }
+                        }
+                    }
+                    if (!end) {
+                        float shown = partH / dpr;
+                        float advance = cut < Float.MAX_VALUE ? cut / dpr : shown;
+                        // Never stuck: a screen with only a cut line (or nothing) moves on most of a screen.
+                        if (advance < shown * 0.25f) advance = seen == 0 ? shown * 0.9f : Math.max(advance, shown * 0.25f);
+                        next = base + advance;
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Could not read a screen of the page", e);
+                } finally {
+                    part.recycle();
+                }
+                final float go = next;
+                main.post(() -> {
+                    boolean over = System.currentTimeMillis() - ocrBegan > OCR_MAX_MS || ocrScreens >= OCR_MAX_SCREENS;
+                    if (go < 0 || over) ocrDone(then);
+                    else ocrScreen(go, then);
+                });
+            });
+        }
+
+        /** The lines read, made into paragraphs and put in the story's place; then on. */
+        private void ocrDone(Runnable then) {
+            if (view == null) return;
+            dwell += System.currentTimeMillis() - ocrBegan;
+            List<String> paragraphs;
+            synchronized (ocrBoxes) {
+                paragraphs = paragraphsOf(ocrBoxes, ocrTexts, ocrScript, ocrWidth);
+                ocrLines = ocrTexts.size();
+            }
+            /* Kept only if it read about as much as the page holds: far less is the reading
+             * gone wrong (a screen drawn blank, a font it could not make out), and then the
+             * words as sent stay -- garbled, perhaps, but not a chapter quietly cut short. */
+            int read = 0;
+            for (String p : paragraphs) read += p.replaceAll("\\s+", "").length();
+            if (paragraphs.isEmpty() || (lastStory > 0 && read < lastStory * OCR_MIN_SHARE)) {
+                Log.w(TAG, "OCR read " + read + " characters of a story of " + lastStory + ": the page's own kept");
+                ocrLines = 0;
+                then.run();
+                return;
+            }
+            JSONArray list = new JSONArray(paragraphs);
+            view.evaluateJavascript(STORY_PUT.replace("__P__", list.toString()), (value) -> then.run());
         }
 
         void finish() {
@@ -1403,6 +1606,167 @@ public class WebBridge {
     private static final Pattern HEAVY = Pattern.compile(
             "\\.(jpe?g|png|gif|webp|avif|bmp|ico|svg|woff2?|ttf|otf|eot|mp4|webm|m4v|mov|mp3|m4a|ogg|wav)$",
             Pattern.CASE_INSENSITIVE);
+
+    /* ── read by OCR: its parts ─────────────────────────────────────── */
+
+    /** A screen scrolled to is drawn after this long; a screen read within this long; a chapter within. */
+    private static final long OCR_SETTLE_MS = 260;
+    private static final long OCR_SCREEN_MS = 20000;
+    private static final long OCR_MAX_MS = 180000;
+    private static final int OCR_MAX_SCREENS = 120;
+    /** Less than this share of the story's length read, and the reading is not used. */
+    private static final float OCR_MIN_SHARE = 0.35f;
+
+    /* Whether the story's words as sent are garbled: a site that scrambles its text
+     * into a font of its own sends characters from the private-use ranges (or ones it
+     * could not encode), which no text holds otherwise. A few in a long chapter (an
+     * icon font's glyph) are not it. */
+    private static final String GARBLED = "(function(){try{var e=window.__gStory;if(!e)return '0';"
+            + "var t=e.textContent||'',n=0,bad=0;for(var i=0;i<t.length&&i<20000;i++){var c=t.charCodeAt(i);"
+            + "if(c<=32)continue;n++;if((c>=0xE000&&c<=0xF8FF)||c===0xFFFD||(c>=0xDB80&&c<=0xDBFF))bad++;}"
+            + "return (bad>=5&&bad>n*0.01)?'1':'0';}catch(x){return '0';}})()";
+
+    static int clamp(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+
+    /** The recogniser for a script, made once (its model is in the app). */
+    private TextRecognizer recogniser(String script) {
+        synchronized (recognisers) {
+            TextRecognizer made = recognisers.get(script);
+            if (made != null) return made;
+            switch (script) {
+                case "korean": made = TextRecognition.getClient(new KoreanTextRecognizerOptions.Builder().build()); break;
+                case "japanese": made = TextRecognition.getClient(new JapaneseTextRecognizerOptions.Builder().build()); break;
+                case "chinese": made = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build()); break;
+                default: made = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
+            }
+            recognisers.put(script, made);
+            return made;
+        }
+    }
+
+    /**
+     * Lines read, as paragraphs. In reading order (top to bottom, then left to right on
+     * one row). A new paragraph where the gap above a line is of the wider kind -- the
+     * page's own gaps fall in two kinds, between a paragraph's lines and between its
+     * paragraphs, and the cut is put between them (one kind only: gaps say nothing);
+     * where a line is indented; or where the line before stopped short -- well short in
+     * a script that wraps by word (its lines end raggedly anyway), a few characters short
+     * in one that wraps anywhere -- short of the story's own width, not of the longest
+     * line (a page of one-line paragraphs has every line short). Joined with a space in
+     * a script that spaces its words; with none in Chinese or Japanese. A hyphen at a
+     * line's end is the text's own (a page does not break words by itself): kept.
+     */
+    static List<String> paragraphsOf(List<float[]> boxes, List<String> texts, String script, float storyWidth) {
+        List<Integer> order = new ArrayList<>();
+        for (int i = 0; i < boxes.size(); i++) order.add(i);
+        order.sort((a, b) -> {
+            float[] p = boxes.get(a), q = boxes.get(b);
+            float rowP = (p[0] + p[1]) / 2, rowQ = (q[0] + q[1]) / 2;
+            float h = Math.max(4, Math.min(p[1] - p[0], q[1] - q[0]) / 2);
+            if (Math.abs(rowP - rowQ) > h) return Float.compare(rowP, rowQ);
+            return Float.compare(p[2], q[2]);
+        });
+        List<String> out = new ArrayList<>();
+        if (order.isEmpty()) return out;
+        float[] heights = new float[order.size()];
+        float left = Float.MAX_VALUE, right = 0;
+        List<Float> gaps = new ArrayList<>();
+        float[] last = null;
+        for (int i = 0; i < order.size(); i++) {
+            float[] b = boxes.get(order.get(i));
+            heights[i] = b[1] - b[0];
+            left = Math.min(left, b[2]);
+            right = Math.max(right, b[3]);
+            if (last != null && b[0] > last[1] - 1) gaps.add(Math.max(0, b[0] - last[1]));
+            last = b;
+        }
+        float[] sorted = heights.clone();
+        java.util.Arrays.sort(sorted);
+        float lineH = Math.max(6, sorted[sorted.length / 2]);
+        // The cut between the two kinds of gap: at the widest step up between gaps in order.
+        float cutGap = Float.MAX_VALUE;
+        if (gaps.size() >= 3) {
+            java.util.Collections.sort(gaps);
+            float bestRatio = 0;
+            for (int i = 0; i + 1 < gaps.size(); i++) {
+                float lo = gaps.get(i), hi = gaps.get(i + 1);
+                float ratio = hi / Math.max(1f, lo);
+                if (hi - lo > lineH * 0.25f && ratio > bestRatio) { bestRatio = ratio; cutGap = (lo + hi) / 2; }
+            }
+            if (bestRatio < 1.5f) cutGap = Float.MAX_VALUE;
+        }
+        boolean spaced = !("chinese".equals(script) || "japanese".equals(script));
+        float edge = Math.max(right, storyWidth > 0 ? storyWidth : right);
+        float width = Math.max(1, edge - left);
+        StringBuilder para = new StringBuilder();
+        float[] prev = null;
+        for (int i = 0; i < order.size(); i++) {
+            float[] b = boxes.get(order.get(i));
+            String line = texts.get(order.get(i)).trim();
+            if (line.isEmpty()) continue;
+            boolean shortBefore = prev != null && (spaced ? prev[3] < left + width * 0.7f : prev[3] < edge - lineH * 2.2f);
+            boolean fresh = prev == null
+                    || b[0] - prev[1] > cutGap
+                    || b[2] - left > lineH * 1.2f
+                    || shortBefore;
+            if (fresh && para.length() > 0) {
+                out.add(para.toString());
+                para.setLength(0);
+            }
+            if (para.length() == 0) para.append(line);
+            else if (!spaced) para.append(line);
+            else if (para.charAt(para.length() - 1) == '-') para.append(line);
+            else para.append(' ').append(line);
+            prev = b;
+        }
+        if (para.length() > 0) out.add(para.toString());
+        return out;
+    }
+
+    /* Before reading: the bars a site pins over its page -- a header, a footer, a
+     * "next chapter" bar -- hidden, or they would sit over the story's lines. Not
+     * the story's own boxes. */
+    private static final String OCR_PREPARE = "(function(){try{var e=window.__gStory;var A=document.querySelectorAll('body *');"
+            + "for(var i=0;i<A.length&&i<20000;i++){var a=A[i];if(e&&(a.contains(e)||e.contains(a)))continue;"
+            + "var p=getComputedStyle(a).position;if(p==='fixed'||p==='sticky')a.style.setProperty('visibility','hidden','important');}"
+            + "}catch(x){}return 1;})()";
+
+    /* The story's point `o` (CSS px into it) brought to the top of the screen -- the
+     * page scrolled, and any box it scrolls in -- and where it then is: its top, left,
+     * width and foot on screen, the screen's height, the pixel ratio, whether its foot
+     * is on screen (the end), and the script it is mostly in (for the recogniser). */
+    private static final String STORY_AT = "(function(o){try{var e=window.__gStory;if(!e||!e.isConnected)return JSON.stringify({ok:0});"
+            + "var r=e.getBoundingClientRect(),d=r.top+o;"
+            + "for(var a=e.parentElement;a&&Math.abs(d)>0.5;a=a.parentElement){var st=getComputedStyle(a).overflowY;"
+            + "if((st==='auto'||st==='scroll')&&a.scrollHeight>a.clientHeight){var b=a.scrollTop;a.scrollTop=b+d;d-=a.scrollTop-b;}}"
+            + "if(Math.abs(d)>0.5)window.scrollBy(0,d);r=e.getBoundingClientRect();"
+            + "var t=(e.textContent||'').slice(0,4000),k=0,j=0,h=0,l=0;"
+            + "for(var i=0;i<t.length;i++){var c=t.charCodeAt(i);if(c>=0xAC00&&c<=0xD7AF)k++;else if(c>=0x3040&&c<=0x30FF)j++;"
+            + "else if(c>=0x4E00&&c<=0x9FFF)h++;else if((c|32)>=97&&(c|32)<=122)l++;}"
+            + "var n=k+j+h+l||1,g=(document.documentElement.lang||'').slice(0,2).toLowerCase();"
+            + "var sc=k/n>0.1||g==='ko'?'korean':j/n>0.02||g==='ja'?'japanese':h/n>0.2||g==='zh'?'chinese':'latin';"
+            + "return JSON.stringify({ok:1,top:r.top+o,left:r.left,width:r.width,bottom:r.bottom,vh:innerHeight,"
+            + "dpr:window.devicePixelRatio||1,end:r.bottom<=innerHeight+1?1:0,script:sc});"
+            + "}catch(x){return JSON.stringify({ok:0});}})(__O__)";
+
+    /* The paragraphs read put in the story's place, marked as read by OCR; the story's
+     * own markup (scrambled) gone. */
+    private static final String STORY_PUT = "(function(P){try{var e=window.__gStory;if(!e||!e.isConnected)return 0;"
+            + "while(e.firstChild)e.removeChild(e.firstChild);"
+            + "for(var i=0;i<P.length;i++){var p=document.createElement('p');p.textContent=P[i];e.appendChild(p);}"
+            + "e.setAttribute('data-grimoire-ocr',String(P.length));return 1;}catch(x){return 0;}})(__P__)";
+
+    private static final Pattern FONT = Pattern.compile("\\.(woff2?|ttf|otf|eot)$", Pattern.CASE_INSENSITIVE);
+
+    /** A font: by its address, or by what it asks to be sent. */
+    static boolean isFont(WebResourceRequest request) {
+        String path = request.getUrl().getPath();
+        if (path != null && FONT.matcher(path).find()) return true;
+        String accept = request.getRequestHeaders() == null ? null : request.getRequestHeaders().get("Accept");
+        return accept != null && accept.toLowerCase(Locale.ROOT).startsWith("font/");
+    }
 
     /** A picture, a font or a video: by its address, or by what it asks to be sent. */
     static boolean isHeavy(WebResourceRequest request) {
@@ -1547,7 +1911,7 @@ public class WebBridge {
             + "for(var d=0;a&&a!==b&&d<6;d++,a=a.parentElement){var cn=a.className;"
             + "if(CM.test(String(a.id||'')+' '+String(cn&&cn.baseVal!==undefined?cn.baseVal:cn||''))){r=true;break;}}"
             + "X.set(e,r);return r;},"
-            + "add=function(e,l){var v=(M.get(e)||0)+l,c=(N.get(e)||0)+1;M.set(e,v);N.set(e,c);if(v>s){s=v;sl=c;}};"
+            + "add=function(e,l){var v=(M.get(e)||0)+l,c=(N.get(e)||0)+1;M.set(e,v);N.set(e,c);if(v>s){s=v;sl=c;window.__gStory=e;}};"
             /* A line on its own saying the chapter is on its way -- "Verifying access…",
              * "Loading chapter…" -- shown where the story will be: waited out, as a
              * spinner is, not taken for a page that is there. */

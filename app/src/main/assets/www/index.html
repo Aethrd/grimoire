@@ -589,9 +589,12 @@
           </div>
           <div class="web-tools-group" role="group" aria-labelledby="web-get-label">
             <span class="web-tools-label" id="web-get-label">Download</span>
-            <div class="web-tools-grid two">
+            <div class="web-tools-grid three">
               <button class="chip" id="web-reverse" aria-pressed="false">Reverse order</button>
               <button class="chip" id="web-pictures" aria-pressed="true" title="Whether the pictures on each page are downloaded too. Remembered for every site.">Pictures: on</button>
+              <!-- Off, Auto (only where a chapter's text comes out garbled), Always: kept for the site. -->
+              <button class="chip" id="web-ocr" aria-pressed="false" disabled
+                title="Read each chapter's words by OCR, from the page as it shows -- for a site whose text comes out garbled. Slower; remembered for the site. Tap: off, auto, always.">OCR: off</button>
             </div>
           </div>
         </div>

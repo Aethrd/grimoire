@@ -148,6 +148,19 @@ await t('a queued book not yet started opens to be named, as a book in Build is'
   assert.ok(document.querySelector('#web-cover img'), 'the picture chosen is not shown');
   assert.equal(document.getElementById('web-cover-pick').getAttribute('aria-pressed'), 'true');
   assert.match(document.getElementById('web-cover-note').textContent, /Your own picture/);
+  // OCR for the site in the box: off, auto, always, off again -- kept for the site.
+  const ocrChip = document.getElementById('web-ocr');
+  assert.equal(ocrChip.disabled, false);
+  assert.equal(ocrChip.textContent, 'OCR: off');
+  const ocrSite = Object.keys((await store.settings()).siteDelays || {})[0];
+  for (const want of ['auto', 'always', 'off']) {
+    ocrChip.click();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(ocrChip.textContent, `OCR: ${want}`);
+    const kept = (await store.settings()).ocrSites || {};
+    assert.equal(Object.values(kept)[0] || 'off', want);
+  }
+  assert.ok(ocrSite === undefined || typeof ocrSite === 'string');
   // Its author, here too, under its title: what the queue had, and what is typed kept.
   const author = document.getElementById('web-author');
   assert.equal(author.value, (await store.settings()).webQueue[3].author || '');

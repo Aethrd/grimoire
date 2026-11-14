@@ -84,6 +84,11 @@ export async function download(url, options = {}) {
   try { host = new URL(url).host; } catch { /* the fetch says what is wrong with it */ }
   /* A site already found to build its pages in script is rendered from the
    * start: asking it twice for every chapter would be twice the load. */
+  /* A site the reader has said to read by OCR: its chapters in the browser, every
+   * time, their words read from the page as it shows -- always, or ("auto") only
+   * where the words as sent come out garbled. Never its lists: those are links. */
+  const ocr = host && !options.list ? ocrMode(host) : null;
+  if (ocr === 'always' || ocr === 'auto') return fetchNative('render', url, { ...options, ocr });
   if (host && renderedHosts.has(host)) return fetchNative('render', url, options);
   /* A site the reader has said to read in the browser: its pages are put
    * right by its own script (paragraphs in their order, say), so they are
@@ -127,6 +132,9 @@ const renderedHosts = new Set();
 /** Which sites the reader has said to read in the browser (app.js keeps them, by site). */
 let readInBrowser = () => false;
 export function setReadInBrowser(test) { readInBrowser = typeof test === 'function' ? test : () => false; }
+/** Which sites the reader has said to read by OCR, and how: 'auto', 'always', or null (app.js keeps them). */
+let ocrMode = () => null;
+export function setOcrMode(test) { ocrMode = typeof test === 'function' ? test : () => null; }
 /* Sites whose contents page is sent without its list -- its script fetches
  * the list after the page has come (WordPress's Madara theme, for one) --
  * though their chapters come whole: their lists are read in the browser,
@@ -360,10 +368,11 @@ export function scriptBuilt(html) {
   return tidy(body.textContent).length < 400 && body.querySelectorAll('a[href]').length < 8;
 }
 
-function fetchNative(method, url, { timeout = 90000, list = false, textOnly = false, press = null } = {}) {
+function fetchNative(method, url, { timeout = 90000, list = false, textOnly = false, press = null, ocr = null } = {}) {
   // A page that says to wait is waited on for up to three minutes, there; a
-  // list whose "show more" is pressed, for as long as that takes (WebBridge).
-  if (method === 'render') timeout = Math.max(timeout, press ? 16 * 60000 : 240000);
+  // list whose "show more" is pressed, for as long as that takes (WebBridge);
+  // a chapter read by OCR, three minutes more for the reading.
+  if (method === 'render') timeout = Math.max(timeout, press ? 16 * 60000 : 240000) + (ocr ? 180000 : 0);
   return new Promise((resolve, reject) => {
     if (!available()) {
       reject(new Error('Downloading needs the app: this copy of the reader cannot reach the web.'));
@@ -399,7 +408,9 @@ function fetchNative(method, url, { timeout = 90000, list = false, textOnly = fa
           const bytes = await response.arrayBuffer();
           const type = String(info.type || '').split(';')[0].trim().toLowerCase();
           resolve({ url: info.url || url, status: info.status, type: info.type || '', blob: new Blob([bytes], { type }),
-            rendered: !!info.rendered, dwell: Math.max(0, Number(info.dwell) || 0) });
+            rendered: !!info.rendered, dwell: Math.max(0, Number(info.dwell) || 0),
+            // How many lines were read by OCR and put in for the words as sent (0: none).
+            ocr: Math.max(0, Number(info.ocr) || 0) });
         } catch (error) {
           reject(error);
         } finally {
@@ -413,7 +424,9 @@ function fetchNative(method, url, { timeout = 90000, list = false, textOnly = fa
       // "t": a chapter wanted for its words alone, watched for them a while (see WebBridge).
       // "1:gap:jitter": a list whose "show more" is pressed, that far apart.
       const listing = list ? (press ? `1:${Math.round(press.gap)}:${Math.round(press.jitter || 0)}` : '1') : null;
-      if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url, list), listing || (textOnly ? 't' : '0'));
+      // "x": read by OCR; "a": by OCR where the words as sent are garbled (see WebBridge).
+      const reading = ocr === 'always' ? 'x' : ocr === 'auto' ? 'a' : '';
+      if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url, list) + reading, listing || (textOnly ? 't' : '0'));
       else window.GrimoireWeb.fetch(id, url);
     } catch (error) {
       pending.delete(id);
@@ -2333,6 +2346,8 @@ export async function readPage(link, index, {
   const chapter = {
     index, title, fromToc: true, html: body, words: countWords(text, lang), url: page.url, from: link.url,
     ...(own !== null ? { number: own } : {}),
+    // Its words read by OCR, from the page as it showed: kept on the chapter, to know it by.
+    ...(page.ocr > 0 ? { ocr: true } : {}),
   };
   return {
     chapter,

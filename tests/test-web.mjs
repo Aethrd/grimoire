@@ -1999,7 +1999,7 @@ await t('the delay is kept for every page -- retries too -- from when the last o
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /private static final long RENDER_WAIT_MS = 180000;/);
   assert.match(java, /: holding \? RENDER_WAIT_MS : presses > 0 \? PRESS_MAX_MS : maxMs;/);
-  assert.match(read('app/src/main/assets/www/js/web.js'), /if \(method === 'render'\) timeout = Math\.max\(timeout, press \? 16 \* 60000 : 240000\);/);
+  assert.match(read('app/src/main/assets/www/js/web.js'), /if \(method === 'render'\) timeout = Math\.max\(timeout, press \? 16 \* 60000 : 240000\) \+ \(ocr \? 180000 : 0\);/);
 });
 
 await t('a spinner left going once the chapter is there holds nothing; waiting and retries are said', async () => {
@@ -3091,10 +3091,37 @@ await t("a site's name stamped into its chapters is taken out; a site read in th
   await web.download('https://other.example/1.html').catch(() => {});
   assert.deepEqual(asked.map((a) => a[0]), ['render', 'fetch', 'fetch']);
   web.setReadInBrowser(null);
+  // Read by OCR, as the reader says for the site: its chapters in the browser, "x" always
+  // or "a" where garbled, after the patience; its lists and other sites as ever.
+  asked.length = 0;
+  window.GrimoireWeb.render = (id, url, patience) => { asked.push(['render', url, patience]); setTimeout(() => web.settleWeb(id, false, 'no'), 0); };
+  web.setOcrMode((host) => (host.endsWith('hetushu.com') ? 'always' : host.endsWith('auto.example') ? 'auto' : null));
+  await web.download('https://m.hetushu.com/book/4892/3626690.html').catch(() => {});
+  await web.download('https://m.hetushu.com/book/4892/catalog-2.html', { list: true }).catch(() => {});
+  await web.download('https://www.auto.example/7.html').catch(() => {});
+  await web.download('https://other.example/1.html').catch(() => {});
+  assert.deepEqual(asked.map((a) => a[0]), ['render', 'fetch', 'render', 'fetch']);
+  assert.match(asked[0][2], /^\d+o?x$/);
+  assert.match(asked[2][2], /^\d+o?a$/);
+  web.setOcrMode(null);
   delete window.GrimoireWeb;
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /web\.setReadInBrowser\(\(host\) => !!browserSites\[siteKey\(host\)\]\);/);
   assert.match(app, /store\.saveSettings\(\{ browserSites \}\)/);
+  assert.match(app, /web\.setOcrMode\(\(host\) => ocrSites\[siteKey\(host\)\] \|\| null\);/);
+  // Read by OCR, kept on the chapter -- and on its record, and when its book is carried on.
+  const webJs = read('app/src/main/assets/www/js/web.js');
+  assert.match(webJs, /\.\.\.\(page\.ocr > 0 \? \{ ocr: true \} : \{\}\),/);
+  assert.equal((read('app/src/main/assets/www/js/build.js').match(/\.\.\.\(chapter\.ocr \? \{ ocr: true \} : \{\}\),/g) || []).length, 2);
+  /* In the renderer: only a chapter that is there (never a check, a block, an empty
+   * page); in auto, only one whose words are garbled; its reading kept only if it read
+   * about as much as the page holds; a screen's cut line left for the next screen. */
+  const bridge = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  assert.match(bridge, /if \(ocr && there && !checkingAccess\) \{\s+if \(!ocrAuto\) \{ readStory\(this::copyPage\); return; \}/);
+  assert.match(bridge, /if \(paragraphs\.isEmpty\(\) \|\| \(lastStory > 0 && read < lastStory \* OCR_MIN_SHARE\)\) \{/);
+  assert.match(bridge, /if \(!end && box\.bottom >= partH - Math\.max\(3, box\.height\(\) \* 0\.15f\)\) \{\s+cut = Math\.min\(cut, box\.top\);\s+continue;/);
+  assert.match(bridge, /if \(job\.ocr && isFont\(request\)\) return null;/);
+  assert.match(bridge, /\(c>=0xE000&&c<=0xF8FF\)\|\|c===0xFFFD/);
 });
 
 await t('a contents in numbered pages joined by "下一页" (hetushu): every page followed, onward only', async () => {

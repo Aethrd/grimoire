@@ -471,6 +471,8 @@ export async function build({
     // The link a web chapter came from: how "Check for new chapters" knows
     // what the book already has.
     ...(chapter.from ? { from: chapter.from } : {}),
+    // Read by OCR from the page as it showed, not as its words were sent.
+    ...(chapter.ocr ? { ocr: true } : {}),
     /* A part whose chapters arrive as finished markup -- a comic, a text
        file -- has its picture references already resolved, so they need the
        prefix applying too. One that arrives as source resolves them later,
@@ -758,6 +760,8 @@ async function readShelfBook(part) {
       words: chapter.words || 0,
       html: chapterHtml(chapter),
       ...(chapter.from ? { from: chapter.from } : {}),
+    // Read by OCR from the page as it showed, not as its words were sent.
+    ...(chapter.ocr ? { ocr: true } : {}),
     })),
     images: images.map((image, order) => ({
       href: image.href,

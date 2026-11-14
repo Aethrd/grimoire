@@ -11019,7 +11019,26 @@ function delayFields() {
 let browserSites = {};
 web.setReadInBrowser((host) => !!browserSites[siteKey(host)]);
 
+/* Sites read by OCR, by the reader's say: 'auto' (a chapter whose words come out
+ * garbled -- scrambled into a font of the site's own -- read from the page as it
+ * shows) or 'always' (every chapter so). Kept by site, as its delays are; every
+ * chapter of such a site is read in the browser, which is slower. */
+let ocrSites = {};
+const OCR_MODES = [null, 'auto', 'always'];
+web.setOcrMode((host) => ocrSites[siteKey(host)] || null);
+function paintOcr() {
+  const button = el('web-ocr');
+  if (!button) return;
+  const site = delaysShownFor;
+  const mode = site ? ocrSites[site] || null : null;
+  button.disabled = !site;
+  button.textContent = `OCR: ${mode || 'off'}`;
+  button.setAttribute('aria-pressed', String(!!mode));
+  button.setAttribute('aria-label', site ? `OCR for ${site}: ${mode || 'off'}. Tap for ${OCR_MODES[(OCR_MODES.indexOf(mode) + 1) % OCR_MODES.length] || 'off'}.` : 'OCR: paste a site\u2019s address first');
+}
+
 function paintSiteDelays() {
+  paintOcr();
   const row = el('web-in-browser-row');
   if (row) {
     row.hidden = !delaysShownFor;
@@ -11109,6 +11128,18 @@ function wireWeb() {
     store.saveSettings({ browserSites }).catch(() => {});
     toast(el('web-in-browser').checked ? `${site}: chapters read in the browser, from now on.` : `${site}: chapters read as sent again.`);
   });
+  el('web-ocr').onclick = () => {
+    const site = delaysShownFor;
+    if (!site) return;
+    const mode = OCR_MODES[(OCR_MODES.indexOf(ocrSites[site] || null) + 1) % OCR_MODES.length];
+    if (mode) ocrSites[site] = mode;
+    else delete ocrSites[site];
+    store.saveSettings({ ocrSites }).catch(() => {});
+    paintOcr();
+    toast(mode === 'always' ? `${site}: every chapter read by OCR, from the page as it shows — slower, text only.`
+      : mode === 'auto' ? `${site}: a chapter whose text comes out garbled is read by OCR instead. Its chapters are read in the browser.`
+        : `${site}: chapters read as sent again, no OCR.`, 5000);
+  };
   el('web-go').onclick = addWebToBuild;
   el('web-queue').onclick = queueWeb;
   // Pick in the browser: only where the app can show a site; remembered.
@@ -11123,6 +11154,9 @@ function wireWeb() {
     if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
     if (settings.siteDelays && typeof settings.siteDelays === 'object') siteDelays = { ...settings.siteDelays, ...siteDelays };
     if (settings.browserSites && typeof settings.browserSites === 'object') browserSites = { ...settings.browserSites, ...browserSites };
+    if (settings.ocrSites && typeof settings.ocrSites === 'object') {
+      ocrSites = Object.fromEntries(Object.entries({ ...settings.ocrSites, ...ocrSites }).filter(([, mode]) => OCR_MODES.includes(mode) && mode));
+    }
     if (typeof settings.webPictures === 'boolean') webState.pictures = settings.webPictures;
     if (el('web-pick')) el('web-pick').checked = settings.webPick === true;
     loadQueue(settings);

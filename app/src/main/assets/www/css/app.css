@@ -2556,7 +2556,9 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .web-tools-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .web-tools-grid .chip { width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: center;
   text-align: center; white-space: normal; line-height: 1.25; }
-@media (min-width: 640px) { .web-tools-grid:not(.two) { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 640px) { .web-tools-grid:not(.three) { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.web-tools-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.web-tools-grid .chip:disabled { opacity: .45; }
 .web-hint { font-size: 11px; line-height: 1.5; margin: 0 0 6px; }
 
 .web-list { list-style: none; margin: 0; padding: 0; }
