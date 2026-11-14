@@ -9,6 +9,7 @@ import * as panels from './panels.js';
 import * as fonts from './fonts.js';
 import { playScene } from './opening.js';
 import * as syosetu from './syosetu.js';
+import * as check from './check.js';
 import { nameWithFormat, chapterHtml, plainTextOf } from './parse.js';
 import * as glossary from './glossary.js';
 import * as build from './build.js';
@@ -1706,6 +1707,7 @@ async function openBookMenu(book) {
       `Much shorter than the rest of the book (${short.slice(0, 3).map((chapter) => chapter.title).join(', ')}${short.length > 3 ? '…' : ''}) — maybe cut off`,
       () => refetchShort(book, short));
   }
+  choice('Check for problems', 'Missing, repeated, cut-off or empty chapters; site text left in', () => checkBook(book));
   choice('Check for new chapters', book.webSources?.length
     ? 'List its website again, and add what it does not have yet'
     : 'From its contents page: add what it does not have yet',
@@ -1722,6 +1724,109 @@ async function openBookMenu(book) {
     toast(`“${library.displayTitle(book)}” moved to the bin`, 6000);
   });
 
+  sheet.hidden = false;
+}
+
+/* ── a book checked for missing or broken content (check.js) ──────────────
+ *
+ * Read as the app keeps it -- each chapter's text, the pictures it has --
+ * and put through epub_check.py's checks. What it finds in a sheet: problems
+ * (✗), things to look at (?), notes (·), each with what it saw; a chapter's
+ * line opens the book there. The report, and every chapter's last and next
+ * one's first lines, can be saved as text.
+ */
+async function bookForCheck(book, onProgress) {
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
+  const pictures = new Set((await store.byIndex('images', 'bookId', book.id).catch(() => [])).map((image) => image.href));
+  const out = [];
+  const missingImgs = [];
+  for (const [at, chapter] of chapters.entries()) {
+    const file = `chapter ${chapter.index + 1}`;
+    const html = chapter.html || '';
+    const imgs = [...html.matchAll(/<img\b[^>]*\bdata-img="([^"]*)"/g)].map((m) => m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+    for (const href of imgs) if (!pictures.has(href)) missingImgs.push([file, href]);
+    out.push({ file, index: chapter.index, title: String(chapter.title || ''), lines: check.textLines(html), imgs: imgs.length });
+    // A long book is read without the screen locking up meanwhile.
+    if (at % 50 === 49) { onProgress?.((at + 1) / chapters.length); await new Promise((resolve) => setTimeout(resolve, 0)); }
+  }
+  return {
+    meta: { title: library.displayTitle(book) || book.title || '', creator: book.author || '', language: book.lang || '' },
+    chapters: out,
+    // The app's contents are its chapters, each by its title.
+    toc: out.map((c) => [c.file, c.title]),
+    names: new Set(out.map((c) => c.file)),
+    missingImgs,
+    coverDupes: [],
+  };
+}
+
+async function checkBook(book) {
+  const name = library.displayTitle(book);
+  const finish = progress.start(`Checking “${name}”`);
+  let res;
+  try {
+    finish.say('Reading its chapters', 0);
+    const read = await bookForCheck(book, (fraction) => finish.say('Reading its chapters', fraction * 0.6));
+    finish.say('Checking', 0.7);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    res = check.analyse(read);
+  } catch (error) {
+    toast(`Could not check “${name}”: ${error.message || error}`, 7000);
+    return;
+  } finally {
+    finish();
+  }
+  showCheck(book, res);
+}
+
+function showCheck(book, res) {
+  const sheet = el('check-sheet');
+  const name = library.displayTitle(book);
+  el('check-sheet-title').textContent = `Check · ${name}`;
+  const problems = res.items.filter((x) => x.sev === '✗').length;
+  const looks = res.items.filter((x) => x.sev === '?').length;
+  el('check-summary').textContent = `${check.summaryLine(res.summary)}. `
+    + (!problems && !looks ? 'No problems found.' : `${problems} problem${problems === 1 ? '' : 's'}, ${looks} to look at.`);
+  const list = el('check-list');
+  list.innerHTML = '';
+  for (const [sev, head] of [['✗', 'Problems'], ['?', 'Check these'], ['·', 'Notes']]) {
+    const xs = res.items.filter((x) => x.sev === sev);
+    if (!xs.length) continue;
+    const h = document.createElement('p');
+    h.className = 'check-head';
+    h.textContent = `${head} (${xs.length})`;
+    list.appendChild(h);
+    for (const x of xs) {
+      const row = document.createElement('button');
+      row.className = 'check-item';
+      row.dataset.sev = sev;
+      row.innerHTML = `<span class="sev">${escapeText(sev)}</span><span>${x.where ? `<span class="where">${escapeText(x.where)}</span> ` : ''}${escapeText(x.msg)}</span>`
+        + (x.excerpt.length ? `<span class="ex">${escapeText(x.excerpt.join('\n'))}</span>` : '');
+      // "#12 …": the twelfth chapter, opened there.
+      const at = /^#(\d+)\b/.exec(x.where || '');
+      const chapter = at ? res.chapters[Number(at[1]) - 1] : null;
+      if (chapter) {
+        row.classList.add('goes');
+        row.title = 'Open the book at this chapter';
+        row.onclick = () => { sheet.hidden = true; openBook(book, { chapter: chapter.index }); };
+      } else row.tabIndex = -1;
+      list.appendChild(row);
+    }
+  }
+  if (!res.items.length) {
+    const ok = document.createElement('p');
+    ok.className = 'check-ok';
+    ok.textContent = 'Nothing found: no gaps, repeats, empty or cut-off chapters, and no site text.';
+    list.appendChild(ok);
+  }
+  list.scrollTop = 0;
+  const safe = name.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80) || 'book';
+  const save = (text, file) => writeOut(new Blob([text], { type: 'text/plain' }), file, 'text/plain')
+    .catch((error) => toast(`Not saved: ${error.message || error}`, 6000));
+  el('check-save').onclick = () => save(check.reportText(res), `${safe} - check.txt`);
+  el('check-boundaries').onclick = () => save(check.boundariesText(res), `${safe} - boundaries.txt`);
+  el('check-close').onclick = () => { sheet.hidden = true; };
+  sheet.onclick = (event) => { if (event.target === sheet) sheet.hidden = true; };
   sheet.hidden = false;
 }
 
@@ -2571,6 +2676,30 @@ async function openFolderActions(folder, label, count) {
 }
 
 /** A book filed into a hidden folder disappears from the shelf; say where. */
+/**
+ * Where the copy already here is, when a file picked again is skipped for it.
+ *
+ * "Already on your shelf" about a book nobody could see on the shelf, nor
+ * find by searching, read as the app being wrong: the copy was in a folder
+ * hidden from the shelf (found only by most of its title, which may not be
+ * the file's name), or off the shelf while a download carries it on. So it
+ * is named, by the title it has here, and where it is said.
+ */
+async function whereAlready(ids) {
+  if (!ids?.length) return '';
+  const book = await store.get('books', ids[0]);
+  if (!book) return '';
+  const hidden = library.hiddenFolderList(await store.settings());
+  const hiddenIn = library.offShelf(book, hidden) ? library.hiddenBy(book.folder || '', hidden) : null;
+  const carried = (await store.all('books')).some((other) => library.isDownloading(other)
+    && (other.builtFrom || []).some((part) => part.bookId === book.id));
+  const where = book.inVault ? ' — in the Vault'
+    : hiddenIn ? ` — in “${hiddenIn}”, a folder hidden from the shelf: open it from Folders, or search most of this title`
+      : carried ? ' — off the shelf while a download carries it on'
+        : book.folder ? ` — in “${book.folder}”` : '';
+  return ` · ${ids.length > 1 ? 'the first: ' : ''}“${library.displayTitle(book)}”${where}`;
+}
+
 async function hiddenNote(books, said) {
   if (activeFolder != null) return said;
   const hidden = library.hiddenFolderList(await store.settings());
@@ -3176,7 +3305,7 @@ async function importNow(files, { transient = false, into = '' } = {}, done) {
     { kind: results.added ? 'done' : 'failed' });
   } else if (!results.added && besides) {
     // Nothing new, and nothing wrong: not a failure, and not a tick either.
-    say(`Nothing new to add · ${besides}`, 7000);
+    say(`Nothing new to add · ${besides}${await whereAlready(results.existing)}`, 12000);
   } else {
     const folders = results.folders?.size || 0;
     const seconds = (results.elapsedMs || 0) / 1000;

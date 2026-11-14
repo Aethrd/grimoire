@@ -2585,6 +2585,25 @@ await t('a copy the shell found by its name goes in, though Android gave an old 
   assert.match(activity, /\(named \? "#named" : ""\)/);
 });
 
+await t('picked again while a copy is here but off the shelf: where it is, by the title it has here', async () => {
+  delete window.GrimoireNative;
+  const file = queuedFile('tucked away', 'Kept in a hidden folder.');
+  pickFiles([file]);
+  await untilIdle();
+  const book = (await store.all('books')).find((b) => b.fingerprint === `${file.name}:${file.size}`);
+  assert.ok(book);
+  await store.put('books', { ...book, folder: 'Private/Old', title: '숨은 책' });
+  const before = await store.settings();
+  await store.saveSettings({ hiddenFolders: ['Private'] });
+  pickFiles([queuedFile('tucked away', 'Kept in a hidden folder.')]);
+  await untilIdle();
+  await settle(100);
+  const said = el('toast').textContent;
+  assert.match(said, /Nothing new to add · 1 already on your shelf · “숨은 책” — in “Private”, a folder hidden from the shelf/);
+  await store.saveSettings({ hiddenFolders: before.hiddenFolders || [] });
+  await store.deleteBook(book.id);
+});
+
 /* ── blurred covers, kept ────────────────────────────────────────────── */
 
 console.log('\nblurred covers, kept');

@@ -440,7 +440,7 @@ p { margin: 0; text-indent: 0; }
 p.gap { margin-top: 1em; }
 section.chapter { page-break-before: always; break-before: page; }
 header.chapter-head { margin: 2.5em 0 2em 0; padding-bottom: 1em; border-bottom: 1px solid #999; text-align: center; page-break-after: avoid; break-after: avoid; }
-p.chapter-arc { margin: 0 0 0.3em 0; font-size: 0.85em; color: #999; }
+span.chapter-arc { display: block; margin: 0 0 0.3em 0; font-size: 0.85em; letter-spacing: normal; color: #999; }
 p.chapter-number { margin: 0 0 0.4em 0; font-size: 0.95em; letter-spacing: 0.1em; color: #777; }
 h1.chapter-title { margin: 0; font-size: 1.4em; line-height: 1.5; }
 aside.note { margin: 1.5em 0; padding: 0.7em 1em; border-left: 3px solid #bbb; font-size: 0.9em; color: #666; }
@@ -623,8 +623,9 @@ export async function rebuild(file, { fetchText, askTitles, readPdf = pdfPages, 
     const n = ei + 1;
     const arcShown = ep.arc && (idx === 0 || eps[found[idx - 1][0]].arc !== ep.arc);
     const parts = ['<section class="chapter" epub:type="chapter">\n<header class="chapter-head">'
-      + (arcShown ? `<p class="chapter-arc">${esc(ep.arc)}</p>` : '')
-      + `<p class="chapter-number">第${n}話</p><h1 class="chapter-title">${esc(horiz(ep.title))}</h1></header>`];
+      // The arc's name inside the number's line, set above it: a checker reading the
+      // first lines (check.js) takes "第一部 第1話" for the heading it is, not 第1話 for one mid-chapter.
+      + `<p class="chapter-number">${arcShown ? `<span class="chapter-arc">${esc(ep.arc)}</span> ` : ''}第${n}話</p><h1 class="chapter-title">${esc(horiz(ep.title))}</h1></header>`];
     if (pre.length) { parts.push(`<aside class="note"><p class="note-label">前書き</p>\n${render(pre, stats)}\n</aside>`); stats.pre += 1; }
     parts.push(render(body, stats));
     if (post.length) { parts.push(`<aside class="note"><p class="note-label">後書き</p>\n${render(post, stats)}\n</aside>`); stats.post += 1; }

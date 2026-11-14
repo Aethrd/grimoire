@@ -327,7 +327,10 @@ await t('a Syosetu PDF made into an EPUB, rebuilt: a chapter an episode, cleaned
   const page = async (n) => out.file(`OEBPS/text/${n}`).async('string');
   // The same pages syosetu_pdf2epub.py writes for it (checked against the script itself).
   const one = await page('ep0001.xhtml');
-  assert.match(one, /<p class="chapter-arc">第一部<\/p><p class="chapter-number">第1話<\/p><h1 class="chapter-title">始まりの朝<\/h1>/);
+  assert.match(one, /<p class="chapter-number"><span class="chapter-arc">第一部<\/span> 第1話<\/p><h1 class="chapter-title">始まりの朝<\/h1>/);
+  // The checker finds nothing to put right in it: the arc's name sits in the number's line, not before it.
+  const checker = await import(new URL('../app/src/main/assets/www/js/check.js', import.meta.url).href);
+  assert.deepEqual(checker.textLines(one).slice(0, 2), ['第一部 第1話', '始まりの朝']);
   assert.match(one, /<p class="gap">朝が来た。<\/p>\n<p>彼は目を覚ました。<\/p>\n<p>「おはよう。」<\/p>\n<p>と母が言った。<\/p>/);
   assert.match(one, /<p class="gap">そして彼は学校へ向かって歩き出した。<\/p>\n<p>空は青かった。<\/p>/, 'a sentence cut by a page break not joined back');
   assert.match(one, /<p class="illust">［挿絵］<\/p>/);
@@ -354,6 +357,46 @@ await t('a Syosetu PDF made into an EPUB, rebuilt: a chapter an episode, cleaned
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /if \(syosetuOn\) files = await rebuildSyosetu\(files\);/);
   assert.match(app, /el\('build-syosetu'\)\.onclick = \(\) => \{ syosetuOn = !syosetuOn; paintSyosetu\(\); \};/);
+});
+
+await t('a book checked for what goes wrong in a download: gaps, typos, duplicates, placeholders, cut chapters, site text -- as epub_check.py does', async () => {
+  const check = await import(new URL('../app/src/main/assets/www/js/check.js', import.meta.url).href);
+  const prose = (n) => Array.from({ length: 12 }, (_, k) => `그는 ${n}번째 날의 ${k + 1}번째 일을 천천히 끝냈다. 하늘은 맑고 바람은 조용했다.`);
+  const ch = (n, lines, title = `${n}화`) => ({ file: `c${n}.xhtml`, title, lines: [title, ...lines], imgs: 0 });
+  const chapters = [
+    ch(1, prose(1)), ch(2, prose(2)), ch(3, prose(3)),
+    ch(5, prose(5)),                                     // 4 missing
+    ch(6, ['로그인 후 이용 가능합니다. 유료 회차입니다.']),      // a locked page
+    ch(7, [...prose(7).slice(0, 11), '그리고 그는 문을 열고,']),   // cut off on a comma
+    ch(8, prose(8)),
+    ch(9, prose(8)),                                     // the same text as 8
+    ch(10, [...prose(10), 'Read the latest chapters at novelsite.com']),
+  ];
+  const toc = chapters.map((c) => [c.file, c.title]);
+  const res = check.analyse({ meta: { title: '테스트', creator: '', language: 'ko' }, chapters, toc, names: new Set(chapters.map((c) => c.file)), missingImgs: [], coverDupes: [] });
+  const said = (sev, rx) => res.items.some((x) => x.sev === sev && rx.test(`${x.where} ${x.msg} ${x.excerpt.join(' ')}`));
+  assert.ok(said('✗', /#4 5화 .*GAP — missing 1 chapter\(s\): 4/), check.reportText(res));
+  assert.ok(said('✗', /#5 6화 .*placeholder \/ locked page \("로그인"\)/), check.reportText(res));
+  assert.ok(said('?', /#6 7화 .*ends without finishing the sentence/));
+  assert.ok(said('✗', /#7 8화 100% of its text also appears in #8 9화/));
+  assert.ok(said('?', /#9 10화 site\/translator text\?.*novelsite\.com/));
+  assert.ok(said('·', /no author in the metadata/));
+  assert.equal(res.summary.chapters, 9);
+  assert.match(check.reportText(res), /PROBLEMS \(\d+\)/);
+  assert.match(check.boundariesText(res), /=== #1 1화  →  #2 2화\n  … /);
+  // A number typo'd mid-run is a typo, not a gap and a step back.
+  const typo = [1, 2, 3, 40, 5, 6].map((n) => ch(n, prose(n)));
+  const t2 = check.analyse({ meta: { title: '', creator: 'x', language: 'ko' }, chapters: typo, toc: typo.map((c) => [c.file, c.title]), names: new Set(typo.map((c) => c.file)) });
+  assert.deepEqual(t2.items.filter((x) => x.sev === '✗').map((x) => x.msg), ['says 40 but sits where 4 should be (typo in the number?)']);
+  // As the script reads a page: <br> and block ends are lines, entities undone once, the 　 a space.
+  assert.deepEqual(check.textLines('<html><body><p>가&amp;나</p><p>&amp;nbsp;　x<br/>y</p></body></html>'), ['가&나', '&nbsp; x', 'y']);
+  // Held down on a book: Check for problems, its report in a sheet, a chapter's line opening the book there.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /choice\('Check for problems', [^\n]*\(\) => checkBook\(book\)\);/);
+  assert.match(app, /row\.onclick = \(\) => \{ sheet\.hidden = true; openBook\(book, \{ chapter: chapter\.index \}\); \};/);
+  assert.match(app, /check\.boundariesText\(res\)/);
+  const html = read('app/src/main/assets/www/index.html');
+  assert.match(html, /id="check-sheet"/);
 });
 
 await t('a Syosetu PDF itself, read by its columns: paragraphs, blank lines, page breaks mended, furigana and page numbers out', async () => {

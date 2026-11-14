@@ -2906,3 +2906,22 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .gradient-roles i { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--divider); }
 .gradient-roles b { font-family: var(--font-heading); font-weight: 600; }
 .gradient-roles span { color: var(--muted); font-size: 12px; }
+
+/* The check of a book: the list scrolls, its buttons stay. */
+#check-sheet .check-sheet { display: flex; flex-direction: column; max-height: 86%; overflow: hidden; }
+.check-summary { flex: none; margin: 2px 0 8px; font-size: 13px; }
+.check-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.check-head { font: 600 11px var(--font-heading); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); margin: 12px 0 4px; }
+.check-item { display: grid; grid-template-columns: 18px 1fr; gap: 2px 8px; width: 100%; text-align: left;
+  padding: 8px 2px; border-bottom: 1px solid var(--divider); font-size: 13px; color: var(--text); background: none; }
+.check-item .sev { font-weight: 700; text-align: center; }
+.check-item[data-sev="✗"] .sev { color: var(--danger, #d4544c); }
+.check-item[data-sev="?"] .sev { color: var(--accent); }
+.check-item[data-sev="·"] .sev { color: var(--muted); }
+.check-item .where { color: var(--muted); font-size: 12px; }
+.check-item .ex { grid-column: 2; font: 12px/1.45 var(--font-ui); color: var(--muted); white-space: pre-wrap;
+  overflow-wrap: anywhere; }
+.check-item.goes { cursor: pointer; }
+.check-ok { padding: 18px 2px; color: var(--muted); }
+.check-actions { flex: none; border: 0; background: none; padding: 10px 0 0; gap: 8px; flex-wrap: wrap; }

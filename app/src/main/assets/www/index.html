@@ -778,6 +778,21 @@
   </div>
 </div>
 
+<!-- A book checked for missing or broken content (check.js): problems, things
+     to look at, notes; a chapter's line opens the book there. -->
+<div class="sheet-scrim" id="check-sheet" hidden>
+  <div class="sheet check-sheet" role="dialog" aria-labelledby="check-sheet-title">
+    <p class="eyebrow" id="check-sheet-title">Check</p>
+    <p class="check-summary muted" id="check-summary"></p>
+    <div class="check-list" id="check-list"></div>
+    <div class="sheet-actions check-actions">
+      <button class="btn ghost" id="check-boundaries" title="Every chapter's last lines and the next one's first, as a text file">Boundaries</button>
+      <button class="btn ghost" id="check-save">Save report</button>
+      <button class="btn primary" id="check-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-scrim" id="cover-pick-sheet" hidden>
   <div class="sheet cover-pick">
     <p class="eyebrow">Cover from the books</p>
