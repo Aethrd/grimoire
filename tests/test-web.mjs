@@ -481,6 +481,22 @@ await t('chapters numbered afresh in each volume are put in order by volume, the
   assert.equal(web.volumeIn('Chapter 9'), null);
 });
 
+await t('a chapter numbered before the part it is in ("447 Part 2 - …") is read by its own number', () => {
+  // nineheavens, newest first, a part's name in every title and its side stories among them.
+  const names = ['447 Part 2 - Side Story 4. Paradise 6 Sep · 8 min read', '446 Part 2 - Side Story 3. Trial 6 Sep · 9 min read',
+    '443 Part 2 - Annihilation 6 Sep · 10 min read', '442 Part 2 - Contract 6 Sep · 9 min read', '441 Part 2 - Illusion Prison 6 Sep · 8 min read'];
+  assert.deepEqual(names.map((n) => web.numberIn(n)), [447, 446, 443, 442, 441]);
+  assert.deepEqual(web.chapterKind(names[0]), { kind: 'main', number: 447 });
+  const links = names.map((text, i) => ({ url: `https://nh.example/novels/x/chapter-${447 - i}/`, text }));
+  const order = web.inReadingOrder(links, () => true);
+  assert.equal(order.how, 'reversed');
+  assert.deepEqual(order.links.map((l) => web.numberIn(l.text)), [441, 442, 443, 446, 447]);
+  // Still a part's own number where nothing else names one; a chapter's word always first.
+  assert.equal(web.numberIn('Part 12 - The Gate'), 12);
+  assert.equal(web.numberIn('Chapter 5 (Part 2)'), 5);
+  assert.equal(web.numberIn('Part 2 - Chapter 5'), 5);
+});
+
 await t('Kakuyomu: every episode, from the works page\'s own data, though its contents are folded', async () => {
   const work = '1177354054881165840';
   const ep = (id, title) => ({ __typename: 'Episode', id, title, publishedAt: '2024-01-01T00:00:00Z' });
@@ -2787,6 +2803,9 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   const w = page.window;
   // A site that stops selecting is overruled; and a link tapped is marked, not followed.
   w.document.addEventListener('selectstart', (e) => e.preventDefault());
+  // A browser's frames, as the WebView has them.
+  w.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 16);
+  w.cancelAnimationFrame = (id) => clearTimeout(id);
   w.eval(script('PICKABLE'));
   const anchors = w.document.querySelectorAll('li a');
   const tap = (a) => a.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -2811,7 +2830,8 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
     cover.dispatchEvent(event);
     return event;
   };
-  assert.ok(touch('touchstart', 100).defaultPrevented, 'the page had the touch too');
+  // Where the page itself scrolls, its touches are the browser's to scroll by -- at its own speed, with its fling.
+  assert.ok(!touch('touchstart', 100).defaultPrevented, 'the page kept from scrolling itself');
   await new Promise((r) => setTimeout(r, 450));
   under = anchors[8];
   const moved = touch('touchmove', 400);
@@ -2820,7 +2840,7 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   const dragged = JSON.parse(w.eval(script('PICKED')));
   assert.deepEqual([dragged.length, dragged[0].text, dragged.at(-1).text], [8, '409화 악은 삶을 바란다', '402화 악은 삶을 바란다']);
   assert.equal(w.document.getElementById('__gPickCount').textContent, '8 picked');
-  // A finger that moves before the hold is a swipe: the list scrolls, nothing is picked.
+  // A finger that moves before the hold is a swipe: the browser scrolls the page (not this script), nothing is picked.
   let scrolled = 0;
   w.scrollBy = (x, y) => { scrolled += y; };
   under = anchors[0];
@@ -2829,7 +2849,13 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   touch('touchmove', 200);
   await new Promise((r) => setTimeout(r, 450));
   touch('touchend', 200);
-  assert.equal(scrolled, 100);
+  assert.equal(scrolled, 0, 'the page scrolled from the script, a touch at a time');
+  // A box that scrolls inside the page is still scrolled from here, with a fling that carries.
+  assert.match(java, /if\(sbox\)e\.preventDefault\(\);/);
+  assert.match(java, /v\*=Math\.pow\(0\.9975,dt\)/);
+  // Dragging: the list kept for the drag, only a change of the chapter under the finger marks again, and the edge scrolls each frame.
+  assert.match(java, /if\(a===lastTo\)return;lastTo=a;moved=true;mark\(p\.from,a\);/);
+  assert.match(java, /roll=requestAnimationFrame\(tick\)/);
   assert.equal(JSON.parse(w.eval(script('PICKED'))).length, 8);
   // A tap through the cover: a chapter marked (not followed), first then last.
   const tapAt = (a) => { under = a; touch('touchstart', 100); touch('touchend', 100); };
@@ -2880,6 +2906,8 @@ ${Array.from({ length: 10 }, (_, i) => `<li><a href="https://k.example/b/ep-${41
   const reader = new JSDOM(`<html><body><aside><h2>Contents</h2><ol>${Array.from({ length: 6 }, (_, i) => `<li role="button" data-href="/viewer/7/${i + 1}">${i + 1} 1장. 인간 비보호 구역 (${i + 1})</li>`).join('')}</ol>
 <ul><li id="bare" role="button">7 2장. 에리직톤 프로토콜 (1)</li></ul></aside></body></html>`, { runScripts: 'outside-only', url: 'https://r.example/viewer/7/1' });
   const rw = reader.window;
+  rw.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 16);
+  rw.cancelAnimationFrame = (id) => clearTimeout(id);
   rw.eval(script('PICKABLE'));
   const items = rw.document.querySelectorAll('li[data-href]');
   let over = items[1];

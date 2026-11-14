@@ -1607,8 +1607,13 @@ export function numberIn(text) {
   if (cjk) return cjkNumber(cjk[1]);
   const korean = KOREAN_EPISODE.exec(text || '');
   if (korean) return parseFloat(korean[1]);
-  const match = /(?:chapters?|chaps?|ch|episodes?|eps?|parts?|第)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(text)
-    || /^\s*[#№]?\s*(\d+(?:\.\d+)?)/.exec(text);
+  /* "Part" last: a chapter's own number before the part of the story it is
+   * in. nineheavens lists "447 Part 2 - Annihilation": read as part 2, every
+   * chapter of the part had one number, and the book was put in order by
+   * part alone -- each part's chapters newest first. */
+  const match = /(?:chapters?|chaps?|ch|episodes?|eps?|第)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(text)
+    || /^\s*[#№]?\s*(\d+(?:\.\d+)?)/.exec(text)
+    || /\bparts?\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(text);
   return match ? parseFloat(match[1]) : null;
 }
 
