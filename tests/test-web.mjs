@@ -3125,7 +3125,11 @@ await t("a site's name stamped into its chapters is taken out; a site read in th
   assert.match(bridge, /if \(ocr && there && !checkingAccess\) \{\s+if \(!ocrAuto\) \{ readStory\(this::copyPage\); return; \}/);
   assert.match(bridge, /if \(paragraphs\.isEmpty\(\) \|\| \(lastStory > 0 && read < lastStory \* OCR_MIN_SHARE\)\) \{/);
   assert.match(bridge, /if \(!end && box\.bottom >= partH - Math\.max\(3, box\.height\(\) \* 0\.15f\)\) \{\s+cut = Math\.min\(cut, box\.top\);\s+continue;/);
-  assert.match(bridge, /if \(job\.ocr && isFont\(request\)\) return null;/);
+  // Its fonts and its styles let in from anywhere (Fanqie's font is named in a stylesheet on its CDN),
+  // and waited for before a screen is read.
+  assert.match(bridge, /if \(job\.ocr && \(isFont\(request\) \|\| isStyle\(request\)\)\) return null;/);
+  assert.match(bridge, /fontsThen\(0, \(\) => view\.evaluateJavascript\(OCR_PREPARE/);
+  assert.match(bridge, /document\.fonts\.status!=='loaded'/);
   // The reading's time is time on the page: taken off the delay after it, as the stay to confirm is.
   assert.match(bridge, /private void ocrDone\(Runnable then\) \{\s+if \(view == null\) return;\s+dwell \+= System\.currentTimeMillis\(\) - ocrBegan;/);
   assert.match(read('app/src/main/assets/www/js/web.js'), /lastEnd = Date\.now\(\) - dwell;/);

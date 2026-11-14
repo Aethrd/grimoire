@@ -987,9 +987,11 @@ public class WebBridge {
             if (request.isForMainFrame()) return null;
             String host = request.getUrl().getHost();
             if (host == null || ALLOWED_ELSEWHERE.contains(host.toLowerCase(Locale.ROOT))) return null;
-            // Read by OCR: the page's own fonts, wherever they come from -- a site that
-            // scrambles its text into a font of its own reads right only in that font.
-            if (job.ocr && isFont(request)) return null;
+            /* Read by OCR: the page's own fonts and its styles, wherever they come from --
+             * a site that scrambles its text into a font of its own (Fanqie: from its
+             * CDN, named in a stylesheet also there) reads right only in that font. Its
+             * scripts, trackers and pictures still kept out as ever. */
+            if (job.ocr && (isFont(request) || isStyle(request))) return null;
             if (job.lean && isHeavy(request)) {
                 return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
             }
@@ -1431,9 +1433,22 @@ public class WebBridge {
 
         private void readStory(Runnable then) {
             ocrBegan = System.currentTimeMillis();
-            view.evaluateJavascript(OCR_PREPARE, (value) -> {
+            fontsThen(0, () -> view.evaluateJavascript(OCR_PREPARE, (value) -> {
                 if (view == null) return;
                 ocrScreen(0f, then);
+            }));
+        }
+
+        /* The page's fonts loaded before a screen is read -- a scrambled text drawn in a
+         * stand-in font before its own arrives reads as the scramble. Asked a few times
+         * a second, for at most OCR_FONTS_MS; then on regardless. */
+        private void fontsThen(final long waited, final Runnable then) {
+            if (view == null) return;
+            view.evaluateJavascript(FONTS_READY, (value) -> {
+                if (view == null) return;
+                boolean ready = "\"1\"".equals(value) || "1".equals(value);
+                if (ready || waited >= OCR_FONTS_MS) then.run();
+                else main.postDelayed(() -> fontsThen(waited + 250, then), 250);
             });
         }
 
@@ -1614,6 +1629,9 @@ public class WebBridge {
     private static final long OCR_SCREEN_MS = 20000;
     private static final long OCR_MAX_MS = 180000;
     private static final int OCR_MAX_SCREENS = 120;
+    /** How long the page's fonts are waited for before its screens are read. */
+    private static final long OCR_FONTS_MS = 8000;
+    private static final String FONTS_READY = "(function(){try{return document.fonts&&document.fonts.status!=='loaded'?'0':'1';}catch(x){return '1';}})()";
     /** Less than this share of the story's length read, and the reading is not used. */
     private static final float OCR_MIN_SHARE = 0.35f;
 
@@ -1759,6 +1777,16 @@ public class WebBridge {
             + "e.setAttribute('data-grimoire-ocr',String(P.length));return 1;}catch(x){return 0;}})(__P__)";
 
     private static final Pattern FONT = Pattern.compile("\\.(woff2?|ttf|otf|eot)$", Pattern.CASE_INSENSITIVE);
+
+    private static final Pattern STYLE = Pattern.compile("\\.css$", Pattern.CASE_INSENSITIVE);
+
+    /** A stylesheet: by its address, or by what it asks to be sent. */
+    static boolean isStyle(WebResourceRequest request) {
+        String path = request.getUrl().getPath();
+        if (path != null && STYLE.matcher(path).find()) return true;
+        String accept = request.getRequestHeaders() == null ? null : request.getRequestHeaders().get("Accept");
+        return accept != null && accept.toLowerCase(Locale.ROOT).startsWith("text/css");
+    }
 
     /** A font: by its address, or by what it asks to be sent. */
     static boolean isFont(WebResourceRequest request) {
