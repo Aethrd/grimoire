@@ -315,16 +315,22 @@ export function forgetAddress(addresses) {
   };
   const stems = new Set(list.map(stem).filter(Boolean));
   if (!stems.size) return 0;
+  /* Every contents page of its site on its way: the list's later pages
+   * ("page 2 of 4", at their own addresses) as well as the one typed.
+   * Chapters are never asked for as a list, so a download is not touched. */
+  const hosts = new Set(list.map(hostOf).filter(Boolean));
+  const leave = new Set(list);
   let stopped = 0;
   for (const [id, entry] of [...pending]) {
-    if (id.startsWith('s') || !entry.list || !stems.has(stem(entry.url))) continue;
+    if (id.startsWith('s') || !entry.list || !(stems.has(stem(entry.url)) || hosts.has(hostOf(entry.url)))) continue;
     pending.delete(id);
     clearInterval(entry.timer);
     entry.reject(Object.assign(new Error('cleared'), { paused: true, cleared: true, tries: 1 }));
     try { window.GrimoireWeb?.release?.(id); } catch { /* cleared with the next run */ }
+    leave.add(entry.url);
     stopped += 1;
   }
-  for (const address of list) {
+  for (const address of leave) {
     try { window.GrimoireWeb?.stopAddress?.(address); } catch { /* an older build: its answer is ignored */ }
   }
   for (const url of [...trying.keys()]) if (stems.has(stem(url))) trying.delete(url);
@@ -1737,11 +1743,49 @@ export function reverseWhere(items, test) {
  */
 const SECTION = { prologue: 0, main: 1, side: 2, after: 3 };
 
+/** The volume a chapter's name puts it in ("Vol. 2 Chapter 5", "Book 3 - Ch 1", 第二卷, 2권), or null. */
+export function volumeIn(text) {
+  const name = String(text || '');
+  const cjk = new RegExp(`第\\s*(${NUMERAL})\\s*[卷巻部]`).exec(name);
+  if (cjk) return cjkNumber(cjk[1]);
+  const korean = /(\d+)\s*권/.exec(name);
+  if (korean) return Number(korean[1]);
+  const latin = /\b(?:vol(?:ume)?|book)\s*\.?\s*(\d+)/i.exec(name);
+  return latin ? Number(latin[1]) : null;
+}
+
+/* Chapters numbered afresh in each volume ("Volume 1 Chapter 1" … "Volume 2
+ * Chapter 1"): put in order by their numbers alone, every volume's first
+ * chapters came first together, then every volume's seconds -- the book
+ * shuffled. Where most numbered chapters name a volume and a number comes
+ * round again in another, the volume is part of the order; a chapter that
+ * names none is in the volume of the one listed before it. */
+function byVolume(chapters, kinds) {
+  const mains = chapters.map((link, at) => ({ at, volume: volumeIn(link.text) }))
+    .filter(({ at }) => kinds[at].kind === 'main' && kinds[at].number !== null);
+  const named = mains.filter((each) => each.volume !== null);
+  if (named.length < 3 || named.length < mains.length * 0.6) return kinds;
+  const seen = new Map();
+  let again = false;
+  for (const { at, volume } of named) {
+    const n = kinds[at].number;
+    if (seen.has(n) && seen.get(n) !== volume) { again = true; break; }
+    seen.set(n, volume);
+  }
+  if (!again) return kinds;
+  let volume = 0;
+  return kinds.map((kind, at) => {
+    const own = volumeIn(chapters[at].text);
+    if (own !== null) volume = own;
+    return kind.kind === 'main' && kind.number !== null ? { ...kind, number: volume * 1e6 + kind.number } : kind;
+  });
+}
+
 export function inReadingOrder(links, isChapter, newestFirstList = false) {
   const places = [];
   links.forEach((link, at) => { if (isChapter(link)) places.push(at); });
   const chapters = places.map((at) => links[at]);
-  const kinds = chapters.map((link) => chapterKind(link.text));
+  const kinds = byVolume(chapters, chapters.map((link) => chapterKind(link.text)));
   const known = kinds.filter((k) => k.kind && k.number !== null);
 
   // Keys: [section, number, place]. Unnumbered ones follow what was before.

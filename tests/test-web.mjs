@@ -462,6 +462,25 @@ await t('a chapter number in odd digits ("第十⑨章") is read as its number, 
   assert.deepEqual(web.inReadingOrder([...links].reverse(), () => true).links.map((l) => l.text), links.map((l) => l.text));
 });
 
+await t('chapters numbered afresh in each volume are put in order by volume, then number -- not shuffled together', () => {
+  const titles = ['Volume 1 Chapter 1', 'Volume 1 Chapter 2', 'Volume 1 Chapter 3', 'Volume 2 Chapter 1', 'Volume 2 Chapter 2', 'Volume 2 Chapter 3'];
+  const links = titles.map((text, i) => ({ url: `https://v.example/c/${i + 1}`, text }));
+  // Newest first, as the site lists them: turned round, each volume whole.
+  assert.deepEqual(web.inReadingOrder([...links].reverse(), () => true).links.map((l) => l.text), titles);
+  // Volumes listed newest first, each one's chapters oldest first.
+  const mixed = [3, 4, 5, 0, 1, 2].map((i) => links[i]);
+  assert.deepEqual(web.inReadingOrder(mixed, () => true).links.map((l) => l.text), titles);
+  // In order already: nothing moves.
+  assert.equal(web.inReadingOrder(links, () => true).how, null);
+  // Numbers that run on across volumes: as before.
+  const running = ['Vol. 1 Ch. 1', 'Vol. 1 Ch. 2', 'Vol. 2 Ch. 3', 'Vol. 2 Ch. 4'].map((text, i) => ({ url: `https://v.example/r/${i}`, text }));
+  assert.deepEqual(web.inReadingOrder([...running].reverse(), () => true).links.map((l) => l.text), running.map((l) => l.text));
+  assert.equal(web.volumeIn('第二卷 第三章'), 2);
+  assert.equal(web.volumeIn('2권 5화'), 2);
+  assert.equal(web.volumeIn('Book 3 - Chapter 1'), 3);
+  assert.equal(web.volumeIn('Chapter 9'), null);
+});
+
 await t('Kakuyomu: every episode, from the works page\'s own data, though its contents are folded', async () => {
   const work = '1177354054881165840';
   const ep = (id, title) => ({ __typename: 'Episode', id, title, publishedAt: '2024-01-01T00:00:00Z' });
@@ -2218,11 +2237,14 @@ await t('a link cleared: its pages on their way stopped, what was learned of its
     release() {},
   };
   const list = web.download('https://clear.example/novel/7/', { list: true });
+  // The list's second page, at an address of its own ("Reading page 2 of 4 of the list…").
+  const page2 = web.download('https://clear.example/novel/7/page/2', { list: true });
   const chapter = web.download('https://clear.example/novel/7/1');
   await new Promise((r) => setTimeout(r, 20));
-  assert.equal(web.forgetAddress(['https://clear.example/novel/7']), 1);
+  assert.equal(web.forgetAddress(['https://clear.example/novel/7']), 2);
   await assert.rejects(list, (error) => error.cleared === true);
-  assert.deepEqual(stoppedThere, ['https://clear.example/novel/7']);
+  await assert.rejects(page2, (error) => error.cleared === true);
+  assert.deepEqual(stoppedThere.sort(), ['https://clear.example/novel/7', 'https://clear.example/novel/7/', 'https://clear.example/novel/7/page/2']);
   // The chapter, from the same site, is still on its way.
   let settled = false;
   chapter.then(() => { settled = true; }, () => { settled = true; });
