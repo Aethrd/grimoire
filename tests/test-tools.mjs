@@ -601,7 +601,8 @@ await t('search does not find deleted books', async () => {
   assert.match(panelsSource, /const visible = books\.filter\(\(b\) => onShelf\(b\)/);
   assert.match(app, /library\.shownOnShelf\.has\(book\.id\)/);
   const screensSource = read('app/src/main/assets/www/js/screens.js');
-  assert.equal((screensSource.match(/!b\.binnedAt/g) || []).length, 3);
+  // (A hidden folder's book found by its title is held to the same, in hiddenBooks.)
+  assert.equal((screensSource.match(/!b\.binnedAt/g) || []).length, 4);
 });
 
 
@@ -740,14 +741,35 @@ await t('a folder hidden from the shelf is only found under Folders', async () =
   assert.ok(shown.includes(kept) && shown.includes(nested), 'opening the folder does not show its books');
   assert.ok(!shown.includes(out));
 
-  // The shelf's search leaves it out too.
+  // The shelf's search leaves it out too -- typed as much as this, less than most of its title.
   screensMod.initFind(() => {}, false);
-  el('find-input').value = 'Brambleway';
+  el('find-input').value = 'Bramble';
   el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
   await settle(450);
   const found = [...el('find-results').querySelectorAll('[data-book]')].map((n) => Number(n.dataset.book));
   assert.ok(found.includes(out));
   assert.ok(!found.includes(kept) && !found.includes(nested), 'search finds a hidden folder');
+
+  // Unless most of its title is typed right: 60% of it, every word in it -- then found, and said where.
+  const findFor = async (text) => {
+    el('find-input').value = text;
+    el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+    await settle(450);
+    return [...el('find-results').querySelectorAll('[data-book]')].map((n) => Number(n.dataset.book));
+  };
+  assert.ok((await findFor('brambleway kep')).includes(kept), 'most of a hidden book\u2019s title typed right, not found');
+  assert.match(el('find-results').textContent, /in Private \(hidden\)/);
+  assert.ok(!(await findFor('kept')).includes(kept), 'a word of a hidden book\u2019s title found it');
+  assert.ok(!(await findFor('brambleway kepx')).includes(kept), 'a hidden book found by a title typed wrong');
+  assert.ok((await findFor('Brambleway Nested')).includes(nested));
+  const sweet = { id: -1, title: "A Sweet Girl Won't Be Fooled By The Villainess" };
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont be fooled by'), true);   // 24 of 37
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont be fooled'), false);     // 22 of 37: just short
+  assert.equal(library.titleTyped(sweet, 'sweet girl'), false);
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont be foolex by'), false);
+  assert.equal(library.titleTyped({ id: -2, title: '快穿女配：反派BOSS有毒' }, '快穿女配：反派BOSS'), true);
+  assert.equal(library.titleTyped({ id: -2, title: '快穿女配：反派BOSS有毒' }, '有毒'), false);
+  await findFor('');
 
   // Still listed under Folders, and marked.
   await panelsMod.openFolders(() => {});

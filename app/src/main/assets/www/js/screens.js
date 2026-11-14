@@ -5,7 +5,7 @@ import * as fonts from './fonts.js';
 import { chapterPlainText } from './parse.js';
 import * as reader from './reader.js';
 import * as library from './library.js';
-import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, collapseBundles, vaultUnlocked, offShelf, hiddenFolderList } from './library.js';
+import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, collapseBundles, vaultUnlocked, offShelf, hiddenFolderList, titleTyped } from './library.js';
 import { pool, measure } from './blobs.js';
 import { holdPicture } from './picturesave.js';
 import { tagKey, tagsOf, usedTags, withEveryTag } from './tags.js';
@@ -651,6 +651,15 @@ async function searchableBooks() {
       && !offShelf(b, hidden));
 }
 
+/** Books in folders hidden from the shelf whose title has been typed, most of it, right. */
+async function hiddenBooks(query) {
+  const hidden = hiddenFolderList(await store.settings());
+  if (!hidden.length) return [];
+  return (await store.all('books'))
+    .filter((b) => !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked)
+      && offShelf(b, hidden) && titleTyped(b, query));
+}
+
 /* Shown the way the shelf shows them: cover first, then the name.
  *
  * A list of names is not how anyone recognises a book they own. The title is
@@ -883,15 +892,17 @@ async function runFind(query, onGoToMatch) {
     // The same books the shelf shows: nothing from the vault while it is
     // locked, nothing still being imported, and nothing deleted -- a book in
     // the bin is found in the bin, not offered back as if it were on the shelf.
-    // Nor anything in a folder hidden from the shelf: that is found by
-    // opening the folder, not by a search anyone could type.
+    // Nor anything in a folder hidden from the shelf -- found by opening the
+    // folder, or by most of its title typed right (titleTyped), but not by a
+    // word anyone might type. Never one in the vault while it is locked.
     const books = await searchableBooks();
+    const hiddenHere = shelfScope === 'author' || shelfScope === 'tags' ? [] : await hiddenBooks(query);
 
     const only = shelfScope === 'title' ? ['title', 'shown']
       : shelfScope === 'author' ? ['author']
       : null;
 
-    const hits = library.findBooks(books, query, only);
+    const hits = [...library.findBooks(books, query, only), ...hiddenHere];
     results.innerHTML = hits.length
       ? '' : '<p class="muted" style="padding:20px 16px">No book found.</p>';
 
@@ -901,7 +912,9 @@ async function runFind(query, onGoToMatch) {
      * one matched on its title, unless it says so. */
     const words = foldDiacritics(query).split(/\s+/).filter(Boolean);
     if (hits.length) results.appendChild(exportBar(hits));
+    const fromHidden = new Set(hiddenHere.map((book) => book.id));
     results.appendChild(bookGrid(hits, onGoToMatch, (book) => {
+      if (fromHidden.has(book.id)) return `in ${book.folder} (hidden)`;
       const where = library.matchedOn(book, query, only);
       if (!where || where === 'author') return '';
       if (where === 'tags') {

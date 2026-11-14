@@ -2229,6 +2229,35 @@ function scoreBook(book, words, only) {
   return score;
 }
 
+/**
+ * Whether what was typed is most of a book's title, typed right: every word of it in
+ * the title (its own or the one the shelf shows), and those words together making up
+ * at least `share` of the title's letters and numbers -- case, accents, spaces and
+ * stops aside. "a sweet girl wont be fooled by" is most of "A Sweet Girl Won't Be Fooled
+ * By The Villainess" (24 of its 37); "sweet girl" is not. How a book in a folder hidden from the shelf
+ * is still found: by someone who knows its name, not by a search anyone could type.
+ */
+export const TITLE_SHARE = 0.6;
+const bare = (text) => fold(text).replace(/[^\p{L}\p{N}]+/gu, '');
+export function titleTyped(book, query, share = TITLE_SHARE) {
+  const words = fold(query).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (!words.length) return false;
+  return [book.title, displayTitle(book)].some((title) => {
+    const whole = bare(title);
+    if (!whole) return false;
+    const covered = new Uint8Array(whole.length);
+    for (const word of words) {
+      let at = whole.indexOf(word);
+      if (at < 0) return false;
+      // The first place it is not yet counted, so a word typed twice is not counted once.
+      while (at >= 0 && covered[at]) at = whole.indexOf(word, at + 1);
+      if (at < 0) at = whole.indexOf(word);
+      covered.fill(1, at, at + word.length);
+    }
+    return covered.reduce((n, c) => n + c, 0) >= whole.length * share;
+  });
+}
+
 /** Which field a book matched on, so a result can say why it is there. */
 export function matchedOn(book, query, only) {
   const words = fold(query).split(/\s+/).filter(Boolean);
