@@ -129,5 +129,27 @@ await t('checked for new chapters first: in the queue, at the site\'s pace, and 
   assert.ok(c);
 });
 
+await t('on its schedule, only once something new has come in: a day with nothing new writes nothing', async () => {
+  const scheduled = async () => {
+    window.document.dispatchEvent(new window.Event('visibilitychange'));
+    await sleep(4600);
+    for (let i = 0; i < 60 && (await store.settings()).autoExport.pending; i += 1) await sleep(100);
+    await sleep(400);
+  };
+  // Due a day ago, nothing new since the last export: left alone, and the day not restarted.
+  const was = (await store.settings()).autoExport;
+  await store.saveSettings({ autoExport: { ...was, update: false, lastAt: Date.now() - 2 * 86400e3 } });
+  folder.clear();
+  await scheduled();
+  assert.equal(folder.size, 0, 'exported with nothing new');
+  assert.ok((await store.settings()).autoExport.lastAt < Date.now() - 86400e3, 'a day with nothing new counted as an export');
+  // A book imported: the next look exports it.
+  await book('Delta', 'delta.epub:4', 'slop');
+  await scheduled();
+  for (let i = 0; i < 80 && !folder.size; i += 1) await sleep(100);
+  assert.deepEqual([...folder.keys()], ['slop/Delta.epub']);
+  assert.ok((await store.settings()).autoExport.lastAt > Date.now() - 60000);
+});
+
 console.log(`\n${pass} checks passed`);
 process.exit(0);

@@ -2353,12 +2353,13 @@ async function autoExportBlock() {
     const when = state.lastAt ? new Date(state.lastAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
     const count = Object.keys(state.files).length;
     said.textContent = !state.folder
-      ? 'Every book written out as an EPUB into a folder you choose, in its folders as on the shelf, daily or weekly. '
+      ? 'Every book written out as an EPUB into a folder you choose, in its folders as on the shelf — at most daily or weekly, and only once something new has come in. '
         + 'Only books that changed are written again; a book’s older file is replaced, and a book that is gone has its file deleted. '
         + 'Nothing else in the folder is touched.'
       : `${state.every ? `Every ${state.every}` : 'Off'} · into “${state.folder}” · ${count} book${count === 1 ? '' : 's'} there`
         + `${state.pending ? ' · waiting for the queue to bring new chapters' : ''}`
         + `${when ? ` · last ${when}` : ' · none yet'}${state.lastError ? ` · last time: ${state.lastError}` : ''}.`
+        + ' Only once something new has come in (a book imported or downloaded), at most this often.'
         + ' Made while the app is open (Android does not let it wake itself for this).';
     box.appendChild(said);
     const chips = (label, options, current, pick) => {

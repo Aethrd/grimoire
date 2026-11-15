@@ -112,6 +112,15 @@ export async function countBooks() {
   return wrap((await tx('books')).count());
 }
 
+/** The newest book's id (books only ever get higher ones), without reading them all. */
+export async function lastBookId() {
+  const request = (await tx('books')).openKeyCursor(null, 'prev');
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result ? request.result.key : 0);
+    request.onerror = () => reject(request.error);
+  });
+}
+
 export async function put(store, value) {
   const s = await tx(store, 'readwrite');
   return wrap(s.put(value));

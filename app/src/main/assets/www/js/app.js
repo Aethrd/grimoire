@@ -2482,7 +2482,8 @@ const autoExport = (() => {
     let folder = '';
     try { folder = available() ? bridge().autoExportFolderName() || '' : ''; } catch { /* none */ }
     return { every: kept.every || null, update: !!kept.update, lastAt: kept.lastAt || 0, lastError: kept.lastError || '',
-      lastCount: kept.lastCount || 0, files: kept.files || {}, pending: !!kept.pending, folder };
+      lastCount: kept.lastCount || 0, files: kept.files || {}, pending: !!kept.pending, folder,
+      checkedAt: kept.checkedAt || 0, lastSig: kept.lastSig || '' };
   }
   async function set(changes) {
     const kept = (await store.settings()).autoExport || {};
@@ -2513,10 +2514,24 @@ const autoExport = (() => {
     });
   }
 
+  /* Something new in the library since the last export: a book added (an
+   * import, a download, one carried on -- each a new book, with a higher id)
+   * or one gone. Read without reading the books. */
+  const signature = async () => `${await store.countBooks()}:${await store.lastBookId()}`;
+
   /** Every book that has changed since, written; every file of a book gone, deleted. */
   async function exportAll({ byHand = false } = {}) {
     const now = await state();
     if (!now.folder) return false;
+    /* On the schedule, only once something new has come: a day with nothing
+     * imported or downloaded is not an export, and the day or week is
+     * counted from the last one made. By hand, always looked through. */
+    const sig = await signature().catch(() => '');
+    if (!byHand && sig && sig === now.lastSig) {
+      await set({ pending: false });
+      repaint();
+      return true;
+    }
     const all = await store.all('books');
     const live = all.filter((book) => !book.binnedAt && !book.transient && !book.importing && !library.isDownloading?.(book));
     // A locked Vault's books: not written, and their files from before left as they are.
@@ -2544,7 +2559,7 @@ const autoExport = (() => {
     const wanted = new Set(books.map(keyOf));
     const gone = shrunk ? [] : Object.keys(files).filter((key) => !wanted.has(key) && !locked.has(key));
     if (!plan.length && !gone.length) {
-      await set({ lastAt: Date.now(), lastError: '', pending: false, lastCount: 0 });
+      await set({ lastSig: sig, lastError: '', pending: false });
       if (byHand) toast('Every book in the export folder is up to date', 4000, { kind: 'done' });
       repaint();
       return true;
@@ -2582,7 +2597,7 @@ const autoExport = (() => {
         if (used.has(files[key].path.toLowerCase())) { delete files[key]; continue; }
         if (bridge().deleteAutoExport(files[key].path)) { delete files[key]; deleted += 1; }
       }
-      await set({ files, lastAt: Date.now(), pending: false, lastCount: written,
+      await set({ files, lastAt: Date.now(), lastSig: sig, pending: false, lastCount: written,
         lastError: failed.length ? `${failed.length} not written — ${failed[0]}` : '' });
       const said = `Exported ${written} book${written === 1 ? '' : 's'}${deleted ? ` · ${deleted} old file${deleted === 1 ? '' : 's'} deleted` : ''}`
         + `${failed.length ? ` · ${failed.length} could not be written` : ''}${shrunk ? ' · nothing deleted: the library is much smaller than the last export' : ''}`;
@@ -2623,7 +2638,9 @@ const autoExport = (() => {
     if (!now.folder) return false;
     running = true;
     try {
-      if (now.update) {
+      // The checks keep their own day or week: they are how anything new is found.
+      if (now.update && (byHand || Date.now() - now.checkedAt >= EVERY[now.every || 'day'])) {
+        await set({ checkedAt: Date.now() });
         const added = await queueChecks();
         if (added) {
           // Exported once the queue has finished: the new chapters in the files.
@@ -2644,7 +2661,9 @@ const autoExport = (() => {
   async function check() {
     if (!available() || running) return;
     const now = await state();
-    if (now.every && now.folder && !now.pending && Date.now() - now.lastAt >= EVERY[now.every]) run();
+    if (!now.every || !now.folder || now.pending) return;
+    const due = (at) => Date.now() - at >= EVERY[now.every];
+    if ((now.update && due(now.checkedAt)) || due(now.lastAt)) run();
   }
 
   const panelHooks = {
