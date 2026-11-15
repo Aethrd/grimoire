@@ -7332,6 +7332,8 @@ function wireJobEdit() {
   el('job-chapters-edit').onclick = () => {
     const it = job();
     if (!it) return;
+    // Its book's short chapters, each going back in its own place: no list to change.
+    if (it.kind === 'refetch') { toast('These are the book’s short chapters, fetched again in place — nothing to choose.'); return; }
     clearWeb();
     // Begun: what its book has is marked so when the site's list is read again (as an update is).
     Object.assign(webState, { intent: 'queue', editing: it.id, ...(it.bookId != null ? { updating: it.bookId } : {}) });
@@ -7419,8 +7421,8 @@ function loadQueue(settings) {
 /** A failure that means a site wants no more asking for now. */
 const queueHalts = (reason) => web.blocked(reason) || web.wantsCheck(reason) || web.tooMany(reason) || web.siteFailed(reason) || web.scrambled(reason);
 
-/** The ticked chapters on the Website screen, into the queue as a book of their own. */
-function queueWeb() {
+/** The ticked chapters on the Website screen, into the queue: a book of their own, or carrying one on. */
+async function queueWeb() {
   let chosen = webState.links.filter((link) => link.picked);
   if (!chosen.length) return;
   // Its site's delays, as set here: what the queue downloads it at.
@@ -7461,19 +7463,33 @@ function queueWeb() {
     back();
     return;
   }
+  /* Carrying a book on -- its new chapters, or the rest after where it stopped:
+   * built onto it, as one book (runJob), named as it is. Gone from the shelf,
+   * the chapters are a book of their own. */
+  const carried = webState.carryOn != null ? await store.get('books', webState.carryOn).catch(() => null) : null;
+  const onto = carried && !carried.binnedAt ? carried : null;
+  const title = onto && !webState.titleTouched ? library.displayTitle(onto) : name;
   const into = webState.folder ?? activeFolder ?? '';
   webQueue.push({
-    id: `q-${Date.now()}`, name, author: webState.author || '', sources: webState.sources || [],
+    id: `q-${Date.now()}`, name: title, author: webState.author || onto?.author || '', sources: webState.sources || [],
     cover: webState.cover || '', links: chosen.map(keptLink),
     total: chosen.length, done: 0, status: 'queued', stops: 0,
     ...(webState.coverData ? { coverData: webState.coverData } : {}),
     // Filed, once built, where it was picked to be (the shelf's open folder unless changed).
-    ...(into ? { folder: into } : {}),
+    ...(into && !onto ? { folder: into } : {}),
+    ...(onto ? { bookId: onto.id } : {}),
   });
+  // Pages left over from an earlier build, looked over and queued: settled.
+  if (webState.leftover) {
+    webLeftovers = webLeftovers.filter((each) => each.id !== webState.leftover);
+    saveLeftovers();
+  }
   saveQueue();
   clearWeb();
   const waiting = webQueue.filter((job) => job.status !== 'done').length;
-  toast(`“${name}” queued — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}${into ? `, into “${into}”` : ''}. ${waiting} in the queue, on Build.`, 5000);
+  toast(onto
+    ? `${chosen.length} chapter${chosen.length === 1 ? '' : 's'} queued to carry “${title}” on — ${queueState.running ? 'downloading in turn' : 'Start queue on Build to download'}.`
+    : `“${title}” queued — ${chosen.length} chapter${chosen.length === 1 ? '' : 's'}${into ? `, into “${into}”` : ''}. ${waiting} in the queue, on Build.`, 5000);
   if (queueState.running) pumpQueue();
   back();
 }
@@ -7647,54 +7663,59 @@ async function runJob(job) {
   job.links = web.settlePlaceholders(job.links);
   let outcome = { rest: job.links, reason: '', paused: false };
   try {
-    const parts = [];
-    const before = job.bookId != null ? await store.get('books', job.bookId) : null;
-    if (before) parts.push({ ...build.bookPart(before), seamless: true });
-    /* The picture chosen for it wins, always -- over the site's, and over the
-     * book it carries on. Without one: the book carried on keeps its own
-     * cover; one that never had one is given the site's. */
-    const chosen = job.coverData
-      ? await fetch(job.coverData).then((response) => response.blob()).catch(() => null)
-      : null;
-    const cover = chosen || (before?.coverBlob ? null : await web.fetchCover(job.cover).catch(() => null));
-    const part = build.webPart({
-      name: job.name, links: job.links, pictures: webState.pictures, cover,
-      author: job.author, sources: job.sources, gap: delaysFor(siteOfJob(job)).gap, jitter: delaysFor(siteOfJob(job)).jitter,
-    });
-    if (before) part.seamless = true;
-    parts.push(part);
-    under.run = {
-      // `had`: the chapters the book carried on already has -- its mark goes on from there, not from nothing.
-      had: before?.chapters || 0,
-      at: -1, total: undefined, done: undefined, parts: parts.length, samples: [], shown: null, startedAt: Date.now(),
-      delays: parts.map((p) => (p.web ? { gap: p.web.gap, jitter: p.web.jitter, chapters: p.web.links.length } : null)),
-    };
-    const { book, failed } = await build.build({
-      parts, tag: job.id, title: before ? library.displayTitle(before) : job.name,
-      author: job.author || undefined, cover: chosen, shouldPause: () => under.pausing,
-      folder: job.folder || null,
-      // Shown, never in the way: a slip in showing it does not stop the download.
-      onProgress: (message, fraction, at, total, now, counts) => {
-        try { trackJob(job, under, message, at, now, counts); } catch (error) { console.warn('queue progress', error); }
-      },
-    });
-    // The book so far, carried on: the shorter one goes to the Bin.
-    if (before && before.id !== book.id) {
-      await library.binBooks([before.id]).catch(() => {});
-      job.earlier = [...new Set([...(job.earlier || []), before.id])];
+    // A book's short chapters fetched again, in place: nothing built.
+    if (job.kind === 'refetch') {
+      outcome = await runRefetch(job, under);
+    } else {
+      const parts = [];
+      const before = job.bookId != null ? await store.get('books', job.bookId) : null;
+      if (before) parts.push({ ...build.bookPart(before), seamless: true });
+      /* The picture chosen for it wins, always -- over the site's, and over the
+       * book it carries on. Without one: the book carried on keeps its own
+       * cover; one that never had one is given the site's. */
+      const chosen = job.coverData
+        ? await fetch(job.coverData).then((response) => response.blob()).catch(() => null)
+        : null;
+      const cover = chosen || (before?.coverBlob ? null : await web.fetchCover(job.cover).catch(() => null));
+      const part = build.webPart({
+        name: job.name, links: job.links, pictures: webState.pictures, cover,
+        author: job.author, sources: job.sources, gap: delaysFor(siteOfJob(job)).gap, jitter: delaysFor(siteOfJob(job)).jitter,
+      });
+      if (before) part.seamless = true;
+      parts.push(part);
+      under.run = {
+        // `had`: the chapters the book carried on already has -- its mark goes on from there, not from nothing.
+        had: before?.chapters || 0,
+        at: -1, total: undefined, done: undefined, parts: parts.length, samples: [], shown: null, startedAt: Date.now(),
+        delays: parts.map((p) => (p.web ? { gap: p.web.gap, jitter: p.web.jitter, chapters: p.web.links.length } : null)),
+      };
+      const { book, failed } = await build.build({
+        parts, tag: job.id, title: before ? library.displayTitle(before) : job.name,
+        author: job.author || undefined, cover: chosen, shouldPause: () => under.pausing,
+        folder: job.folder || null,
+        // Shown, never in the way: a slip in showing it does not stop the download.
+        onProgress: (message, fraction, at, total, now, counts) => {
+          try { trackJob(job, under, message, at, now, counts); } catch (error) { console.warn('queue progress', error); }
+        },
+      });
+      // The book so far, carried on: the shorter one goes to the Bin.
+      if (before && before.id !== book.id) {
+        await library.binBooks([before.id]).catch(() => {});
+        job.earlier = [...new Set([...(job.earlier || []), before.id])];
+      }
+      job.bookId = book.id;
+      // A chapter that came at the end, its placeholder further back: put in its place.
+      await build.settleMisplaced(book.id).catch(() => 0);
+      noteShort(book).catch(() => {});
+      // The chosen picture into the book itself, as Build puts its chosen cover.
+      if (chosen) await covers.placeCover(book.id, chosen).catch(() => {});
+      job.done = book.chapters;
+      const rest = failed.flatMap((each) => each.web?.links || []);
+      outcome = {
+        rest, reason: failed[0]?.reason || '',
+        paused: failed.length > 0 && failed.every((each) => each.paused),
+      };
     }
-    job.bookId = book.id;
-    // A chapter that came at the end, its placeholder further back: put in its place.
-    await build.settleMisplaced(book.id).catch(() => 0);
-    noteShort(book).catch(() => {});
-    // The chosen picture into the book itself, as Build puts its chosen cover.
-    if (chosen) await covers.placeCover(book.id, chosen).catch(() => {});
-    job.done = book.chapters;
-    const rest = failed.flatMap((each) => each.web?.links || []);
-    outcome = {
-      rest, reason: failed[0]?.reason || '',
-      paused: failed.length > 0 && failed.every((each) => each.paused),
-    };
   } catch (error) {
     outcome = { rest: job.links, reason: error.message || 'nothing came', paused: !!error.paused };
   } finally {
@@ -7703,8 +7724,9 @@ async function runJob(job) {
   }
   // Stepped back for a book resumed by hand: back in line, not paused.
   settleJob(job, outcome, under.pausing && !under.siteStop && !under.yielding);
+  if (outcome.said) whenNotReading(() => toast(outcome.said, 8000, { kind: 'done' }));
   await purgeSuperseded().catch(() => 0);
-  if (job.status === 'done') {
+  if (job.status === 'done' && job.kind !== 'refetch') {
     await purgeEarlier(job).catch(() => 0);
     await binOutgrown(job).catch(() => 0);
   }
@@ -8000,9 +8022,12 @@ function jobState(job) {
     case 'retry': return `Trying again at ${clockAt(job.retryAt || Date.now())} — last time ${web.shortReason(job.note) || job.note || 'it stopped'} · ${job.links.length} left`;
     case 'attention': return `Needs you: ${job.note || 'it stopped'} · ${job.links.length} left`;
     case 'paused': return `Paused · ${job.links.length} of ${job.total} left`;
-    case 'done': return `Done · ${job.done || job.total} chapters, on the shelf`;
+    case 'done': return job.kind === 'refetch'
+      ? `Done · ${job.done || 0} of ${job.total} short chapters came back longer`
+      : `Done · ${job.done || job.total} chapters, on the shelf`;
     default: {
       const held = sitesHeld().has(host) ? ' · waiting: its site needs you' : '';
+      if (job.kind === 'refetch') return `${job.links.length} short chapter${job.links.length === 1 ? '' : 's'} to fetch again${host ? ` · ${host}` : ''}${held}`;
       return `${job.bookId != null ? `${job.links.length} chapters to come, carrying its book on${host ? ` · ${host}` : ''}` : chapters}${held}`;
     }
   }
@@ -8563,7 +8588,8 @@ function markUnfinished() {
   const add = (id, count) => { if (id != null) left.set(id, (left.get(id) || 0) + (count || 0)); };
   for (const each of webLeftovers) add(each.bookId, each.links?.length);
   for (const job of webQueue) {
-    if (job.status === 'done') continue;
+    // Short chapters fetched again add nothing to the book: it is not unfinished for them.
+    if (job.status === 'done' || job.kind === 'refetch') continue;
     const run = queueJobs.get(job.id)?.run;
     // Under way: what its own count says is still to come; else every link it holds.
     const { came, of } = runCounts(job, run);
@@ -8741,19 +8767,20 @@ function keepLeftovers(failed, retried = [], book = null) {
 /* A book that stopped, into the queue at its head: carried on there as one
  * book (the queue's own builds carry on from the book so far), or begun as
  * one if there is none. Settled as a leftover once queued. */
-function leftoverToQueue(left) {
+function leftoverToQueue(left, { ownBook = false } = {}) {
   const name = String(left.bookTitle || left.name || 'From the web').replace(LEFTOVER_SUFFIX, '').replace(/ — from .*$/, '');
+  const onto = !ownBook && left.bookId != null;
   webQueue.unshift({
     id: `q-${Date.now()}`, name, author: left.author || '', sources: left.sources || [], cover: '',
     links: left.links.map(keptLink), total: left.links.length, done: 0,
-    status: 'queued', stops: 0, ...(left.bookId != null ? { bookId: left.bookId } : {}),
+    status: 'queued', stops: 0, ...(onto ? { bookId: left.bookId } : {}),
   });
   webLeftovers = webLeftovers.filter((each) => each.id !== left.id);
   saveLeftovers();
   saveQueue();
   buildIndex = true;
   renderWorkshop();
-  toast(`“${name}” is first in the queue — ${left.links.length} chapter${left.links.length === 1 ? '' : 's'} to come${left.bookId != null ? ', carrying the book on' : ''}.`, 5000);
+  toast(`“${name}” is first in the queue — ${left.links.length} chapter${left.links.length === 1 ? '' : 's'} to come${onto ? ', carrying the book on' : ''}${queueState.running ? '' : '. Start queue to download'}.`, 5000);
   if (queueState.running) pumpQueue();
 }
 
@@ -8761,7 +8788,6 @@ function paintLeftovers(parts) {
   const host = el('build-leftovers');
   if (!host) return;
   host.replaceChildren();
-  const busy = parts.length > 0;
   for (const left of webLeftovers) {
     // Already in the list, being tried again.
     if (parts.some((part) => part.leftover === left.id)) continue;
@@ -8781,22 +8807,18 @@ function paintLeftovers(parts) {
       + `<small>${crowded
         ? 'The site turned a request away. Trying again usually works straight away.'
         : 'If that page is not the book, look them over and untick it first.'}`
-      + (busy ? ' Build or clear the list above first.' : '') + '</small></p>'
+      + '</small></p>'
       + '<div class="web-row"><button class="btn ghost" data-forget>Forget</button>'
       + '<button class="btn ghost" data-look>Look over</button>'
       + (left.bookId != null
-        ? '<button class="btn ghost" data-retry>As another book</button><button class="btn primary" data-carry>Carry on</button>'
-        : '<button class="btn primary" data-retry>Download as another book</button>')
-      // Or carried on by the queue, first in line: Build stays free.
-      + '<button class="btn ghost" data-queue>Add to queue</button>'
+        ? '<button class="btn ghost" data-retry>Queue as another book</button><button class="btn primary" data-carry>Queue to carry on</button>'
+        : '<button class="btn primary" data-retry>Queue as another book</button>')
       + '</div>';
-    box.querySelector('[data-look]').disabled = busy;
     // Stopped at a site's browser check: shown, passed, and carried on.
     if (web.wantsCheck(left.reason) && web.canOpenSite() && left.links[0]?.url) {
       const pass = document.createElement('button');
       pass.className = 'btn ghost';
       pass.textContent = 'Open the site';
-      pass.disabled = busy;
       pass.onclick = async () => {
         try { await web.openSite(left.links[0].url); } catch (error) { toast(error.message, 6000); return; }
         if (left.bookId != null) await carryOnLeftover(left);
@@ -8806,15 +8828,12 @@ function paintLeftovers(parts) {
     }
     const carry = box.querySelector('[data-carry]');
     if (carry) {
-      carry.disabled = busy;
       carry.onclick = () => carryOnLeftover(left);
     }
-    box.querySelector('[data-queue]').onclick = () => leftoverToQueue(left);
     box.querySelector('[data-look]').onclick = () => {
       showLeftoverInWeb(left);
       show('web');
     };
-    box.querySelector('[data-retry]').disabled = busy;
     box.querySelector('[data-forget]').onclick = () => {
       webLeftovers = webLeftovers.filter((each) => each.id !== left.id);
       saveLeftovers();
@@ -8825,50 +8844,24 @@ function paintLeftovers(parts) {
   }
 }
 
-/** Left over pages, downloaded as a book of their own. False if Build is busy. */
+/** Left over pages, downloaded as a book of their own: through the queue, as every download is. */
 function leftoverAsBook(left) {
-  if (build.contents().length || buildRun) return false;
-  build.addWeb({
-    name: left.name, links: left.links, pictures: left.pictures,
-    author: left.author, sources: left.sources, leftover: left.id,
-    gap: Number.isFinite(left.gap) ? left.gap : webDelay(),
-    jitter: Number.isFinite(left.jitter) ? left.jitter : webJitter(),
-  });
-  el('build-title').value = left.name;
-  buildTitleTouched = true;
-  if (left.author) el('build-author').value = left.author;
-  renderWorkshop();
-  // Straight on: a book of its own is what was asked for.
-  el('build-go').click();
+  leftoverToQueue(left, { ownBook: true });
   return true;
 }
 
 /**
  * The book left over pages stopped short of, and the rest after it: one
- * book again, as Build onto makes one. The shorter one stays on the shelf
- * until you are happy with the whole (overnight, it goes to the Bin). With
- * the book gone, the rest is downloaded as a book of its own.
+ * book again, carried on in the queue (runJob builds onto it). With the
+ * book gone, the rest is a book of its own.
  */
 async function carryOnLeftover(left) {
-  if (build.contents().length || buildRun) return false;
   const book = left.bookId != null ? await store.get('books', left.bookId) : null;
   if (!book || book.binnedAt) {
-    toast(`“${left.bookTitle || 'That book'}” is no longer on the shelf — downloading the rest as another book`, 6000);
+    toast(`“${left.bookTitle || 'That book'}” is no longer on the shelf — the rest is queued as another book`, 6000);
     return leftoverAsBook(left);
   }
-  build.addBook(book);
-  build.addWeb({
-    name: left.name, links: left.links, pictures: left.pictures,
-    author: left.author, sources: left.sources, leftover: left.id,
-    gap: Number.isFinite(left.gap) ? left.gap : webDelay(),
-    jitter: Number.isFinite(left.jitter) ? left.jitter : webJitter(),
-  });
-  for (const part of build.contents()) part.seamless = true;
-  el('build-title').value = library.displayTitle(book);
-  buildTitleTouched = true;
-  if (book.author || left.author) el('build-author').value = book.author || left.author;
-  renderWorkshop();
-  el('build-go').click();
+  leftoverToQueue(left);
   return true;
 }
 
@@ -8889,7 +8882,7 @@ function showLeftoverInWeb(left) {
   webState.title = left.name;
   webState.author = left.author;
   webNote(`Stopped last time at ${left.links[0]?.text || 'the first of these'}`
-    + (left.reason ? ` — ${left.reason}` : '') + `. It and what comes after it are here, to add to Build as another book.`);
+    + (left.reason ? ` — ${left.reason}` : '') + `. It and what comes after it are here, to queue as another book.`);
   drawWebList();
 }
 
@@ -10653,7 +10646,7 @@ function renderWeb() {
   el('web-pictures').textContent = webState.pictures ? 'Pictures: on' : 'Pictures: off';
   if (!webState.titleTouched) el('web-title').value = webState.title;
   if (!webState.authorTouched && document.activeElement !== el('web-author')) el('web-author').value = webState.author || '';
-  el('web-eyebrow').textContent = (el('web-title').value || '').trim() || 'Chapters from a website, for Build';
+  el('web-eyebrow').textContent = (el('web-title').value || '').trim() || 'Chapters from a website, into the queue';
   if (webState.links.length) {
     paintWebCover();
     paintWebFolder();
@@ -10780,21 +10773,14 @@ function paintWebCount() {
   el('web-count').textContent = webState.links.length
     ? `${picked} of ${webState.links.length}`
     : '';
-  const go = el('web-go');
-  go.textContent = `Add${picked ? ` ${picked}` : ''} to Build`;
-  go.disabled = picked === 0;
-  // Come from Build's index to add a novel: queued is what is meant, and the main button.
-  const queueing = webState.intent === 'queue';
-  go.hidden = queueing;
-  /* Queued as a book of its own -- not for pages carrying on a book, or left
-   * over from one, or new chapters for one: those belong with that book. */
+  /* Every download from a website goes through the queue -- a book of its own,
+   * new chapters for one, or the rest of one that stopped: paced, retried and
+   * held for its site there, one place to see it. (Build is for files and
+   * books already on the shelf.) */
   const queue = el('web-queue');
   if (queue) {
-    queue.hidden = !queueing && !!(webState.leftover || webState.carryOn != null || webState.updating != null);
     queue.disabled = picked === 0;
-    queue.textContent = queueing ? `Queue${picked ? ` ${picked}` : ''}` : 'Queue';
-    queue.classList.toggle('primary', queueing);
-    queue.classList.toggle('ghost', !queueing);
+    queue.textContent = `Queue${picked ? ` ${picked}` : ''}`;
   }
 }
 
@@ -11085,42 +11071,69 @@ async function noteShort(book) {
   whenNotReading(() => toast(said, 9000));
 }
 
-async function refetchShort(book, short) {
+/** Short chapters, to be fetched again: into the queue, first in line, as every download is. */
+function refetchShort(book, short) {
   const links = short.map((chapter) => ({ url: chapter.from, text: chapter.title }));
-  const site = siteOfAddress(links[0].url);
-  const { gap, jitter } = delaysFor(site);
-  const finish = progress.start(`Fetching ${links.length} short chapter${links.length === 1 ? '' : 's'} of ${library.displayTitle(book)}`);
-  let mended = 0;
+  const name = library.displayTitle(book);
+  webQueue.unshift({
+    id: `q-${Date.now()}`, kind: 'refetch', name, author: book.author || '', sources: book.webSources || [], cover: '',
+    links, total: links.length, done: 0, status: 'queued', stops: 0, bookId: book.id,
+  });
+  saveQueue();
+  renderWorkshop();
+  toast(`${links.length} short chapter${links.length === 1 ? '' : 's'} of “${name}” first in the queue${queueState.running ? '' : ' — Start queue on Build to fetch them'}.`, 6000);
+  if (queueState.running) pumpQueue();
+}
+
+/**
+ * A queued fetch of a book's short chapters: each fetched again at its site's
+ * own delay and put back in its own place -- only where what comes is longer
+ * than what the book has. Nothing is added to the book or made anew.
+ */
+async function runRefetch(job, under) {
+  const book = await store.get('books', job.bookId);
+  if (!book || book.binnedAt) return { rest: [], reason: '', paused: false, said: `“${job.name}” is no longer on the shelf — nothing fetched.` };
+  const { gap, jitter } = delaysFor(siteOfJob(job));
+  const was = new Map((await shortOf(book.id)).map((chapter) => [chapter.from, chapter]));
+  let got;
   try {
-    // Paced as any download from the site is: its own delay, from when the last one ended.
-    const got = await web.readPages(links, {
-      title: book.title, pictures: false, gap, jitter,
-      onProgress: (fraction, done, total) => finish.say(null, fraction, `${done} of ${total}`),
+    got = await web.readPages(job.links, {
+      title: book.title, pictures: false, gap, jitter, shouldStop: () => under.pausing,
+      onProgress: (fraction, done, total) => {
+        under.finish.say(null, fraction, `${done} of ${total}`);
+        job.progress = `${done} of ${total}`;
+      },
     });
-    const byUrl = new Map(short.map((chapter) => [chapter.from, chapter]));
-    for (const chapter of got.chapters || []) {
-      const was = byUrl.get(chapter.from) || byUrl.get(chapter.url);
-      if (!was || !((chapter.words || 0) > was.words)) continue;
-      const kept = await store.get('chapters', [book.id, was.index]);
-      if (!kept) continue;
-      await store.put('chapters', { ...kept, html: chapter.html, words: chapter.words, source: undefined });
-      mended += 1;
-    }
-    if (mended) {
-      const all = await store.byIndex('chapters', 'bookId', book.id);
-      const fresh = await store.get('books', book.id);
-      if (fresh) await store.put('books', { ...fresh, words: all.reduce((sum, chapter) => sum + (chapter.words || 0), 0) });
-    }
-    const still = (await shortOf(book.id)).length;
-    toast(mended
-      ? `${mended} of ${links.length} chapter${links.length === 1 ? '' : 's'} came back longer${still ? ` · ${still} still short — they may simply be short` : ''}`
-      : 'None came back longer — those chapters may simply be short, or the site cut them off again', 8000, { kind: mended ? 'done' : undefined });
   } catch (error) {
-    finish.fail();
-    toast(error.message || 'Those chapters could not be fetched again', 7000, { kind: 'failed' });
-  } finally {
-    finish();
+    // None came: all of them kept, to try again as the queue does.
+    if (!error.rest) throw error;
+    const reason = error.failed?.[0]?.reason || error.message;
+    return { rest: error.rest, reason, paused: reason === web.PAUSED_REASON };
   }
+  let mended = 0;
+  for (const chapter of got.chapters || []) {
+    const short = was.get(chapter.from) || was.get(chapter.url);
+    if (!short || !((chapter.words || 0) > short.words)) continue;
+    const kept = await store.get('chapters', [book.id, short.index]);
+    if (!kept) continue;
+    await store.put('chapters', { ...kept, html: chapter.html, words: chapter.words, source: undefined });
+    mended += 1;
+  }
+  if (mended) {
+    const all = await store.byIndex('chapters', 'bookId', book.id);
+    const fresh = await store.get('books', book.id);
+    if (fresh) await store.put('books', { ...fresh, words: all.reduce((sum, chapter) => sum + (chapter.words || 0), 0) });
+  }
+  const rest = got.rest || [];
+  const reason = got.failed?.[0]?.reason || '';
+  const still = (await shortOf(book.id).catch(() => [])).length;
+  job.done = (job.done || 0) + mended;
+  return {
+    rest, reason, paused: reason === web.PAUSED_REASON,
+    said: rest.length ? '' : mended
+      ? `“${job.name}”: ${mended} of ${job.links.length} short chapter${job.links.length === 1 ? '' : 's'} came back longer${still ? ` · ${still} still short — they may simply be short` : ''}`
+      : `“${job.name}”: none came back longer — those chapters may simply be short, or the site cut them off again`,
+  };
 }
 
 async function checkNewChapters(book) {
@@ -11335,68 +11348,6 @@ function paintResume() {
   };
   ask();
   box.hidden = false;
-}
-
-/**
- * The chosen pages, into Build as a part.
- *
- * Downloaded when the book is built, beside whatever else is in the list,
- * rather than now: only the site's picture of the book is fetched here, so
- * the workshop can offer it as the cover.
- */
-async function addWebToBuild() {
-  let chosen = webState.links.filter((link) => link.picked);
-  if (!chosen.length) return;
-  keepDelays({ site: siteOfJob({ sources: webState.sources, links: chosen }) || delaysShownFor });
-  /* Put in reading order again as they go in -- what is ticked can be a
-   * different set from what was ordered when the list was found -- unless
-   * the order was turned round by hand, which is the reader's say. */
-  if (!webState.manualOrder) chosen = web.inReadingOrder(chosen, () => true).links;
-  chosen = placeholdersFor(chosen);
-  let name = (el('web-title').value || '').trim() || webState.title || 'From the web';
-  // Left over pages, looked over: named for where they now pick up.
-  if (webState.leftover && !webState.titleTouched && chosen[0]?.text) {
-    const from = chosen[0].text.trim();
-    name = `${name.replace(LEFTOVER_SUFFIX, '')} — from ${from.length > 48 ? `${from.slice(0, 47)}…` : from}`;
-  }
-  const go = el('web-go');
-  go.disabled = true;
-  go.textContent = 'Adding…';
-  try {
-    /* Resumed: the book it stopped short of goes in first, so what is built
-     * is that book carried on to the end, not a second one beside it. */
-    const carried = webState.carryOn != null ? await store.get('books', webState.carryOn) : null;
-    if (carried && !build.hasBook(carried.id)) {
-      build.addBook(carried);
-      build.contents().at(-1).seamless = true;
-      if (!webState.titleTouched) name = library.displayTitle(carried);
-      el('build-title').value = library.displayTitle(carried);
-      buildTitleTouched = true;
-    }
-    // The reader's own picture, or the site's -- fetched already if it was shown.
-    const cover = webState.coverData
-      ? await fetch(webState.coverData).then((response) => response.blob()).catch(() => null)
-      : webCovers.get(webState.cover)?.blob || await web.fetchCover(webState.cover);
-    build.addWeb({
-      name, links: chosen, pictures: webState.pictures, cover,
-      author: webState.author, sources: webState.sources, gap: webDelay(), jitter: webJitter(),
-      // Pages left over from an earlier build: this settles them.
-      leftover: webState.leftover || null,
-    });
-    if (carried) build.contents().at(-1).seamless = true;
-    if (webState.author && !el('build-author').value) el('build-author').value = webState.author;
-    // Filed where it was picked to be, if picked other than the shelf's open folder.
-    if (webState.folder != null && webState.folder !== (activeFolder || '')) buildFolder = webState.folder;
-    clearWeb();
-    toast(carried
-      ? `${chosen.length} page${chosen.length === 1 ? '' : 's'} added after “${library.displayTitle(carried)}” — built, they carry it on as one book`
-      : `${chosen.length} page${chosen.length === 1 ? '' : 's'} added to Build — downloaded when it is built`);
-    // Back to the workshop, which draws itself on the way in.
-    back();
-  } finally {
-    go.disabled = false;
-    paintWebCount();
-  }
 }
 
 /** The pause between pages, in milliseconds, as set on the website screen. */
@@ -11655,7 +11606,6 @@ function wireWeb() {
       : mode === 'auto' ? `${site}: a chapter whose text comes out garbled is read by OCR instead. Its chapters are read in the browser.`
         : `${site}: chapters read as sent again, no OCR.`, 5000);
   };
-  el('web-go').onclick = addWebToBuild;
   el('web-queue').onclick = queueWeb;
   // Pick in the browser: only where the app can show a site; remembered.
   if (web.canPickSite()) el('web-pick-row').hidden = false;

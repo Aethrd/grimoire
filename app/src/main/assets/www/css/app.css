@@ -2829,7 +2829,7 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .web-gaps { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--accent-300); border-radius: var(--radius-md);
   font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .web-gaps[hidden] { display: none; }
-#web-queue[hidden], #web-go[hidden], #build-minimise[hidden] { display: none; }
+#web-queue[hidden], #build-minimise[hidden] { display: none; }
 .build-from-shelf[hidden] { display: none; }
 
 /* Automatic backups, under Save a backup. */

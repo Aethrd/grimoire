@@ -83,7 +83,7 @@ await t('a book that stopped shows above every view, and goes to the queue first
   const box = document.getElementById('build-leftovers');
   assert.ok(!box.closest('#build-detail'), 'the stopped book is hidden with the book view');
   assert.match(box.textContent, /“D” stopped at 3화/);
-  box.querySelector('[data-queue]').click();
+  box.querySelector('[data-carry]').click();
   await new Promise((r) => setTimeout(r, 50));
   const jobs = (await store.settings()).webQueue;
   assert.deepEqual([jobs[0].name, jobs[0].bookId, jobs[0].links.length], ['D', cut, 2]);
@@ -136,7 +136,7 @@ await t('a queued book not yet started opens to be named, as a book in Build is'
   document.getElementById('job-chapters-edit').click();
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(document.querySelector('[data-screen="web"]').hasAttribute('data-active'), true);
-  assert.equal(document.getElementById('web-go').hidden, true);
+  assert.equal(document.getElementById('web-go'), null);
   assert.match(document.getElementById('web-queue').textContent, /^Queue 4$/);
   assert.equal(document.getElementById('web-list').children.length, 4);
   // Its cover, chosen here too: a picture of the reader's own goes with it to the queue.

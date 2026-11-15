@@ -285,9 +285,12 @@ await t('the screen is reached from Build, and only from there', () => {
   assert.match(app, /case 'web': return renderWeb\(\);/);
   assert.match(app, /settleWeb: web\.settleWeb/);
   assert.match(app, /el\('build-web'\)\.onclick = \(\) => \{ webState\.intent = null; webState\.editing = null; show\('web'\); paintWebCount\(\); \};/);
-  assert.match(app, /el\('web-go'\)\.onclick = addWebToBuild;/);
-  // Emptied for the next one: on adding, on a build, and on Clear in Build.
-  const add = app.slice(app.indexOf('async function addWebToBuild('), app.indexOf('function clearWeb('));
+  // Every website download goes through the queue: no adding to Build from here.
+  assert.doesNotMatch(app, /addWebToBuild|el\('web-go'\)/);
+  assert.doesNotMatch(html, /id="web-go"/);
+  assert.match(app, /el\('web-queue'\)\.onclick = queueWeb;/);
+  // Emptied for the next one: on queueing, on a build, and on Clear in Build.
+  const add = app.slice(app.indexOf('async function queueWeb('), app.indexOf('\nfunction startQueue('));
   assert.match(add, /clearWeb\(\);/);
   const go = app.slice(app.indexOf("el('build-go').onclick"), app.indexOf('\nfunction wireReader('));
   assert.match(go, /clearWeb\(\);/);
@@ -679,7 +682,7 @@ await t('missing chapters get a placeholder each, labelled, and the site is neve
   // On the website screen: added for a fresh book, never one carried on or brought up to date.
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /const placeholdersFor = \(chosen\) => \(webState\.updating != null \|\| webState\.carryOn != null \|\| webState\.leftover\s+\? chosen : web\.withPlaceholders\(chosen\)\);/);
-  assert.equal((app.match(/chosen = placeholdersFor\(chosen\);/g) || []).length, 2);
+  assert.equal((app.match(/chosen = placeholdersFor\(chosen\);/g) || []).length, 1);
   assert.match(app, /const keptLink = \(\{ url, text, alts, placeholder \}\)/);
   assert.match(app, /it\.links\.filter\(\(link\) => !web\.isPlaceholder\(link\)\)/);
   // Every copy of a book's links keeps the mark: lost, a placeholder's own address was asked for.
@@ -770,7 +773,7 @@ await t('Build offers the rest as another book, and remembers it across a restar
   assert.match(app, /const kept = keepLeftovers\(failed, retried, book\);/);
   assert.match(app, /if \(kept\) showLeftoverInWeb\(kept\);/);
   assert.match(app, /store\.saveSettings\(\{ webLeftovers \}\)/);
-  assert.match(app, /data-retry>Download as another book</);
+  assert.match(app, /data-retry>Queue as another book</);
   const html = read('app/src/main/assets/www/index.html');
   assert.match(html, /id="build-leftovers"/);
   // And slower once the site has said so.
@@ -1283,7 +1286,7 @@ await t('a chapter split across pages is joined, and never runs into the next ch
 
 await t('what goes into Build is put in reading order again, unless turned round by hand', () => {
   const app = read('app/src/main/assets/www/js/app.js');
-  const add = app.slice(app.indexOf('async function addWebToBuild('), app.indexOf('function clearWeb('));
+  const add = app.slice(app.indexOf('async function queueWeb('), app.indexOf('\nfunction startQueue('));
   assert.match(add, /if \(!webState\.manualOrder\) chosen = web\.inReadingOrder\(chosen, \(\) => true\)\.links;/);
   assert.match(app, /webState\.manualOrder = true;/);
 });
@@ -2809,8 +2812,8 @@ await t('a queue of websites: books of their own, several at once but never two 
   // Kept across the app being closed; what was under way, queued again.
   assert.match(app, /store\.saveSettings\(\{ webQueue, queueRunning: queueState\.running, queueAtOnce: queueState\.atOnce, queuePerSite: queueState\.perSite, queueLocked: queueState\.locked, siteCosts \}\)/);
   assert.match(app, /\.\.\.\(job\.status === 'running' \? \{ status: 'queued' \} : \{\}\),/);
-  // Queued from the Website screen with its own ticks and title; not for pages carrying a book on.
-  assert.match(html, /id="web-queue"/);
+  // Queued from the Website screen with its own ticks and title -- carrying a book on too: every download is the queue's.
+  assert.match(html, /<button class="btn primary" id="web-queue"/);
   // The chapter tools all in view: grouped, wrapping two to a row -- no sideways scroll.
   const tools = html.slice(html.indexOf('<div class="web-tools">'), html.indexOf('<p class="web-gaps"'));
   for (const id of ['web-likely', 'web-all', 'web-none', 'web-menus', 'web-reverse', 'web-pictures']) assert.match(tools, new RegExp(`id="${id}"`));
@@ -2818,14 +2821,16 @@ await t('a queue of websites: books of their own, several at once but never two 
   const css = read('app/src/main/assets/www/css/app.css');
   assert.match(css, /\.web-tools-grid \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
   assert.match(app, /el\('web-queue'\)\.onclick = queueWeb;/);
-  assert.match(app, /queue\.hidden = !queueing && !!\(webState\.leftover \|\| webState\.carryOn != null \|\| webState\.updating != null\);/);
+  assert.doesNotMatch(app, /queue\.hidden = /);
+  const queueing = app.slice(app.indexOf('async function queueWeb('), app.indexOf('\nfunction startQueue('));
+  assert.match(queueing, /\.\.\.\(onto \? \{ bookId: onto\.id \} : \{\}\),/);
+  assert.match(queueing, /webLeftovers = webLeftovers\.filter\(\(each\) => each\.id !== webState\.leftover\);/);
   // Each at the settings as they are when its turn comes -- the same for all.
   assert.match(run, /pictures: webState\.pictures, cover,\s+author: job\.author, sources: job\.sources, gap: delaysFor\(siteOfJob\(job\)\)\.gap, jitter: delaysFor\(siteOfJob\(job\)\)\.jitter,/);
   // Build as the book in it, or the index of every novel; adding a novel from there queues it.
   assert.match(app, /el\('build-minimise'\)\.onclick = \(\) => \{\s+if \(editingJob\) editingJob = null;\s+else buildIndex = true;/);
   assert.match(app, /el\('build-index-current'\)\.onclick = \(\) => \{ buildIndex = false; renderWorkshop\(\); \};/);
   assert.match(app, /el\('build-index-add'\)\.onclick = \(\) => \{ webState\.intent = 'queue'; webState\.editing = null; show\('web'\); paintWebCount\(\); \};/);
-  assert.match(app, /go\.hidden = queueing;/);
   assert.match(app, /if \(parts\.length > shownParts && !buildRun\) buildIndex = false;/);
   assert.ok(html.indexOf('id="build-queue"') > html.indexOf('id="build-index"') && html.indexOf('id="build-queue"') < html.indexOf('id="build-detail"'));
   // Pause all stops what is under way; Start queue resumes the paused.
@@ -3589,9 +3594,15 @@ await t('a chapter is scrolled to its end while it is confirmed; one that came o
   assert.match(app, /job\.bookId = book\.id;[\s\S]{0,160}await build\.settleMisplaced\(book\.id\)\.catch\(\(\) => 0\);\s+noteShort\(book\)/);
   assert.match(app, /noteShort\(book\)\.catch\(\(\) => \{\}\);\s+\/\* Into the book itself/);
   assert.match(app, /choice\(`Fetch \$\{short\.length\} short chapter/);
-  assert.match(app, /const \{ gap, jitter \} = delaysFor\(site\);/);
-  assert.match(app, /if \(!was \|\| !\(\(chapter\.words \|\| 0\) > was\.words\)\) continue;/);
-  assert.match(app, /const kept = await store\.get\('chapters', \[book\.id, was\.index\]\);/);
+  // Through the queue, first in line, as every download is: its site's own delay, and paused as the queue pauses.
+  const refetch = app.slice(app.indexOf('function refetchShort('), app.indexOf('async function checkNewChapters('));
+  assert.match(refetch, /webQueue\.unshift\(\{\s+id: `q-\$\{Date\.now\(\)\}`, kind: 'refetch'/);
+  assert.doesNotMatch(refetch.slice(0, refetch.indexOf('async function runRefetch(')), /readPages/);
+  assert.match(refetch, /const \{ gap, jitter \} = delaysFor\(siteOfJob\(job\)\);/);
+  assert.match(refetch, /shouldStop: \(\) => under\.pausing/);
+  assert.match(refetch, /if \(!short \|\| !\(\(chapter\.words \|\| 0\) > short\.words\)\) continue;/);
+  assert.match(refetch, /const kept = await store\.get\('chapters', \[book\.id, short\.index\]\);/);
+  assert.match(app, /if \(job\.kind === 'refetch'\) \{\s+outcome = await runRefetch\(job, under\);/);
 });
 
 console.log(`\n${pass} assertions passed`);

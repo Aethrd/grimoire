@@ -504,7 +504,7 @@
   <section class="screen" data-screen="web">
     <header class="app-head">
       <button class="icon-btn" data-back><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
-      <div class="app-head-title"><h1>From the web</h1><p class="eyebrow" id="web-eyebrow">Chapters from a website, for Build</p></div>
+      <div class="app-head-title"><h1>From the web</h1><p class="eyebrow" id="web-eyebrow">Chapters from a website, into the queue</p></div>
     </header>
 
     <div class="scroll pad" id="web-body">
@@ -558,8 +558,8 @@
       <p class="muted web-note" id="web-note">
         Paste the address of a book's contents page. Every link on it is listed
         — the chapters, and whatever else the site put there. Untick what is
-        not the book, and the rest goes into Build as one part, a chapter a
-        page, downloaded when you build. More than one address, one per line,
+        not the book, and Queue the rest: a book, a chapter a page, downloaded
+        in the queue on Build. More than one address, one per line,
         and their links are put together — the same book on other sites, after
         the first, fills in the chapters the first is missing, and stands in for
         any of its chapters that will not come.
@@ -629,9 +629,8 @@
     <footer class="stepper" id="web-foot" hidden>
       <button class="btn ghost" id="web-clear">Clear</button>
       <span class="muted" id="web-count"></span>
-      <!-- Into the queue instead: a book of its own, built after the ones before it. -->
-      <button class="btn ghost" id="web-queue" title="Built as a book of its own, after the websites queued before it">Queue</button>
-      <button class="btn primary" id="web-go">Add to Build</button>
+      <!-- Every website download goes through the queue: a book of its own, or carrying one on. -->
+      <button class="btn primary" id="web-queue" title="Downloaded in the queue, after the websites queued before it">Queue</button>
     </footer>
   </section>
 
