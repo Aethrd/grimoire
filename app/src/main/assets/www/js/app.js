@@ -2456,6 +2456,270 @@ const autoBackups = (() => {
   };
 })();
 
+/* ── automatic export ───────────────────────────────────────────────────
+ *
+ * Every book written out as an EPUB into a folder chosen once, kept in its
+ * folders as on the shelf, daily or weekly -- and, if asked, every book from
+ * a website checked for new chapters first, through the queue, and written
+ * out once those have come. Only what changed is written again: a book's
+ * file is replaced in place when it grows, is renamed or moves, and deleted
+ * when the book goes (an older version purged, a book binned for good).
+ * The app keeps the list of files it wrote, and only ever touches those --
+ * nothing else in the folder. Like the backups, it runs while the app is
+ * open: Android does not let a web page wake itself.
+ */
+const autoExport = (() => {
+  const EVERY = { day: 24 * 3600e3, week: 7 * 24 * 3600e3 };
+  let running = false;
+  let picking = null;
+  const waiting = new Map();   // token -> resolve, for each file being written
+  let tokens = 0;
+  const bridge = () => window.GrimoireNative;
+  const available = () => !!bridge()?.writeAutoExport;
+
+  async function state() {
+    const kept = (await store.settings()).autoExport || {};
+    let folder = '';
+    try { folder = available() ? bridge().autoExportFolderName() || '' : ''; } catch { /* none */ }
+    return { every: kept.every || null, update: !!kept.update, lastAt: kept.lastAt || 0, lastError: kept.lastError || '',
+      lastCount: kept.lastCount || 0, files: kept.files || {}, pending: !!kept.pending, folder };
+  }
+  async function set(changes) {
+    const kept = (await store.settings()).autoExport || {};
+    await store.saveSettings({ autoExport: { ...kept, ...changes } });
+  }
+  function chooseFolder() {
+    if (!available()) return Promise.resolve('');
+    return new Promise((resolve) => { picking = resolve; bridge().chooseAutoExportFolder(); });
+  }
+  const repaint = () => { try { panelHooks.repaint?.(); } catch { /* not shown */ } };
+
+  /** Where a book's file goes: its folder's path, then its title. */
+  const segment = (text) => String(text || '').replace(/[\\:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 80);
+  function pathOf(book) {
+    const folders = String(book.folder || '').split('/').map(segment).filter(Boolean);
+    return [...folders, `${epub.safeName(library.displayTitle(book))}.epub`].join('/');
+  }
+  // What a book's file is a copy of: written again when any of it changes.
+  const stampOf = (book) => [book.chapters || 0, book.words || 0, book.coverBytes || 0,
+    library.displayTitle(book), book.author || '', book.folder || ''].join('|');
+  const keyOf = (book) => book.fingerprint || `id:${book.id}`;
+
+  function writeFile(handle, path) {
+    const token = `x${++tokens}`;
+    return new Promise((resolve) => {
+      waiting.set(token, resolve);
+      bridge().writeAutoExport(handle, path, token);
+    });
+  }
+
+  /** Every book that has changed since, written; every file of a book gone, deleted. */
+  async function exportAll({ byHand = false } = {}) {
+    const now = await state();
+    if (!now.folder) return false;
+    const all = await store.all('books');
+    const live = all.filter((book) => !book.binnedAt && !book.transient && !book.importing && !library.isDownloading?.(book));
+    // A locked Vault's books: not written, and their files from before left as they are.
+    const locked = new Set(live.filter((book) => book.inVault && !library.vaultUnlocked).map(keyOf));
+    const books = live.filter((book) => !locked.has(keyOf(book))).sort((a, b) => a.id - b.id);
+    const files = { ...now.files };
+    /* A library much smaller than what was written last: not trusted -- one
+     * that did not open properly would have every file deleted. Written,
+     * but nothing deleted. */
+    const known = Object.keys(files).length;
+    const shrunk = known >= 10 && books.length + locked.size < known * 0.5;
+    const used = new Set();
+    const plan = [];
+    for (const book of books) {
+      let path = pathOf(book);
+      const first = path;
+      let n = 2;
+      while (used.has(path.toLowerCase())) path = first.replace(/\.epub$/i, ` (${n++}).epub`);
+      used.add(path.toLowerCase());
+      const key = keyOf(book);
+      const stamp = stampOf(book);
+      if (files[key]?.path === path && files[key]?.stamp === stamp) continue;
+      plan.push({ book, key, path, stamp });
+    }
+    const wanted = new Set(books.map(keyOf));
+    const gone = shrunk ? [] : Object.keys(files).filter((key) => !wanted.has(key) && !locked.has(key));
+    if (!plan.length && !gone.length) {
+      await set({ lastAt: Date.now(), lastError: '', pending: false, lastCount: 0 });
+      if (byHand) toast('Every book in the export folder is up to date', 4000, { kind: 'done' });
+      repaint();
+      return true;
+    }
+    const finish = progress.start(`Exporting ${plan.length} book${plan.length === 1 ? '' : 's'}`);
+    let written = 0;
+    const failed = [];
+    try {
+      for (const [at, { book, key, path, stamp }] of plan.entries()) {
+        // Out of the way of reading: a book being built while one is read makes it stutter.
+        while (inBook) await new Promise((resolve) => setTimeout(resolve, 5000));
+        finish.say(`Exporting ${library.displayTitle(book)}`, at / plan.length, `${at + 1} of ${plan.length}`);
+        try {
+          const { blob } = await epub.buildEpub(book.id);
+          const sink = exportSink(path.split('/').pop());
+          const bytes = new Uint8Array(await blobs.readArrayBuffer(blob));
+          for (let from = 0; from < bytes.length; from += 1024 * 1024) await sink.write(bytes.subarray(from, from + 1024 * 1024));
+          const { ok, message } = await writeFile(sink.close(), path);
+          if (!ok) throw new Error(message || 'it could not be written');
+          // Moved or renamed: the file it had before goes -- unless another book's is there now.
+          if (files[key]?.path && files[key].path !== path && !used.has(files[key].path.toLowerCase())) bridge().deleteAutoExport(files[key].path);
+          files[key] = { path, stamp };
+          written += 1;
+          // Kept as it goes: a run cut short starts where it stopped.
+          if (written % 10 === 0) await set({ files });
+        } catch (error) {
+          if (/can no longer be written/.test(error.message)) throw error;
+          failed.push(`${library.displayTitle(book)}: ${error.message}`);
+        }
+      }
+      let deleted = 0;
+      for (const key of gone) {
+        /* A book carried on is a new book of the same name: its file is the one
+         * just written, at the path the one before it had. Only forgotten. */
+        if (used.has(files[key].path.toLowerCase())) { delete files[key]; continue; }
+        if (bridge().deleteAutoExport(files[key].path)) { delete files[key]; deleted += 1; }
+      }
+      await set({ files, lastAt: Date.now(), pending: false, lastCount: written,
+        lastError: failed.length ? `${failed.length} not written — ${failed[0]}` : '' });
+      const said = `Exported ${written} book${written === 1 ? '' : 's'}${deleted ? ` · ${deleted} old file${deleted === 1 ? '' : 's'} deleted` : ''}`
+        + `${failed.length ? ` · ${failed.length} could not be written` : ''}${shrunk ? ' · nothing deleted: the library is much smaller than the last export' : ''}`;
+      whenNotReading(() => toast(said, 7000, { kind: failed.length ? 'failed' : 'done' }));
+      return true;
+    } catch (error) {
+      finish.fail();
+      await set({ files, lastError: error.message || 'the export could not be written' });
+      toast(`Automatic export failed: ${error.message}`, 7000, { kind: 'failed' });
+      return false;
+    } finally {
+      finish();
+      repaint();
+    }
+  }
+
+  /** Every book from a website, queued to be checked for new chapters (each a "check" in the queue). */
+  async function queueChecks() {
+    const books = (await store.all('books')).filter((book) => book.webSources?.length && !book.binnedAt
+      && !book.transient && library.statusOf(book) !== 'dropped');
+    const busy = new Set(webQueue.filter((job) => job.status !== 'done' && job.bookId != null).map((job) => job.bookId));
+    let added = 0;
+    for (const book of books) {
+      if (busy.has(book.id)) continue;
+      webQueue.push({
+        id: `q-${Date.now()}-${book.id}`, kind: 'check', name: library.displayTitle(book), author: book.author || '',
+        sources: book.webSources, cover: '', links: [], total: 0, done: 0, status: 'queued', stops: 0, bookId: book.id,
+      });
+      added += 1;
+    }
+    if (added) saveQueue();
+    return added;
+  }
+
+  async function run({ byHand = false } = {}) {
+    if (running || !available() || libraryHeld) return false;
+    const now = await state();
+    if (!now.folder) return false;
+    running = true;
+    try {
+      if (now.update) {
+        const added = await queueChecks();
+        if (added) {
+          // Exported once the queue has finished: the new chapters in the files.
+          await set({ pending: true });
+          if (!queueState.running) startQueueQuietly();
+          else pumpQueue();
+          renderWorkshop();
+          whenNotReading(() => toast(`Checking ${added} book${added === 1 ? '' : 's'} for new chapters — exported once the queue finishes`, 6000, { topic: 'downloads' }));
+          return true;
+        }
+      }
+      return await exportAll({ byHand });
+    } finally {
+      running = false;
+    }
+  }
+
+  async function check() {
+    if (!available() || running) return;
+    const now = await state();
+    if (now.every && now.folder && !now.pending && Date.now() - now.lastAt >= EVERY[now.every]) run();
+  }
+
+  const panelHooks = {
+    available,
+    state,
+    set: async (changes) => { await set(changes); check(); },
+    chooseFolder,
+    now: () => run({ byHand: true }),
+  };
+
+  return {
+    start() {
+      panels.onAutoExport(panelHooks);
+      if (!available()) return;
+      setTimeout(check, 20000);
+      setInterval(check, 30 * 60000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(check, 4000); });
+    },
+    /** The queue has finished: the export waiting on its new chapters. */
+    async afterQueue() {
+      const now = await state();
+      if (now.pending && !running) {
+        running = true;
+        try { await exportAll(); } finally { running = false; }
+      }
+    },
+    written(token, ok, message) {
+      const resolve = waiting.get(token);
+      waiting.delete(token);
+      resolve?.({ ok: !!ok, message });
+    },
+    folderChosen(name) {
+      const resolve = picking;
+      picking = null;
+      resolve?.(name || '');
+      repaint();
+    },
+    run,
+  };
+})();
+
+/** The queue started by the schedule: books paused by hand stay paused. */
+function startQueueQuietly() {
+  queueState.running = true;
+  try { window.GrimoireNative?.keepScreenOn?.(true); } catch { /* not in a browser */ }
+  saveQueue();
+  pumpQueue();
+}
+
+/**
+ * A queued check of a book from a website: its contents page read (only as
+ * far as it must be, to the chapters the book has), and what is new made
+ * into this job's chapters, carrying the book on -- or, with nothing new,
+ * the job gone from the queue.
+ */
+async function runCheck(job, under) {
+  const book = await store.get('books', job.bookId);
+  if (!book || book.binnedAt) return { none: true };
+  const chapters = await store.byIndex('chapters', 'bookId', book.id);
+  const known = new Set(chapters.map((chapter) => chapter.from).filter(Boolean));
+  const names = new Set(chapters.map((chapter) => tidyName(chapter.title)).filter(Boolean));
+  const { gap, jitter } = delaysFor(siteOfJob(job));
+  const sources = job.sources.slice(0, 1);
+  under.finish.say(`Checking ${job.name} for new chapters`, null, '');
+  const found = await web.findLinks(sources, {
+    listGap: gap, listJitter: jitter, known: known.size ? known : null, shouldStop: () => under.pausing,
+  });
+  if (!found.links.length) return { reason: found.failed[0]?.reason || 'its contents page showed no chapters' };
+  const likely = web.likelyChapters(found.links, sources[0]);
+  const order = web.inReadingOrder(found.links.map((link) => ({ ...link, likely: likely.has(link.url) })),
+    (link) => link.likely, found.newestFirstList);
+  const fresh = order.links.filter((link) => link.likely && !known.has(link.url) && !(link.text && names.has(tidyName(link.text))));
+  return { fresh };
+}
+
 /** Several archives, saved together: one folder asked for (the app), or a download each (a browser). */
 async function exportSinksDone(sinks, mimeType, startedReading = inBook) {
   const closed = sinks.map((sink) => ({ name: sink.name, made: sink.close() }));
@@ -7370,6 +7634,7 @@ function wireJobEdit() {
     if (!it) return;
     // Its book's short chapters, each going back in its own place: no list to change.
     if (it.kind === 'refetch') { toast('These are the book’s short chapters, fetched again in place — nothing to choose.'); return; }
+    if (it.kind === 'check') { toast('Its new chapters are found when it is checked — nothing to choose yet.'); return; }
     clearWeb();
     // Begun: what its book has is marked so when the site's list is read again (as an update is).
     Object.assign(webState, { intent: 'queue', editing: it.id, ...(it.bookId != null ? { updating: it.bookId } : {}) });
@@ -7683,6 +7948,7 @@ function pumpQueue() {
     notifyBuild({ title: 'Queue done', text: message });
     letScreenGo();
     autoBackups.afterQueue();
+    autoExport.afterQueue();
   }
   saveQueue();
 }
@@ -7695,6 +7961,25 @@ async function runJob(job) {
   delete job.resumed;
   job.note = '';
   saveQueue();
+  // A book checked for new chapters: what is new becomes its chapters, in line again; nothing new, gone.
+  if (job.kind === 'check') {
+    let result;
+    try { result = await runCheck(job, under); } catch (error) { result = { reason: error.message || 'its contents page could not be read', paused: !!error.paused }; } finally {
+      under.finish();
+      queueJobs.delete(job.id);
+    }
+    if (under.pausing || result.paused) job.status = under.siteStop || under.yielding ? 'queued' : 'paused';
+    else if (result.fresh?.length) {
+      delete job.kind;
+      Object.assign(job, { links: result.fresh.map(keptLink), total: result.fresh.length, done: 0, status: 'queued', note: '' });
+    } else if (result.fresh || result.none) webQueue.splice(webQueue.indexOf(job), 1);
+    else if (queueHalts(result.reason)) settleJob(job, { rest: [{ url: job.sources[0], text: 'its contents page' }], reason: result.reason, paused: false }, false);
+    else { job.status = 'attention'; job.note = `could not check for new chapters: ${result.reason}`; }
+    saveQueue();
+    if (queueState.running) pumpQueue();
+    else letScreenGo();
+    return;
+  }
   // Kept from before a chapter was known for what it is: the real one into its placeholder's place.
   job.links = web.settlePlaceholders(job.links);
   let outcome = { rest: job.links, reason: '', paused: false };
@@ -8064,6 +8349,7 @@ function jobState(job) {
     default: {
       const held = sitesHeld().has(host) ? ' · waiting: its site needs you' : '';
       if (job.kind === 'refetch') return `${job.links.length} short chapter${job.links.length === 1 ? '' : 's'} to fetch again${host ? ` · ${host}` : ''}${held}`;
+      if (job.kind === 'check') return `To check for new chapters${host ? ` · ${host}` : ''}${held}`;
       return `${job.bookId != null ? `${job.links.length} chapters to come, carrying its book on${host ? ` · ${host}` : ''}` : chapters}${held}`;
     }
   }
@@ -8625,7 +8911,7 @@ function markUnfinished() {
   for (const each of webLeftovers) add(each.bookId, each.links?.length);
   for (const job of webQueue) {
     // Short chapters fetched again add nothing to the book: it is not unfinished for them.
-    if (job.status === 'done' || job.kind === 'refetch') continue;
+    if (job.status === 'done' || job.kind === 'refetch' || job.kind === 'check') continue;
     const run = queueJobs.get(job.id)?.run;
     // Under way: what its own count says is still to come; else every link it holds.
     const { came, of } = runCounts(job, run);
@@ -12293,6 +12579,10 @@ window.Grimoire = {
   backupWritten(ok, message) { autoBackups.written(!!ok, message); },
   /** The folder for automatic backups, chosen: its name, or null if none was. */
   backupFolderChosen(name) { autoBackups.folderChosen(name); },
+  /** A book's file written into the automatic export folder, or why not. */
+  autoExportWritten(token, ok, message) { autoExport.written(token, ok, message); },
+  /** The folder for the automatic export, chosen: its name, or null if none was. */
+  autoExportFolderChosen(name) { autoExport.folderChosen(name); },
   /** An export in parts, saved into the folder chosen: how many of them, and the first that would not go. */
   exportSetSaved(saved, of, failed) {
     toast(saved === of
@@ -12552,6 +12842,7 @@ async function boot() {
   panels.onGuides(refreshGuides);
   panels.onWrite((blob, name, type, opts) => writeOut(blob, name, type, opts));
   autoBackups.start();
+  autoExport.start();
   panels.onExportEverything(exportEverything);
   panels.onFolderMenu(openFolderActions);
 

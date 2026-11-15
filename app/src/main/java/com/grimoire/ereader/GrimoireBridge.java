@@ -308,6 +308,34 @@ public class GrimoireBridge {
         if (activity instanceof MainActivity) ((MainActivity) activity).writeBackup(file, keep);
     }
 
+    /* ── automatic export ── (see MainActivity) */
+
+    /** Ask for the folder. Answered in window.Grimoire.autoExportFolderChosen(name or null). */
+    @JavascriptInterface
+    public void chooseAutoExportFolder() {
+        if (activity instanceof MainActivity) ((MainActivity) activity).chooseAutoExportFolder();
+    }
+
+    /** The chosen folder's name, or "" when there is none (or it can no longer be written). */
+    @JavascriptInterface
+    public String autoExportFolderName() {
+        return activity instanceof MainActivity ? ((MainActivity) activity).autoExportFolderName() : "";
+    }
+
+    /** A staged book written to `path` in the folder ("slop/Title.epub"), replacing its own
+     *  file there. Answered in window.Grimoire.autoExportWritten(reply, ok, message). */
+    @JavascriptInterface
+    public void writeAutoExport(String handle, String path, String reply) {
+        final File file = new File(new File(activity.getCacheDir(), "exports"), new File(handle).getName());
+        if (activity instanceof MainActivity) ((MainActivity) activity).writeAutoExport(file, path, reply);
+    }
+
+    /** A file the app exported before, deleted (a book gone, moved or renamed). */
+    @JavascriptInterface
+    public boolean deleteAutoExport(String path) {
+        return activity instanceof MainActivity && ((MainActivity) activity).deleteAutoExport(path);
+    }
+
     /**
      * Finish several files at once -- an export in parts -- and ask once for a
      * folder to put them all in, not once per file.
