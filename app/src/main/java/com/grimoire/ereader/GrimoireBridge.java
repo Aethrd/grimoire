@@ -101,6 +101,23 @@ public class GrimoireBridge {
         }
     }
 
+    /**
+     * How many books the library held when last drawn, kept outside the web
+     * storage (in the app's own preferences), so that a library that opens
+     * empty can be told from one that is empty. Tonight's scare: after a
+     * crash the shelf came up empty with the default look, and four minutes
+     * later every book was back. -1 when never marked.
+     */
+    @JavascriptInterface
+    public int libraryMark() {
+        return activity.getSharedPreferences("library", Activity.MODE_PRIVATE).getInt("books", -1);
+    }
+
+    @JavascriptInterface
+    public void markLibrary(int books) {
+        activity.getSharedPreferences("library", Activity.MODE_PRIVATE).edit().putInt("books", Math.max(0, books)).apply();
+    }
+
     @JavascriptInterface
     public String platform() {
         return "android";

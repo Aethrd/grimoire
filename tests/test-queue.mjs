@@ -451,6 +451,22 @@ await t('automatic backups: a folder chosen once, written on schedule and after 
   await new Promise((r) => setTimeout(r, 200));
   assert.match((await store.settings()).autoBackup.lastError, /can no longer be written/);
   assert.match(block.textContent, /last try failed: the backup folder can no longer be written/);
+  // A backup with far fewer books than the last: not written on its own, so it cannot push a good one out.
+  window.GrimoireNative.writeBackup = (handle, keep) => {
+    written.push({ name: handle, keep, json: JSON.parse(Buffer.concat(staged.get(handle)).toString('utf8')) });
+    setTimeout(() => window.Grimoire.backupWritten(true, handle), 0);
+  };
+  const before = written.length;
+  await store.saveSettings({ autoBackup: { ...(await store.settings()).autoBackup, lastBooks: 783, lastAt: 0, lastError: '' } });
+  chip('Day').click();
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(written.length, before, 'a backup of a library a fraction of its size was written on its own');
+  assert.match((await store.settings()).autoBackup.lastError, /against 783 at the last backup — not written/);
+  // By hand it is the reader's say: written, and the count it holds kept for next time.
+  [...block.querySelectorAll('button')].find((b) => b.textContent === 'Back up now').click();
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(written.length, before + 1);
+  assert.equal((await store.settings()).autoBackup.lastBooks, written.at(-1).json.books.length);
   // The native side: the folder's permission kept; only automatic backups ever removed.
   const java = (await import('node:fs')).readFileSync(new URL('../app/src/main/java/com/grimoire/ereader/MainActivity.java', import.meta.url), 'utf8');
   assert.match(java, /takePersistableUriPermission\(tree,/);

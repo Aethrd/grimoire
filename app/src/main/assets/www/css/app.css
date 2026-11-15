@@ -2975,3 +2975,10 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .page-flow figure.pb { margin: 0; padding: 0; }
 .page-flow figure.pb .pic { margin-top: 0; margin-bottom: 0; }
 .page-flow figure.pb img { margin: 0 auto; }
+
+/* A library that did not open (app.js, libraryMissing): said over everything, nothing behind it to tap. */
+.library-missing { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: var(--bg, #1b1a20);
+  padding: max(24px, env(safe-area-inset-top, 0px)) max(20px, env(safe-area-inset-right, 0px)) max(24px, env(safe-area-inset-bottom, 0px)) max(20px, env(safe-area-inset-left, 0px)); }
+.library-missing-card { max-width: 440px; display: grid; gap: 12px; color: var(--text, #efeef3); line-height: 1.5; }
+.library-missing-card h2 { margin: 0; font-size: 22px; }
+.library-missing-card p { margin: 0; }

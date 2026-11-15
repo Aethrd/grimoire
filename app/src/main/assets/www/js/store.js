@@ -107,6 +107,11 @@ function wrap(request) {
   });
 }
 
+/** How many books there are, without reading them. */
+export async function countBooks() {
+  return wrap((await tx('books')).count());
+}
+
 export async function put(store, value) {
   const s = await tx(store, 'readwrite');
   return wrap(s.put(value));

@@ -2084,6 +2084,22 @@ export async function openVault(onVaultChange, host) {
     backupRow.appendChild(button);
   }
   data.appendChild(backupRow);
+  /* The books themselves, which a backup does not hold: every one, hidden
+   * folders included (the shelf's own export takes only what it shows). */
+  if (exportEverything) {
+    const everything = document.createElement('button');
+    everything.className = 'btn ghost block';
+    everything.style.marginTop = '8px';
+    everything.textContent = 'Export every book';
+    everything.onclick = () => exportEverything();
+    data.appendChild(everything);
+    const said = document.createElement('p');
+    said.className = 'muted';
+    said.style.cssText = 'font-size:12px;line-height:1.55;margin:6px 0 0';
+    said.textContent = 'The books themselves, as EPUB files in zips, each in its folder — hidden folders too. '
+      + 'A backup holds everything but the books; this is the books.';
+    data.appendChild(said);
+  }
   if (backupHooks?.available()) data.appendChild(await autoBackupBlock());
 
   const restoreBtn = document.createElement('button');
@@ -2315,6 +2331,8 @@ let onWriteOut = null;
  * set, chooseFolder, now }. */
 let backupHooks = null;
 export function onAutoBackup(hooks) { backupHooks = hooks; }
+let exportEverything = null;
+export function onExportEverything(run) { exportEverything = run; }
 
 /** How often, how many kept, into which folder, and when the last was made. */
 async function autoBackupBlock() {

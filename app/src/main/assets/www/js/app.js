@@ -336,6 +336,7 @@ function refreshShelf() {
       shelfAgain = false;
       await drawShelf();
     } while (shelfAgain);
+    noteLibrarySize();
   })().finally(() => { shelfDrawing = null; });
   return shelfDrawing;
 }
@@ -2184,6 +2185,24 @@ function exportFound(books) {
   return askExportParts(kept);
 }
 
+/**
+ * Every book written out, hidden folders included.
+ *
+ * Exporting from the shelf takes what the shelf shows -- and a hidden
+ * folder's books are not on it, so a whole-shelf export left them out
+ * without a word. From Settings it is the whole library: each book in its
+ * folder inside the zips. The locked Vault only if unlocked, and said so.
+ */
+async function exportEverything() {
+  const all = await store.all('books');
+  const kept = all.filter((book) => !book.binnedAt && !book.transient && !book.importing);
+  const books = kept.filter((book) => !book.inVault || library.vaultUnlocked);
+  const locked = kept.length - books.length;
+  if (!books.length) { toast(locked ? 'Every book is in the locked Vault — unlock it to export them' : 'There are no books to export'); return; }
+  if (locked) toast(`${locked} book${locked === 1 ? '' : 's'} in the locked Vault left out — unlock it first to include ${locked === 1 ? 'it' : 'them'}`, 7000);
+  await askExportParts(books);
+}
+
 async function askExportParts(books) {
   const sheet = el('export-many-sheet');
   const saved = (await store.settings()).exportParts;
@@ -2317,6 +2336,7 @@ const autoBackups = (() => {
   let running = false;
   let manual = false;
   let picking = null;
+  let writingBooks = 0;   // how many books the backup being written holds
   const bridge = () => window.GrimoireNative;
   const available = () => !!bridge()?.writeBackup;
 
@@ -2325,7 +2345,7 @@ const autoBackups = (() => {
     let folder = '';
     try { folder = available() ? bridge().backupFolderName() || '' : ''; } catch { /* none */ }
     return { every: kept.every || null, afterQueue: !!kept.afterQueue, keep: kept.keep || 5,
-      lastAt: kept.lastAt || 0, lastError: kept.lastError || '', folder };
+      lastAt: kept.lastAt || 0, lastError: kept.lastError || '', lastBooks: kept.lastBooks || 0, folder };
   }
   async function set(changes) {
     const kept = (await store.settings()).autoBackup || {};
@@ -2350,7 +2370,19 @@ const autoBackups = (() => {
       const pad = (n) => String(n).padStart(2, '0');
       const at = new Date();
       const name = `quire-backup-auto-${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}.json`;
-      const bytes = new TextEncoder().encode(JSON.stringify(await store.exportBackup()));
+      const backup = await store.exportBackup();
+      /* Far fewer books than the last one had: not written on its own. The
+       * folder keeps only the newest few, and a backup of a library that did
+       * not open properly would push a good one out. By hand, it is the
+       * reader's say. */
+      const books = backup.books?.length || 0;
+      if (!byHand && now.lastBooks >= 10 && books < now.lastBooks * 0.5) {
+        running = false;
+        await failed(`only ${books} books, against ${now.lastBooks} at the last backup — not written, so it cannot replace a good one. Back up by hand if that is right`);
+        return false;
+      }
+      writingBooks = books;
+      const bytes = new TextEncoder().encode(JSON.stringify(backup));
       const sink = exportSink(name);
       for (let from = 0; from < bytes.length; from += 1024 * 1024) await sink.write(bytes.subarray(from, from + 1024 * 1024));
       bridge().writeBackup(sink.close(), now.keep);
@@ -2404,7 +2436,7 @@ const autoBackups = (() => {
     async written(ok, message) {
       running = false;
       if (!ok) { await failed(message); return; }
-      await set({ lastAt: Date.now(), lastError: '' });
+      await set({ lastAt: Date.now(), lastError: '', lastBooks: writingBooks });
       if (manual) toast(`Backed up: ${message}`, 5000, { kind: 'done' });
       manual = false;
       backupPainted();
@@ -12363,7 +12395,61 @@ window.Grimoire = {
 
 /* ── boot ─────────────────────────────────────────────────────────────── */
 
+/* ── a library that opens empty ─────────────────────────────────────────
+ *
+ * After a crash mid-build the app once opened on an empty shelf in the
+ * default look -- and four minutes later every book was back. An empty shelf
+ * then is not an empty library: it is one that did not open. Shown as such,
+ * nothing is written, no backup is made, and nobody imports or restores into
+ * it thinking all is lost. The size it last had is kept outside the web
+ * storage (GrimoireNative.libraryMark), the one place that survives it. */
+async function libraryMissing() {
+  let mark = -1;
+  try { mark = Number(window.GrimoireNative?.libraryMark?.() ?? -1); } catch { mark = -1; }
+  if (!(mark >= 5)) return false;
+  let count = 0;
+  try { count = await store.countBooks(); } catch { count = 0; }
+  if (count > 0) return false;
+  showLibraryMissing(mark);
+  return true;
+}
+
+let libraryHeld = false;   // shown as not opened: its size is not noted over
+function showLibraryMissing(mark) {
+  libraryHeld = true;
+  const box = document.createElement('div');
+  box.className = 'library-missing';
+  box.setAttribute('role', 'alertdialog');
+  box.innerHTML = `<div class="library-missing-card">
+    <h2>Your library did not open</h2>
+    <p>Last time there were ${mark.toLocaleString()} books here. They are most likely still on the phone:
+    the app could not reach them just now, which can happen just after a crash.</p>
+    <p><b>Nothing has been changed.</b> Close the app (swipe it away) and open it again. Do not import
+    or restore anything while this shows.</p>
+    <p class="muted">Still here after a few tries? Then restore your newest backup, and import your files again.</p>
+    <div class="web-row"><button class="btn ghost" data-empty>Start with no books</button>
+    <button class="btn primary" data-retry>Try again</button></div></div>`;
+  box.querySelector('[data-retry]').onclick = () => location.reload();
+  box.querySelector('[data-empty]').onclick = () => {
+    // Said to be so: the empty library is the real one from now on.
+    try { window.GrimoireNative?.markLibrary?.(0); } catch { /* not in the app */ }
+    location.reload();
+  };
+  document.body.appendChild(box);
+}
+
+/** The library's size, noted outside the web storage, as it stands now. */
+let markedAt = 0;
+async function noteLibrarySize() {
+  if (libraryHeld || typeof window.GrimoireNative?.markLibrary !== 'function' || Date.now() - markedAt < 5000) return;
+  markedAt = Date.now();
+  try { window.GrimoireNative.markLibrary(await store.countBooks()); } catch { /* next time */ }
+}
+
 async function boot() {
+  // Kept, not tidied away by Android when the phone runs short of room (where the WebView grants it).
+  try { navigator.storage?.persist?.().catch(() => {}); } catch { /* not offered */ }
+  if (await libraryMissing()) return;
   const settings = await store.settings();
   theme.apply(settings);
   reader.setPictureFrame(settings.pictureFrame || null);
@@ -12442,6 +12528,7 @@ async function boot() {
   panels.onGuides(refreshGuides);
   panels.onWrite((blob, name, type, opts) => writeOut(blob, name, type, opts));
   autoBackups.start();
+  panels.onExportEverything(exportEverything);
   panels.onFolderMenu(openFolderActions);
 
 
