@@ -825,6 +825,62 @@ export async function pendingRestoreCount() {
   return Object.values(pending.books).filter((record) => record.saved).length;
 }
 
+/* ── matching a backup's books to the books here ───────────────────────
+ *
+ * A backup knows each book by its fingerprint: the file's name and size as
+ * it was imported ("name.epub:65465871"). The same book can come back under
+ * another: imported from inside a zip, its path in the zip goes in front
+ * ("Books/slop/name.epub:65465871"); written out by this app and imported
+ * again, it is a new file that names the old one inside it (sourceId); built
+ * in the app and downloaded again, it is "built:" and a new time. Matched
+ * only on the exact fingerprint, a restore after importing again found none
+ * of them, and said every book was not there. So, in turn: the fingerprint;
+ * the one the file names; the file's own name and size wherever it sat; and,
+ * where there is only one book of that title on each side, the title. */
+export const looseKey = (fingerprint) => {
+  const text = String(fingerprint || '');
+  if (/^(built|merged|part|split|pictures):/.test(text)) return '';
+  const m = /^(.*?):(\d+)(?::.*)?$/.exec(text);
+  return m ? `${m[1].split('/').pop().normalize('NFC').toLowerCase()}:${m[2]}` : '';
+};
+export const titleKey = (title) => String(title || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/** Finds, for a backup's fingerprint and title, the one book here that is it -- or null. */
+function bookMatcher(books) {
+  const live = books.filter((b) => !b.transient && !b.importing);
+  const byPrint = new Map(live.map((b) => [b.fingerprint, b]));
+  const bySource = new Map(live.filter((b) => b.sourceId).map((b) => [b.sourceId, b]));
+  const group = (keyOf) => {
+    const map = new Map();
+    for (const b of live) {
+      const key = keyOf(b);
+      if (!key) continue;
+      map.set(key, map.has(key) ? null : b);   // null: more than one, so none
+    }
+    return map;
+  };
+  const byLoose = group((b) => looseKey(b.fingerprint));
+  const byTitle = group((b) => titleKey(b.title));
+  return (fingerprint, title, titleUnique = true) => byPrint.get(fingerprint)
+    || bySource.get(fingerprint)
+    || byLoose.get(looseKey(fingerprint))
+    || (titleUnique ? byTitle.get(titleKey(title)) : null)
+    || null;
+}
+
+/** The waiting record a book just imported is, by the same steps, from its side. */
+function pendingFor(book, pending) {
+  if (pending.books[book.fingerprint]) return book.fingerprint;
+  if (book.sourceId && pending.books[book.sourceId]) return book.sourceId;
+  const loose = looseKey(book.fingerprint);
+  const title = titleKey(book.title);
+  const keys = Object.keys(pending.books);
+  const one = (list) => (list.length === 1 ? list[0] : null);
+  return (loose && one(keys.filter((key) => looseKey(key) === loose)))
+    || (title && one(keys.filter((key) => titleKey(pending.books[key].saved?.title) === title)))
+    || null;
+}
+
 /**
  * A book has just been imported: give it whatever a restore was holding for
  * it, and join it to its bundle if that was waiting too.
@@ -837,12 +893,13 @@ export async function pendingRestoreCount() {
 export async function restorePending(book) {
   if (!book?.fingerprint || book.transient) return false;
   const pending = await pendingRestore();
-  const record = pending.books[book.fingerprint];
-  const members = pending.leaders[book.fingerprint];
+  const key = pendingFor(book, pending);
+  const record = key ? pending.books[key] : null;
+  const members = pending.leaders[book.fingerprint] || (key && key !== book.fingerprint ? pending.leaders[key] : null);
   if (!record && !members) return false;
 
   if (record) {
-    delete pending.books[book.fingerprint];
+    delete pending.books[key];
     await restoreInto(book, record);
     const leaderPrint = record.saved?.bundleLeader;
     if (leaderPrint) {
@@ -861,6 +918,7 @@ export async function restorePending(book) {
 
   if (members) {
     delete pending.leaders[book.fingerprint];
+    if (key) delete pending.leaders[key];
     for (const fingerprint of members) {
       for (const member of await byIndex('books', 'fingerprint', fingerprint)) {
         if (member.transient) continue;
@@ -904,9 +962,23 @@ export async function importBackup(data) {
   for (const row of data.layout || []) await put('layout', row);
 
   const books = await all('books');
-  const byFingerprint = new Map(books.map((b) => [b.fingerprint, b]));
   const pending = await pendingRestore();
   const records = recordsOf(data);
+  // Each of the backup's books to the book here that is it (see bookMatcher).
+  const match = bookMatcher(books);
+  const titles = new Map();
+  for (const [, record] of records) {
+    const key = titleKey(record.saved?.title);
+    if (key) titles.set(key, (titles.get(key) || 0) + 1);
+  }
+  const matched = new Map();
+  const used = new Set();
+  for (const [fingerprint, record] of records) {
+    const title = record.saved?.title;
+    const book = match(fingerprint, title, titles.get(titleKey(title)) === 1);
+    if (book && !used.has(book.id)) { matched.set(fingerprint, book); used.add(book.id); }
+  }
+  const byFingerprint = { get: (fingerprint) => matched.get(fingerprint) };
 
   /* A book not on the shelf yet is kept for when it is.
    *

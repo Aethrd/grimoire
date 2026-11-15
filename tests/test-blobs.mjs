@@ -519,6 +519,47 @@ await t('restoring matches books by file, not by id', async () => {
   assert.equal((await store.get('positions', a)).chapterIndex, 12);
 });
 
+await t('restoring finds books imported again another way: from a zip, written out by the app, downloaded again', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  for (const book of await store.all('books')) await store.deleteBook(book.id);
+  const backup = {
+    format: 'grimoire-backup', version: 1,
+    books: [
+      { fingerprint: 'Hero.epub:65465871', title: 'The Hero', folder: 'nefarious' },
+      { fingerprint: 'Exported.epub:500', title: 'Exported', folder: 'slop' },
+      { fingerprint: 'built:1794000000000-ab12', title: '괴력 난신', folder: 'not slop (hopefully)' },
+      { fingerprint: 'built:1794000000001-cd34', title: 'Twin', folder: 'one' },
+      { fingerprint: 'built:1794000000002-ef56', title: 'Twin', folder: 'two' },
+      { fingerprint: 'Later.epub:77', title: 'Later', folder: 'nsfw' },
+    ],
+  };
+  // From inside a zip: its path in the zip in front of the same name and size.
+  const hero = await store.add('books', { title: 'The Hero (retitled)', fingerprint: 'Backup/nefarious/Hero.epub:65465871', addedAt: 9 });
+  // Written out by the app and imported again: a new file naming the old one.
+  const exported = await store.add('books', { title: 'Exported', fingerprint: 'Exported (1).epub:612', sourceId: 'Exported.epub:500', addedAt: 9 });
+  // Downloaded again: a new "built:", the only book of its title on each side.
+  const novel = await store.add('books', { title: '괴력  난신', fingerprint: 'built:1794700000000-zz99', addedAt: 9 });
+  // Two of one title in the backup: which is which cannot be known, so neither is guessed.
+  const twin = await store.add('books', { title: 'Twin', fingerprint: 'built:1794700000001-yy88', addedAt: 9 });
+
+  const report = await store.importBackup(JSON.parse(JSON.stringify(backup)));
+  assert.equal(report.books, 3);
+  assert.equal(report.missing, 3);
+  assert.equal((await store.get('books', hero)).folder, 'nefarious');
+  assert.equal((await store.get('books', exported)).folder, 'slop');
+  assert.equal((await store.get('books', novel)).folder, 'not slop (hopefully)');
+  assert.ok(!(await store.get('books', twin)).folder, 'a book of a title the backup has twice was guessed at');
+  // Imported after the restore, from a zip: handed what was held for it.
+  const later = await store.add('books', { title: 'Later', fingerprint: 'Books/Later.epub:77', addedAt: 9 });
+  assert.equal(await store.restorePending(await store.get('books', later)), true);
+  assert.equal((await store.get('books', later)).folder, 'nsfw');
+  // The keys: a file's own name and size, wherever it sat; never a book built in the app.
+  assert.equal(store.looseKey('A/B/Name.EPUB:12'), 'name.epub:12');
+  assert.equal(store.looseKey('Name.epub:12:vol2'), 'name.epub:12');
+  assert.equal(store.looseKey('built:1794:abc'), '');
+  for (const book of await store.all('books')) await store.deleteBook(book.id);
+});
+
 await t('a cover chosen by hand is carried in the backup', async () => {
   // The rest of a book comes back by re-importing the file. A cover someone
   // went and found does not -- it exists nowhere else.
