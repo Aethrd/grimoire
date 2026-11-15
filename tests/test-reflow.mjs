@@ -856,6 +856,9 @@ await (async () => {
     reader.init({ onChange() {} });
     const strips = await make('Webtoon', [[690, 5000], [690, 6200], [690, 4800]]);
     const comic = await make('Comic', [[800, 1200], [800, 1200], [690, 5000]]);
+    // Long pictures, but more words than pictures: a novel, left alone.
+    const novel = await make('Novel', [[690, 5000], [690, 6200], [690, 4800]]);
+    await store.put('chapters', { bookId: novel, index: 1, title: 'Two', html: '<p>他慢慢地走回了家，没有说一句话。</p>', words: 0 });
 
     await reader.open(strips);
     assert.equal(reader.state.mode, 'scroll');
@@ -873,6 +876,10 @@ await (async () => {
 
     // One strip among pages: left as the settings say.
     await reader.open(comic);
+    assert.equal(reader.state.mode, 'paged');
+    assert.equal(window.document.body.dataset.images, 'screen');
+
+    await reader.open(novel);
     assert.equal(reader.state.mode, 'paged');
     assert.equal(window.document.body.dataset.images, 'screen');
 

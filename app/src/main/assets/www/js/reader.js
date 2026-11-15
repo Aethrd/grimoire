@@ -803,7 +803,9 @@ export async function open(bookId, opts = {}) {
   opts.onBook?.(book);
   // Started now, so it runs while the layout and the place are read and the
   // opening scene plays -- not after them.
-  const tall = tallStrips(images.filter((i) => i.blob));
+  const pictured = images.filter((i) => i.blob);
+  const tall = mostlyPictures(state.chapters, pictured.length)
+    .then((pictures) => (pictures ? tallStrips(pictured) : false));
   state.layout = await store.layoutFor(bookId);
   const settings = await store.settings();
   applyLayout(state.layout, settings);
@@ -1230,7 +1232,9 @@ export function percent() {
  * when it is left. Nothing is saved: the settings stay what they were.
  *
  * "Tall" is more than twice as tall, for its width, as an ordinary phone
- * screen (20:9), so a page of a comic or a photograph never counts.
+ * screen (20:9), so a page of a comic or a photograph never counts. And the
+ * book has to be more pictures than words, so a novel with a few long
+ * illustrations in it is still read as the reader chose.
  */
 export const PHONE_SHAPE = 20 / 9;
 export const STRIP_SHAPE = 2 * PHONE_SHAPE;
@@ -1238,6 +1242,62 @@ const STRIPS_NEEDED = 2;
 // Checked while the book opens, so bounded: a book of thousands of pictures
 // is not read to the end before its first page shows.
 const STRIP_LOOK_MS = 1500;
+
+/* Words, in any language: Chinese and Japanese are not written with spaces
+   and Thai not between words, so splitting on spaces counts a paragraph of
+   them as one word. The browser's own word breaker knows every script; where
+   it is missing, each character of a script written without spaces is
+   counted as a word. */
+const segmenter = (() => {
+  try { return typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'word' }) : null; } catch { return null; }
+})();
+const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/gu;
+
+/** The words of a chapter's text: no headings, no markup, no captions' tags. */
+export function bodyText(html) {
+  return String(html || '')
+    // Titles are not the text: the chapter's heading, the document's title.
+    .replace(/<(h[1-6]|title|header)\b[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<(script|style|svg|rt|rp)\b[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&[#\w]+;/g, ' ');
+}
+
+export function countBodyWords(text, cap = Infinity) {
+  if (!text.trim()) return 0;
+  let n = 0;
+  if (segmenter) {
+    for (const piece of segmenter.segment(text)) {
+      if (piece.isWordLike && ++n >= cap) return n;
+    }
+    return n;
+  }
+  const unspaced = text.match(UNSPACED)?.length || 0;
+  n = unspaced + text.replace(UNSPACED, ' ').split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+  return Math.min(n, cap);
+}
+
+/**
+ * Whether a book is more pictures than words. Counted only as far as it
+ * needs to: a novel stops being a candidate within its first chapter. Gives
+ * way to the page every so often, so the opening scene keeps moving.
+ */
+export async function mostlyPictures(chapters, pictures, { within = STRIP_LOOK_MS } = {}) {
+  if (!pictures) return false;
+  const until = Date.now() + within;
+  let words = 0;
+  let slice = Date.now();
+  for (const chapter of chapters) {
+    words += countBodyWords(bodyText(chapterHtml(chapter)), pictures - words);
+    if (words >= pictures) return false;
+    if (Date.now() - slice > 16) {
+      if (Date.now() > until) return false;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      slice = Date.now();
+    }
+  }
+  return words < pictures;
+}
 
 // Header only: a picture that would have to be decoded to be measured is
 // not waited for while the book opens.

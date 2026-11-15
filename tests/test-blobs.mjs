@@ -1529,9 +1529,26 @@ await t('a book of two or more long strips opens scrolling at the width, and goe
   await reader.tallStrips(sized(Array.from({ length: 400 }, () => [800, 1200])), { size: slow, within: 200 });
   assert.ok(Date.now() - began < 600);
 
+  // More pictures than words, in any language -- and titles and markup are not words.
+  assert.equal(reader.countBodyWords(reader.bodyText('<h2>Chapter One: The Long Title Of It</h2><figure><img src="a.jpg" alt="Page one of many"></figure>')), 0);
+  assert.equal(reader.countBodyWords(reader.bodyText('<p>He <b>went</b> home.</p>')), 3);
+  // Chinese and Japanese have no spaces; a sentence is not one word.
+  assert.ok(reader.countBodyWords(reader.bodyText('<p>他慢慢地走回了家，没有说一句话。</p>')) >= 6);
+  assert.ok(reader.countBodyWords(reader.bodyText('<p>彼はゆっくりと家に帰った。</p>')) >= 4);
+  assert.ok(reader.countBodyWords(reader.bodyText('<p>ผมกลับบ้านแล้ว</p>')) >= 3);
+  assert.equal(reader.countBodyWords(reader.bodyText('<p>그는 집으로 돌아갔다</p>')), 3);
+  const chapters = (...bodies) => bodies.map((html, index) => ({ index, html }));
+  assert.equal(await reader.mostlyPictures(chapters('<h1>第一话</h1>', '<h1>第二话</h1><p>啊！</p>'), 40), true);
+  assert.equal(await reader.mostlyPictures(chapters('<p>他慢慢地走回了家，没有说一句话。</p>'), 5), false);
+  assert.equal(await reader.mostlyPictures(chapters('<p>one two three</p>'), 3), false);
+  assert.equal(await reader.mostlyPictures(chapters('<p>one two</p>'), 3), true);
+  assert.equal(await reader.mostlyPictures(chapters('<h1>Only a title</h1>'), 0), false);
+
   const src = read('app/src/main/assets/www/js/reader.js');
+  // Pictures are only measured for a book that is mostly pictures.
+  assert.match(src, /mostlyPictures\(state\.chapters, pictured\.length\)\s+\.then\(\(pictures\) => \(pictures \? tallStrips\(pictured\) : false\)\)/);
   // Checked while the book opens -- started before the layout is read, waited for before it is applied.
-  assert.match(src, /const tall = tallStrips\([\s\S]{0,200}store\.layoutFor\(bookId\)[\s\S]{0,200}applyLayout\(state\.layout, settings\);\s+holdForStrips\(await tall, settings\);/);
+  assert.match(src, /const tall = mostlyPictures\([\s\S]{0,200}store\.layoutFor\(bookId\)[\s\S]{0,200}applyLayout\(state\.layout, settings\);\s+holdForStrips\(await tall, settings\);/);
   // Never saved: the settings stay what they were.
   const hold = src.slice(src.indexOf('function holdForStrips'), src.indexOf('export async function releaseStrips'));
   assert.doesNotMatch(hold, /saveSettings/);
