@@ -1529,6 +1529,36 @@ await t('a book of two or more long strips opens scrolling at the width, and goe
   await reader.tallStrips(sized(Array.from({ length: 400 }, () => [800, 1200])), { size: slow, within: 200 });
   assert.ok(Date.now() - began < 600);
 
+  // Tall but mostly blank -- white, black or see-through for more than 40% -- is no strip.
+  assert.equal(reader.BLANK_LIMIT, 0.4);
+  const tall2 = sized([[690, 5000], [690, 6000]]);
+  assert.equal(await reader.tallStrips(tall2, { size, blank: async () => 0.5 }), false);
+  assert.equal(await reader.tallStrips(tall2, { size, blank: async () => 0.4 }), true);
+  let looks = 0;
+  await reader.tallStrips(sized([[800, 1200], [690, 5000], [690, 6000]]), { size, blank: async () => { looks += 1; return 0; } });
+  assert.equal(looks, 2, 'a picture not tall was decoded to look for blanks');
+  // Rows in RGBA, 48 across: a row is blank when nearly all of it is white, black or see-through,
+  // and only a run of them a quarter of the width tall is a patch.
+  const W = 48;
+  const rows = (kinds) => {
+    const data = new Uint8ClampedArray(W * kinds.length * 4);
+    kinds.forEach((kind, y) => {
+      for (let x = 0; x < W; x += 1) {
+        const i = (y * W + x) * 4;
+        const [r, g, b, a] = kind === 'white' ? [250, 250, 250, 255] : kind === 'black' ? [5, 5, 5, 255]
+          : kind === 'clear' ? [0, 0, 0, 0] : [(x * 37) % 200 + 30, 90, 140, 255];
+        data.set([r, g, b, a], i);
+      }
+    });
+    return [data, W, kinds.length];
+  };
+  const run = (kind, n) => Array(n).fill(kind);
+  assert.equal(reader.blankRowsShare(...rows([...run('art', 50), ...run('white', 50)])), 0.5);
+  assert.equal(reader.blankRowsShare(...rows([...run('black', 30), ...run('art', 40), ...run('clear', 30)])), 0.6);
+  // Thin gaps -- between lines of speech -- are no patch, however many.
+  assert.equal(reader.blankRowsShare(...rows(Array.from({ length: 100 }, (_, i) => (i % 4 ? 'white' : 'art')))), 0);
+  assert.equal(reader.blankRowsShare(...rows(run('art', 100))), 0);
+
   // More pictures than words, in any language -- and titles and markup are not words.
   assert.equal(reader.countBodyWords(reader.bodyText('<h2>Chapter One: The Long Title Of It</h2><figure><img src="a.jpg" alt="Page one of many"></figure>')), 0);
   assert.equal(reader.countBodyWords(reader.bodyText('<p>He <b>went</b> home.</p>')), 3);

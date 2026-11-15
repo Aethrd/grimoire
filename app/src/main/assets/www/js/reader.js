@@ -1232,9 +1232,11 @@ export function percent() {
  * when it is left. Nothing is saved: the settings stay what they were.
  *
  * "Tall" is more than twice as tall, for its width, as an ordinary phone
- * screen (20:9), so a page of a comic or a photograph never counts. And the
- * book has to be more pictures than words, so a novel with a few long
- * illustrations in it is still read as the reader chose.
+ * screen (20:9), so a page of a comic or a photograph never counts -- and
+ * not more than 40% blank (white, black or see-through), so padding and
+ * spacers do not count either. And the book has to be more pictures than
+ * words, so a novel with a few long illustrations in it is still read as the
+ * reader chose.
  */
 export const PHONE_SHAPE = 20 / 9;
 export const STRIP_SHAPE = 2 * PHONE_SHAPE;
@@ -1303,7 +1305,64 @@ export async function mostlyPictures(chapters, pictures, { within = STRIP_LOOK_M
 // not waited for while the book opens.
 const headerSize = (blob) => pictureSize(blob, { decode: false });
 
-export async function tallStrips(images, { needed = STRIPS_NEEDED, within = STRIP_LOOK_MS, size = headerSize } = {}) {
+/* A strip that is mostly nothing -- white, black or see-through for more
+   than BLANK_LIMIT of its length -- is padding between pages, or a spacer,
+   not a page of a webtoon: it does not count. Looked at small (BLANK_WIDTH
+   across), a row at a time: a row is blank when nearly all of it is, and
+   only blank rows in a run as tall as a quarter of the width -- a patch --
+   count. Text or linework in a row averages to grey at that size, so it is
+   never blank, and the space between lines of speech is no patch. */
+export const BLANK_LIMIT = 0.4;
+const BLANK_WIDTH = 48;
+const BLANK_ROWS_MAX = 1200;
+
+/** The share of rows in large blank patches, in RGBA pixels `width` across.
+ *  A patch is large when it is at least a quarter of the picture's width tall:
+ *  the gaps between lines of speech, or round a panel's edge, are not. */
+export function blankRowsShare(data, width, height) {
+  if (!width || !height) return 0;
+  const large = Math.max(1, Math.round(width / 4));
+  let blankRows = 0;
+  let run = 0;
+  const endRun = () => { if (run >= large) blankRows += run; run = 0; };
+  for (let y = 0; y < height; y += 1) {
+    let blank = 0;
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      const r = data[i]; const g = data[i + 1]; const b = data[i + 2]; const a = data[i + 3];
+      // See-through, white or black (each within a little of it).
+      if (a <= 20 || Math.min(r, g, b) >= 235 || Math.max(r, g, b) <= 20) blank += 1;
+    }
+    if (blank >= width * 0.95) run += 1;
+    else endRun();
+  }
+  endRun();
+  return blankRows / height;
+}
+
+/** How much of a picture is blank (0 to 1); 0 where it cannot be looked at. */
+export async function blankShare(blob) {
+  try {
+    if (typeof createImageBitmap !== 'function') return 0;
+    const shape = await pictureSize(blob, { decode: false });
+    if (!shape.width || !shape.height) return 0;
+    const width = BLANK_WIDTH;
+    const height = Math.max(1, Math.min(BLANK_ROWS_MAX, Math.round(width * (shape.height / shape.width))));
+    const bitmap = await createImageBitmap(blob, { resizeWidth: width, resizeHeight: height, resizeQuality: 'low' });
+    const canvas = typeof OffscreenCanvas === 'function'
+      ? new OffscreenCanvas(width, height)
+      : Object.assign(document.createElement('canvas'), { width, height });
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return 0;
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close?.();
+    return blankRowsShare(context.getImageData(0, 0, width, height).data, width, height);
+  } catch {
+    return 0;
+  }
+}
+
+export async function tallStrips(images, { needed = STRIPS_NEEDED, within = STRIP_LOOK_MS, size = headerSize, blank = blankShare } = {}) {
   const queue = [...images].sort((a, b) => (a.order || 0) - (b.order || 0));
   const until = Date.now() + within;
   let found = 0;
@@ -1314,7 +1373,12 @@ export async function tallStrips(images, { needed = STRIPS_NEEDED, within = STRI
       let shape;
       try { shape = await size(image.blob); } catch { continue; }
       // A thin rule drawn as a picture is tall too; a strip is a page wide.
-      if (shape.width >= 200 && shape.height / shape.width > STRIP_SHAPE) found += 1;
+      if (!(shape.width >= 200 && shape.height / shape.width > STRIP_SHAPE)) continue;
+      // Tall, and mostly something: looked at only once its shape says it may count.
+      let empty = 0;
+      try { empty = await blank(image.blob); } catch { empty = 0; }
+      if (empty > BLANK_LIMIT) continue;
+      found += 1;
     }
   };
   /* Bounded outright, not only between pictures: one that has to be decoded
