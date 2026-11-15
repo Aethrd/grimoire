@@ -57,7 +57,11 @@ function screenNode(name) {
 let inBook = false;
 const held = [];
 
+let lastView = null;
 function viewChanged() {
+  // Left the Website screen part-way through changing a queued book: let it all go.
+  if (lastView === 'web' && current !== 'web') dropWebEdit();
+  lastView = current;
   const wasInBook = inBook;
   if (current === 'reader') inBook = true;
   else if (!BESIDE_THE_BOOK.has(current)) inBook = false;
@@ -11577,7 +11581,27 @@ function resetWebLink() {
   el('web-address').focus();
 }
 
+/*
+ * A queued book's chapters, opened on the Website screen to change and left
+ * without Queue: everything begun for it let go -- its chapters, its title
+ * and address, a Find links still reading its site. Kept, the next book
+ * added from Build's index opened on the last one's chapters, with its list
+ * still being read. The queued book itself is as it was.
+ */
+function dropWebEdit() {
+  if (!webState.editing) return false;
+  const addresses = web.addressesIn(el('web-address').value);
+  webSearch += 1;   // a search under way for it: its answers are no longer wanted
+  holdSearch(false);
+  el('web-find').textContent = 'Find links';
+  web.forgetAddress(addresses);
+  clearWeb();
+  paintMore();
+  return true;
+}
+
 function clearWeb() {
+  webState.editing = null;
   Object.assign(webState, {
     links: [], title: '', author: '', cover: '', coverData: '', folder: null, sources: [], reversed: false, titleTouched: false, authorTouched: false, leftover: null, pickListed: null,
     manualOrder: false, carryOn: null, searches: 0, updating: null,
@@ -11895,7 +11919,7 @@ function wireWeb() {
   });
 
   // Reached from Build, and only from there: what is chosen becomes a part.
-  el('build-web').onclick = () => { webState.intent = null; webState.editing = null; show('web'); paintWebCount(); };
+  el('build-web').onclick = () => { dropWebEdit(); webState.intent = null; show('web'); paintWebCount(); };
   // The book minimised, to the index of every novel; and back into it from its card.
   el('build-minimise').onclick = () => {
     if (editingJob) editingJob = null;
@@ -11905,7 +11929,7 @@ function wireWeb() {
   wireJobEdit();
   el('build-index-current').onclick = () => { buildIndex = false; renderWorkshop(); };
   // Another novel, to queue: the Website screen with Queue as its main button.
-  el('build-index-add').onclick = () => { webState.intent = 'queue'; webState.editing = null; show('web'); paintWebCount(); };
+  el('build-index-add').onclick = () => { dropWebEdit(); webState.intent = 'queue'; show('web'); paintWebCount(); };
   el('build-from-shelf').onclick = () => { pickNext = true; show('library'); };
 }
 

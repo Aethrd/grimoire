@@ -194,6 +194,27 @@ await t('a queued book not yet started opens to be named, as a book in Build is'
   assert.equal(document.getElementById('build-job-edit').hidden, true);
   assert.equal(document.getElementById('build-index').hidden, false);
   assert.match(document.getElementById('build-queue-list').children[3].textContent, /C, renamed/);
+
+  // Opened to change and left without Queue: nothing of it carried into the next book added.
+  const tab = () => document.querySelector('[data-go="workshop"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  openC();
+  await new Promise((r) => setTimeout(r, 50));
+  document.getElementById('job-chapters-edit').click();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(document.getElementById('web-list').children.length, 4);
+  tab();
+  await new Promise((r) => setTimeout(r, 50));
+  document.getElementById('build-minimise').click();
+  document.getElementById('build-index-add').click();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(document.querySelector('[data-screen="web"]').hasAttribute('data-active'), true);
+  assert.equal(document.getElementById('web-list').children.length, 0, 'the last queued book\'s chapters were still there');
+  assert.equal(document.getElementById('web-title').value, '');
+  assert.equal(document.getElementById('web-address').value, '');
+  const still = (await store.settings()).webQueue[3];
+  assert.deepEqual([still.name, still.links.length], ['C, renamed', 4], 'the queued book was changed by leaving it');
+  tab();
+  await new Promise((r) => setTimeout(r, 50));
 });
 
 await t('started, it builds every book: two at once, never two from one site', async () => {

@@ -606,6 +606,27 @@ public class WebBridge {
                 CookieManager manager = CookieManager.getInstance();
                 manager.setAcceptCookie(true);
                 manager.setAcceptThirdPartyCookies(view, true);
+                /* Until the site first shows: a loading animation over it, not the black of
+                 * a page that has drawn nothing yet (which looked like the browser had died). */
+                final float dp = activity.getResources().getDisplayMetrics().density;
+                final android.widget.LinearLayout loading = new android.widget.LinearLayout(activity);
+                loading.setOrientation(android.widget.LinearLayout.VERTICAL);
+                loading.setGravity(android.view.Gravity.CENTER);
+                loading.setBackgroundColor(0xFF15131A);
+                android.widget.ProgressBar spinner = new android.widget.ProgressBar(activity);
+                spinner.setIndeterminate(true);
+                spinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(0xFFD8A7B1));
+                loading.addView(spinner, new android.widget.LinearLayout.LayoutParams(Math.round(44 * dp), Math.round(44 * dp)));
+                android.widget.TextView loadingNote = new android.widget.TextView(activity);
+                String host = uri.getHost() == null ? "the site" : uri.getHost();
+                loadingNote.setText("Opening " + host + "\u2026");
+                loadingNote.setTextColor(0xFFB9B2C0);
+                loadingNote.setTextSize(13);
+                loadingNote.setGravity(android.view.Gravity.CENTER);
+                loadingNote.setPadding(0, Math.round(14 * dp), 0, 0);
+                loading.addView(loadingNote, new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                final Runnable shownNow = () -> loading.setVisibility(View.GONE);
                 view.setWebViewClient(new WebViewClient() {
                     @Override
                     public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
@@ -615,6 +636,7 @@ public class WebBridge {
 
                     @Override
                     public void onPageCommitVisible(WebView v, String url) {
+                        shownNow.run();
                         if (pick) {
                             v.evaluateJavascript(PICKING_STARTS, null);
                             v.evaluateJavascript(modeScript(pickMode), null);
@@ -623,6 +645,7 @@ public class WebBridge {
 
                     @Override
                     public void onPageFinished(WebView v, String url) {
+                        shownNow.run();
                         if (pick) {
                             v.evaluateJavascript(PICKING_STARTS, null);
                             v.evaluateJavascript(modeScript(pickMode), null);
@@ -642,7 +665,13 @@ public class WebBridge {
                 column.setBackgroundColor(0xFF15131A);
                 column.setFitsSystemWindows(true);
                 column.setClickable(true);   // nothing under it is touched meanwhile
-                column.addView(view, new android.widget.LinearLayout.LayoutParams(
+                // The page, with the loading animation over it until it first shows.
+                FrameLayout stage = new FrameLayout(activity);
+                stage.addView(view, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                stage.addView(loading, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                column.addView(stage, new android.widget.LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
                 android.widget.LinearLayout bar = new android.widget.LinearLayout(activity);

@@ -284,7 +284,7 @@ await t('the screen is reached from Build, and only from there', () => {
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /case 'web': return renderWeb\(\);/);
   assert.match(app, /settleWeb: web\.settleWeb/);
-  assert.match(app, /el\('build-web'\)\.onclick = \(\) => \{ webState\.intent = null; webState\.editing = null; show\('web'\); paintWebCount\(\); \};/);
+  assert.match(app, /el\('build-web'\)\.onclick = \(\) => \{ dropWebEdit\(\); webState\.intent = null; show\('web'\); paintWebCount\(\); \};/);
   // Every website download goes through the queue: no adding to Build from here.
   assert.doesNotMatch(app, /addWebToBuild|el\('web-go'\)/);
   assert.doesNotMatch(html, /id="web-go"/);
@@ -575,6 +575,10 @@ await t('a picture book: each episode its pictures alone, in order, fetched sayi
     assert.match(java, /if \(!pictureBook\) view\.evaluateJavascript\(STORY_END, null\);/);
     assert.match(java, /if \(referer != null && !referer\.isEmpty\(\)\) connection\.setRequestProperty\("Referer", referer\);/);
     assert.match(java, /if \(job\.pictureBook && isPicture\(request\)\) return null;/);
+    // Picking from a site: a loading animation until it first shows, not the black of a page not yet drawn.
+    assert.match(java, /final Runnable shownNow = \(\) -> loading\.setVisibility\(View\.GONE\);/);
+    assert.match(java, /public void onPageCommitVisible\(WebView v, String url\) \{\s+shownNow\.run\(\);/);
+    assert.match(java, /stage\.addView\(loading, new FrameLayout\.LayoutParams/);
     // An episode is there once its pictures are: never held for words, nor for its pictures loading.
     assert.match(java, /if \(pictureBook\) \{\s+there = pics > 0 && !accessCheck;\s+ready = there;\s+\}/);
     assert.match(java, /String stillAs = pictureBook && pics > 0 \? pics \+/);
@@ -2830,7 +2834,7 @@ await t('a queue of websites: books of their own, several at once but never two 
   // Build as the book in it, or the index of every novel; adding a novel from there queues it.
   assert.match(app, /el\('build-minimise'\)\.onclick = \(\) => \{\s+if \(editingJob\) editingJob = null;\s+else buildIndex = true;/);
   assert.match(app, /el\('build-index-current'\)\.onclick = \(\) => \{ buildIndex = false; renderWorkshop\(\); \};/);
-  assert.match(app, /el\('build-index-add'\)\.onclick = \(\) => \{ webState\.intent = 'queue'; webState\.editing = null; show\('web'\); paintWebCount\(\); \};/);
+  assert.match(app, /el\('build-index-add'\)\.onclick = \(\) => \{ dropWebEdit\(\); webState\.intent = 'queue'; show\('web'\); paintWebCount\(\); \};/);
   assert.match(app, /if \(parts\.length > shownParts && !buildRun\) buildIndex = false;/);
   assert.ok(html.indexOf('id="build-queue"') > html.indexOf('id="build-index"') && html.indexOf('id="build-queue"') < html.indexOf('id="build-detail"'));
   // Pause all stops what is under way; Start queue resumes the paused.

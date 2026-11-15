@@ -1187,7 +1187,7 @@ await t('the Kindle reader runs on the oldest WebView the app supports', async (
 await t('what finishes while you read waits for the book to be put down', async () => {
   const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
   // One place decides: in a book (the reader, or its own screens), or not.
-  assert.match(app, /function viewChanged\(\) \{[\s\S]{0,40}?if \(current === 'reader'\) inBook = true;\s*else if \(!BESIDE_THE_BOOK\.has\(current\)\) inBook = false;/);
+  assert.match(app, /function viewChanged\(\) \{[\s\S]{0,300}?if \(current === 'reader'\) inBook = true;\s*else if \(!BESIDE_THE_BOOK\.has\(current\)\) inBook = false;/);
   assert.equal((app.match(/viewChanged\(\);/g) || []).length, 2, 'show() and back() both report the change');
   // A finished build opens its book only if Build is still on screen.
   // (Overnight, not between tries: Build stays up, saying when the next is.)
