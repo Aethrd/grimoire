@@ -1209,6 +1209,7 @@ public class WebBridge {
         Browser browser;
         private boolean loaded;
         private String lastShape = "";
+        private String lastStill = "";
         /** What it was opened for is plainly on the page: then it is kept. */
         private boolean there;
         /** The page's own access check ("Verifying access…") on show, when last looked at. */
@@ -1264,9 +1265,24 @@ public class WebBridge {
         /** Still changing? Scroll on, and look again shortly. */
         private void poll() {
             if (view == null) return;
-            view.evaluateJavascript(scroll ? SCROLL + SHAPE : SHAPE, (value) -> {
+            view.evaluateJavascript(pictureBook ? PB_SHAPE : scroll ? SCROLL + SHAPE : SHAPE, (value) -> {
                 if (view == null) return;
                 String reply = value == null ? "" : value;
+                /* A picture book's episode: how many pictures are on it, ahead of the shape
+                 * ("12#" then the shape as ever). */
+                int pics = -1;
+                if (pictureBook) {
+                    String r = reply.startsWith("\"") ? reply.substring(1) : reply;
+                    int hash = r.indexOf('#');
+                    if (hash > 0) {
+                        try {
+                            pics = Integer.parseInt(r.substring(0, hash));
+                        } catch (Exception ignored) {
+                            // Unreadable: as though none were there yet.
+                        }
+                        reply = "\"" + r.substring(hash + 1);
+                    }
+                }
                 // "pending|text|links|checking|resources|chapters|title": all
                 // but the pending count make the page's shape.
                 String[] parts = reply.replace("\"", "").split("\\|", 10);
@@ -1316,10 +1332,16 @@ public class WebBridge {
                     return;
                 }
                 boolean waiting = shape.contains("|checking|"); // a bot check still at work
-                if (!shape.equals(lastShape) || waiting) {
-                    lastShape = shape;
+                /* Still: the page's shape unchanged -- or a picture book's, its count of
+                 * pictures. Its pictures loading change the shape (what has loaded is part
+                 * of it) and its adverts never stop, so an episode all there was held to
+                 * the long fallback, every one. */
+                String stillAs = pictureBook && pics > 0 ? pics + (waiting ? "|checking|" : "") : shape;
+                if (!stillAs.equals(lastStill) || waiting) {
+                    lastStill = stillAs;
                     stillSince = now;
                 }
+                lastShape = shape;
                 long still = now - stillSince;
                 boolean blank = shape.startsWith("0|");
                 /* What it was opened for, there to see: a list showing its
@@ -1330,11 +1352,16 @@ public class WebBridge {
                 // its text being there did not mean its story was, last time.
                 boolean patient = quietMs > RENDER_QUIET_MS;
                 // A chapter's story: long, or shorter over many lines.
-                boolean storyThere = !accessCheck && (storyLength >= READY_STORY
+                boolean storyThere = !pictureBook && !accessCheck && (storyLength >= READY_STORY
                         || (storyLength >= SHORT_STORY && storyLines >= SHORT_STORY_LINES));
                 boolean ready = scroll ? chapterLinks >= 3 : !patient && storyThere;
                 // Plainly there, whatever else the page seems to be doing.
                 there = scroll ? chapterLinks >= 3 : storyThere;
+                // A picture book's episode: there once its pictures are, whatever its words.
+                if (pictureBook) {
+                    there = pics > 0 && !accessCheck;
+                    ready = there;
+                }
                 /* A chapter with no story on it yet is given longer to be still: a
                  * site that puts the chapter up a few seconds after the page opens
                  * shows nothing changing meanwhile, and taken then, it was all a
@@ -2005,9 +2032,13 @@ public class WebBridge {
      * Closed ones are not reachable, and are left. */
     /** To the end of a chapter: the page, and the box its story scrolls in, if it has its own. */
     /* Picture book: the episode walked through as a reader scrolls it -- each picture of
-     * it brought into view in turn and waited on until it has loaded (a site that loads
-     * pictures as they near the screen loads them now), then each stamped with where it
-     * came from and its size, in order (data-g-pb, data-g-src, data-g-w, data-g-h).
+     * it that has not yet said where it comes from brought into view in turn, until it
+     * does (a site that puts its pictures' addresses in only as they near the screen does
+     * so now). A picture already saying so is passed over, and none is waited on to finish
+     * loading: they are fetched afterwards, and only their addresses are needed -- waiting
+     * on every one was most of a minute an episode. Then the end of the episode looked at,
+     * for more of it put in late, and each stamped with where it came from and its size,
+     * if known, in order (data-g-pb, data-g-src, data-g-w, data-g-h).
      * The episode is the box holding most of the page's pictures; only its pictures are
      * walked, never past its last -- a reader that puts the next episode under this one
      * at the end (endless scrolling) adds that elsewhere, or moves the address on, and
@@ -2030,32 +2061,55 @@ public class WebBridge {
             + "counts.forEach(function(c,e){if(c>=Math.max(1,Math.ceil(all.length*0.8))&&(c<least||(c===least&&box&&box.contains(e)))){least=c;box=e;}});"
             + "if(!box)box=document.body;"
             + "var known=pics(box);"
-            + "var at=0,since=0,forced=false,quiet=0;"
             + "var loaded=function(i){return i.complete&&i.naturalWidth>=40&&!/^data:/.test(i.currentSrc||i.src||'');};"
-            + "var stamp=function(upTo){var l=upTo==null?known:known.slice(0,upTo);for(var k=0;k<l.length;k++){var i=l[k];i.setAttribute('data-g-pb',String(k));i.setAttribute('data-g-src',(loaded(i)?(i.currentSrc||i.src):'')||lazy(i)||i.getAttribute('src')||'');i.setAttribute('data-g-w',String(i.naturalWidth||0));i.setAttribute('data-g-h',String(i.naturalHeight||0));}P.taken=l.length;};"
+            + "/* A stand-in shared by the pictures not yet shown, or named as one: not a picture's address. */"
+            + "var STAND=/(?:^|[\\/_.-])(?:loading|loader|lazy|blank|placeholder|spacer|transparent|pixel|grey|gray)[^\\/]*\\.(?:gif|png|svg|webp)(?:[?#]|$)/i;"
+            + "var shared={};"
+            + "var tally=function(){shared={};known.forEach(function(i){var s=i.getAttribute('src')||'';if(s)shared[s]=(shared[s]||0)+1;});};"
+            + "/* Where a picture comes from, once the page has said: its loader's own attribute, or an address"
+            + "   of its own. Only that is needed -- the pictures are fetched afterwards -- so a picture is not"
+            + "   waited on to finish loading here. */"
+            + "var urlOf=function(i){var z=lazy(i);if(z)return z;var s=i.currentSrc||i.getAttribute('src')||'';var a=i.getAttribute('src')||'';"
+            + " if(!s||/^data:/.test(s)||STAND.test(s)||(a&&shared[a]>1))return '';return s;};"
+            + "var at=0,since=0,forced=false,probes=0,probing=0;"
+            + "var stamp=function(upTo){var l=upTo==null?known:known.slice(0,upTo);for(var k=0;k<l.length;k++){var i=l[k];i.setAttribute('data-g-pb',String(k));i.setAttribute('data-g-src',urlOf(i)||lazy(i)||i.getAttribute('src')||'');i.setAttribute('data-g-w',String(loaded(i)?i.naturalWidth:0));i.setAttribute('data-g-h',String(loaded(i)?i.naturalHeight:0));}P.taken=l.length;};"
             + "P.stamp=stamp;"
+            + "var rescan=function(){var now=pics(box);if(now.length>known.length&&(!known.length||now.indexOf(known[known.length-1])>=0)){known=now;tally();return true;}return false;};"
+            + "tally();"
             + "var step=function(){"
             + " try{"
             + "  if(P.state!=='walking')return;"
-            + "  if(location.href!==start){stamp(at);P.state='done';P.why='moved on';return;}"
+            + "  if(location.href!==start){stamp(Math.min(at,known.length));P.state='done';P.why='moved on';return;}"
             + "  if(Date.now()-P.started>220000||known.length>800){stamp();P.state='done';P.why='long';return;}"
-            + "  if(at<known.length){"
-            + "   if(!since){var now=pics(box);if(now.length>known.length&&now.indexOf(known[at])>=0)known=now;}"
-            + "   var i=known[at];"
-            + "   if(!since){since=Date.now();forced=false;i.scrollIntoView({block:'center',inline:'nearest'});}"
-            + "   if(loaded(i)||Date.now()-since>9000){at++;since=0;P.at=at;P.n=known.length;setTimeout(step,260+Math.random()*220);return;}"
-            + "   if(!forced&&Date.now()-since>3500){var u=lazy(i);if(u&&(i.getAttribute('src')||'')!==u){i.setAttribute('src',u);}forced=true;}"
-            + "   setTimeout(step,200);return;"
+            + "  /* Looking at the end of the episode: anything more of it put in meanwhile is walked too. */"
+            + "  if(probing){if(Date.now()-probing<700+Math.random()*400){setTimeout(step,150);return;}probing=0;"
+            + "   if(rescan()){setTimeout(step,120);return;}stamp();P.state='done';return;}"
+            + "  if(!since){"
+            + "   rescan();"
+            + "   /* Pictures already showing where they come from are passed over: only one that has not is"
+            + "      scrolled to, as a reader's scrolling would bring it in. */"
+            + "   while(at<known.length&&urlOf(known[at]))at++;"
+            + "   P.at=at;P.n=known.length;"
+            + "   if(at>=known.length){"
+            + "    if(probes++>=4){stamp();P.state='done';return;}"
+            + "    known[known.length-1].scrollIntoView({block:'end',inline:'nearest'});probing=Date.now();setTimeout(step,150);return;}"
+            + "   since=Date.now();forced=false;known[at].scrollIntoView({block:'center',inline:'nearest'});"
             + "  }"
-            + "  if(++quiet<6&&known.some(function(i){return !loaded(i);})){setTimeout(step,300);return;}"
-            + "  stamp();P.state='done';"
+            + "  var i=known[at];"
+            + "  if(urlOf(i)||Date.now()-since>5000){at++;since=0;setTimeout(step,150+Math.random()*150);return;}"
+            + "  if(!forced&&Date.now()-since>2500){var u=lazy(i);if(u&&(i.getAttribute('src')||'')!==u){i.setAttribute('src',u);}forced=true;}"
+            + "  setTimeout(step,100);"
             + " }catch(e){try{stamp();}catch(x){}P.state='done';P.why=String(e);}"
             + "};"
-            + "setTimeout(step,100);"
+            + "setTimeout(step,50);"
             + "}catch(e){window.__gPB={state:'none',why:String(e)};}})();";
+    /** A picture book's page: its pictures counted ("12#"), then its shape as ever. */
+    static final String PB_SHAPE = "(function(){var n=0;try{var I=document.images;"
+            + "for(var i=0;i<I.length&&i<400&&n<99;i++){var m=I[i];if(m.naturalWidth>=200||m.getBoundingClientRect().width>=150)n++;}}catch(e){}"
+            + "return n+'#'+" + WebBridge.SHAPE + ";})()";
     /** How long a picture book's episode is walked through at most, and how often it is looked at. */
     static final long PB_MAX_MS = 240_000;
-    static final long PB_POLL_MS = 500;
+    static final long PB_POLL_MS = 250;
     static final String PB_STATE = "(function(){try{return window.__gPB?String(__gPB.state):'none';}catch(e){return 'none';}})()";
     static final String PB_STAMP = "(function(){try{if(window.__gPB&&__gPB.state==='walking'&&__gPB.stamp){__gPB.stamp();__gPB.state='done';}}catch(e){}})()";
 

@@ -2305,40 +2305,125 @@ export function picturesOfEpisode(doc, base) {
   return found.filter((pic) => /^https?:/.test(pic.url) && !seen.has(pic.url) && seen.add(pic.url));
 }
 
+/**
+ * An episode's pictures as the page came, without walking it -- and whether
+ * that is all of them.
+ *
+ * Most sites write every picture of an episode into the page, each with its
+ * address (or a lazy loader's data-src) though it only loads as it is
+ * scrolled to; for those, the page fetched as any chapter is has them all,
+ * and walking it in the browser was a minute an episode for nothing. Whole
+ * when four in five of the pictures in the episode's box have an address of
+ * their own: a placeholder shared by all of them is not one.
+ */
+export function picturesAsSent(doc, base) {
+  const absolute = (src) => { try { return new URL(src, base).href; } catch { return ''; } };
+  const imgs = [...doc.querySelectorAll('img')].filter((img) => {
+    const w = Number(img.getAttribute('width')) || 0;
+    const h = Number(img.getAttribute('height')) || 0;
+    return (!w || w >= PB_MIN_WIDTH) && (!h || h >= PB_MIN_HEIGHT);
+  });
+  if (!imgs.length) return { pictures: [], whole: false };
+  const counts = new Map();
+  for (const img of imgs) for (let e = img.parentElement; e && e !== doc.body; e = e.parentElement) counts.set(e, (counts.get(e) || 0) + 1);
+  let box = doc.body;
+  let least = Infinity;
+  for (const [e, c] of counts) if (c >= Math.ceil(imgs.length * 0.8) && c <= least) { least = c; box = e; }
+  const inBox = imgs.filter((img) => box?.contains(img));
+  const urls = inBox.map((img) => absolute(pictureSource(img) || ''));
+  const uses = new Map();
+  for (const url of urls) uses.set(url, (uses.get(url) || 0) + 1);
+  const pictures = urls
+    .filter((url) => /^https?:/.test(url) && uses.get(url) === 1 && !PLACEHOLDER_PICTURE.test(url))
+    .map((url) => ({ url, width: 0, height: 0 }));
+  return { pictures, whole: pictures.length > 0 && pictures.length >= Math.ceil(inBox.length * 0.8) };
+}
+
+// A lazy loader's stand-in, by its name.
+const PLACEHOLDER_PICTURE = /(?:^|[\/_.-])(?:loading|loader|lazy|blank|placeholder|spacer|transparent|pixel|grey|gray)[^/]*\.(?:gif|png|svg|webp)(?:[?#]|$)/i;
+
+/* Sites whose episodes give their pictures' addresses only as they are
+ * scrolled to: read in the browser and walked through from then on, not
+ * fetched as sent first -- that would ask for every episode twice. */
+const walkedSites = new Set();
+
 export async function readPicturePage(link, index, { fetchPage = download } = {}) {
-  const page = await fetchPage(link.url, { pictureBook: true });
-  const type = String(page.type || '').toLowerCase();
-  if (type.startsWith('image/')) {
-    const href = `web/${index}-0.${EXT_OF_TYPE[type.split(';')[0]] || 'jpg'}`;
-    return {
-      chapter: { index, title: link.text || `Episode ${index + 1}`, fromToc: true,
-        html: `<figure class="pb"><img data-img="${href}" alt="Page 1"></figure>`, words: 0, url: page.url },
-      images: [{ href, blob: page.blob, order: index * 1000, chapterIndex: index, animated: /gif/.test(type), width: 0, height: 0 }],
-      lang: null,
-    };
+  let host = '';
+  try { host = new URL(link.url).host; } catch { /* asked for as it is */ }
+  let page = null;
+  let found = null;
+  if (!walkedSites.has(host)) {
+    /* As any chapter is fetched -- as sent, or in the browser for a site that
+     * needs it, its pictures not loaded there -- and taken if every picture is
+     * there to take: the quick way, as before the walk. */
+    page = await fetchPage(link.url, {});
+    if (String(page.type || '').toLowerCase().startsWith('image/')) return pictureChapter(page, link, index);
+    const doc = parseHtml(decodePage(await bytesOf(page.blob), page.type));
+    const sent = picturesAsSent(doc, page.url);
+    if (sent.whole) found = sent.pictures;
+    // The site said it failed: slowed down for and asked again, not walked.
+    else if (!sent.pictures.length && SITE_FAILED_LINE.test(tidy(doc.body?.textContent || '').slice(0, 600))) {
+      throw notLoadedYet(link.url, tidy(doc.body?.textContent || '').slice(0, 300));
+    }
   }
-  const doc = parseHtml(decodePage(await bytesOf(page.blob), page.type));
-  const found = picturesOfEpisode(doc, page.url);
-  // No pictures yet: not loaded, asked for again as a chapter would be. Never an empty episode kept.
-  if (!found.length) throw notLoadedYet(link.url, tidy(doc.body?.textContent || '').slice(0, 300));
+  if (!found) {
+    page = await fetchPage(link.url, { pictureBook: true });
+    if (String(page.type || '').toLowerCase().startsWith('image/')) return pictureChapter(page, link, index);
+    const doc = parseHtml(decodePage(await bytesOf(page.blob), page.type));
+    found = picturesOfEpisode(doc, page.url);
+    // No pictures yet: not loaded, asked for again as a chapter would be. Never an empty episode kept.
+    if (!found.length) throw notLoadedYet(link.url, tidy(doc.body?.textContent || '').slice(0, 300));
+    walkedSites.add(host);
+  }
   if (page.rendered) learnSite(link.url, false);
   trying.delete(link.url);
+  return takePictures(found, page, link, index, fetchPage);
+}
+
+/** A picture linked directly: an episode of one page. */
+function pictureChapter(page, link, index) {
+  const type = String(page.type || '').toLowerCase();
+  const href = `web/${index}-0.${EXT_OF_TYPE[type.split(';')[0]] || 'jpg'}`;
+  return {
+    chapter: { index, title: link.text || `Episode ${index + 1}`, fromToc: true,
+      html: `<figure class="pb"><img data-img="${href}" alt="Page 1"></figure>`, words: 0, url: page.url },
+    images: [{ href, blob: page.blob, order: index * 1000, chapterIndex: index, animated: /gif/.test(type), width: 0, height: 0 }],
+    lang: null,
+  };
+}
+
+/* An episode's pictures fetched, a few at a time as a browser does, each
+ * saying the page it is on; put back in their order however they arrive. */
+const PICTURES_AT_ONCE = 3;
+
+async function takePictures(found, page, link, index, fetchPage) {
+  const got = new Array(found.length).fill(null);
+  let next = 0;
+  let paused = null;
+  const one = async () => {
+    while (next < found.length && !paused) {
+      const n = next++;
+      try {
+        const answer = await fetchPage(found[n].url, { picture: true, referer: page.url });
+        const kind = String(answer.type || '').split(';')[0].toLowerCase();
+        if (!kind.startsWith('image/') || !answer.blob.size) throw new Error('not a picture');
+        got[n] = { blob: answer.blob, kind };
+      } catch (error) {
+        if (error?.paused) paused = error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(PICTURES_AT_ONCE, found.length) }, one));
+  if (paused) throw paused;
   const images = [];
   let html = '';
   let lost = 0;
   for (const [n, pic] of found.entries()) {
+    if (!got[n]) { lost += 1; continue; }
     const href = `web/${index}-${n}`;
-    try {
-      const got = await fetchPage(pic.url, { picture: true, referer: page.url });
-      const kind = String(got.type || '').split(';')[0].toLowerCase();
-      if (!kind.startsWith('image/') || !got.blob.size) throw new Error('not a picture');
-      images.push({ href, blob: got.blob, order: index * 1000 + n, chapterIndex: index, part: 0,
-        animated: kind === 'image/gif', width: pic.width, height: pic.height });
-      html += `<figure class="pb"><img data-img="${href}" alt="Page ${images.length}"></figure>`;
-    } catch (error) {
-      if (error?.paused) throw error;
-      lost += 1;
-    }
+    images.push({ href, blob: got[n].blob, order: index * 1000 + n, chapterIndex: index, part: 0,
+      animated: got[n].kind === 'image/gif', width: pic.width, height: pic.height });
+    html += `<figure class="pb"><img data-img="${href}" alt="Page ${images.length}"></figure>`;
   }
   /* A page missing is a hole in the story: more than one in ten, and the
    * episode is fetched again rather than kept with holes. */

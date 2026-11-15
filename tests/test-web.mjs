@@ -493,29 +493,67 @@ await t('a picture book: each episode its pictures alone, in order, fetched sayi
 <div class="viewer">${[2, 1, 3].map((k) => `<img data-g-pb="${k}" data-g-src="https://cdn.toon.example/e12/${k}.jpg" data-g-w="690" data-g-h="1600">`).join('')}
 <img data-g-pb="4" data-g-src="https://cdn.toon.example/e12/4.jpg" data-g-w="0" data-g-h="0"></div>
 <div class="comments"><p>first!</p></div></body></html>`;
+    // As sent: every picture the same stand-in, their addresses put in only as they are scrolled to.
+    const asSent = `<html><body><h1>Episode 12</h1><div class="viewer">${[1, 2, 3, 4].map(() => '<img src="/img/loading.gif">').join('')}</div></body></html>`;
     const asked = [];
     const fetchPage = async (url, options = {}) => {
       asked.push([url, options]);
       if (options.pictureBook) return { url, type: 'text/html', blob: new Blob([page]), rendered: true };
+      if (!options.picture) return { url, type: 'text/html', blob: new Blob([asSent]) };
+      // Arriving out of their order, as they would a few at a time.
+      await new Promise((r) => setTimeout(r, url.endsWith('1.jpg') ? 30 : 5));
       return { url, type: 'image/jpeg', blob: new Blob([new Uint8Array([1, 2, 3])]) };
     };
     const got = await web.readPage({ url: 'https://toon.example/ep/12', text: 'Episode 12' }, 11, { fetchPage, pictures: false });
-    // Pictures whatever "Pictures" says; the page asked for as a picture book.
-    assert.deepEqual(asked[0], ['https://toon.example/ep/12', { pictureBook: true }]);
-    assert.deepEqual(asked.slice(1).map(([url, o]) => [url, o.referer, o.picture]), [1, 2, 3, 4].map((k) => [`https://cdn.toon.example/e12/${k}.jpg`, 'https://toon.example/ep/12', true]));
+    // Pictures whatever "Pictures" says. Asked for as any chapter first; the pictures not all
+    // there as sent, then in the browser, walked through.
+    assert.deepEqual(asked[0], ['https://toon.example/ep/12', {}]);
+    assert.deepEqual(asked[1], ['https://toon.example/ep/12', { pictureBook: true }]);
+    assert.deepEqual(asked.slice(2).map(([url, o]) => [url, o.referer, o.picture]).sort(), [1, 2, 3, 4].map((k) => [`https://cdn.toon.example/e12/${k}.jpg`, 'https://toon.example/ep/12', true]));
     assert.equal(got.images.length, 4);
     assert.equal(got.chapter.words, 0);
     assert.equal(got.chapter.title, 'Episode 12');
     // Nothing but the pictures: no heading, no site text, no comments.
     assert.equal(got.chapter.html, [0, 1, 2, 3].map((n) => `<figure class="pb"><img data-img="web/11-${n}" alt="Page ${n + 1}"></figure>`).join(''));
     assert.deepEqual(got.images.map((i) => [i.href, i.order, i.width]), [['web/11-0', 11000, 690], ['web/11-1', 11001, 690], ['web/11-2', 11002, 690], ['web/11-3', 11003, 0]]);
+    // A site found to need the walk is walked from then on: never asked twice an episode.
+    asked.length = 0;
+    await web.readPage({ url: 'https://toon.example/ep/13', text: 'Episode 13' }, 12, { fetchPage });
+    assert.deepEqual(asked[0], ['https://toon.example/ep/13', { pictureBook: true }]);
+    assert.equal(asked.filter(([, o]) => !o.picture).length, 1);
+
+    // Every picture in the page as sent, a lazy loader's address on each: taken as it came -- no
+    // walk, no second asking -- and still nothing but the pictures.
+    web.setPictureBook((host) => host === 'toon.example' || host === 'quick.example');
+    const quick = `<html><body><header><img src="/logo.png" width="40" height="40"></header><h1>Ep 3</h1><p>Words, words.</p>
+<div id="v">${[1, 2, 3].map((k) => `<img class="lazy" data-src="/e3/${k}.webp" src="data:image/gif;base64,R0">`).join('')}</div><div class="comments"><p>first</p></div></body></html>`;
+    const quickAsked = [];
+    const quickFetch = async (url, options = {}) => {
+      quickAsked.push([url, options]);
+      if (!options.picture) return { url, type: 'text/html', blob: new Blob([quick]) };
+      return { url, type: 'image/webp', blob: new Blob([new Uint8Array([1])]) };
+    };
+    const fast = await web.readPage({ url: 'https://quick.example/ep/3', text: 'Ep 3' }, 2, { fetchPage: quickFetch });
+    assert.deepEqual(quickAsked.filter(([, o]) => !o.picture), [['https://quick.example/ep/3', {}]]);
+    assert.deepEqual(quickAsked.filter(([, o]) => o.picture).map(([u]) => u), [1, 2, 3].map((k) => `https://quick.example/e3/${k}.webp`));
+    assert.equal(fast.chapter.html, [0, 1, 2].map((n) => `<figure class="pb"><img data-img="web/2-${n}" alt="Page ${n + 1}"></figure>`).join(''));
+    assert.equal(fast.chapter.words, 0);
+    // A stand-in by its name is not a picture of the episode.
+    const named = new DOMParser().parseFromString(`<div>${[1, 2].map((k) => `<img src="/e/${k}.jpg">`).join('')}<img src="/static/lazy-load.png"></div>`, 'text/html');
+    assert.equal(web.picturesAsSent(named, 'https://q.example/').whole, false);
+    // The site said it could not load the episode: slowed down for and asked again, not walked.
+    const failedAsked = [];
+    const failed = async (url, options = {}) => { failedAsked.push(options); return { url, type: 'text/html', blob: new Blob(['<html><body><p>이미지를 불러오지 못했습니다</p></body></html>']) }; };
+    await assert.rejects(web.readPage({ url: 'https://quick.example/ep/4', text: 'Ep 4' }, 3, { fetchPage: failed }), (error) => error.notLoaded === true);
+    assert.deepEqual(failedAsked, [{}]);
+
     // No pictures yet: not loaded, asked again -- never an empty episode.
     const bare = async (url, options = {}) => ({ url, type: 'text/html', blob: new Blob(['<html><body><p>Loading…</p></body></html>']), rendered: true });
     await assert.rejects(web.readPage({ url: 'https://toon.example/ep/13', text: 'Episode 13' }, 12, { fetchPage: bare }), (error) => error.notLoaded === true);
     // Pictures that will not come: more than one in ten, and the episode is fetched again, not kept with holes.
     let n = 0;
     const holes = async (url, options = {}) => {
-      if (options.pictureBook) return { url, type: 'text/html', blob: new Blob([page]), rendered: true };
+      if (!options.picture) return { url, type: 'text/html', blob: new Blob([page]), rendered: true };
       n += 1;
       if (n <= 2) throw new Error('403');
       return { url, type: 'image/jpeg', blob: new Blob([new Uint8Array([1])]) };
@@ -534,6 +572,10 @@ await t('a picture book: each episode its pictures alone, in order, fetched sayi
     assert.match(java, /if \(!pictureBook\) view\.evaluateJavascript\(STORY_END, null\);/);
     assert.match(java, /if \(referer != null && !referer\.isEmpty\(\)\) connection\.setRequestProperty\("Referer", referer\);/);
     assert.match(java, /if \(job\.pictureBook && isPicture\(request\)\) return null;/);
+    // An episode is there once its pictures are: never held for words, nor for its pictures loading.
+    assert.match(java, /if \(pictureBook\) \{\s+there = pics > 0 && !accessCheck;\s+ready = there;\s+\}/);
+    assert.match(java, /String stillAs = pictureBook && pics > 0 \? pics \+/);
+    assert.match(java, /boolean storyThere = !pictureBook && !accessCheck/);
   } finally {
     web.setPictureBook(() => false);
   }
@@ -2444,7 +2486,7 @@ await t('a short chapter is known by its lines, and a comment section is no chap
   const fenrir = shown(`${panel}<div class="chapter"><h1>Chapter 1</h1><p>15 Jan 2026</p><p>Verifying access...</p><p>You can use keyboard arrow key ← or → to navigate between chapters</p></div>`);
   assert.ok(Number(fenrir[7]) >= 400 && Number(fenrir[8]) >= 8, fenrir.join('|'));
   assert.equal(fenrir[6], '2');
-  assert.match(java, /boolean storyThere = !accessCheck && \(storyLength >= READY_STORY/);
+  assert.match(java, /boolean storyThere = !pictureBook && !accessCheck && \(storyLength >= READY_STORY/);
   assert.match(java, /accessCheck = "2"\.equals\(parts\[6\]\);/);
   // Not let through in 45 s: handed to the reader to pass, not waited out for minutes -- nor got round.
   assert.match(java, /long limit = checkingAccess && !waiting \? ACCESS_WAIT_MS/);
