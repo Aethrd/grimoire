@@ -265,7 +265,8 @@ await t('the native side fetches only web addresses, and only when asked', () =>
   // (And a site's cookies forgotten, which only ever clears.)
   // (And the site shown to pick chapters from by hand.)
   // (And a cleared link's page left, which only ever stops.)
-  assert.deepEqual(entries.sort(), ['fetch', 'forgetSite', 'pickFromSite', 'release', 'render', 'showSite', 'stopAddress', 'stopAll']);
+  // (And a picture fetched saying the page it is on, as a browser does -- a picture book's.)
+  assert.deepEqual(entries.sort(), ['fetch', 'fetchFrom', 'forgetSite', 'pickFromSite', 'release', 'render', 'showSite', 'stopAddress', 'stopAll']);
   assert.equal(java.match(/if \(!scheme\.equals\("http"\) && !scheme\.equals\("https"\)\)/g).length, 3);
   // Cookies are the browser's own, kept as it keeps them: nothing of the app's own store.
   assert.ok(!/SharedPreferences|getSharedPreferences/.test(java));
@@ -479,6 +480,63 @@ await t('chapters numbered afresh in each volume are put in order by volume, the
   assert.equal(web.volumeIn('2권 5화'), 2);
   assert.equal(web.volumeIn('Book 3 - Chapter 1'), 3);
   assert.equal(web.volumeIn('Chapter 9'), null);
+});
+
+await t('a picture book: each episode its pictures alone, in order, fetched saying their page -- no text, no logo, never the next episode', async () => {
+  web.setPictureBook((host) => host === 'toon.example');
+  try {
+    assert.equal(web.isPictureBook('https://toon.example/ep/1'), true);
+    assert.equal(web.isPictureBook('https://novel.example/ch/1'), false);
+    // As the walk leaves it: the episode's pictures stamped in order, sizes known; a logo too small; words around.
+    const page = `<html><body><header><img src="/logo.png" data-g-pb="0" data-g-src="https://cdn.toon.example/logo.png" data-g-w="40" data-g-h="40"> Toon</header>
+<h1>Episode 12</h1><p>Read the latest chapters at toon.example!</p>
+<div class="viewer">${[2, 1, 3].map((k) => `<img data-g-pb="${k}" data-g-src="https://cdn.toon.example/e12/${k}.jpg" data-g-w="690" data-g-h="1600">`).join('')}
+<img data-g-pb="4" data-g-src="https://cdn.toon.example/e12/4.jpg" data-g-w="0" data-g-h="0"></div>
+<div class="comments"><p>first!</p></div></body></html>`;
+    const asked = [];
+    const fetchPage = async (url, options = {}) => {
+      asked.push([url, options]);
+      if (options.pictureBook) return { url, type: 'text/html', blob: new Blob([page]), rendered: true };
+      return { url, type: 'image/jpeg', blob: new Blob([new Uint8Array([1, 2, 3])]) };
+    };
+    const got = await web.readPage({ url: 'https://toon.example/ep/12', text: 'Episode 12' }, 11, { fetchPage, pictures: false });
+    // Pictures whatever "Pictures" says; the page asked for as a picture book.
+    assert.deepEqual(asked[0], ['https://toon.example/ep/12', { pictureBook: true }]);
+    assert.deepEqual(asked.slice(1).map(([url, o]) => [url, o.referer, o.picture]), [1, 2, 3, 4].map((k) => [`https://cdn.toon.example/e12/${k}.jpg`, 'https://toon.example/ep/12', true]));
+    assert.equal(got.images.length, 4);
+    assert.equal(got.chapter.words, 0);
+    assert.equal(got.chapter.title, 'Episode 12');
+    // Nothing but the pictures: no heading, no site text, no comments.
+    assert.equal(got.chapter.html, [0, 1, 2, 3].map((n) => `<figure class="pb"><img data-img="web/11-${n}" alt="Page ${n + 1}"></figure>`).join(''));
+    assert.deepEqual(got.images.map((i) => [i.href, i.order, i.width]), [['web/11-0', 11000, 690], ['web/11-1', 11001, 690], ['web/11-2', 11002, 690], ['web/11-3', 11003, 0]]);
+    // No pictures yet: not loaded, asked again -- never an empty episode.
+    const bare = async (url, options = {}) => ({ url, type: 'text/html', blob: new Blob(['<html><body><p>Loading…</p></body></html>']), rendered: true });
+    await assert.rejects(web.readPage({ url: 'https://toon.example/ep/13', text: 'Episode 13' }, 12, { fetchPage: bare }), (error) => error.notLoaded === true);
+    // Pictures that will not come: more than one in ten, and the episode is fetched again, not kept with holes.
+    let n = 0;
+    const holes = async (url, options = {}) => {
+      if (options.pictureBook) return { url, type: 'text/html', blob: new Blob([page]), rendered: true };
+      n += 1;
+      if (n <= 2) throw new Error('403');
+      return { url, type: 'image/jpeg', blob: new Blob([new Uint8Array([1])]) };
+    };
+    await assert.rejects(web.readPage({ url: 'https://toon.example/ep/12', text: 'Episode 12' }, 11, { fetchPage: holes }), /2 of 4 pictures of Episode 12 would not come/);
+    // A page not walked (an older shell): the box holding most of the pictures.
+    const sent = `<html><body><img src="/logo.png" width="40"><div id="v">${[1, 2, 3, 4, 5].map((k) => `<img data-src="/e/${k}.jpg" src="data:image/gif;base64,R0">`).join('')}</div><aside><img src="/ad.jpg"></aside></body></html>`;
+    const doc = new DOMParser().parseFromString(sent, 'text/html');
+    assert.deepEqual(web.picturesOfEpisode(doc, 'https://toon.example/ep/1').map((p) => p.url), [1, 2, 3, 4, 5].map((k) => `https://toon.example/e/${k}.jpg`));
+    // The renderer is asked for the episode as a picture book ("p"); its pictures with the page they are on.
+    const source = fs.readFileSync(new URL('../app/src/main/assets/www/js/web.js', import.meta.url), 'utf8');
+    assert.match(source, /listing \|\| \(book \? 'p' : textOnly \? 't' : '0'\)/);
+    assert.match(source, /window\.GrimoireWeb\.fetchFrom\(id, url, referer\)/);
+    const java = fs.readFileSync(new URL('../app/src/main/java/com/grimoire/ereader/WebBridge.java', import.meta.url), 'utf8');
+    assert.match(java, /final boolean pictureBook = "p"\.equals\(list\);/);
+    assert.match(java, /if \(!pictureBook\) view\.evaluateJavascript\(STORY_END, null\);/);
+    assert.match(java, /if \(referer != null && !referer\.isEmpty\(\)\) connection\.setRequestProperty\("Referer", referer\);/);
+    assert.match(java, /if \(job\.pictureBook && isPicture\(request\)\) return null;/);
+  } finally {
+    web.setPictureBook(() => false);
+  }
 });
 
 await t('a chapter numbered before the part it is in ("447 Part 2 - …") is read by its own number', () => {
@@ -2045,7 +2103,7 @@ await t('the delay is kept for every page -- retries too -- from when the last o
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /private static final long RENDER_WAIT_MS = 180000;/);
   assert.match(java, /: holding \? RENDER_WAIT_MS : presses > 0 \? PRESS_MAX_MS : maxMs;/);
-  assert.match(read('app/src/main/assets/www/js/web.js'), /if \(method === 'render'\) timeout = Math\.max\(timeout, press \? 16 \* 60000 : 240000\) \+ \(ocr \? 180000 : 0\);/);
+  assert.match(read('app/src/main/assets/www/js/web.js'), /if \(method === 'render'\) timeout = Math\.max\(timeout, press \? 16 \* 60000 : 240000\) \+ \(ocr \? 180000 : 0\) \+ \(book \? 240000 : 0\);/);
 });
 
 await t('a spinner left going once the chapter is there holds nothing; waiting and retries are said', async () => {
@@ -2234,7 +2292,8 @@ await t('a chapter is taken as soon as its story is there and still, not when th
   assert.match(java, /boolean noStoryYet = textOnly && !scroll && storyLength < STORY_SOME && mainStatus < 400\s+&& now - startedAt < STORY_WAIT_MS && !deadStill;/);
   assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\) \|\| noStoryYet\);/);
   // Pictures, fonts and video are not loaded by the unseen browser, but at the most patient try.
-  assert.match(java, /final boolean skipHeavy = ownSiteOnly;/);
+  // (A picture book loads its pictures: they are what is taken.)
+  assert.match(java, /final boolean skipHeavy = ownSiteOnly && !pictureBook;/);
   assert.match(java, /new Rendering\(address, quietMs, maxMs, scroll, ownSiteOnly, skipHeavy, textOnly\)/);
   assert.match(java, /if \(job\.lean && isHeavy\(request\)\) \{/);
   // What a site needs is remembered past the app being closed, for a fortnight.
@@ -2584,7 +2643,7 @@ await t('a chapter is stayed on a few seconds to confirm it, and that time comes
   assert.match(java, /private static final long CONFIRM_MS = 3000;\s+private static final long CONFIRM_JITTER_MS = 1000;/);
   // Begun when the story is there and still; taken only once it has not grown the whole time.
   assert.match(java, /if \(storyDone && confirmBegan == 0\) \{/);
-  assert.match(java, /if \(storyLength > confirmStory \+ storySlack\(confirmStory\)\) \{\s+confirmStory = storyLength;\s+confirmAt = now;\s+\/\/[^\n]*\n\s+if \(endScrolls < 2\) \{\s+endScrolls\+\+;\s+view\.evaluateJavascript\(STORY_END, null\);\s+\}\s+\}[\s\S]{0,400}settled = now - confirmAt >= confirmFor \|\| now - confirmBegan >= CONFIRM_MAX_MS;/);
+  assert.match(java, /if \(storyLength > confirmStory \+ storySlack\(confirmStory\)\) \{\s+confirmStory = storyLength;\s+confirmAt = now;\s+\/\/[^\n]*\n\s+if \(endScrolls < 2 && !pictureBook\) \{\s+endScrolls\+\+;\s+view\.evaluateJavascript\(STORY_END, null\);\s+\}\s+\}[\s\S]{0,400}settled = now - confirmAt >= confirmFor \|\| now - confirmBegan >= CONFIRM_MAX_MS;/);
   assert.match(java, /result\.put\("dwell", job\.dwell\);/);
   // The pacer takes the stay off the wait after it -- never below nothing.
   const times = [];
@@ -3429,11 +3488,11 @@ await t('a book with more to download is marked on its cover; the strip sits on 
 await t('a chapter is scrolled to its end while it is confirmed; one that came out much shorter than the rest is said, and fetched again', async () => {
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   // Scrolled when its confirming begins, and again whenever more of it came -- inside the stay that comes off the delay.
-  assert.match(java, /confirmStory = storyLength;\s+endScrolls = 0;\s+\/\*[\s\S]{0,400}\*\/\s+view\.evaluateJavascript\(STORY_END, null\);/);
+  assert.match(java, /confirmStory = storyLength;\s+endScrolls = 0;\s+\/\*[\s\S]{0,400}\*\/\s+\/\/[^\n]*\n\s+if \(!pictureBook\) view\.evaluateJavascript\(STORY_END, null\);/);
   // A few characters coming and going in the story's box is no growth: an advert held every chapter to the limit.
   assert.match(java, /if \(lastStory < 0 \|\| storyLength > lastStory \+ storySlack\(lastStory\)\) \{\s+lastStory = storyLength;\s+storySince = now;/);
   assert.match(java, /return Math\.max\(STORY_SLACK, Math\.max\(0, story\) \/ 100\);/);
-  assert.match(java, /confirmAt = now;\s+\/\/ More came[^\n]*\n\s+if \(endScrolls < 2\) \{/);
+  assert.match(java, /confirmAt = now;\s+\/\/ More came[^\n]*\n\s+if \(endScrolls < 2 && !pictureBook\) \{/);
   assert.match(java, /if \(settled\) dwell = now - confirmBegan;/);
   // Short: under 40% of the book's typical chapter, only website chapters, only with enough to say what is typical.
   const chapters = Array.from({ length: 12 }, (_, i) => ({ index: i, title: `${i + 1}화`, words: 2000 + i * 10, from: `https://s.example/${i + 1}` }));

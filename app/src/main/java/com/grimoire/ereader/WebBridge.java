@@ -216,11 +216,17 @@ public class WebBridge {
      */
     @JavascriptInterface
     public void fetch(final String id, final String address) {
+        fetchFrom(id, address, null);
+    }
+
+    /** As fetch, saying the page it is asked from (a picture book's pictures, see download). */
+    @JavascriptInterface
+    public void fetchFrom(final String id, final String address, final String referer) {
         io.execute(() -> {
             String safeId = id == null ? "x" : id.replaceAll("[^A-Za-z0-9_-]", "_");
             File target = new File(dir(), safeId);
             try {
-                JSONObject result = download(address, target);
+                JSONObject result = download(address, target, referer);
                 result.put("path", ORIGIN + "/handoff/web/" + Uri.encode(safeId));
                 settle(id, true, result.toString());
             } catch (Exception e) {
@@ -273,6 +279,8 @@ public class WebBridge {
         final long pressJitter = jitter;
         // "t": a chapter wanted for its text alone -- one with none is no chapter.
         final boolean textOnly = "t".equals(list);
+        // "p": a picture book's episode -- its pictures loaded, walked through, and taken (see PB_WALK).
+        final boolean pictureBook = "p".equals(list);
         // "2", or "0o": a level, and "o" when the site has been found to need
         // nothing kept out (its pages come only with everything let in).
         String asked = String.valueOf(patience).trim();
@@ -299,7 +307,7 @@ public class WebBridge {
          * out anyway. A site found to need everything let in may be one that holds its
          * chapter back until its adverts have shown: leaving out their pictures did that
          * to every chapter, each then coming only at the third try. */
-        final boolean skipHeavy = ownSiteOnly;
+        final boolean skipHeavy = ownSiteOnly && !pictureBook;
         final int askedAt = stops.get();
         final long requestedAt = System.currentTimeMillis();
         renderer.execute(() -> {
@@ -318,6 +326,7 @@ public class WebBridge {
                 job.pressGap = pressGap;
                 job.pressJitter = pressJitter;
                 job.ocr = ocr;
+                job.pictureBook = pictureBook;
                 job.ocrAuto = ocrAuto;
                 // One page of a site at a time: another of its pages waits its turn here.
                 String siteKey = job.site == null ? address : job.site;
@@ -331,7 +340,7 @@ public class WebBridge {
                 }
                 try {
                     main.post(job::start);
-                    if (!job.done.await((pressGap >= 0 ? PRESS_MAX_MS : RENDER_WAIT_MS) + 20000 + (ocr ? OCR_MAX_MS : 0), TimeUnit.MILLISECONDS)) {
+                    if (!job.done.await((pressGap >= 0 ? PRESS_MAX_MS : RENDER_WAIT_MS) + 20000 + (ocr ? OCR_MAX_MS : 0) + (pictureBook ? PB_MAX_MS : 0), TimeUnit.MILLISECONDS)) {
                         main.post(job::finish);
                         throw new IOException("the site took too long to answer");
                     }
@@ -1076,6 +1085,9 @@ public class WebBridge {
              * CDN, named in a stylesheet also there) reads right only in that font. Its
              * scripts, trackers and pictures still kept out as ever. */
             if (job.ocr && (isFont(request) || isStyle(request))) return null;
+            /* A picture book: its pictures, wherever they are kept (a picture server of
+             * another name, most often). Its adverts' scripts still kept out as ever. */
+            if (job.pictureBook && isPicture(request)) return null;
             if (job.lean && isHeavy(request)) {
                 return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
             }
@@ -1151,6 +1163,9 @@ public class WebBridge {
         final boolean textOnly;
         /** Its words read by OCR from the page as shown (see readStory); and how many lines were. */
         boolean ocr;
+        /** A picture book's episode: walked through for its pictures before it is taken (see walkPictures). */
+        boolean pictureBook;
+        private long walkBegan;
         /** Only if the story's words as sent come out garbled. */
         boolean ocrAuto;
         volatile int ocrLines;
@@ -1385,7 +1400,8 @@ public class WebBridge {
                      * the rest of a chapter only as it is scrolled to does so now, and
                      * the story growing is watched out as before. Nothing is asked of
                      * a site that does not. */
-                    view.evaluateJavascript(STORY_END, null);
+                    // Never for a picture book: its episodes run on into the next at the end.
+                    if (!pictureBook) view.evaluateJavascript(STORY_END, null);
                 }
                 boolean settled;
                 if (confirmBegan > 0) {
@@ -1395,7 +1411,7 @@ public class WebBridge {
                         confirmStory = storyLength;
                         confirmAt = now;
                         // More came: to the new end, for any more after it -- twice at most.
-                        if (endScrolls < 2) {
+                        if (endScrolls < 2 && !pictureBook) {
                             endScrolls++;
                             view.evaluateJavascript(STORY_END, null);
                         }
@@ -1459,6 +1475,11 @@ public class WebBridge {
                 fail("that page does not exist (404)");
                 return;
             }
+            // A picture book's episode: walked through for its pictures first. Never a page still behind a check.
+            if (pictureBook && walkBegan == 0 && !checkingAccess && !lastShape.contains("|checking|")) {
+                walkPictures();
+                return;
+            }
             // Read by OCR first, where asked and the story is there: its words then put into the page.
             /* Never a page that is not the chapter: one still behind a check, blocked, or
              * empty is said so as ever, not read into something that looks like one. */
@@ -1472,6 +1493,30 @@ public class WebBridge {
                 return;
             }
             copyPage();
+        }
+
+        /* The episode read as a reader reads it: scrolled through, each picture waited
+         * on (PB_WALK), for up to PB_MAX_MS -- then taken as it stands, stamped. The
+         * time spent is time on the page: credited against the next delay, as the
+         * stay to confirm a chapter is. */
+        private void walkPictures() {
+            if (view == null) return;
+            walkBegan = System.currentTimeMillis();
+            view.evaluateJavascript(PB_WALK, (ignored) -> main.postDelayed(this::watchWalk, PB_POLL_MS));
+        }
+
+        private void watchWalk() {
+            if (view == null || done.getCount() == 0) return;
+            view.evaluateJavascript(PB_STATE, (state) -> {
+                if (view == null || done.getCount() == 0) return;
+                long spent = System.currentTimeMillis() - walkBegan;
+                if (state != null && state.contains("walking") && spent < PB_MAX_MS) {
+                    main.postDelayed(this::watchWalk, PB_POLL_MS);
+                    return;
+                }
+                dwell += spent;
+                view.evaluateJavascript(PB_STAMP, (stamped) -> take());
+            });
         }
 
         private void copyPage() {
@@ -1881,6 +1926,17 @@ public class WebBridge {
     }
 
     /** A picture, a font or a video: by its address, or by what it asks to be sent. */
+    /** A picture, by its address or by what the browser asks to be sent. */
+    static boolean isPicture(WebResourceRequest request) {
+        String path = request.getUrl().getPath();
+        if (path != null && PICTURE_PATH.matcher(path).find()) return true;
+        String accept = request.getRequestHeaders() == null ? null : request.getRequestHeaders().get("Accept");
+        return accept != null && accept.toLowerCase(Locale.ROOT).startsWith("image/");
+    }
+
+    private static final java.util.regex.Pattern PICTURE_PATH =
+            java.util.regex.Pattern.compile("\\.(?:jpe?g|png|gif|webp|avif|bmp)$", java.util.regex.Pattern.CASE_INSENSITIVE);
+
     static boolean isHeavy(WebResourceRequest request) {
         String path = request.getUrl().getPath();
         if (path != null && HEAVY.matcher(path).find()) return true;
@@ -1948,6 +2004,61 @@ public class WebBridge {
      * children go where its slots were (by name, the rest to the unnamed one).
      * Closed ones are not reachable, and are left. */
     /** To the end of a chapter: the page, and the box its story scrolls in, if it has its own. */
+    /* Picture book: the episode walked through as a reader scrolls it -- each picture of
+     * it brought into view in turn and waited on until it has loaded (a site that loads
+     * pictures as they near the screen loads them now), then each stamped with where it
+     * came from and its size, in order (data-g-pb, data-g-src, data-g-w, data-g-h).
+     * The episode is the box holding most of the page's pictures; only its pictures are
+     * walked, never past its last -- a reader that puts the next episode under this one
+     * at the end (endless scrolling) adds that elsewhere, or moves the address on, and
+     * either way it is not taken. A logo or an icon is too small to count. */
+    static final String PB_WALK = "(function(){try{"
+            + "if(window.__gPB)return;"
+            + "var P=window.__gPB={state:'walking',taken:0,started:Date.now()};"
+            + "var start=location.href;"
+            + "try{document.documentElement.style.setProperty('scroll-behavior','auto','important');}catch(x){}"
+            + "var LAZY=['data-src','data-original','data-lazy-src','data-url','data-echo','data-lazy','data-original-src','data-img','data-srcset'];"
+            + "var lazy=function(i){for(var k=0;k<LAZY.length;k++){var v=i.getAttribute(LAZY[k]);if(v&&!/^data:/.test(v))return v.split(',')[0].trim().split(/\\s+/)[0];}return '';};"
+            + "var wide=function(i){var r=i.getBoundingClientRect();return r.width>=150||i.naturalWidth>=200||(lazy(i)&&r.width>=60);};"
+            + "var visible=function(i){var s=getComputedStyle(i);return s.display!=='none'&&s.visibility!=='hidden';};"
+            + "var pics=function(root){return [].slice.call((root||document).querySelectorAll('img')).filter(function(i){return visible(i)&&wide(i);});};"
+            + "var all=pics();"
+            + "if(!all.length){P.state='none';return;}"
+            + "var counts=new Map();"
+            + "all.forEach(function(i){for(var e=i.parentElement;e&&e!==document.body&&e!==document.documentElement;e=e.parentElement)counts.set(e,(counts.get(e)||0)+1);});"
+            + "var box=null,least=1e9;"
+            + "counts.forEach(function(c,e){if(c>=Math.max(1,Math.ceil(all.length*0.8))&&(c<least||(c===least&&box&&box.contains(e)))){least=c;box=e;}});"
+            + "if(!box)box=document.body;"
+            + "var known=pics(box);"
+            + "var at=0,since=0,forced=false,quiet=0;"
+            + "var loaded=function(i){return i.complete&&i.naturalWidth>=40&&!/^data:/.test(i.currentSrc||i.src||'');};"
+            + "var stamp=function(upTo){var l=upTo==null?known:known.slice(0,upTo);for(var k=0;k<l.length;k++){var i=l[k];i.setAttribute('data-g-pb',String(k));i.setAttribute('data-g-src',(loaded(i)?(i.currentSrc||i.src):'')||lazy(i)||i.getAttribute('src')||'');i.setAttribute('data-g-w',String(i.naturalWidth||0));i.setAttribute('data-g-h',String(i.naturalHeight||0));}P.taken=l.length;};"
+            + "P.stamp=stamp;"
+            + "var step=function(){"
+            + " try{"
+            + "  if(P.state!=='walking')return;"
+            + "  if(location.href!==start){stamp(at);P.state='done';P.why='moved on';return;}"
+            + "  if(Date.now()-P.started>220000||known.length>800){stamp();P.state='done';P.why='long';return;}"
+            + "  if(at<known.length){"
+            + "   if(!since){var now=pics(box);if(now.length>known.length&&now.indexOf(known[at])>=0)known=now;}"
+            + "   var i=known[at];"
+            + "   if(!since){since=Date.now();forced=false;i.scrollIntoView({block:'center',inline:'nearest'});}"
+            + "   if(loaded(i)||Date.now()-since>9000){at++;since=0;P.at=at;P.n=known.length;setTimeout(step,260+Math.random()*220);return;}"
+            + "   if(!forced&&Date.now()-since>3500){var u=lazy(i);if(u&&(i.getAttribute('src')||'')!==u){i.setAttribute('src',u);}forced=true;}"
+            + "   setTimeout(step,200);return;"
+            + "  }"
+            + "  if(++quiet<6&&known.some(function(i){return !loaded(i);})){setTimeout(step,300);return;}"
+            + "  stamp();P.state='done';"
+            + " }catch(e){try{stamp();}catch(x){}P.state='done';P.why=String(e);}"
+            + "};"
+            + "setTimeout(step,100);"
+            + "}catch(e){window.__gPB={state:'none',why:String(e)};}})();";
+    /** How long a picture book's episode is walked through at most, and how often it is looked at. */
+    static final long PB_MAX_MS = 240_000;
+    static final long PB_POLL_MS = 500;
+    static final String PB_STATE = "(function(){try{return window.__gPB?String(__gPB.state):'none';}catch(e){return 'none';}})()";
+    static final String PB_STAMP = "(function(){try{if(window.__gPB&&__gPB.state==='walking'&&__gPB.stamp){__gPB.stamp();__gPB.state='done';}}catch(e){}})()";
+
     static final String STORY_END = "(function(){try{var se=document.scrollingElement||document.documentElement;"
             + "window.scrollTo(0,se.scrollHeight);"
             + "var all=document.querySelectorAll('div,main,article,section');"
@@ -2070,6 +2181,11 @@ public class WebBridge {
     }
 
     private JSONObject download(String address, File target) throws IOException, JSONException {
+        return download(address, target, null);
+    }
+
+    /** As above, saying which page it was asked from (a picture's page): as the browser would. */
+    private JSONObject download(String address, File target, String referer) throws IOException, JSONException {
         URL url = new URL(address);
         for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
             String scheme = url.getProtocol().toLowerCase(Locale.ROOT);
@@ -2092,6 +2208,10 @@ public class WebBridge {
                 connection.setUseCaches(false);
                 connection.setRequestProperty("Cache-Control", "no-cache");
                 connection.setRequestProperty("Pragma", "no-cache");
+                /* A picture of a picture book, from the page it is on: the browser
+                 * says so of every picture it loads, and a site's picture server
+                 * that will not hand its pictures to anyone else checks. */
+                if (referer != null && !referer.isEmpty()) connection.setRequestProperty("Referer", referer);
                 addCookies(connection, url);
 
                 int status = connection.getResponseCode();

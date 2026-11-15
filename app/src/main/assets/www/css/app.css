@@ -2968,3 +2968,10 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
   background: color-mix(in srgb, var(--topic) 22%, transparent); color: var(--text); border-color: var(--topic); }
 .notice-row.off { opacity: .55; }
 .notices-hidden { width: 100%; margin-top: 8px; font-size: 13px; }
+
+/* A picture book's pages (manga, webtoons: web.js readPicturePage), one under
+   the next with nothing between -- a webtoon's strip is cut into pieces that
+   are one picture only joined up. */
+.page-flow figure.pb { margin: 0; padding: 0; }
+.page-flow figure.pb .pic { margin-top: 0; margin-bottom: 0; }
+.page-flow figure.pb img { margin: 0 auto; }

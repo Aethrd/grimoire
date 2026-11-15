@@ -11487,6 +11487,10 @@ function delayFields() {
  * and asked by web.js for every chapter of theirs. */
 let browserSites = {};
 web.setReadInBrowser((host) => !!browserSites[siteKey(host)]);
+/* Sites read as picture books (manga, webtoons), by the reader's say: each
+ * episode its pictures alone (web.js readPicturePage). Remembered for the site. */
+let pictureBookSites = {};
+web.setPictureBook((host) => !!pictureBookSites[siteKey(host)]);
 
 /* Sites read by OCR, by the reader's say: 'auto' (a chapter whose words come out
  * garbled -- scrambled into a font of the site's own -- read from the page as it
@@ -11517,6 +11521,8 @@ function paintSiteDelays() {
   if (row) {
     row.hidden = !delaysShownFor;
     el('web-in-browser').checked = !!browserSites[delaysShownFor];
+    el('web-picture-book-row').hidden = !delaysShownFor;
+    el('web-picture-book').checked = !!pictureBookSites[delaysShownFor];
   }
   const note = el('web-site-delays');
   if (!note) return;
@@ -11613,6 +11619,17 @@ function wireWeb() {
   };
   el('web-address').addEventListener('input', paintMore);
   el('web-address').addEventListener('input', applySiteDelays);
+  el('web-picture-book').addEventListener('change', () => {
+    const site = delaysShownFor;
+    if (!site) return;
+    if (el('web-picture-book').checked) pictureBookSites[site] = true;
+    else delete pictureBookSites[site];
+    store.saveSettings({ pictureBookSites }).catch(() => {});
+    // Its pictures are the book: downloaded, whatever Pictures says for other sites.
+    toast(el('web-picture-book').checked
+      ? `${site}: a picture book — each episode its pictures alone, scrolled through in the browser.`
+      : `${site}: chapters read as text again.`, 5000);
+  });
   el('web-in-browser').addEventListener('change', () => {
     const site = delaysShownFor;
     if (!site) return;
@@ -11649,6 +11666,7 @@ function wireWeb() {
     if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
     if (settings.siteDelays && typeof settings.siteDelays === 'object') siteDelays = { ...settings.siteDelays, ...siteDelays };
     if (settings.browserSites && typeof settings.browserSites === 'object') browserSites = { ...settings.browserSites, ...browserSites };
+    if (settings.pictureBookSites && typeof settings.pictureBookSites === 'object') pictureBookSites = { ...settings.pictureBookSites, ...pictureBookSites };
     if (settings.scrambledSites && typeof settings.scrambledSites === 'object') scrambledSites = { ...settings.scrambledSites, ...scrambledSites };
     if (settings.ocrSites && typeof settings.ocrSites === 'object') {
       ocrSites = Object.fromEntries(Object.entries({ ...settings.ocrSites, ...ocrSites }).filter(([, mode]) => OCR_MODES.includes(mode) && mode));

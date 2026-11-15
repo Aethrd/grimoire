@@ -88,6 +88,8 @@ export async function download(url, options = {}) {
    * time, their words read from the page as it shows -- always, or ("auto") only
    * where the words as sent come out garbled. Never its lists: those are links. */
   const ocr = host && !options.list ? ocrMode(host) : null;
+  // A picture book's episode: in the browser, always, walked through for its pictures.
+  if (options.pictureBook && !options.list) return fetchNative('render', url, options);
   if (ocr === 'always' || ocr === 'auto') return fetchNative('render', url, { ...options, ocr });
   if (host && renderedHosts.has(host)) return fetchNative('render', url, options);
   /* A site the reader has said to read in the browser: its pages are put
@@ -138,6 +140,11 @@ export function setKeepScrambled(test) { keepScrambled = typeof test === 'functi
 /** Which sites the reader has said to read by OCR, and how: 'auto', 'always', or null (app.js keeps them). */
 let ocrMode = () => null;
 export function setOcrMode(test) { ocrMode = typeof test === 'function' ? test : () => null; }
+/* Picture book (manga, webtoons): by site, the app's say (settings.pictureBookSites).
+ * Its episodes are read for their pictures alone (readPicturePage). */
+let pictureBook = () => false;
+export function setPictureBook(test) { pictureBook = typeof test === 'function' ? test : () => false; }
+export const isPictureBook = (url) => { const host = hostOf(url); return !!host && !!pictureBook(host); };
 /* Sites whose contents page is sent without its list -- its script fetches
  * the list after the page has come (WordPress's Madara theme, for one) --
  * though their chapters come whole: their lists are read in the browser,
@@ -450,11 +457,12 @@ export function scriptBuilt(html) {
   return tidy(body.textContent).length < 400 && body.querySelectorAll('a[href]').length < 8;
 }
 
-function fetchNative(method, url, { timeout = 90000, list = false, textOnly = false, press = null, ocr = null } = {}) {
+function fetchNative(method, url, { timeout = 90000, list = false, textOnly = false, press = null, ocr = null, pictureBook: book = false, referer = '' } = {}) {
   // A page that says to wait is waited on for up to three minutes, there; a
   // list whose "show more" is pressed, for as long as that takes (WebBridge);
-  // a chapter read by OCR, three minutes more for the reading.
-  if (method === 'render') timeout = Math.max(timeout, press ? 16 * 60000 : 240000) + (ocr ? 180000 : 0);
+  // a chapter read by OCR, three minutes more for the reading; a picture
+  // book's episode, four more for walking through its pictures.
+  if (method === 'render') timeout = Math.max(timeout, press ? 16 * 60000 : 240000) + (ocr ? 180000 : 0) + (book ? 240000 : 0);
   return new Promise((resolve, reject) => {
     if (!available()) {
       reject(new Error('Downloading needs the app: this copy of the reader cannot reach the web.'));
@@ -510,7 +518,10 @@ function fetchNative(method, url, { timeout = 90000, list = false, textOnly = fa
       const listing = list ? (press ? `1:${Math.round(press.gap)}:${Math.round(press.jitter || 0)}` : '1') : null;
       // "x": read by OCR; "a": by OCR where the words as sent are garbled (see WebBridge).
       const reading = ocr === 'always' ? 'x' : ocr === 'auto' ? 'a' : '';
-      if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url, list) + reading, listing || (textOnly ? 't' : '0'));
+      // "p": a picture book's episode, walked through for its pictures (see WebBridge PB_WALK).
+      if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url, list) + reading, listing || (book ? 'p' : textOnly ? 't' : '0'));
+      // A picture, saying the page it is on, as the browser does (a picture server may check).
+      else if (referer && window.GrimoireWeb.fetchFrom) window.GrimoireWeb.fetchFrom(id, url, referer);
       else window.GrimoireWeb.fetch(id, url);
     } catch (error) {
       pending.delete(id);
@@ -2248,6 +2259,99 @@ function pictureSource(img) {
   return img.getAttribute('src');
 }
 
+/* ── picture books ──────────────────────────────────────────────────────
+ *
+ * Manga, webtoons: an episode is its pictures, in order, and nothing else --
+ * no words, no notes, no comments. A site that shows them puts them up as
+ * they near the screen, so an episode is read in the browser and walked
+ * through as a reader scrolls it (WebBridge PB_WALK), each picture stamped
+ * with where it came from and how big it is. Only those are taken: a logo,
+ * an icon, an advert's banner are too small or outside the episode, and a
+ * reader that runs on into the next episode at the end never has it taken.
+ * Each picture is fetched saying the page it is on, as a browser does.
+ */
+const PB_MIN_WIDTH = 200;
+const PB_MIN_HEIGHT = 120;
+
+/** The episode's pictures, in order: as walked and stamped, or (a page not walked) as the page has them. */
+export function picturesOfEpisode(doc, base) {
+  const absolute = (src) => { try { return new URL(src, base).href; } catch { return ''; } };
+  const stamped = [...doc.querySelectorAll('img[data-g-pb]')]
+    .sort((a, b) => Number(a.getAttribute('data-g-pb')) - Number(b.getAttribute('data-g-pb')));
+  let found;
+  if (stamped.length) {
+    found = stamped.map((img) => ({
+      url: absolute(img.getAttribute('data-g-src') || pictureSource(img) || ''),
+      width: Number(img.getAttribute('data-g-w')) || 0,
+      height: Number(img.getAttribute('data-g-h')) || 0,
+    }))
+      // Loaded and small: a logo or an icon that sat in the episode's box. Not loaded: kept, its size unknown.
+      .filter((pic) => pic.url && (!pic.width || (pic.width >= PB_MIN_WIDTH && pic.height >= PB_MIN_HEIGHT)));
+  } else {
+    /* Not walked (an older shell, or a page as sent): the box holding most of the
+     * page's pictures -- the deepest that holds four in five of them. */
+    const all = [...doc.querySelectorAll('img')].filter((img) => {
+      const w = Number(img.getAttribute('width')) || 0;
+      return (!w || w >= PB_MIN_WIDTH) && pictureSource(img);
+    });
+    const counts = new Map();
+    for (const img of all) for (let e = img.parentElement; e && e !== doc.body; e = e.parentElement) counts.set(e, (counts.get(e) || 0) + 1);
+    let box = doc.body;
+    let least = Infinity;
+    for (const [e, c] of counts) if (c >= Math.ceil(all.length * 0.8) && c <= least) { least = c; box = e; }
+    found = all.filter((img) => box?.contains(img)).map((img) => ({ url: absolute(pictureSource(img)), width: 0, height: 0 }));
+  }
+  const seen = new Set();
+  return found.filter((pic) => /^https?:/.test(pic.url) && !seen.has(pic.url) && seen.add(pic.url));
+}
+
+export async function readPicturePage(link, index, { fetchPage = download } = {}) {
+  const page = await fetchPage(link.url, { pictureBook: true });
+  const type = String(page.type || '').toLowerCase();
+  if (type.startsWith('image/')) {
+    const href = `web/${index}-0.${EXT_OF_TYPE[type.split(';')[0]] || 'jpg'}`;
+    return {
+      chapter: { index, title: link.text || `Episode ${index + 1}`, fromToc: true,
+        html: `<figure class="pb"><img data-img="${href}" alt="Page 1"></figure>`, words: 0, url: page.url },
+      images: [{ href, blob: page.blob, order: index * 1000, chapterIndex: index, animated: /gif/.test(type), width: 0, height: 0 }],
+      lang: null,
+    };
+  }
+  const doc = parseHtml(decodePage(await bytesOf(page.blob), page.type));
+  const found = picturesOfEpisode(doc, page.url);
+  // No pictures yet: not loaded, asked for again as a chapter would be. Never an empty episode kept.
+  if (!found.length) throw notLoadedYet(link.url, tidy(doc.body?.textContent || '').slice(0, 300));
+  if (page.rendered) learnSite(link.url, false);
+  trying.delete(link.url);
+  const images = [];
+  let html = '';
+  let lost = 0;
+  for (const [n, pic] of found.entries()) {
+    const href = `web/${index}-${n}`;
+    try {
+      const got = await fetchPage(pic.url, { picture: true, referer: page.url });
+      const kind = String(got.type || '').split(';')[0].toLowerCase();
+      if (!kind.startsWith('image/') || !got.blob.size) throw new Error('not a picture');
+      images.push({ href, blob: got.blob, order: index * 1000 + n, chapterIndex: index, part: 0,
+        animated: kind === 'image/gif', width: pic.width, height: pic.height });
+      html += `<figure class="pb"><img data-img="${href}" alt="Page ${images.length}"></figure>`;
+    } catch (error) {
+      if (error?.paused) throw error;
+      lost += 1;
+    }
+  }
+  /* A page missing is a hole in the story: more than one in ten, and the
+   * episode is fetched again rather than kept with holes. */
+  if (!images.length || lost > Math.max(1, Math.floor(found.length / 10))) {
+    throw new Error(`${lost} of ${found.length} pictures of ${link.text || 'the episode'} would not come`);
+  }
+  return {
+    chapter: { index, title: link.text || `Episode ${index + 1}`, fromToc: true, html, words: 0, url: page.url, pictures: images.length },
+    images,
+    lang: null,
+  };
+}
+
 const EXT_OF_TYPE = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/svg+xml': 'svg' };
 
 /**
@@ -2263,6 +2367,8 @@ export async function readPage(link, index, {
   // How it came out short the last time it was read (see `thin` below), if it did.
   thinAs = '',
 } = {}) {
+  // A picture book's site (manga, webtoons): its episodes are their pictures, nothing else.
+  if (isPictureBook(link.url)) return readPicturePage(link, index, { fetchPage });
   // Its words alone, when pictures are not wanted: then a page with none yet is
   // watched for them a while, not taken empty and loaded again.
   const page = await fetchPage(link.url, pictures ? {} : { textOnly: true });
