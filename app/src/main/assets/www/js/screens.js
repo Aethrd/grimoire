@@ -1249,7 +1249,11 @@ export function topicOf(text, kind = null, topic = null) {
 }
 let topicsOff = new Set();
 /** The kinds that do not pop up (settings.noticesOff). */
-export function setNoticeTopicsOff(list) { topicsOff = new Set((list || []).filter((key) => TOPIC_KEYS.has(key))); }
+export function setNoticeTopicsOff(list) {
+  topicsOff = new Set((list || []).filter((key) => TOPIC_KEYS.has(key)));
+  // The bell's dot, again: a kind just turned off no longer counts as new.
+  for (const fn of listeners) { try { fn(); } catch { /* */ } }
+}
 export const noticeTopicsOff = () => [...topicsOff];
 
 const HISTORY_FOR = 24 * 60 * 60 * 1000;
@@ -1281,7 +1285,8 @@ export function notices() {
 }
 /** Read: the newest of them no longer counts as unseen. */
 export function noticesSeen() { seenUpTo = keptCount; for (const fn of listeners) { try { fn(); } catch { /* */ } } }
-export const unseenNotices = () => { prune(); return history.filter((entry) => entry.n > seenUpTo).length; };
+// A kind turned off never lights the bell: it did not pop up, so there is nothing new to see.
+export const unseenNotices = () => { prune(); return history.filter((entry) => entry.n > seenUpTo && !topicsOff.has(entry.topic)).length; };
 /** The notice on screen put away now (the list of them opened over it). */
 export function dismissToast() { lines.length = 0; clearTimeout(toastTimer); const node = el('toast'); if (node) node.hidden = true; }
 export function clearNotices() { history.length = 0; noticesSeen(); }

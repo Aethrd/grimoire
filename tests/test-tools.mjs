@@ -3283,6 +3283,9 @@ await t('notices that faded are kept a day: the bell on the Library, a notice he
   screensMod.toast('Queue unlocked.');
   assert.equal(el('toast').hidden, true, 'a kind turned off still popped up');
   assert.equal(screensMod.notices()[0].text, 'Queue unlocked.');
+  // Nor lights the bell: it never popped up, so it is nothing new to see.
+  assert.equal(screensMod.unseenNotices(), 0);
+  assert.equal(el('notices-dot').hidden, true, 'a kind turned off still lit the bell');
   screensMod.toast('That file could not be read', 4000);
   assert.equal(el('toast').hidden, false);
   assert.equal(el('toast').dataset.topic, 'problem');
