@@ -58,8 +58,11 @@ let inBook = false;
 const held = [];
 
 function viewChanged() {
+  const wasInBook = inBook;
   if (current === 'reader') inBook = true;
   else if (!BESIDE_THE_BOOK.has(current)) inBook = false;
+  // Put down: a book switched to scrolling for its long strips goes back.
+  if (wasInBook && !inBook) reader.releaseStrips().catch(() => {});
   document.body.classList.toggle('in-book', inBook);
   // On the page itself: no tab bar, so the progress strip is a pill under the top bar (see app.css).
   document.body.classList.toggle('on-page', current === 'reader');

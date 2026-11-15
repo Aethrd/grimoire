@@ -1478,4 +1478,74 @@ await t('files leave in pieces, not in one', () => {
   assert.match(panels, /Send a copy/);
 });
 
+await t('a picture\'s size is read from its first bytes, in every common format', async () => {
+  const png = new Uint8Array(PNG);
+  assert.deepEqual(blobs.sizeFromBytes(png), { width: 1, height: 1 });
+  const gif = new Uint8Array([...Buffer.from('GIF89a'), 0x20, 0x03, 0x58, 0x1b, 0, 0]);
+  assert.deepEqual(blobs.sizeFromBytes(gif), { width: 800, height: 7000 });
+  // A JPEG with an APP0 segment before its frame header.
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, ...new Array(14).fill(0),
+    0xff, 0xc2, 0x00, 0x11, 0x08, 0x13, 0x88, 0x02, 0xb2, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+  assert.deepEqual(blobs.sizeFromBytes(jpeg), { width: 690, height: 5000 });
+  const vp8x = new Uint8Array(40);
+  vp8x.set(Buffer.from('RIFF'), 0); vp8x.set(Buffer.from('WEBP'), 8); vp8x.set(Buffer.from('VP8X'), 12);
+  vp8x.set([719 & 0xff, 719 >> 8, 0], 24); vp8x.set([3999 & 0xff, 3999 >> 8, 0], 27);
+  assert.deepEqual(blobs.sizeFromBytes(vp8x), { width: 720, height: 4000 });
+  assert.equal(blobs.sizeFromBytes(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])), null);
+  // AVIF, by its 'ispe' box.
+  const avif = new Uint8Array(64);
+  avif.set(Buffer.from('ftypavif'), 4);
+  avif.set(Buffer.from('ispe'), 30);
+  avif.set([0, 0, 0x02, 0xb2, 0, 0, 0x17, 0x70], 38);
+  assert.deepEqual(blobs.sizeFromBytes(avif), { width: 690, height: 6000 });
+  // Unknown and not to be decoded: nothing, at once.
+  assert.deepEqual(await blobs.pictureSize(new window.Blob([new Uint8Array(12)]), { decode: false }), { width: 0, height: 0 });
+  // Through a Blob, as the reader asks.
+  const got = await blobs.pictureSize(new window.Blob([gif], { type: 'image/gif' }));
+  assert.deepEqual(got, { width: 800, height: 7000 });
+});
+
+await t('a book of two or more long strips opens scrolling at the width, and goes back when put down', async () => {
+  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
+  // Twice as tall for its width as a 20:9 phone.
+  assert.ok(Math.abs(reader.STRIP_SHAPE - 40 / 9) < 1e-9);
+  const sized = (list) => list.map(([width, height], order) => ({ order, blob: { width, height } }));
+  const size = async (b) => b;
+  // Pages of a comic, a photograph, a phone-shaped screenshot: none of them.
+  assert.equal(await reader.tallStrips(sized([[800, 1200], [1080, 2400], [1200, 800], [690, 3000]]), { size }), false);
+  // One strip is a book with a long picture in it, not a webtoon.
+  assert.equal(await reader.tallStrips(sized([[800, 1200], [690, 5000]]), { size }), false);
+  assert.equal(await reader.tallStrips(sized([[800, 1200], [690, 5000], [720, 9000]]), { size }), true);
+  // A thin rule drawn as a picture is tall, and not a strip.
+  assert.equal(await reader.tallStrips(sized([[20, 900], [30, 2000], [690, 5000]]), { size }), false);
+  // Stops looking once it has two.
+  let looked = 0;
+  const counting = async (b) => { looked += 1; return b; };
+  await reader.tallStrips(sized(Array.from({ length: 400 }, () => [690, 5000])), { size: counting });
+  assert.ok(looked < 20, `looked at ${looked}`);
+  // Bounded in time: a slow book still opens.
+  const slow = (b) => new Promise((r) => setTimeout(() => r(b), 40));
+  const began = Date.now();
+  await reader.tallStrips(sized(Array.from({ length: 400 }, () => [800, 1200])), { size: slow, within: 200 });
+  assert.ok(Date.now() - began < 600);
+
+  const src = read('app/src/main/assets/www/js/reader.js');
+  // Checked while the book opens -- started before the layout is read, waited for before it is applied.
+  assert.match(src, /const tall = tallStrips\([\s\S]{0,200}store\.layoutFor\(bookId\)[\s\S]{0,200}applyLayout\(state\.layout, settings\);\s+holdForStrips\(await tall, settings\);/);
+  // Never saved: the settings stay what they were.
+  const hold = src.slice(src.indexOf('function holdForStrips'), src.indexOf('export async function releaseStrips'));
+  assert.doesNotMatch(hold, /saveSettings/);
+  assert.match(hold, /body\.dataset\.images = 'width'/);
+  assert.match(hold, /state\.mode = 'scroll'/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /if \(wasInBook && !inBook\) reader\.releaseStrips\(\)/);
+  // A theme change while reading does not undo the width.
+  assert.match(read('app/src/main/assets/www/js/theme.js'), /dataset\.images = document\.body\.dataset\.imagesHeld \|\| settings\.imageFit/);
+  // Choosing a fit or a mode by hand is the reader's own, and kept.
+  for (const file of ['screens.js', 'panels.js']) {
+    assert.match(read(`app/src/main/assets/www/js/${file}`), /delete document\.body\.dataset\.imagesHeld;/);
+  }
+  assert.match(src, /const wasHeld = state\.held;\s+state\.held = false;/);
+});
+
 console.log(`\n${pass} assertions passed`);

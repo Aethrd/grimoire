@@ -2509,9 +2509,11 @@ async function renderBehaviourPane(body) {
     const option = document.createElement('button');
     option.className = 'list-row';
     option.innerHTML = `<span class="body"><b>${escape(label)}</b><small>${escape(note)}</small></span>`;
-    option.setAttribute('aria-pressed', String((settings.imageFit || 'screen') === value));
+    option.setAttribute('aria-pressed', String((document.body.dataset.imagesHeld || settings.imageFit || 'screen') === value));
     option.onclick = async () => {
       await store.saveSettings({ imageFit: value });
+      // Chosen: no longer held at the width for a book of strips.
+      delete document.body.dataset.imagesHeld;
       document.body.dataset.images = value;
       renderSettings();
     };

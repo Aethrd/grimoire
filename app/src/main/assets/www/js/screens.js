@@ -166,7 +166,8 @@ export async function openLayout(bookId) {
   for (const [value, label] of [['paged', 'Paged'], ['scroll', 'Scroll']]) {
     const button = document.createElement('button');
     button.textContent = label;
-    button.setAttribute('aria-pressed', String(settings.readingMode === value));
+    // The mode showing, which a book of long strips can differ from the setting in.
+    button.setAttribute('aria-pressed', String((reader.state.book ? reader.state.mode : settings.readingMode) === value));
     button.onclick = async () => {
       // Saved by setMode, and applied everywhere: choosing how to read is a
       // habit, not a property of the book in front of you. Switching rebuilds
@@ -203,9 +204,11 @@ export async function openLayout(bookId) {
     chip.className = 'chip';
     chip.style.textTransform = 'none';
     chip.textContent = label;
-    chip.setAttribute('aria-pressed', String((settings.imageFit || 'screen') === value));
+    chip.setAttribute('aria-pressed', String(reader.shownFit(settings) === value));
     chip.onclick = async () => {
       await store.saveSettings({ imageFit: value });
+      // Chosen: no longer held at the width for a book of strips.
+      delete document.body.dataset.imagesHeld;
       document.body.dataset.images = value;
       openLayout(bookId);
     };
@@ -243,7 +246,7 @@ export async function openLayout(bookId) {
   greyField.appendChild(greyRow);
   body.appendChild(greyField);
 
-  if (settings.readingMode === 'scroll') {
+  if ((reader.state.book ? reader.state.mode : settings.readingMode) === 'scroll') {
     const endless = document.createElement('div');
     endless.className = 'row';
     endless.innerHTML = `<div class="row-text"><b>Endless scroll</b>

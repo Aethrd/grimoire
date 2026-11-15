@@ -835,4 +835,57 @@ await (async () => {
   });
 })();
 
+await (async () => {
+  /* A webtoon opens as it was drawn, and leaves no trace on the settings. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const reader = await import(
+    `${new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href}?strips`);
+  // Node's own Blob: the fake IndexedDB keeps it, where jsdom's comes back empty.
+  const { Blob: NodeBlob } = await import('node:buffer');
+  const gif = (w, h) => new NodeBlob([new Uint8Array([...Buffer.from('GIF89a'), w & 255, w >> 8, h & 255, h >> 8, 0, 0])], { type: 'image/gif' });
+  const make = async (title, shapes) => {
+    const id = await store.add('books', { title, fingerprint: title, addedAt: 1 });
+    await store.put('chapters', { bookId: id, index: 0, title: 'One',
+      html: shapes.map((_, n) => `<figure><img data-img="p${n}"></figure>`).join('') || '<p>x</p>', words: 0 });
+    for (const [n, [w, h]] of shapes.entries()) await store.put('images', { bookId: id, href: `p${n}`, blob: gif(w, h), order: n });
+    return id;
+  };
+
+  await t('a book of long strips is read scrolling at the width, and put back on leaving', async () => {
+    await store.saveSettings({ readingMode: 'paged', imageFit: 'screen' });
+    reader.init({ onChange() {} });
+    const strips = await make('Webtoon', [[690, 5000], [690, 6200], [690, 4800]]);
+    const comic = await make('Comic', [[800, 1200], [800, 1200], [690, 5000]]);
+
+    await reader.open(strips);
+    assert.equal(reader.state.mode, 'scroll');
+    assert.equal(window.document.body.dataset.images, 'width');
+    assert.equal(window.document.body.dataset.mode, 'scroll');
+    // Nothing saved.
+    const settings = await store.settings();
+    assert.equal(settings.readingMode, 'paged');
+    assert.equal(settings.imageFit, 'screen');
+
+    await reader.releaseStrips();
+    assert.equal(reader.state.mode, 'paged');
+    assert.equal(window.document.body.dataset.images, 'screen');
+    assert.equal(window.document.body.dataset.imagesHeld, undefined);
+
+    // One strip among pages: left as the settings say.
+    await reader.open(comic);
+    assert.equal(reader.state.mode, 'paged');
+    assert.equal(window.document.body.dataset.images, 'screen');
+
+    // Chosen by hand while held: kept.
+    await reader.open(strips);
+    await reader.setMode('paged');
+    await reader.open(strips);
+    await reader.setMode('scroll');
+    assert.equal((await store.settings()).readingMode, 'scroll');
+    await reader.releaseStrips();
+    assert.equal(reader.state.mode, 'scroll');
+    await store.saveSettings({ readingMode: 'paged' });
+  });
+})();
+
 console.log(`\n${pass} assertions passed`);

@@ -16,7 +16,7 @@
 
 import * as store from './store.js';
 import { countWords, chapterHtml, spacedByLines } from './parse.js';
-import { pool } from './blobs.js';
+import { pool, pictureSize } from './blobs.js';
 import * as translate from './translate.js';
 import * as frames from './frame.js';
 import { faceFamily } from './fonts.js';
@@ -43,6 +43,7 @@ export const state = {
   mergeMarks: true,
 
   mode: 'paged',     // 'paged' | 'scroll'
+  held: false,       // switched to scrolling for a book of long strips (releaseStrips)
   endless: true,     // scroll mode only: run on into the next chapter
   loaded: [],        // chapter indices currently in the DOM, ascending
 };
@@ -93,7 +94,15 @@ export function init(handlers) {
 const isScroll = () => state.mode === 'scroll';
 
 export async function setMode(mode) {
-  if (mode === state.mode) return;
+  /* Chosen while the book was switched to scrolling for its strips: the
+     choice is the reader's own, so it is kept, and the book is no longer
+     switched back on leaving it. */
+  const wasHeld = state.held;
+  state.held = false;
+  if (mode === state.mode) {
+    if (wasHeld) await store.saveSettings({ readingMode: mode });
+    return;
+  }
   await store.saveSettings({ readingMode: mode });
   // The stylesheet needs to know before anything is drawn in the new mode.
   document.body.dataset.mode = mode;
@@ -792,8 +801,13 @@ export async function open(bookId, opts = {}) {
   state.images = new Map(images.filter((i) => i.blob).map((i) => [i.href, i.blob]));
   // The book and its chapters are in: its index and picture reel can be drawn (app.js, bookReady).
   opts.onBook?.(book);
+  // Started now, so it runs while the layout and the place are read and the
+  // opening scene plays -- not after them.
+  const tall = tallStrips(images.filter((i) => i.blob));
   state.layout = await store.layoutFor(bookId);
-  applyLayout(state.layout, await store.settings());
+  const settings = await store.settings();
+  applyLayout(state.layout, settings);
+  holdForStrips(await tall, settings);
 
   const saved = await store.get('positions', bookId);
   const chapterIndex = opts.chapter ?? saved?.chapterIndex ?? 0;
@@ -1202,6 +1216,103 @@ function pageInChapter() {
 
 export function percent() {
   return Math.min(1, pageInBook() / state.totalPages);
+}
+
+/* ── long strips ──────────────────────────────────────────────────────── */
+
+/**
+ * A webtoon read as it was drawn: one long strip, scrolled.
+ *
+ * A picture much taller than a phone screen is unreadable as a page -- fitted
+ * to the screen it is a sliver, and in paged mode it is cut up or shrunk.
+ * A book with two or more of them is switched, for as long as it is open, to
+ * scrolling with its pictures as wide as the screen, and put back as it was
+ * when it is left. Nothing is saved: the settings stay what they were.
+ *
+ * "Tall" is more than twice as tall, for its width, as an ordinary phone
+ * screen (20:9), so a page of a comic or a photograph never counts.
+ */
+export const PHONE_SHAPE = 20 / 9;
+export const STRIP_SHAPE = 2 * PHONE_SHAPE;
+const STRIPS_NEEDED = 2;
+// Checked while the book opens, so bounded: a book of thousands of pictures
+// is not read to the end before its first page shows.
+const STRIP_LOOK_MS = 1500;
+
+// Header only: a picture that would have to be decoded to be measured is
+// not waited for while the book opens.
+const headerSize = (blob) => pictureSize(blob, { decode: false });
+
+export async function tallStrips(images, { needed = STRIPS_NEEDED, within = STRIP_LOOK_MS, size = headerSize } = {}) {
+  const queue = [...images].sort((a, b) => (a.order || 0) - (b.order || 0));
+  const until = Date.now() + within;
+  let found = 0;
+  let at = 0;
+  const one = async () => {
+    while (found < needed && at < queue.length && Date.now() < until) {
+      const image = queue[at++];
+      let shape;
+      try { shape = await size(image.blob); } catch { continue; }
+      // A thin rule drawn as a picture is tall too; a strip is a page wide.
+      if (shape.width >= 200 && shape.height / shape.width > STRIP_SHAPE) found += 1;
+    }
+  };
+  /* Bounded outright, not only between pictures: one that has to be decoded
+     to be measured can take seconds, and the book waits on this. */
+  let timer;
+  const stop = new Promise((resolve) => { timer = setTimeout(resolve, within); });
+  await Promise.race([Promise.all(Array.from({ length: 6 }, one)), stop]);
+  clearTimeout(timer);
+  // Anything still being measured is let go of.
+  at = queue.length;
+  return found >= needed;
+}
+
+/** Switched to scrolling and the width for a book of strips, or put back. */
+function holdForStrips(tall, settings) {
+  const body = document.body;
+  if (!tall) {
+    state.held = false;
+    delete body.dataset.imagesHeld;
+    body.dataset.images = settings.imageFit || 'screen';
+    return;
+  }
+  state.held = true;
+  body.dataset.imagesHeld = 'width';
+  body.dataset.images = 'width';
+  if (state.mode !== 'scroll') {
+    state.mode = 'scroll';
+    viewport.classList.add('scrolling');
+    flow.classList.add('scrolling');
+    body.dataset.mode = 'scroll';
+  }
+}
+
+/** The book is put down: a book switched for its strips goes back as it was. */
+export async function releaseStrips() {
+  const body = document.body;
+  const fitHeld = !!body.dataset.imagesHeld;
+  if (!state.held && !fitHeld) return;
+  const settings = await store.settings();
+  if (fitHeld) {
+    delete body.dataset.imagesHeld;
+    body.dataset.images = settings.imageFit || 'screen';
+  }
+  if (state.held) {
+    state.held = false;
+    const mode = settings.readingMode || 'paged';
+    if (mode !== state.mode) {
+      state.mode = mode;
+      viewport?.classList.toggle('scrolling', isScroll());
+      flow?.classList.toggle('scrolling', isScroll());
+      body.dataset.mode = mode;
+    }
+  }
+}
+
+/** The fit a picture is shown with now: the book's own while it is held. */
+export function shownFit(settings) {
+  return document.body.dataset.imagesHeld || settings.imageFit || 'screen';
 }
 
 /* ── layout override ──────────────────────────────────────────────────── */
