@@ -949,8 +949,8 @@ await t('many books written out in zips under a size: whole books, folder order,
   // How warm the phone says it is, in turn; the waits made short for the test.
   const heats = [];
   const fakeWindow = { GrimoireNative: { heat: () => JSON.stringify(heats.shift() || { status: 0, celsius: 30 }) } };
-  const heatSrc = app.slice(app.indexOf('const HEAT_WARM = 38;'), app.indexOf('/** In folder order, then by name'))
-    .replace(/const HEAT_REST = \{[^}]*\};/, 'const HEAT_REST = { warm: 5, hot: 10 };');
+  const heatSrc = app.slice(app.indexOf('const HEAT_WARM = '), app.indexOf('/** In folder order, then by name'))
+    .replace(/const HEAT_REST = \{[^}]*\};/, 'const HEAT_REST = { between: 1, warm: 5, hot: 10 };');
   const MB = 1048576;
   const waits = [];
   const run = async (books, limitMB, { stopAfter = Infinity } = {}) => {
@@ -974,7 +974,7 @@ await t('many books written out in zips under a size: whole books, folder order,
       if (++built > stopAfter) stop?.();
       return { blob: { size: sizes.get(id) }, name: `${books.find((b) => b.id === id).title}.epub` };
     }, safeName: (x) => x };
-    const progress = { rested: [], rest(on) { progress.rested.push(on); },
+    const progress = {
       start: () => Object.assign(() => {}, { say() {}, fail() {}, activity(now) { if (now) waits.push(now.why); }, controls({ cancel }) { stop = cancel; } }) };
     const exportMany = new Function('window', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
       `${label}\n${heatSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('exportMany')}\nreturn exportMany;`)(fakeWindow,
@@ -1007,14 +1007,14 @@ await t('many books written out in zips under a size: whole books, folder order,
   assert.equal(halted.sinks.flatMap((sink) => sink.entries).length, 13);
   assert.match(halted.toasts.at(-1), /Export stopped — nothing saved/);
   // The phone warm: a breath before the next book; hot, waited out till it is not -- and nothing skipped.
-  heats.push({ status: 0, celsius: 39 }, { status: 2, celsius: 43 }, { status: 3, celsius: 44 }, { status: 0, celsius: 35 });
+  heats.push({ status: 0, celsius: 40.4 }, { status: 2, celsius: 43 }, { status: 3, celsius: 44 }, { status: 0, celsius: 38.5 });
   waits.length = 0;
   const warm = await run(books.slice(0, 6), 0);
   assert.equal(warm.sinks[0].entries.length, 6);
+  assert.match(app, /const HEAT_REST = \{ between: 400, warm: 3000, hot: 20000 \};/);
   assert.equal(waits.length, 3, `rested ${waits.length} times`);
-  assert.match(waits[0], /the phone is warm \(39°C\) — letting it cool/);
+  assert.match(waits[0], /the phone is warm \(40°C\) — letting it cool/);
   assert.match(waits[1], /43°C/);
-  assert.deepEqual(warm.progress.rested.filter((on) => !on).length, 2, 'the scene not let back on');
   // No limit: one zip, saved as ever.
   const one = await run(books, 0);
   assert.equal(one.sinks.length, 1);
@@ -2447,7 +2447,7 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.match(css, /\.opening \{[^}]*background: var\(--bg\); opacity: 0;\s+transition: opacity \.4s/);
   assert.match(css, /\.import-progress\.open \.jobs-scene \{[^}]*opacity: var\(--jobs-scene-opacity, \.22\);/);
   // Its strength is the person's: 0 stops it; a change of faintness starts it afresh.
-  assert.match(app, /host\.classList\.contains\('open'\) && sceneOpacity > 0 && !sceneResting;/);
+  assert.match(app, /host\.classList\.contains\('open'\) && sceneOpacity > 0;/);
   assert.match(app, /if \(scene && \(!showing \|\| faint !== sceneFaint\)\) \{ scene\.stop\(\); scene = null; \}/);
   assert.match(app, /store\.saveSettings\(\{ queueSceneOpacity: sceneOpacity \}\)/);
   // From the queue page's head: a slider, seen as it moves, kept once let go. (Wired when the imports above began.)

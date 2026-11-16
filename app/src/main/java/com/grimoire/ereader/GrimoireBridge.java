@@ -26,6 +26,8 @@ import android.webkit.JavascriptInterface;
 import org.json.JSONObject;
 
 import java.util.concurrent.ExecutorService;
+import androidx.webkit.JavaScriptReplyProxy;
+import androidx.webkit.WebMessageCompat;
 import java.util.concurrent.Executors;
 
 import androidx.core.app.ActivityCompat;
@@ -256,6 +258,50 @@ public class GrimoireBridge {
                     new File(handle).getName());
             try (java.io.FileOutputStream out = new java.io.FileOutputStream(file, true)) {
                 out.write(Base64.decode(base64, Base64.DEFAULT));
+            }
+            return true;
+        } catch (Throwable e) {
+            Log.w(TAG, "Could not add to " + handle, e);
+            return false;
+        }
+    }
+
+    /* ── the export pipe ──────────────────────────────────────────────────
+     *
+     * The bytes of a file being written out, posted from the page as they
+     * are (an ArrayBuffer, by androidx.webkit's message listener) rather than
+     * as base64 text through appendExport: no text made of them in the page,
+     * none decoded here, and a third less to carry across. "to:<name>" says
+     * which file the next piece is for; each piece is appended in order on a
+     * thread of its own, and answered "ok" or "failed" once written, so the
+     * page sends no faster than the file is written. */
+    private final ExecutorService pipeWriter = Executors.newSingleThreadExecutor();
+    private String pipeTarget = null;
+
+    /** One message from the page's MythosPipe (MainActivity registers it, for this app's own origin). */
+    void pipeMessage(WebMessageCompat message, boolean mainFrame, JavaScriptReplyProxy reply) {
+        if (!mainFrame || message == null) return;
+        if (message.getType() == WebMessageCompat.TYPE_STRING) {
+            String data = message.getData();
+            if (data != null && data.startsWith("to:")) pipeTarget = new File(data.substring(3)).getName();
+            return;
+        }
+        if (message.getType() != WebMessageCompat.TYPE_ARRAY_BUFFER) return;
+        final byte[] bytes = message.getArrayBuffer();
+        final String target = pipeTarget;
+        pipeWriter.execute(() -> {
+            boolean ok = target != null && appendBytes(target, bytes);
+            activity.runOnUiThread(() -> {
+                try { reply.postMessage(ok ? "ok" : "failed"); } catch (Throwable e) { Log.w(TAG, "No answer to the pipe", e); }
+            });
+        });
+    }
+
+    private boolean appendBytes(String handle, byte[] bytes) {
+        try {
+            File file = new File(new File(activity.getCacheDir(), "exports"), new File(handle).getName());
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(file, true)) {
+                out.write(bytes);
             }
             return true;
         } catch (Throwable e) {

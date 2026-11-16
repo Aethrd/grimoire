@@ -25,23 +25,68 @@
 const PIECE = 3 * 1024 * 1024;
 const MAX32 = 0xFFFFFFFF;
 
-let table = null;
-function crcTable() {
-  if (table) return table;
-  table = new Uint32Array(256);
+/* The checksum, eight bytes at a time (slicing-by-8): several times fewer
+ * steps than a byte at a time, for every byte of every book written out. */
+let tables = null;
+function crcTables() {
+  if (tables) return tables;
+  tables = Array.from({ length: 8 }, () => new Int32Array(256));
   for (let n = 0; n < 256; n++) {
     let c = n;
     for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
-    table[n] = c >>> 0;
+    tables[0][n] = c;
   }
-  return table;
+  for (let n = 0; n < 256; n++) {
+    let c = tables[0][n];
+    for (let t = 1; t < 8; t++) { c = tables[0][c & 0xFF] ^ (c >>> 8); tables[t][n] = c; }
+  }
+  return tables;
 }
 
-function crcUpdate(crc, bytes) {
-  const t = crcTable();
-  let c = crc ^ 0xFFFFFFFF;
-  for (let i = 0; i < bytes.length; i++) c = t[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
-  return (c ^ 0xFFFFFFFF) >>> 0;
+export function crcUpdate(crc, bytes) {
+  const [t0, t1, t2, t3, t4, t5, t6, t7] = crcTables();
+  let c = ~crc;
+  const n = bytes.length;
+  let i = 0;
+  for (; i + 8 <= n; i += 8) {
+    const a = c ^ (bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) | (bytes[i + 3] << 24));
+    c = t7[a & 0xFF] ^ t6[(a >>> 8) & 0xFF] ^ t5[(a >>> 16) & 0xFF] ^ t4[a >>> 24]
+      ^ t3[bytes[i + 4]] ^ t2[bytes[i + 5]] ^ t1[bytes[i + 6]] ^ t0[bytes[i + 7]];
+  }
+  for (; i < n; i++) c = t0[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return ~c >>> 0;
+}
+
+/* Two checksums made one, as zlib's crc32_combine: the checksum of A then B
+ * from A's, B's and B's length, without reading either again. A book's own
+ * checksum is worked out as it is made, so the zip it goes into need not read
+ * it all through a second time. */
+function gf2Times(mat, vec) {
+  let sum = 0;
+  for (let i = 0; vec; i++, vec >>>= 1) if (vec & 1) sum ^= mat[i];
+  return sum >>> 0;
+}
+function gf2Square(square, mat) { for (let n = 0; n < 32; n++) square[n] = gf2Times(mat, mat[n]); }
+export function crcCombine(crc1, crc2, len2) {
+  if (!(len2 > 0)) return crc1 >>> 0;
+  const even = new Array(32);
+  const odd = new Array(32);
+  odd[0] = 0xEDB88320;
+  for (let n = 1, row = 1; n < 32; n++, row = (row << 1) >>> 0) odd[n] = row;
+  gf2Square(even, odd);
+  gf2Square(odd, even);
+  let left = len2;
+  for (;;) {
+    gf2Square(even, odd);
+    if (left % 2 === 1) crc1 = gf2Times(even, crc1);
+    left = Math.floor(left / 2);
+    if (!left) break;
+    gf2Square(odd, even);
+    if (left % 2 === 1) crc1 = gf2Times(odd, crc1);
+    left = Math.floor(left / 2);
+    if (!left) break;
+  }
+  return (crc1 ^ crc2) >>> 0;
 }
 
 async function bytesOf(blob) {
@@ -120,8 +165,8 @@ export function zipWriter(write, { zip64At = MAX32, blobs = false } = {}) {
   const stamp = dosTime(new Date());
 
   // `blobs`: a file's own Blob handed on as it is (write takes Blobs too), not copied into bytes.
-  const emit = async (bytes) => {
-    await write(bytes);
+  const emit = async (bytes, crc) => {
+    await write(bytes, crc);
     offset += bytes.size ?? bytes.length;
   };
 
@@ -131,10 +176,13 @@ export function zipWriter(write, { zip64At = MAX32, blobs = false } = {}) {
       const nameBytes = new TextEncoder().encode(name);
       const size = blob.size;
 
-      let crc = 0;
-      for (let at = 0; at < size; at += PIECE) {
-        crc = crcUpdate(crc, await bytesOf(blob.slice(at, Math.min(size, at + PIECE))));
-        onProgress?.(at / size / 2);
+      // Its checksum, if worked out as it was made (an EPUB of epubArchive's); else read for it.
+      let crc = Number.isInteger(blob.crc32) ? blob.crc32 >>> 0 : 0;
+      if (!Number.isInteger(blob.crc32)) {
+        for (let at = 0; at < size; at += PIECE) {
+          crc = crcUpdate(crc, await bytesOf(blob.slice(at, Math.min(size, at + PIECE))));
+          onProgress?.(at / size / 2);
+        }
       }
 
       const start = offset;
@@ -147,7 +195,7 @@ export function zipWriter(write, { zip64At = MAX32, blobs = false } = {}) {
         [2, nameBytes.length], [2, extra.length],
       ]), nameBytes, extra));
 
-      if (blobs) await emit(blob);
+      if (blobs) await emit(blob, crc);
       else {
         for (let at = 0; at < size; at += PIECE) {
           await emit(await bytesOf(blob.slice(at, Math.min(size, at + PIECE))));

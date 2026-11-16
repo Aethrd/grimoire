@@ -154,6 +154,23 @@ await t('what each Stop does: the queue’s book out of the queue with its chapt
   assert.ok(!/setInterval|requestAnimationFrame/.test(controls));
 });
 
+const jsdomBlob = globalThis.Blob;
+await t('the checksum: eight bytes at a time, and two made one, the same as zlib’s', async () => {
+  const { crcUpdate, crcCombine } = await import(www('zipwriter.js'));
+  const { crc32 } = await import('node:zlib');
+  for (const size of [0, 1, 7, 8, 9, 63, 1000, 70001]) {
+    const bytes = Uint8Array.from({ length: size }, (_, i) => (i * 131 + (i >> 3)) & 255);
+    assert.equal(crcUpdate(0, bytes), crc32(bytes), `size ${size}`);
+    // In pieces, carried on.
+    const cut = Math.floor(size / 3);
+    assert.equal(crcUpdate(crcUpdate(0, bytes.subarray(0, cut)), bytes.subarray(cut)), crc32(bytes));
+    // Combined, without reading the first again.
+    assert.equal(crcCombine(crc32(bytes.subarray(0, cut)), crc32(bytes.subarray(cut)), size - cut), crc32(bytes), `combined ${size}`);
+  }
+  // A length past 4GB, as zip64 sizes are: still exact, by the halving.
+  assert.equal(crcCombine(0x12345678, 0, 2 ** 33) >>> 0, crcCombine(crcCombine(0x12345678, 0, 2 ** 32), 0, 2 ** 32) >>> 0);
+});
+
 await t('a book written out by the phone’s own deflate is a whole EPUB: mimetype first and stored, chapters deflated, pictures as they are', async () => {
   const epub = await import(www('epub.js'));
   const { canDeflate } = await import(www('zipwriter.js'));
@@ -167,7 +184,6 @@ await t('a book written out by the phone’s own deflate is a whole EPUB: mimety
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4ab0000000049454e44ae426082', 'hex');
   await store.put('images', { bookId: id, href: 'p.png', blob: new NodeBlob([png], { type: 'image/png' }) });
   // jsdom's Blob cannot hold another Blob as a part, as a browser's can; Node's can.
-  const jsdomBlob = globalThis.Blob;
   globalThis.Blob = NodeBlob;
   let blob;
   try { ({ blob } = await epub.buildEpub(id)); } finally { globalThis.Blob = jsdomBlob; }
@@ -189,6 +205,56 @@ await t('a book written out by the phone’s own deflate is a whole EPUB: mimety
   const picture = Object.keys(read.files).find((name) => /images\/img0001\.png$/.test(name));
   assert.deepEqual(Buffer.from(await read.file(picture).async('uint8array')), png);
   assert.match(await read.file('OEBPS/content.opf').async('string'), /<dc:title>Deflated<\/dc:title>/);
+  // Its checksum worked out as it was made, and right: a zip of it takes it without reading it again, and checks.
+  const { crcUpdate, zipWriter } = await import(www('zipwriter.js'));
+  assert.equal(blob.crc32, crcUpdate(0, bytes));
+  const outer = [];
+  const zip = zipWriter((piece) => { outer.push(piece); }, { blobs: true });
+  globalThis.Blob = NodeBlob;
+  try {
+    await zip.add('Deflated.epub', blob);
+    await zip.finish();
+  } finally { globalThis.Blob = jsdomBlob; }
+  const whole = Buffer.concat(await Promise.all(outer.map(async (p) => (p instanceof Uint8Array ? Buffer.from(p) : Buffer.from(await p.arrayBuffer())))));
+  const back = await JSZip.loadAsync(whole, { checkCRC32: true });
+  assert.deepEqual(Buffer.from(await back.file('Deflated.epub').async('uint8array')), Buffer.from(bytes));
+});
+
+await t('files written out go to Android as bytes through the pipe, a piece at a time, each waited on; base64 only without it', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const src = app.slice(app.indexOf('const pipe = (() => {'), app.indexOf('/**\n * A piece of a file as base64, for the bridge'));
+  const received = [];
+  let answer = 'ok';
+  const listeners = [];
+  const port = {
+    addEventListener: (kind, fn) => listeners.push(fn),
+    postMessage(data) {
+      received.push(data);
+      if (typeof data !== 'string') setTimeout(() => listeners.forEach((fn) => fn({ data: answer })), 5);
+    },
+  };
+  const fakeWindow = { MythosPipe: port };
+  const blobsShim = { readArrayBuffer: (b) => b.arrayBuffer() };
+  const appended = [];
+  const bridge = { appendExport: (handle, text) => { appended.push([handle, text]); return true; } };
+  const make = (win) => new Function('window', 'blobs', 'blobBase64', `${src}\nreturn sendPiece;`)(win, blobsShim, async (b) => Buffer.from(await b.arrayBuffer()).toString('base64'));
+  const { Blob: NodeBlob } = await import('node:buffer');
+  const send = make(fakeWindow);
+  assert.equal(await send(bridge, 'Books (part 1).zip', new NodeBlob([Buffer.from('abc')])), true);
+  assert.equal(await send(bridge, 'Books (part 1).zip', new NodeBlob([Buffer.from('def')])), true);
+  assert.deepEqual(received.map((d) => (typeof d === 'string' ? d : Buffer.from(d).toString())),
+    ['to:Books (part 1).zip', 'abc', 'to:Books (part 1).zip', 'def']);
+  assert.equal(appended.length, 0, 'sent as base64 as well');
+  // Not written: said so, so the export stops rather than going on with a hole in the file.
+  answer = 'failed';
+  assert.equal(await send(bridge, 'x.zip', new NodeBlob([Buffer.from('g')])), false);
+  // No pipe: base64, as before.
+  const plain = make({});
+  assert.equal(await plain(bridge, 'y.zip', new NodeBlob([Buffer.from('hi')])), true);
+  assert.deepEqual(appended, [['y.zip', Buffer.from('hi').toString('base64')]]);
+  const main = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(main, /WebViewCompat\.addWebMessageListener\(webView, "MythosPipe", java\.util\.Collections\.singleton\(ORIGIN\)/);
+  assert.match(read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java'), /reply\.postMessage\(ok \? "ok" : "failed"\)/);
 });
 
 console.log(`\n${pass} checks passed`);

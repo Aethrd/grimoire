@@ -12,7 +12,7 @@
  */
 
 import * as store from './store.js';
-import { zipWriter, canDeflate } from './zipwriter.js';
+import { zipWriter, canDeflate, crcUpdate, crcCombine } from './zipwriter.js';
 import { chapterHtml, spacedByLines } from './parse.js';
 import { SIZES, shrinkPicture, describeSaving } from './shrink.js';
 
@@ -319,7 +319,14 @@ function epubArchive() {
   return {
     file(name, data, options = {}) { parts.push({ name, data, deflate: options.compression === 'DEFLATE' }); },
     async generateAsync(_options, onUpdate) {
-      const writer = zipWriter((piece) => { pieces.push(piece); }, { blobs: true });
+      /* The book's own checksum kept as it is made -- of its bytes as they
+       * go, and of a picture from the one worked out for it -- so the zip
+       * it goes into has no need to read it all again (zipWriter.add). */
+      let crc = 0;
+      const writer = zipWriter((piece, known) => {
+        pieces.push(piece);
+        crc = piece instanceof Uint8Array ? crcUpdate(crc, piece) : crcCombine(crc, known, piece.size);
+      }, { blobs: true });
       for (const [at, { name, data, deflate }] of parts.entries()) {
         if (typeof data === 'string') await writer.addBytes(name, encoder.encode(data), { deflate });
         else {
@@ -328,7 +335,9 @@ function epubArchive() {
         onUpdate?.({ percent: ((at + 1) / parts.length) * 100 });
       }
       await writer.finish();
-      return new Blob(pieces, { type: 'application/epub+zip' });
+      const book = new Blob(pieces, { type: 'application/epub+zip' });
+      book.crc32 = crc;
+      return book;
     },
   };
 }

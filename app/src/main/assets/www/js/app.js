@@ -2180,11 +2180,14 @@ const limitLabel = (mb) => (mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`);
  * however light each book is made, that warms a phone. Between books, then,
  * the phone is asked how warm it is (Android's own thermal status, and the
  * battery's temperature): warm, a breath before the next; hot, it waits --
- * said on its row -- until it has cooled. The popup's scene is off meanwhile.
- * It only ever waits; nothing is skipped. */
-const HEAT_WARM = 38;      // degrees C at the battery
-const HEAT_HOT = 41;
-const HEAT_REST = { warm: 3000, hot: 20000 };   // how long a breath, and a wait to cool
+ * said on its row -- until it has cooled. It only ever waits; nothing is
+ * skipped. */
+const HEAT_WARM = 40;      // degrees C at the battery: under load 38 is ordinary
+const HEAT_HOT = 43;
+/* How long a rest: after every book, always (`between` -- stability over
+ * speed: the load never runs flat out for long, and memory is let go of
+ * between books); a breath more when warm; a wait to cool when hot. */
+const HEAT_REST = { between: 400, warm: 3000, hot: 20000 };
 function phoneHeat() {
   try {
     const heat = JSON.parse(window.GrimoireNative?.heat?.() || 'null');
@@ -2198,6 +2201,7 @@ const heatState = (heat) => {
   return 'cool';
 };
 async function letCool(row, { stopped = () => false } = {}) {
+  if (HEAT_REST.between) await new Promise((resolve) => setTimeout(resolve, HEAT_REST.between));
   let rested = false;
   for (let rounds = 0; rounds < 90 && !stopped(); rounds += 1) {
     const heat = phoneHeat();
@@ -2205,14 +2209,13 @@ async function letCool(row, { stopped = () => false } = {}) {
     if (state === 'cool') break;
     const wait = HEAT_REST[state];
     const degrees = heat.celsius > 0 ? ` (${Math.round(heat.celsius)}°C)` : '';
-    progress.rest(true);
     row.activity?.({ kind: 'wait', until: Date.now() + wait, why: `the phone is warm${degrees} — letting it cool`, name: 'the next book' });
     await new Promise((resolve) => setTimeout(resolve, wait));
     rested = true;
     // Warm: one breath a book. Hot: till it is not.
     if (state === 'warm') break;
   }
-  if (rested) { row.activity?.(null); progress.rest(false); }
+  if (rested) row.activity?.(null);
 }
 
 /** In folder order, then by name (numbers counted) -- so a folder's books sit together. */
@@ -2864,8 +2867,7 @@ function exportSink(name) {
     heldBytes = 0;
     if (!native) { kept.push(all); return; }
     for (let at = 0; at < all.size; at += EXPORT_CHUNK) {
-      const text = await blobBase64(all.slice(at, Math.min(all.size, at + EXPORT_CHUNK)));
-      if (!bridge.appendExport(handle, text)) {
+      if (!(await sendPiece(bridge, handle, all.slice(at, Math.min(all.size, at + EXPORT_CHUNK))))) {
         const error = new Error('The file could not be written — the phone may be out of space');
         error.writeFailed = true;
         throw error;
@@ -3357,11 +3359,9 @@ export const progress = (() => {
    * At 0 it does not play at all; faint, it draws every other frame, which
    * cannot be seen at that strength; stronger, every frame. */
   let sceneOpacity = 22;
-  // The phone warm (letCool): the scene left off till it has cooled, whatever its setting.
-  let sceneResting = false;
   function syncScene() {
     const host = panel();
-    const showing = !!host && !host.hidden && host.classList.contains('open') && sceneOpacity > 0 && !sceneResting;
+    const showing = !!host && !host.hidden && host.classList.contains('open') && sceneOpacity > 0;
     const faint = sceneOpacity < 40;
     if (scene && (!showing || faint !== sceneFaint)) { scene.stop(); scene = null; }
     if (showing && !scene) { sceneFaint = faint; scene = playScene(el('jobs-scene'), { faint }); }
@@ -3635,7 +3635,6 @@ export const progress = (() => {
   return {
     start,
     seat,
-    rest(on) { if (sceneResting !== !!on) { sceneResting = !!on; syncScene(); } },
     /** Back makes the open page small, before leaving anything. */
     close() {
       if (!isOpen()) return false;
@@ -12837,6 +12836,49 @@ const EXPORT_CHUNK = 3 * 1024 * 1024;
 /** Bytes to base64, in pieces: String.fromCharCode on a whole chunk at once
  *  overflows the argument list. */
 /**
+ * A piece of a file written out, to the native side: as bytes through the
+ * pipe (MythosPipe, where the WebView has it -- nothing turned to text, a
+ * third less carried), else as base64 through appendExport. Each piece is
+ * waited on until it is written, so nothing piles up in memory. Resolves
+ * true once written; false if it could not be.
+ */
+const pipe = (() => {
+  const waiting = [];
+  let wired = false;
+  let broken = false;
+  const port = () => (broken ? null : window.MythosPipe || null);
+  const wire = (p) => {
+    if (wired) return;
+    wired = true;
+    p.addEventListener('message', (event) => { waiting.shift()?.(event.data === 'ok'); });
+  };
+  return {
+    get open() { return !!port(); },
+    async send(handle, blob) {
+      const p = port();
+      if (!p) return false;
+      wire(p);
+      const bytes = await blobs.readArrayBuffer(blob);
+      const written = new Promise((resolve) => {
+        /* An answer that never comes: this file failed (not finished as base64,
+         * which could put a piece in twice), and base64 for the files after. */
+        const timer = setTimeout(() => { broken = true; resolve(false); }, 30000);
+        waiting.push((ok) => { clearTimeout(timer); resolve(ok); });
+      });
+      p.postMessage(`to:${handle}`);
+      p.postMessage(bytes);
+      return written;
+    },
+  };
+})();
+
+/** A piece of the file, by the pipe if there is one, else as base64 text. */
+async function sendPiece(bridge, handle, blob) {
+  if (pipe.open) return pipe.send(handle, blob);
+  return bridge.appendExport(handle, await blobBase64(blob));
+}
+
+/**
  * A piece of a file as base64, for the bridge -- by FileReader, in the
  * browser's own code. Built in script (a character at a time, then btoa)
  * it was megabytes of strings made and thrown away for every piece sent:
@@ -12874,7 +12916,7 @@ async function writeOut(blob, name, mimeType, { share = false, toPictures = fals
 
   for (let at = 0; at < blob.size; at += EXPORT_CHUNK) {
     const piece = blob.slice(at, Math.min(at + EXPORT_CHUNK, blob.size));
-    if (!bridge.appendExport(handle, await blobBase64(piece))) {
+    if (!(await sendPiece(bridge, handle, piece))) {
       throw new Error('The file could not be written');
     }
     onProgress?.(Math.min(1, (at + EXPORT_CHUNK) / blob.size));

@@ -36,6 +36,7 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.webkit.WebSettingsCompat;
 import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewFeature;
+import androidx.webkit.WebViewCompat;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -220,6 +221,17 @@ public class MainActivity extends AppCompatActivity {
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
         bridge = new GrimoireBridge(this, webView);
         webView.addJavascriptInterface(bridge, "GrimoireNative");
+        /* Files written out carried as bytes, not base64 (GrimoireBridge.pipeMessage):
+         * only for this app's own pages, and only where the WebView can. */
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+                && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_ARRAY_BUFFER)) {
+            try {
+                WebViewCompat.addWebMessageListener(webView, "MythosPipe", java.util.Collections.singleton(ORIGIN),
+                        (view, message, sourceOrigin, isMainFrame, reply) -> bridge.pipeMessage(message, isMainFrame, reply));
+            } catch (Throwable e) {
+                Log.w(TAG, "No export pipe; base64 it is", e);
+            }
+        }
         // Kept in its own object because it is the only thing in the app that
         // touches the network, and it should be obvious where that boundary is.
         webView.addJavascriptInterface(new TranslateBridge(this, webView), "GrimoireTranslate");

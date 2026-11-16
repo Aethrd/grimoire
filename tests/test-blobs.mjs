@@ -1517,8 +1517,9 @@ await t('files leave in pieces, not in one', () => {
   // is what killed the app when files came the other way.
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /const EXPORT_CHUNK/);
-  assert.match(app, /bridge\.appendExport\(handle, await blobBase64\(piece\)\)/);
-  assert.match(app, /const text = await blobBase64\(all\.slice\(at, Math\.min\(all\.size, at \+ EXPORT_CHUNK\)\)\);/);
+  assert.match(app, /if \(!\(await sendPiece\(bridge, handle, piece\)\)\) \{/);
+  assert.match(app, /if \(!\(await sendPiece\(bridge, handle, all\.slice\(at, Math\.min\(all\.size, at \+ EXPORT_CHUNK\)\)\)\)\) \{/);
+  assert.match(app, /return bridge\.appendExport\(handle, await blobBase64\(blob\)\);/);
   // Turned to text by the browser, not a character at a time in script.
   assert.match(app, /reader\.readAsDataURL\(blob\);/);
   assert.ok(!/function base64Of\(/.test(app), 'the script-side base64 is still there');
