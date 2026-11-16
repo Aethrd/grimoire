@@ -12,6 +12,7 @@
  */
 
 import * as store from './store.js';
+import { zipWriter, canDeflate } from './zipwriter.js';
 import { chapterHtml, spacedByLines } from './parse.js';
 import { SIZES, shrinkPicture, describeSaving } from './shrink.js';
 
@@ -98,7 +99,7 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
   // writing them into the file would be exporting what was removed.
   const images = (await store.byIndex('images', 'bookId', bookId))
     .filter((image) => !image.removed);
-  const zip = new JSZip();
+  const zip = canDeflate() ? epubArchive() : new JSZip();
 
   /* The mimetype entry must come first and must not be compressed. It is the
    * one part of the format that is a rule about the archive rather than about
@@ -301,6 +302,35 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
   // The saving is reported rather than assumed: it is the whole reason a
   // smaller copy was asked for, and on line art it can come out near zero.
   return { blob, name: `${safeName(book.title)}.epub`, saved };
+}
+
+/**
+ * An EPUB written with the browser's own deflate (zipwriter.js), in the order
+ * its parts were given -- the mimetype first and stored, as the format asks.
+ * The same two calls JSZip is used by here, so either makes the book. Text is
+ * deflated natively; pictures are stored, their Blobs put in the book as they
+ * are rather than copied. A picture that cannot be read is left out, as JSZip
+ * left out one it would not take, and the book is still made.
+ */
+function epubArchive() {
+  const parts = [];
+  const pieces = [];
+  const encoder = new TextEncoder();
+  return {
+    file(name, data, options = {}) { parts.push({ name, data, deflate: options.compression === 'DEFLATE' }); },
+    async generateAsync(_options, onUpdate) {
+      const writer = zipWriter((piece) => { pieces.push(piece); }, { blobs: true });
+      for (const [at, { name, data, deflate }] of parts.entries()) {
+        if (typeof data === 'string') await writer.addBytes(name, encoder.encode(data), { deflate });
+        else {
+          try { await writer.add(name, data); } catch { /* unreadable: left out, the rest written */ }
+        }
+        onUpdate?.({ percent: ((at + 1) / parts.length) * 100 });
+      }
+      await writer.finish();
+      return new Blob(pieces, { type: 'application/epub+zip' });
+    },
+  };
 }
 
 /** What marks a book as this app's, and which of its books it is. */

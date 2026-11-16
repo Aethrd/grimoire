@@ -54,6 +54,28 @@ async function bytesOf(blob) {
   });
 }
 
+/* Deflating by the browser's own zlib, not by script.
+ *
+ * Each chapter of a book written out is deflated; done in JavaScript (as
+ * JSZip does) that was one core flat out for the whole of a long export --
+ * the heat. CompressionStream is the same deflate, in the browser's own
+ * code, several times cheaper. Where it is missing, null, and the caller
+ * keeps to JSZip. */
+let deflateKnown = null;
+export function canDeflate() {
+  if (deflateKnown !== null) return deflateKnown;
+  try { deflateKnown = typeof CompressionStream === 'function' && !!new CompressionStream('deflate-raw') && typeof Response === 'function'; } catch { deflateKnown = false; }
+  return deflateKnown;
+}
+
+export async function deflateRaw(bytes) {
+  const stream = new CompressionStream('deflate-raw');
+  const writer = stream.writable.getWriter();
+  writer.write(bytes).catch(() => {});
+  writer.close().catch(() => {});
+  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+}
+
 /** A little-endian record of fixed fields. */
 function record(fields) {
   const size = fields.reduce((n, [bytes]) => n + bytes, 0);
@@ -92,14 +114,15 @@ const join = (...parts) => {
  * @param options.zip64At  the size past which the zip64 forms are used. 4GB,
  *               which is what the format says; lower only to test them.
  */
-export function zipWriter(write, { zip64At = MAX32 } = {}) {
+export function zipWriter(write, { zip64At = MAX32, blobs = false } = {}) {
   const entries = [];
   let offset = 0;
   const stamp = dosTime(new Date());
 
+  // `blobs`: a file's own Blob handed on as it is (write takes Blobs too), not copied into bytes.
   const emit = async (bytes) => {
     await write(bytes);
-    offset += bytes.length;
+    offset += bytes.size ?? bytes.length;
   };
 
   return {
@@ -124,12 +147,39 @@ export function zipWriter(write, { zip64At = MAX32 } = {}) {
         [2, nameBytes.length], [2, extra.length],
       ]), nameBytes, extra));
 
-      for (let at = 0; at < size; at += PIECE) {
-        await emit(await bytesOf(blob.slice(at, Math.min(size, at + PIECE))));
-        onProgress?.(0.5 + at / size / 2);
+      if (blobs) await emit(blob);
+      else {
+        for (let at = 0; at < size; at += PIECE) {
+          await emit(await bytesOf(blob.slice(at, Math.min(size, at + PIECE))));
+          onProgress?.(0.5 + at / size / 2);
+        }
       }
       onProgress?.(1);
-      entries.push({ nameBytes, crc, size, start });
+      entries.push({ nameBytes, crc, size, packed: size, method: 0, start });
+    },
+
+    /**
+     * Add a file already in memory -- a chapter, a list of contents -- deflated
+     * if asked and if that makes it smaller, else stored. Under 4GB, always.
+     */
+    async addBytes(name, bytes, { deflate = false } = {}) {
+      const nameBytes = new TextEncoder().encode(name);
+      const crc = crcUpdate(0, bytes);
+      let data = bytes;
+      let method = 0;
+      if (deflate && bytes.length > 64) {
+        const packed = await deflateRaw(bytes);
+        if (packed.length < bytes.length) { data = packed; method = 8; }
+      }
+      const start = offset;
+      await emit(join(record([
+        [4, 0x04034b50], [2, 20], [2, 0x0800], [2, method],
+        [2, stamp.time], [2, stamp.date], [4, crc],
+        [4, data.length], [4, bytes.length],
+        [2, nameBytes.length], [2, 0],
+      ]), nameBytes));
+      await emit(data);
+      entries.push({ nameBytes, crc, size: bytes.length, packed: data.length, method, start });
     },
 
     /** Write the directory that ends the archive. */
@@ -147,9 +197,9 @@ export function zipWriter(write, { zip64At = MAX32 } = {}) {
           // Made on Unix, as an ordinary readable file: tools then take the
           // name as the UTF-8 it is flagged as, and extract with sane
           // permissions rather than none.
-          [4, 0x02014b50], [2, (3 << 8) | (needs ? 45 : 20)], [2, needs ? 45 : 20], [2, 0x0800], [2, 0],
+          [4, 0x02014b50], [2, (3 << 8) | (needs ? 45 : 20)], [2, needs ? 45 : 20], [2, 0x0800], [2, entry.method || 0],
           [2, stamp.time], [2, stamp.date], [4, entry.crc],
-          [4, entry.size >= zip64At ? MAX32 : entry.size], [4, entry.size >= zip64At ? MAX32 : entry.size],
+          [4, entry.size >= zip64At ? MAX32 : entry.packed ?? entry.size], [4, entry.size >= zip64At ? MAX32 : entry.size],
           [2, entry.nameBytes.length], [2, extra.length], [2, 0], [2, 0], [2, 0], [4, (0o100644 << 16) >>> 0],
           [4, entry.start >= zip64At ? MAX32 : entry.start],
         ]), entry.nameBytes, extra));

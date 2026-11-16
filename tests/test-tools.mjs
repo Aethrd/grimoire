@@ -946,7 +946,13 @@ await t('many books written out in zips under a size: whole books, folder order,
   const app = read('app/src/main/assets/www/js/app.js');
   const fn = (name) => { const at = app.search(new RegExp(`(?:async )?function ${name}\\(`)); return app.slice(at, app.indexOf('\n}\n', at) + 3); };
   const label = app.match(/const limitLabel = .*;/)[0];
+  // How warm the phone says it is, in turn; the waits made short for the test.
+  const heats = [];
+  const fakeWindow = { GrimoireNative: { heat: () => JSON.stringify(heats.shift() || { status: 0, celsius: 30 }) } };
+  const heatSrc = app.slice(app.indexOf('const HEAT_WARM = 38;'), app.indexOf('/** In folder order, then by name'))
+    .replace(/const HEAT_REST = \{[^}]*\};/, 'const HEAT_REST = { warm: 5, hot: 10 };');
   const MB = 1048576;
+  const waits = [];
   const run = async (books, limitMB, { stopAfter = Infinity } = {}) => {
     const sinks = [];
     let stop = null;
@@ -968,13 +974,14 @@ await t('many books written out in zips under a size: whole books, folder order,
       if (++built > stopAfter) stop?.();
       return { blob: { size: sizes.get(id) }, name: `${books.find((b) => b.id === id).title}.epub` };
     }, safeName: (x) => x };
-    const progress = { start: () => Object.assign(() => {}, { say() {}, fail() {}, controls({ cancel }) { stop = cancel; } }) };
-    const exportMany = new Function('library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
-      `${label}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('exportMany')}\nreturn exportMany;`)(
+    const progress = { rested: [], rest(on) { progress.rested.push(on); },
+      start: () => Object.assign(() => {}, { say() {}, fail() {}, activity(now) { if (now) waits.push(now.why); }, controls({ cancel }) { stop = cancel; } }) };
+    const exportMany = new Function('window', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
+      `${label}\n${heatSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('exportMany')}\nreturn exportMany;`)(fakeWindow,
       { displayTitle: (b) => b.title }, epub, progress, exportSink, zipWriter,
       async (staged) => { together = staged; }, (text) => toasts.push(text), () => 'Library', () => {}, async () => {}, false);
     await exportMany(books, limitMB);
-    return { sinks, together, toasts };
+    return { sinks, together, toasts, progress };
   };
   const books = [];
   for (let i = 0; i < 30; i += 1) books.push({ id: i, title: `Novel ${i}`, folder: i % 3 ? 'Korean' : 'Chinese', mb: i === 7 ? 140 : 9 });
@@ -999,6 +1006,15 @@ await t('many books written out in zips under a size: whole books, folder order,
   assert.ok(halted.sinks.length && halted.sinks.every((sink) => sink.discarded), 'a stopped zip kept');
   assert.equal(halted.sinks.flatMap((sink) => sink.entries).length, 13);
   assert.match(halted.toasts.at(-1), /Export stopped — nothing saved/);
+  // The phone warm: a breath before the next book; hot, waited out till it is not -- and nothing skipped.
+  heats.push({ status: 0, celsius: 39 }, { status: 2, celsius: 43 }, { status: 3, celsius: 44 }, { status: 0, celsius: 35 });
+  waits.length = 0;
+  const warm = await run(books.slice(0, 6), 0);
+  assert.equal(warm.sinks[0].entries.length, 6);
+  assert.equal(waits.length, 3, `rested ${waits.length} times`);
+  assert.match(waits[0], /the phone is warm \(39°C\) — letting it cool/);
+  assert.match(waits[1], /43°C/);
+  assert.deepEqual(warm.progress.rested.filter((on) => !on).length, 2, 'the scene not let back on');
   // No limit: one zip, saved as ever.
   const one = await run(books, 0);
   assert.equal(one.sinks.length, 1);
@@ -2372,15 +2388,16 @@ await t('the strip holds still while a field is typed in (the system\u2019s Past
   document.body.appendChild(field);
   const finish = app.progress.start('Holding still');
   finish.say('Reading', 0.1);
-  await settle(20);
+  await settle(320);
   const summary = el('jobs-summary');
   const before = summary.textContent;
   field.focus();
   finish.say('Reading', 0.6);
-  await settle(20);
+  await settle(320);
   assert.equal(summary.textContent, before, 'the strip changed under the field');
   field.blur();
-  await settle(20);
+  // Redrawn a few times a second at most (paintSoon), not on every word.
+  await settle(320);
   assert.notEqual(summary.textContent, before, 'the strip did not catch up once the field was left');
   finish();
   field.remove();
@@ -2430,7 +2447,7 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.match(css, /\.opening \{[^}]*background: var\(--bg\); opacity: 0;\s+transition: opacity \.4s/);
   assert.match(css, /\.import-progress\.open \.jobs-scene \{[^}]*opacity: var\(--jobs-scene-opacity, \.22\);/);
   // Its strength is the person's: 0 stops it; a change of faintness starts it afresh.
-  assert.match(app, /host\.classList\.contains\('open'\) && sceneOpacity > 0;/);
+  assert.match(app, /host\.classList\.contains\('open'\) && sceneOpacity > 0 && !sceneResting;/);
   assert.match(app, /if \(scene && \(!showing \|\| faint !== sceneFaint\)\) \{ scene\.stop\(\); scene = null; \}/);
   assert.match(app, /store\.saveSettings\(\{ queueSceneOpacity: sceneOpacity \}\)/);
   // From the queue page's head: a slider, seen as it moves, kept once let go. (Wired when the imports above began.)

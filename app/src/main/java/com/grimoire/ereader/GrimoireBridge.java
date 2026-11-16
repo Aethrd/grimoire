@@ -8,7 +8,10 @@ import android.app.PendingIntent;
 import android.content.pm.PackageManager;
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.os.BatteryManager;
 import android.os.Build;
+import android.os.PowerManager;
+import android.content.IntentFilter;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.content.Intent;
@@ -259,6 +262,36 @@ public class GrimoireBridge {
             Log.w(TAG, "Could not add to " + handle, e);
             return false;
         }
+    }
+
+    /**
+     * How warm the phone is: Android's own thermal status (0 none, 1 light,
+     * 2 moderate, 3 severe and up; -1 before Android 10) and the battery's
+     * temperature in degrees C (-1 if unknown). Read when asked, from a
+     * sticky broadcast -- nothing registered, nothing kept running.
+     */
+    @JavascriptInterface
+    public String heat() {
+        int status = -1;
+        float celsius = -1f;
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                PowerManager power = activity.getSystemService(PowerManager.class);
+                if (power != null) status = power.getCurrentThermalStatus();
+            }
+        } catch (Throwable e) {
+            Log.w(TAG, "No thermal status", e);
+        }
+        try {
+            Intent battery = activity.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (battery != null) {
+                int tenths = battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Integer.MIN_VALUE);
+                if (tenths != Integer.MIN_VALUE) celsius = tenths / 10f;
+            }
+        } catch (Throwable e) {
+            Log.w(TAG, "No battery temperature", e);
+        }
+        return "{\"status\":" + status + ",\"celsius\":" + celsius + "}";
     }
 
     /** An export stopped before it was saved: its staged file deleted, nothing offered. */

@@ -2174,6 +2174,47 @@ const EXPORT_LIMITS = [0, 2048, 1024, 500, 250, 100];
 const DEFAULT_EXPORT_LIMIT = 1024;
 const limitLabel = (mb) => (mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`);
 
+/* ── a phone getting warm ─────────────────────────────────────────────
+ *
+ * Writing hundreds of books out is a core kept busy for a long time, and
+ * however light each book is made, that warms a phone. Between books, then,
+ * the phone is asked how warm it is (Android's own thermal status, and the
+ * battery's temperature): warm, a breath before the next; hot, it waits --
+ * said on its row -- until it has cooled. The popup's scene is off meanwhile.
+ * It only ever waits; nothing is skipped. */
+const HEAT_WARM = 38;      // degrees C at the battery
+const HEAT_HOT = 41;
+const HEAT_REST = { warm: 3000, hot: 20000 };   // how long a breath, and a wait to cool
+function phoneHeat() {
+  try {
+    const heat = JSON.parse(window.GrimoireNative?.heat?.() || 'null');
+    return heat && typeof heat === 'object' ? heat : null;
+  } catch { return null; }
+}
+const heatState = (heat) => {
+  if (!heat) return 'cool';
+  if (heat.status >= 2 || heat.celsius >= HEAT_HOT) return 'hot';
+  if (heat.status === 1 || heat.celsius >= HEAT_WARM) return 'warm';
+  return 'cool';
+};
+async function letCool(row, { stopped = () => false } = {}) {
+  let rested = false;
+  for (let rounds = 0; rounds < 90 && !stopped(); rounds += 1) {
+    const heat = phoneHeat();
+    const state = heatState(heat);
+    if (state === 'cool') break;
+    const wait = HEAT_REST[state];
+    const degrees = heat.celsius > 0 ? ` (${Math.round(heat.celsius)}°C)` : '';
+    progress.rest(true);
+    row.activity?.({ kind: 'wait', until: Date.now() + wait, why: `the phone is warm${degrees} — letting it cool`, name: 'the next book' });
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    rested = true;
+    // Warm: one breath a book. Hot: till it is not.
+    if (state === 'warm') break;
+  }
+  if (rested) { row.activity?.(null); progress.rest(false); }
+}
+
 /** In folder order, then by name (numbers counted) -- so a folder's books sit together. */
 function exportOrder(books) {
   return [...books].sort((a, b) => (a.folder || '').localeCompare(b.folder || '', undefined, { numeric: true, sensitivity: 'base' })
@@ -2274,7 +2315,7 @@ async function exportMany(books, limitMB = 0) {
   const start = () => {
     const sink = exportSink(limit ? `${base} (part ${staged.length + 1}).zip` : `${base}.zip`);
     const zip = { sink, used: new Set(), inZip: 0, size: 0, central: 0 };
-    zip.writer = zipWriter(async (bytes) => { zip.size += bytes.length; await sink.write(bytes); });
+    zip.writer = zipWriter(async (bytes) => { zip.size += bytes.size ?? bytes.length; await sink.write(bytes); }, { blobs: true });
     return zip;
   };
   const close = async () => {
@@ -2293,6 +2334,8 @@ async function exportMany(books, limitMB = 0) {
    * written into the archive on disk, and let go before the next. */
   try {
     for (const [at, book] of ordered.entries()) {
+      if (stopped) break;
+      if (at) await letCool(finish, { stopped: () => stopped });
       if (stopped) break;
       const zipNo = () => (limit ? ` · zip ${staged.length + 1}` : '');
       finish.say(`Writing ${library.displayTitle(book)}${zipNo()}`, null, `${at + 1} of ${books.length}`);
@@ -2414,7 +2457,7 @@ const autoBackups = (() => {
       const bytes = new TextEncoder().encode(JSON.stringify(backup));
       const sink = exportSink(name);
       for (let from = 0; from < bytes.length; from += 1024 * 1024) await sink.write(bytes.subarray(from, from + 1024 * 1024));
-      bridge().writeBackup(sink.close(), now.keep);
+      bridge().writeBackup(await sink.close(), now.keep);
       return true;
     } catch (error) {
       running = false;
@@ -2598,15 +2641,17 @@ const autoExport = (() => {
     try {
       for (const [at, { book, key, path, stamp }] of plan.entries()) {
         if (stopped) break;
+        if (at) await letCool(finish, { stopped: () => stopped });
+        if (stopped) break;
         // Out of the way of reading: a book being built while one is read makes it stutter.
         while (inBook) await new Promise((resolve) => setTimeout(resolve, 5000));
         finish.say(`Exporting ${library.displayTitle(book)}`, at / plan.length, `${at + 1} of ${plan.length}`);
         try {
           const { blob } = await epub.buildEpub(book.id);
           const sink = exportSink(path.split('/').pop());
-          const bytes = new Uint8Array(await blobs.readArrayBuffer(blob));
-          for (let from = 0; from < bytes.length; from += 1024 * 1024) await sink.write(bytes.subarray(from, from + 1024 * 1024));
-          const { ok, message } = await writeFile(sink.close(), path);
+          // Handed on as it is: read across in pieces by the sink, not copied here first.
+          await sink.write(blob);
+          const { ok, message } = await writeFile(await sink.close(), path);
           if (!ok) throw new Error(message || 'it could not be written');
           // Moved or renamed: the file it had before goes -- unless another book's is there now.
           if (files[key]?.path && files[key].path !== path && !used.has(files[key].path.toLowerCase())) bridge().deleteAutoExport(files[key].path);
@@ -2776,7 +2821,8 @@ async function runCheck(job, under) {
 
 /** Several archives, saved together: one folder asked for (the app), or a download each (a browser). */
 async function exportSinksDone(sinks, mimeType, startedReading = inBook) {
-  const closed = sinks.map((sink) => ({ name: sink.name, made: sink.close() }));
+  const closed = [];
+  for (const sink of sinks) closed.push({ name: sink.name, made: await sink.close() });
   const bridge = window.GrimoireNative;
   await untilNotReading(startedReading);
   if (bridge?.finishExportSet) {
@@ -2805,34 +2851,35 @@ function exportSink(name) {
   const handle = native ? bridge.beginExport(name) : null;
   if (native && !handle) throw new Error('There was nowhere to write the file');
 
-  const held = [];
+  const held = [];              // bytes, or whole Blobs -- a book's file handed on as it is
   let heldBytes = 0;
   const kept = [];             // the browser's download, which has to be whole
 
-  const flush = () => {
+  /* Sent across in pieces of a few megabytes, each turned to text by the
+   * browser's own code (blobBase64), never copied byte by byte in script. */
+  const flush = async () => {
     if (!heldBytes) return;
-    const piece = new Uint8Array(heldBytes);
-    let at = 0;
-    for (const part of held) { piece.set(part, at); at += part.length; }
+    const all = new Blob(held);
     held.length = 0;
     heldBytes = 0;
-    if (!native) { kept.push(piece); return; }
-    if (!bridge.appendExport(handle, base64Of(piece))) {
-      const error = new Error('The file could not be written — the phone may be out of space');
-      error.writeFailed = true;
-      throw error;
+    if (!native) { kept.push(all); return; }
+    for (let at = 0; at < all.size; at += EXPORT_CHUNK) {
+      const text = await blobBase64(all.slice(at, Math.min(all.size, at + EXPORT_CHUNK)));
+      if (!bridge.appendExport(handle, text)) {
+        const error = new Error('The file could not be written — the phone may be out of space');
+        error.writeFailed = true;
+        throw error;
+      }
+      // A breath, so the progress bar paints and the app answers taps.
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
   };
 
   return {
     async write(bytes) {
       held.push(bytes);
-      heldBytes += bytes.length;
-      if (heldBytes >= EXPORT_CHUNK) {
-        flush();
-        // A breath, so the progress bar paints and the app answers taps.
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
+      heldBytes += bytes.size ?? bytes.length;
+      if (heldBytes >= EXPORT_CHUNK) await flush();
     },
     /** Not wanted after all: what was written so far let go of. */
     discard() {
@@ -2842,13 +2889,13 @@ function exportSink(name) {
       if (native) { try { bridge.discardExport?.(handle); } catch { /* gone already */ } }
     },
     /** Written, and its name to save it under -- for saving with others (exportSinksDone). */
-    close() {
-      flush();
+    async close() {
+      await flush();
       return native ? handle : new Blob(kept, { type: 'application/zip' });
     },
     name,
     async done(mimeType, share = false) {
-      flush();
+      await flush();
       // Android's save screen, not over a page being read.
       await untilNotReading(startedReading);
       if (native) { bridge.finishExport(handle, mimeType, share); return; }
@@ -3310,9 +3357,11 @@ export const progress = (() => {
    * At 0 it does not play at all; faint, it draws every other frame, which
    * cannot be seen at that strength; stronger, every frame. */
   let sceneOpacity = 22;
+  // The phone warm (letCool): the scene left off till it has cooled, whatever its setting.
+  let sceneResting = false;
   function syncScene() {
     const host = panel();
-    const showing = !!host && !host.hidden && host.classList.contains('open') && sceneOpacity > 0;
+    const showing = !!host && !host.hidden && host.classList.contains('open') && sceneOpacity > 0 && !sceneResting;
     const faint = sceneOpacity < 40;
     if (scene && (!showing || faint !== sceneFaint)) { scene.stop(); scene = null; }
     if (showing && !scene) { sceneFaint = faint; scene = playScene(el('jobs-scene'), { faint }); }
@@ -3349,6 +3398,11 @@ export const progress = (() => {
    * Paste bubble and selection handles, and with downloads running the strip
    * moved every second. Its words and bar are changed only when they change. */
   let paintHeld = false;
+  let paintTimer = null;
+  function paintSoon() {
+    if (paintTimer) return;
+    paintTimer = setTimeout(() => { paintTimer = null; paint(); }, 250);
+  }
   function paint() {
     const host = panel();
     if (!host) return;
@@ -3419,19 +3473,24 @@ export const progress = (() => {
       if (job.ended) return;
       // Asked to pause or stop: said so, until it has -- not talked over by the chapter it is finishing.
       if (message && job.asked && !force) message = null;
-      if (message) {
+      /* Changed only where it changed, and the strip and its title redrawn at
+       * most a few times a second (paintSoon): an export says how far it has
+       * got after every chapter, thousands a book, and each redraw had the
+       * screen laid out again -- a core kept busy for nothing to be seen. */
+      if (message && message !== job.label) {
         job.label = message;
         job.row.querySelector('.job-label').textContent = message;
       }
       if (fraction != null && Number.isFinite(fraction)) {
         job.fraction = Math.max(0, Math.min(1, fraction));
-        job.row.querySelector('.bar-fill').style.width = `${Math.round(job.fraction * 100)}%`;
+        const width = `${Math.round(job.fraction * 100)}%`;
+        if (width !== job.width) { job.width = width; job.row.querySelector('.bar-fill').style.width = width; }
       }
-      if (count != null) {
+      if (count != null && count !== job.count) {
         job.count = count;
         job.row.querySelector('.job-count').textContent = count;
       }
-      paint();
+      paintSoon();
     };
 
     /**
@@ -3576,6 +3635,7 @@ export const progress = (() => {
   return {
     start,
     seat,
+    rest(on) { if (sceneResting !== !!on) { sceneResting = !!on; syncScene(); } },
     /** Back makes the open page small, before leaving anything. */
     close() {
       if (!isOpen()) return false;
@@ -8144,9 +8204,54 @@ function sameBookAs(book, { jobId = null, title = '', sources = [] } = {}) {
 }
 const jobOwns = (job, book) => sameBookAs(book, { jobId: job.id, title: job.name, sources: job.sources });
 
+/**
+ * Books an old restored queue may have mixed up, said once each.
+ *
+ * Carrying on the wrong book left a mark that can be read back: the book
+ * the queue entry made is its own (queueJob), and is named after the book it
+ * carried on -- so an entry's book whose name is not the entry's is the book
+ * of another title with this entry's chapters after it. The book it took
+ * the start from went to the Bin (the entry's `earlier`). Said in notices so
+ * it can be read again from the bell; nothing is changed.
+ */
+async function findMixedBooks(look) {
+  const said = new Set((await store.settings()).mixedSaid || []);
+  const found = [];
+  for (const job of webQueue) {
+    if (job.bookId == null) continue;
+    const book = await look(job.bookId);
+    if (!book || book.queueJob !== job.id || said.has(book.id)) continue;
+    if (sameBookAs(book, { title: job.name })) continue;
+    const taken = [];
+    for (const id of job.earlier || []) {
+      const was = await look(id);
+      if (was && was.id !== book.id && !sameBookAs(was, { title: job.name })) taken.push(was);
+    }
+    found.push({ book, job, taken });
+  }
+  for (const { book, job, taken } of found.slice(0, 12)) {
+    const bin = taken.length
+      ? ` The book it started from is in the Bin: ${taken.map((was) => `“${library.displayTitle(was)}”`).join(', ')}.`
+      : ' If the book it started from is not on the shelf or in the Bin, it was deleted when the download finished — import it again from your zip.';
+    toast(`May be mixed up: “${library.displayTitle(book)}” starts with that book’s chapters, then has “${job.name}” downloaded after them`
+      + ` (from an old queue restored with a backup).${bin}`, 15000, { kind: 'failed' });
+  }
+  if (found.length > 12) toast(`…and ${found.length - 12} more books that may be mixed up the same way.`, 15000, { kind: 'failed' });
+  if (found.length) {
+    /* And the book it took the start from kept in the Bin: an entry that
+     * finishes deletes for good the versions it carried on (purgeEarlier),
+     * and the one here is not a version of it but another book. */
+    for (const { job } of found) delete job.earlier;
+    saveQueue();
+    await store.saveSettings({ mixedSaid: [...said, ...found.map(({ book }) => book.id)] });
+  }
+  return found;
+}
+
 /** Every saved book number checked, once, as the app opens; any that is not its book let go of. */
 async function checkSavedBooks() {
   const look = async (bookId) => (bookId == null ? null : store.get('books', bookId).catch(() => null));
+  await findMixedBooks(look).catch((error) => console.warn('mixed books', error));
   let let_go = 0;
   let dropped = 0;
   const was = { queue: 0, leftovers: 0, stops: 0 };
@@ -12707,12 +12812,22 @@ const EXPORT_CHUNK = 3 * 1024 * 1024;
 
 /** Bytes to base64, in pieces: String.fromCharCode on a whole chunk at once
  *  overflows the argument list. */
-function base64Of(bytes) {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 8192) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-  }
-  return btoa(binary);
+/**
+ * A piece of a file as base64, for the bridge -- by FileReader, in the
+ * browser's own code. Built in script (a character at a time, then btoa)
+ * it was megabytes of strings made and thrown away for every piece sent:
+ * a large part of what an export spent, and of the heat.
+ */
+function blobBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || '');
+      resolve(url.slice(url.indexOf(',') + 1));
+    };
+    reader.onerror = () => reject(reader.error || new Error('That piece could not be read'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 async function writeOut(blob, name, mimeType, { share = false, toPictures = false, onProgress } = {}) {
@@ -12735,9 +12850,7 @@ async function writeOut(blob, name, mimeType, { share = false, toPictures = fals
 
   for (let at = 0; at < blob.size; at += EXPORT_CHUNK) {
     const piece = blob.slice(at, Math.min(at + EXPORT_CHUNK, blob.size));
-    // Not piece.arrayBuffer(): older WebViews do not have it.
-    const bytes = new Uint8Array(await blobs.readArrayBuffer(piece));
-    if (!bridge.appendExport(handle, base64Of(bytes))) {
+    if (!bridge.appendExport(handle, await blobBase64(piece))) {
       throw new Error('The file could not be written');
     }
     onProgress?.(Math.min(1, (at + EXPORT_CHUNK) / blob.size));

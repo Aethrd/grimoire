@@ -1517,8 +1517,11 @@ await t('files leave in pieces, not in one', () => {
   // is what killed the app when files came the other way.
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /const EXPORT_CHUNK/);
-  assert.match(app, /bridge\.appendExport\(handle, base64Of\(bytes\)\)/);
-  assert.match(app, /bridge\.appendExport\(handle, base64Of\(piece\)\)/);
+  assert.match(app, /bridge\.appendExport\(handle, await blobBase64\(piece\)\)/);
+  assert.match(app, /const text = await blobBase64\(all\.slice\(at, Math\.min\(all\.size, at \+ EXPORT_CHUNK\)\)\);/);
+  // Turned to text by the browser, not a character at a time in script.
+  assert.match(app, /reader\.readAsDataURL\(blob\);/);
+  assert.ok(!/function base64Of\(/.test(app), 'the script-side base64 is still there');
   const bridge = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
   assert.match(bridge, /public boolean appendExport/);
   // Saving somewhere chosen, not only handing it to whatever app will take
