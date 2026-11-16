@@ -2069,6 +2069,8 @@ export async function openVault(onVaultChange, host) {
     button.style.flex = '1';
     button.textContent = label;
     button.onclick = async () => {
+      // Saved: asked whether in parts, as the books are when written out.
+      if (!share && saveBackupHook) { saveBackupHook(); return; }
       button.disabled = true;
       try {
         const backup = await store.exportBackup();
@@ -2112,11 +2114,23 @@ export async function openVault(onVaultChange, host) {
     picker.type = 'file';
     // As wide as a theme's: a .json from a chat app is often typed as text.
     picker.accept = 'application/json,text/plain,application/octet-stream,.json';
+    // A backup in parts: all of them chosen at once, the first (the settings) restored first.
+    picker.multiple = true;
     picker.onchange = async () => {
-      const file = picker.files?.[0];
-      if (!file) return;
+      const files = [...(picker.files || [])];
+      if (!files.length) return;
       try {
-        const report = await store.importBackup(JSON.parse(await readText(file)));
+        const read = [];
+        for (const file of files) read.push(JSON.parse(await readText(file)));
+        read.sort((a, b) => (a.part?.n || 1) - (b.part?.n || 1));
+        const report = { books: 0, missing: 0, marks: 0, events: 0 };
+        for (const data of read) {
+          const one = await store.importBackup(data);
+          for (const key of Object.keys(report)) report[key] += one[key] || 0;
+        }
+        const of = read[0]?.part?.of;
+        const partly = of && read.length < of
+          ? ` · part${read.length === 1 ? '' : 's'} ${read.map((d) => d.part?.n).join(', ')} of ${of} — restore the others too` : '';
         // The look comes back at once -- accent, gradient, its direction and roles -- not at the next launch.
         theme.apply(await store.settings());
         // And which kinds of notice pop up.
@@ -2124,9 +2138,9 @@ export async function openVault(onVaultChange, host) {
         refreshTheme();
         // Said plainly, including what could not be matched: a backup restored
         // before the books are back is half a restore, and should say so.
-        toast(report.missing
+        toast((report.missing
           ? `${report.books} books restored · ${report.missing} not on the shelf yet — they get their covers, blurs, places and marks back as you import them`
-          : `${report.books} books, ${report.marks} marks and ${report.events} sessions restored`, 8000);
+          : `${report.books} books, ${report.marks} marks and ${report.events} sessions restored`) + partly, 8000);
         onVaultChange?.();
         openVault(onVaultChange, body);
       } catch (error) {
@@ -2336,6 +2350,9 @@ let exportEverything = null;
 export function onExportEverything(run) { exportEverything = run; }
 let exportHooks = null;
 export function onAutoExport(hooks) { exportHooks = hooks; }
+let saveBackupHook = null;
+/** Saving a backup by hand, which may ask for it in parts (app.js saveBackupAsked). */
+export function onSaveBackup(fn) { saveBackupHook = fn; }
 
 /** Every book into a folder on a schedule, kept up to date there (app.js autoExport). */
 async function autoExportBlock() {

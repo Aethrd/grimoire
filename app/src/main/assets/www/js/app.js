@@ -2328,6 +2328,61 @@ async function exportMany(books, parts = 1) {
   }
 }
 
+/**
+ * Saving a backup by hand: as one file, or in parts -- each a backup of its
+ * own, about the same size, all saved into one folder chosen once, as the
+ * books are when written out. A backup with hundreds of chosen covers runs
+ * to many megabytes, too much for some places it is sent.
+ */
+const BACKUP_PARTS = [1, 2, 3, 4, 5, 6, 8, 10];
+async function saveBackupAsked() {
+  const backup = await store.exportBackup();
+  const bytes = JSON.stringify(backup).length;
+  const megabytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+  let parts = (await store.settings()).backupParts || 1;
+  const sheet = el('backup-parts-sheet');
+  const row = el('backup-parts-count');
+  const paint = () => {
+    row.replaceChildren(...BACKUP_PARTS.map((n) => {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.textContent = n === 1 ? 'One file' : String(n);
+      chip.setAttribute('aria-pressed', String(n === parts));
+      chip.onclick = () => { parts = n; paint(); };
+      return chip;
+    }));
+    el('backup-parts-note').textContent = parts === 1
+      ? `One file of ${megabytes(bytes)}.`
+      : `${parts} files of about ${megabytes(bytes / parts)} each, every book's record whole in one of them; the settings in the first.`;
+  };
+  paint();
+  el('backup-parts-cancel').onclick = () => { sheet.hidden = true; };
+  sheet.onclick = (event) => { if (event.target === sheet) sheet.hidden = true; };
+  el('backup-parts-go').onclick = async () => {
+    sheet.hidden = true;
+    store.saveSettings({ backupParts: parts }).catch(() => {});
+    const name = `quire-backup-${store.dayKey()}`;
+    try {
+      const pieces = store.splitBackup(backup, parts);
+      if (pieces.length === 1) {
+        await writeOut(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }), `${name}.json`, 'application/json');
+        return;
+      }
+      const sinks = [];
+      for (const piece of pieces) {
+        const sink = exportSink(`${name} (${piece.part.n} of ${piece.part.of}).json`);
+        await sink.write(new TextEncoder().encode(JSON.stringify(piece)));
+        sinks.push(sink);
+      }
+      await exportSinksDone(sinks, 'application/json');
+      toast(`Backup in ${pieces.length} parts — choose a folder for them. Restore them all together, or one at a time.`, 7000, { kind: 'done' });
+    } catch (error) {
+      toast(error.message || 'That backup could not be written', 6000, { kind: 'failed' });
+    }
+  };
+  sheet.hidden = false;
+}
+
 /* ── automatic backups ────────────────────────────────────────────────
  *
  * The backup Settings saves by hand -- everything but the books: folders,
@@ -12879,6 +12934,7 @@ async function boot() {
   autoBackups.start();
   autoExport.start();
   panels.onExportEverything(exportEverything);
+  panels.onSaveBackup(saveBackupAsked);
   panels.onFolderMenu(openFolderActions);
 
 

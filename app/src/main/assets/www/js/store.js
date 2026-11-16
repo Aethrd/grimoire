@@ -107,6 +107,48 @@ function wrap(request) {
   });
 }
 
+/**
+ * A backup in parts, each a backup of its own: the settings, views, reading
+ * log and a series' glossaries in the first, and every book's record -- its
+ * place, marks, chosen cover, glossary -- whole in one part, the parts about
+ * the same size. Restored in any order, one at a time or together, each
+ * gives back what it holds (importBackup).
+ */
+export function splitBackup(backup, parts) {
+  if (!(parts > 1)) return [backup];
+  const groups = new Map();
+  const group = (fingerprint) => {
+    if (!groups.has(fingerprint)) groups.set(fingerprint, { books: [], covers: [], positions: [], marks: [], glossaries: [] });
+    return groups.get(fingerprint);
+  };
+  for (const book of backup.books || []) group(book.fingerprint).books.push(book);
+  for (const cover of backup.covers || []) group(cover.fingerprint).covers.push(cover);
+  for (const position of backup.positions || []) group(position.fingerprint).positions.push(position);
+  for (const mark of backup.marks || []) group(mark.fingerprint).marks.push(mark);
+  const series = [];
+  for (const row of backup.glossaries || []) (row.fingerprint ? group(row.fingerprint).glossaries : series).push(row);
+  const id = `${backup.exportedAt || Date.now()}`;
+  const head = { format: backup.format, version: backup.version, exportedAt: backup.exportedAt };
+  const first = { ...head, settings: backup.settings, imports: backup.imports, views: backup.views,
+    events: backup.events, layout: backup.layout, glossaries: series };
+  const sizeOf = (value) => JSON.stringify(value).length;
+  const list = [...groups.values()].map((g) => ({ g, size: sizeOf(g) }));
+  const total = sizeOf(first) + list.reduce((sum, each) => sum + each.size, 0);
+  const target = total / parts;
+  const out = [{ ...first, books: [], covers: [], positions: [], marks: [] }];
+  let filled = sizeOf(first);
+  for (const { g, size } of list) {
+    if (filled + size / 2 > target && out.length < parts) {
+      out.push({ ...head, books: [], covers: [], positions: [], marks: [], glossaries: [] });
+      filled = 0;
+    }
+    const part = out.at(-1);
+    for (const key of ['books', 'covers', 'positions', 'marks', 'glossaries']) part[key].push(...g[key]);
+    filled += size;
+  }
+  return out.map((part, i) => ({ ...part, part: { n: i + 1, of: out.length, id } }));
+}
+
 /** How many books there are, without reading them. */
 export async function countBooks() {
   return wrap((await tx('books')).count());

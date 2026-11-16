@@ -492,7 +492,7 @@ await t('the look goes in a backup and comes back: gradient colours and shares, 
   const after = await store.settings();
   for (const key of Object.keys(look)) assert.deepEqual(after[key], look[key], `${key} not restored`);
   // The look is put on at once after a restore, not at the next launch.
-  assert.match(read('app/src/main/assets/www/js/panels.js'), /await store\.importBackup\([^\n]*\n[^\n]*\n\s+theme\.apply\(await store\.settings\(\)\);\s+\/\/ And which kinds of notice pop up\.\s+setNoticeTopicsOff\(\(await store\.settings\(\)\)\.noticesOff\);\s+refreshTheme\(\);/);
+  assert.match(read('app/src/main/assets/www/js/panels.js'), /const one = await store\.importBackup\(data\);[\s\S]{0,700}?theme\.apply\(await store\.settings\(\)\);\s+\/\/ And which kinds of notice pop up\.\s+setNoticeTopicsOff\(\(await store\.settings\(\)\)\.noticesOff\);\s+refreshTheme\(\);/);
   // A settings file carries it too.
   assert.equal(await store.importSettings({ noticesOff: ['other'] }), 1);
   assert.deepEqual((await store.settings()).noticesOff, ['other']);
@@ -558,6 +558,52 @@ await t('restoring finds books imported again another way: from a zip, written o
   assert.equal(store.looseKey('Name.epub:12:vol2'), 'name.epub:12');
   assert.equal(store.looseKey('built:1794:abc'), '');
   for (const book of await store.all('books')) await store.deleteBook(book.id);
+});
+
+await t('a backup in parts: each a backup of its own, every book whole in one, the settings in the first', async () => {
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const backup = {
+    format: 'grimoire-backup', version: 1, exportedAt: '2026-11-16T01:00:00.000Z',
+    settings: { theme: 'red' }, imports: [], views: [{ id: 1 }], events: [{ at: 1 }], layout: [],
+    books: Array.from({ length: 40 }, (_, i) => ({ fingerprint: `b${i}.epub:${i}`, title: `Book ${i}`, folder: i % 2 ? 'slop' : 'nsfw' })),
+    covers: Array.from({ length: 10 }, (_, i) => ({ fingerprint: `b${i * 4}.epub:${i * 4}`, dataUrl: `data:image/png;base64,${'A'.repeat(4000)}` })),
+    positions: Array.from({ length: 40 }, (_, i) => ({ fingerprint: `b${i}.epub:${i}`, chapter: i })),
+    marks: [{ fingerprint: 'b3.epub:3', text: 'x' }],
+    glossaries: [{ key: 'series', value: {}, fingerprint: null }, { key: 'k', value: {}, fingerprint: 'b5.epub:5' }],
+  };
+  assert.deepEqual(store.splitBackup(backup, 1), [backup]);
+  const parts = store.splitBackup(backup, 4);
+  assert.equal(parts.length, 4);
+  parts.forEach((part, i) => {
+    assert.equal(part.format, 'grimoire-backup');
+    assert.deepEqual([part.part.n, part.part.of], [i + 1, 4]);
+  });
+  // The settings, views, log and a series' glossary in the first alone.
+  assert.deepEqual(parts[0].settings, { theme: 'red' });
+  assert.ok(parts.slice(1).every((part) => part.settings === undefined && part.events === undefined));
+  // Nothing lost, nothing twice; each book's cover, place and marks with it.
+  for (const key of ['books', 'covers', 'positions', 'marks', 'glossaries']) {
+    assert.equal(parts.reduce((n, part) => n + part[key].length, 0), backup[key].length, key);
+  }
+  for (const part of parts) {
+    const here = new Set(part.books.map((b) => b.fingerprint));
+    for (const key of ['covers', 'positions', 'marks']) for (const row of part[key]) assert.ok(here.has(row.fingerprint), `${key} apart from its book`);
+  }
+  // About the same size.
+  const sizes = parts.map((part) => JSON.stringify(part).length);
+  assert.ok(Math.max(...sizes) < Math.min(...sizes) * 3, `uneven parts ${sizes}`);
+
+  // Restored one part at a time: what each holds comes back.
+  for (const book of await store.all('books')) await store.deleteBook(book.id);
+  const id = await store.add('books', { title: 'Book 37', fingerprint: 'b37.epub:37', addedAt: 1 });
+  const holding = parts.find((part) => part.books.some((b) => b.fingerprint === 'b37.epub:37'));
+  const report = await store.importBackup(JSON.parse(JSON.stringify(holding)));
+  assert.equal(report.books, 1);
+  assert.equal((await store.get('books', id)).folder, 'slop');
+  for (const book of await store.all('books')) await store.deleteBook(book.id);
+  const panelsSrc = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panelsSrc, /if \(!share && saveBackupHook\) \{ saveBackupHook\(\); return; \}/);
+  assert.match(panelsSrc, /picker\.multiple = true;/);
 });
 
 await t('a cover chosen by hand is carried in the backup', async () => {
