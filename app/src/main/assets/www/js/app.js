@@ -11089,9 +11089,25 @@ function paintWebGaps() {
       }
       return set;
     };
-    const listed = numbers(webState.pickListed);
     const have = numbers(ticked.map((link) => link.text));
-    const left = [...listed].filter((n) => !have.has(n)).sort((a, b) => a - b);
+    /* Only the run of numbers the book's chapters are in. A page also links
+     * other things with numbers in them -- another novel's latest chapter in
+     * a sidebar, a count ("1990 views") -- and one stray 1990 by a list of
+     * 1-463 was said as a chapter not picked, the list as "1-1990". Split
+     * where the numbers jump by more than CHAPTER_JUMP, and keep the run
+     * holding the most of the chapters picked. */
+    const CHAPTER_JUMP = 50;
+    const sorted = [...numbers(webState.pickListed)].sort((a, b) => a - b);
+    const runs = [];
+    for (const n of sorted) {
+      const last = runs.at(-1);
+      if (last && n - last.at(-1) <= CHAPTER_JUMP) last.push(n);
+      else runs.push([n]);
+    }
+    const weight = (run) => run.filter((n) => have.has(n)).length * 1e6 + run.length;
+    const main = runs.reduce((best, run) => (!best || weight(run) > weight(best) ? run : best), null) || [];
+    const listed = new Set(main);
+    const left = main.filter((n) => !have.has(n));
     if (left.length && listed.size >= 5) {
       const ranges = [];
       for (let i = 0; i < left.length;) {

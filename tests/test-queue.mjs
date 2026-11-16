@@ -417,6 +417,26 @@ await t('picked in the site: a chapter passed over in the drag, and the page\'s 
   window.GrimoireWeb.fetch = fetchBefore;
 });
 
+
+await t('picked in the site: a stray number on the page (another novel\'s chapter, a count) is not said as one not picked', async () => {
+  const before = window.GrimoireWeb.pickFromSite;
+  const picked = Array.from({ length: 10 }, (_, i) => ({ url: `https://pick.example/c/${i + 1}`, text: `${i + 1}화` }));
+  const listed = [...picked.map((link) => link.text), '1990화'];
+  window.GrimoireWeb.pickFromSite = (id, url) => setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url, title: 'C', links: picked, listed })), 0);
+  document.getElementById('web-reset').click();
+  await new Promise((r) => setTimeout(r, 50));
+  const address = document.getElementById('web-address');
+  address.value = 'https://pick.example/c';
+  address.dispatchEvent(new window.Event('input'));
+  document.getElementById('web-pick').checked = true;
+  document.getElementById('web-find').click();
+  await new Promise((r) => setTimeout(r, 300));
+  const gaps = document.getElementById('web-gaps');
+  assert.doesNotMatch(gaps.textContent, /page lists|1990/, gaps.textContent);
+  window.GrimoireWeb.pickFromSite = before;
+  document.getElementById('web-reset').click();
+  await new Promise((r) => setTimeout(r, 50));
+});
 await t('automatic backups: a folder chosen once, written on schedule and after the queue, the newest few kept', async () => {
   const panels = await import(www('panels.js'));
   let folder = '';
