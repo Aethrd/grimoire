@@ -8413,7 +8413,12 @@ function jobState(job) {
   const host = siteOfJob(job);
   const chapters = `${job.total || job.links.length} chapters${host ? ` · ${host}` : ''}`;
   switch (job.status) {
-    case 'running': return `Downloading · ${job.progress || 'starting…'}`;
+    case 'running': {
+      // Paused by hand: said at once, though it stops only after the chapter under way.
+      const under = queueJobs.get(job.id);
+      if (under?.pausing && !under.yielding && !under.siteStop) return 'Pausing — after the chapter under way, which is kept';
+      return `Downloading · ${job.progress || 'starting…'}`;
+    }
     case 'retry': return `Trying again at ${clockAt(job.retryAt || Date.now())} — last time ${web.shortReason(job.note) || job.note || 'it stopped'} · ${job.links.length} left`;
     case 'attention': return `Needs you: ${job.note || 'it stopped'} · ${job.links.length} left`;
     case 'paused': return `Paused · ${job.links.length} of ${job.total} left`;
@@ -8526,7 +8531,6 @@ function paintQueue() {
     }
   }
   const list = el('build-queue-list');
-  list.replaceChildren();
   const icon = (label, path, onclick, disabled = false) => {
     const button = document.createElement('button');
     button.className = 'icon-btn';
@@ -8543,7 +8547,7 @@ function paintQueue() {
     button.onclick = onclick;
     return button;
   };
-  webQueue.forEach((job, at) => {
+  const makeRow = (job, at) => {
     const row = document.createElement('li');
     row.dataset.status = job.status;
     row.dataset.job = job.id;
@@ -8567,13 +8571,33 @@ function paintQueue() {
     };
     const move = (by) => () => { webQueue.splice(at + by, 0, ...webQueue.splice(at, 1)); saveQueue(); renderWorkshop(); };
     if (job.status === 'running') {
-      row.appendChild(playButton(word('', () => { const under = queueJobs.get(job.id); if (under) under.pausing = true; }), 'pause', `Pause “${job.name}”`));
+      const under = queueJobs.get(job.id);
+      // Asked to pause: said at once, and stops after the chapter under way (it is kept).
+      const pause = playButton(word('', () => {
+        const now = queueJobs.get(job.id);
+        if (!now || now.pausing) return;
+        now.pausing = true;
+        // Its pages under way given up now (each kept to carry on with), not waited for.
+        web.stopPages([...job.links.map((link) => link.url), ...(job.kind === 'check' ? job.sources : [])]);
+        paintQueue();
+      }), 'pause', `Pause “${job.name}”`);
+      pause.disabled = !!under?.pausing;
+      row.appendChild(pause);
     } else {
       /* Paused: carried on from where it stopped. With the queue going, it
        * takes its turn; with the queue paused, it alone goes -- the others
        * stay as they are. */
       if (job.status === 'paused') {
         row.appendChild(playButton(word('', () => resumeJob(job)), 'play', `Resume “${job.name}”`));
+      }
+      /* Waiting its turn: paused where it stands, so the queue goes on without it
+       * until it is resumed. Each book, not only the one downloading. */
+      if (job.status === 'queued' || job.status === 'retry') {
+        row.appendChild(playButton(word('', () => {
+          job.status = 'paused';
+          job.pausedAt = Date.now();
+          saveQueue();
+        }), 'pause', `Pause “${job.name}”`));
       }
       if (job.status === 'attention') {
         // Past a check in the site itself, then tried again; or just tried again.
@@ -8607,10 +8631,7 @@ function paintQueue() {
       } else if (job.status === 'retry') {
         row.appendChild(word('Now', () => { job.retryAt = 0; saveQueue(); pumpQueue(); }));
       }
-      if (locked) {
-        list.appendChild(row);
-        return;
-      }
+      if (locked) return row;
       if (job.status !== 'done') {
         row.appendChild(icon('Move up', 'M12 19V5M5 12l7-7 7 7', move(-1), at === 0));
         row.appendChild(icon('Move down', 'M12 5v14M5 12l7 7 7-7', move(1), at === webQueue.length - 1));
@@ -8622,8 +8643,30 @@ function paintQueue() {
         if (queueState.running) pumpQueue();
       }));
     }
-    list.appendChild(row);
+    return row;
+  };
+  /* Rows kept where nothing about them changed but the words under the
+   * title. Redrawn every time anything in the queue moved, a row's pause
+   * button was replaced under a finger -- the tap landed on a button no
+   * longer there, and nothing paused. */
+  const shown = [...list.children];
+  const sameOrder = shown.length === webQueue.length && shown.every((row, i) => row.dataset.job === webQueue[i].id && row.jobRef === webQueue[i]);
+  const fresh = [];
+  webQueue.forEach((job, at) => {
+    const sig = [job.status, job.name, at, webQueue.length, locked, job.note || '', !!queueJobs.get(job.id)?.pausing,
+      sitesHeld().has(siteOfJob(job))].join('|');
+    if (sameOrder && shown[at].dataset.sig === sig) {
+      const words = shown[at].querySelector('small.muted');
+      if (words) words.textContent = jobState(job);
+      return;
+    }
+    const row = makeRow(job, at);
+    row.dataset.sig = sig;
+    row.jobRef = job;
+    if (sameOrder) shown[at].replaceWith(row);
+    else fresh.push(row);
   });
+  if (!sameOrder) list.replaceChildren(...fresh);
 }
 
 /* ── overnight ─────────────────────────────────────────────────────────

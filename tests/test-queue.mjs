@@ -100,7 +100,9 @@ await t('the queue shows on Build, with each book and Start queue', async () => 
   document.getElementById('build-queue-lock').click();
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(document.getElementById('build-queue-lock').getAttribute('aria-pressed'), 'true');
-  assert.deepEqual(buttons(), []);
+  // Still paused, each of them: the lock keeps them, it does not hold them.
+  assert.deepEqual(buttons().filter((title) => !title.startsWith('Pause “')), []);
+  assert.equal(buttons().length, 4);
   assert.equal((await store.settings()).queueLocked, true);
   assert.ok(list.children[3].querySelector('.col.editable'), 'a locked queue cannot be opened to be named');
   document.getElementById('build-queue-lock').click();
@@ -215,6 +217,21 @@ await t('a queued book not yet started opens to be named, as a book in Build is'
   assert.deepEqual([still.name, still.links.length], ['C, renamed', 4], 'the queued book was changed by leaving it');
   tab();
   await new Promise((r) => setTimeout(r, 50));
+
+  // Waiting its turn, paused on its own: the queue goes on without it till it is resumed.
+  const rowC = () => [...document.getElementById('build-queue-list').children].find((row) => /C, renamed/.test(row.textContent));
+  const pause = rowC().querySelector('button[aria-label^="Pause"]');
+  assert.ok(pause, 'a book waiting in the queue cannot be paused');
+  pause.click();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal((await store.settings()).webQueue[3].status, 'paused');
+  assert.ok(rowC().querySelector('button[aria-label^="Resume"]'), 'paused, but no Resume');
+  // A row nothing changed in is kept as it is, so a tap on its button is not lost to a redraw.
+  const before = rowC();
+  document.getElementById('build-queue-lock').click();
+  document.getElementById('build-queue-lock').click();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(rowC());
 });
 
 await t('started, it builds every book: two at once, never two from one site', async () => {

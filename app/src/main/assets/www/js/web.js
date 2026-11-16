@@ -350,6 +350,33 @@ export function forgetAddress(addresses) {
   return stopped;
 }
 
+/**
+ * One book in the queue paused: the pages it is reading given up now, not
+ * when they come. A page in the browser runs on until it settles -- a
+ * picture book's episode is walked for minutes -- so a pause that waited
+ * for it left the phone working hard (and warm) with nothing to show, and
+ * looked like no pause at all. Its other pages, and every other book's, go
+ * on. What was asked for is kept to carry on with (readPages: paused).
+ */
+export function stopPages(urls) {
+  const wanted = new Set((urls || []).filter(Boolean));
+  if (!wanted.size) return 0;
+  const leave = new Set();
+  for (const [id, entry] of [...pending]) {
+    if (id.startsWith('s') || entry.list || !wanted.has(entry.url)) continue;
+    pending.delete(id);
+    clearInterval(entry.timer);
+    entry.reject(Object.assign(new Error(PAUSED_REASON), { paused: true, tries: 1 }));
+    try { window.GrimoireWeb?.release?.(id); } catch { /* cleared with the next run */ }
+    leave.add(entry.url);
+  }
+  // Only these pages, to the letter: another book of the same site goes on.
+  for (const address of leave) {
+    try { window.GrimoireWeb?.stopPage?.(address); } catch { /* an older build: its answer is ignored */ }
+  }
+  return leave.size;
+}
+
 export function forgetSite(url) {
   if (typeof window.GrimoireWeb?.forgetSite !== 'function') return false;
   window.GrimoireWeb.forgetSite(url);

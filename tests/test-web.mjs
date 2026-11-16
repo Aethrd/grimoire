@@ -254,6 +254,25 @@ await t('without the app, it says so rather than trying', async () => {
   await assert.rejects(web.download('https://novels.example/'), /needs the app/);
 });
 
+await t('one book paused: its own pages given up at once, to the letter; another book of the same site goes on', async () => {
+  const stopped = [];
+  const asked = new Map();
+  const before = window.GrimoireWeb;
+  window.GrimoireWeb = { fetch: (id, url) => asked.set(url, id), release() {}, stopPage: (url) => stopped.push(url) };
+  const mine = web.download('https://same.example/view.php?no=5');
+  const theirs = web.download('https://same.example/view.php?no=6');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(web.stopPages(['https://same.example/view.php?no=5']), 1);
+  await assert.rejects(mine, (error) => error.paused === true);
+  assert.deepEqual(stopped, ['https://same.example/view.php?no=5']);
+  // The other, of the same page with another query, still waiting for its answer.
+  const id = asked.get('https://same.example/view.php?no=6');
+  const path = `data:text/html;base64,${Buffer.from('<p>six</p>').toString('base64')}`;
+  web.settleWeb(id, true, JSON.stringify({ url: 'https://same.example/view.php?no=6', status: 200, type: 'text/html', path }));
+  assert.equal((await theirs).url, 'https://same.example/view.php?no=6');
+  window.GrimoireWeb = before;
+});
+
 await t('the native side fetches only web addresses, and only when asked', () => {
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /if \(!scheme\.equals\("http"\) && !scheme\.equals\("https"\)\)/);
@@ -266,7 +285,8 @@ await t('the native side fetches only web addresses, and only when asked', () =>
   // (And the site shown to pick chapters from by hand.)
   // (And a cleared link's page left, which only ever stops.)
   // (And a picture fetched saying the page it is on, as a browser does -- a picture book's.)
-  assert.deepEqual(entries.sort(), ['fetch', 'fetchFrom', 'forgetSite', 'pickFromSite', 'release', 'render', 'showSite', 'stopAddress', 'stopAll']);
+  // (And a paused book's own pages left, to the letter, which only ever stops.)
+  assert.deepEqual(entries.sort(), ['fetch', 'fetchFrom', 'forgetSite', 'pickFromSite', 'release', 'render', 'showSite', 'stopAddress', 'stopAll', 'stopPage']);
   assert.equal(java.match(/if \(!scheme\.equals\("http"\) && !scheme\.equals\("https"\)\)/g).length, 3);
   // Cookies are the browser's own, kept as it keeps them: nothing of the app's own store.
   assert.ok(!/SharedPreferences|getSharedPreferences/.test(java));

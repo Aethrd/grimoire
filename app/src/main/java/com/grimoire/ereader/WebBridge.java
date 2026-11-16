@@ -855,13 +855,35 @@ public class WebBridge {
         });
     }
 
+    /**
+     * One page given up: a book in the queue paused (web.js stopPages). Only that
+     * address, query and all -- a site whose chapters differ only in "?no=5" has one
+     * stem for all of them, and another book of it must not be stopped with it.
+     */
+    @JavascriptInterface
+    public void stopPage(final String address) {
+        if (address == null) return;
+        synchronized (renderingSites) {
+            clearedPages.put(address, System.currentTimeMillis());
+            renderingSites.notifyAll();
+        }
+        main.post(() -> {
+            for (Browser each : browsers) {
+                Rendering job = each.current;
+                if (job != null && address.equals(job.address)) job.fail("cleared");
+            }
+        });
+    }
+
     /** Addresses cleared on the page, and when: a page of one asked for before then is not opened. */
     private final Map<String, Long> cleared = new HashMap<>();
+    private final Map<String, Long> clearedPages = new HashMap<>();
 
     private boolean clearedSince(String address, long requestedAt) {
         synchronized (renderingSites) {
             Long at = cleared.get(stemOf(address));
-            return at != null && at >= requestedAt;
+            Long page = clearedPages.get(address);
+            return (at != null && at >= requestedAt) || (page != null && page >= requestedAt);
         }
     }
 
