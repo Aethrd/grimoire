@@ -953,6 +953,8 @@ await t('many books written out in zips under a size: whole books, folder order,
     .replace(/const HEAT_REST = \{[^}]*\};/, 'const HEAT_REST = { between: 1, warm: 5, hot: 10 };');
   const MB = 1048576;
   const waits = [];
+  const saved = {};
+  const fakeStore = { settings: async () => saved };
   const run = async (books, limitMB, { stopAfter = Infinity } = {}) => {
     const sinks = [];
     let stop = null;
@@ -976,8 +978,8 @@ await t('many books written out in zips under a size: whole books, folder order,
     }, safeName: (x) => x };
     const progress = {
       start: () => Object.assign(() => {}, { say() {}, fail() {}, activity(now) { if (now) waits.push(now.why); }, controls({ cancel }) { stop = cancel; } }) };
-    const exportMany = new Function('window', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
-      `${label}\n${heatSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('exportMany')}\nreturn exportMany;`)(fakeWindow,
+    const exportMany = new Function('window', 'store', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
+      `${label}\n${heatSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('exportMany')}\nreturn exportMany;`)(fakeWindow, fakeStore,
       { displayTitle: (b) => b.title }, epub, progress, exportSink, zipWriter,
       async (staged) => { together = staged; }, (text) => toasts.push(text), () => 'Library', () => {}, async () => {}, false);
     await exportMany(books, limitMB);
@@ -1015,6 +1017,29 @@ await t('many books written out in zips under a size: whole books, folder order,
   assert.equal(waits.length, 3, `rested ${waits.length} times`);
   assert.match(waits[0], /the phone is warm \(40°C\) — letting it cool/);
   assert.match(waits[1], /43°C/);
+  // Turned off: however warm, no pause and no wait -- the heat not even asked.
+  saved.exportCoolDown = false;
+  heats.length = 0;
+  heats.push({ status: 3, celsius: 46 }, { status: 3, celsius: 46 });
+  waits.length = 0;
+  const off = await run(books.slice(0, 3), 0);
+  assert.equal(off.sinks[0].entries.length, 3);
+  assert.equal(waits.length, 0, 'waited with it turned off');
+  assert.equal(heats.length, 2, 'asked how warm with it turned off');
+  delete saved.exportCoolDown;
+  heats.length = 0;
+  // Turned off during a wait: the wait ends, rather than running out its time.
+  const longSrc = heatSrc.replace(/const HEAT_REST = \{[^}]*\};/, 'const HEAT_REST = { between: 1, warm: 5, hot: 60000 };');
+  const letCool = new Function('window', 'store', `${longSrc}\nreturn letCool;`)(
+    { GrimoireNative: { heat: () => JSON.stringify({ status: 3, celsius: 46 }) } }, fakeStore);
+  const began = Date.now();
+  setTimeout(() => { saved.exportCoolDown = false; }, 300);
+  await letCool({ activity() {} });
+  assert.ok(Date.now() - began < 3000, `still waited ${Date.now() - began} ms`);
+  delete saved.exportCoolDown;
+  // In Settings and on the export sheet alike.
+  assert.match(read('app/src/main/assets/www/js/panels.js'), /toggle\(settings\.exportCoolDown !== false, \(on\) => store\.saveSettings\(\{ exportCoolDown: on \}\)\)/);
+  assert.match(read('app/src/main/assets/www/index.html'), /<button class="switch" id="export-many-cool" aria-pressed="true"/);
   // No limit: one zip, saved as ever.
   const one = await run(books, 0);
   assert.equal(one.sinks.length, 1);

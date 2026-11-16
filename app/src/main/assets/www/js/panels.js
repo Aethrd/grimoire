@@ -2161,6 +2161,10 @@ export async function openVault(onVaultChange, host) {
     everything.onclick = () => exportEverything();
     data.appendChild(everything);
   }
+  // Exports pausing for a warm phone: on unless turned off (app.js letCool).
+  data.appendChild(row('Wait for the phone to cool',
+    'Exports pause between books when the phone is warm (40°C), and wait when hot (43°C). Off: they keep going.',
+    toggle(settings.exportCoolDown !== false, (on) => store.saveSettings({ exportCoolDown: on }))));
   if (exportHooks?.available()) data.appendChild(await autoExportBlock());
 
   /* Settings alone -- to carry a setup to another phone without its books'

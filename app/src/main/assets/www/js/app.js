@@ -2200,17 +2200,26 @@ const heatState = (heat) => {
   if (heat.status === 1 || heat.celsius >= HEAT_WARM) return 'warm';
   return 'cool';
 };
+/* Whether to wait for it at all: on unless turned off (Settings, or the
+ * export sheet). Read again each second of a wait, so turning it off ends
+ * one already under way. */
+const coolDownOn = async () => (await store.settings().catch(() => ({}))).exportCoolDown !== false;
+
 async function letCool(row, { stopped = () => false } = {}) {
   if (HEAT_REST.between) await new Promise((resolve) => setTimeout(resolve, HEAT_REST.between));
   let rested = false;
   for (let rounds = 0; rounds < 90 && !stopped(); rounds += 1) {
+    if (!(await coolDownOn())) break;
     const heat = phoneHeat();
     const state = heatState(heat);
     if (state === 'cool') break;
     const wait = HEAT_REST[state];
     const degrees = heat.celsius > 0 ? ` (${Math.round(heat.celsius)}°C)` : '';
-    row.activity?.({ kind: 'wait', until: Date.now() + wait, why: `the phone is warm${degrees} — letting it cool`, name: 'the next book' });
-    await new Promise((resolve) => setTimeout(resolve, wait));
+    row.activity?.({ kind: 'wait', until: Date.now() + wait, why: `the phone is warm${degrees} — letting it cool (can be turned off in Settings)`, name: 'the next book' });
+    const until = Date.now() + wait;
+    while (Date.now() < until && !stopped() && (await coolDownOn())) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(1000, until - Date.now())));
+    }
     rested = true;
     // Warm: one breath a book. Hot: till it is not.
     if (state === 'warm') break;
@@ -2281,6 +2290,16 @@ async function askExportParts(books) {
       : `All ${books.length} in one zip, however large it gets.`;
   };
   paint();
+  // Waiting for a warm phone to cool: said, and turned off here as in Settings.
+  const cool = el('export-many-cool');
+  if (cool) {
+    cool.setAttribute('aria-pressed', String((await store.settings()).exportCoolDown !== false));
+    cool.onclick = () => {
+      const next = cool.getAttribute('aria-pressed') !== 'true';
+      cool.setAttribute('aria-pressed', String(next));
+      store.saveSettings({ exportCoolDown: next }).catch(() => {});
+    };
+  }
   el('export-many-cancel').onclick = () => { sheet.hidden = true; };
   sheet.onclick = (event) => { if (event.target === sheet) sheet.hidden = true; };
   el('export-many-go').onclick = () => {
