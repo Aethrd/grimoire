@@ -78,7 +78,7 @@ await t('a saved book number that is another book now is let go of -- nothing bu
 
 await t('a backup carries no queue, and restoring one keeps this phone’s queue as it is', async () => {
   const backup = await store.exportBackup();
-  for (const key of ['webQueue', 'queueRunning', 'webLeftovers', 'webStops', 'autoExport', 'autoBackup']) {
+  for (const key of ['webQueue', 'queueRunning', 'webLeftovers', 'webStops', 'autoExport', 'autoBackup', 'exportRun']) {
     assert.ok(!(key in backup.settings), `${key} in the backup`);
   }
   const before = (await store.settings()).webQueue.map((each) => each.id);
