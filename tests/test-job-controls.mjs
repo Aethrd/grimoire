@@ -42,6 +42,9 @@ await store.saveSettings({
 await import(www('app.js'));
 await new Promise((r) => setTimeout(r, 700));
 
+const screens = await import(www('screens.js'));
+const said = () => screens.notices().map((entry) => entry.text || entry.message || String(entry)).join('\n');
+
 await t('a saved book number that is another book now is let go of -- nothing built onto, binned or covered', async () => {
   const kept = (await store.settings()).webQueue;
   const by = Object.fromEntries(kept.map((each) => [each.id, each]));
@@ -49,20 +52,23 @@ await t('a saved book number that is another book now is let go of -- nothing bu
   assert.equal(by['q-2'].bookId, undefined);
   assert.equal(by['q-2'].earlier, undefined, 'still holding the other book to delete');
   assert.equal(by['q-3'].bookId, renamed);
+  // Said by name: which download, and the book it had been pointed at; and on its row in the queue.
+  assert.match(said(), /saved downloads? pointed at a book not (its|their) own .*caught before .*ran — no book was changed: .*the queue’s “Return of the Hero” \(pointed at “A Different Novel”\) — will begin a book of its own/);
+  assert.match(said(), /the queue’s check of “Gone Book” \(pointed at “A Different Novel”\) — taken out/);
+  assert.match(said(), /Build’s leftover “Return of the Hero” \(pointed at “A Different Novel”\)/);
+  assert.equal(by['q-2'].repointed, '“A Different Novel”');
   assert.equal(by['q-4'], undefined, 'a check of another book still queued');
   assert.equal((await store.settings()).webLeftovers[0].bookId, null);
   // Nothing done to the books themselves.
   for (const id of [mine, other, renamed]) assert.ok(!(await store.get('books', id)).binnedAt);
   // A book an old queue mixed up is named, with the one it took the start from -- once.
-  const screens = await import(www('screens.js'));
-  const said = screens.notices().map((entry) => entry.text || entry.message || String(entry)).join('\n');
-  assert.match(said, /May be mixed up: “Lord of Mysteries” starts with that book’s chapters, then has “Shadow Slave” downloaded after them/);
-  assert.match(said, /The book it started from is in the Bin: “Lord of Mysteries”/);
+  assert.match(said(), /May be mixed up: “Lord of Mysteries” starts with that book’s chapters, then has “Shadow Slave” downloaded after them/);
+  assert.match(said(), /The book it started from is in the Bin: “Lord of Mysteries”/);
   assert.deepEqual((await store.settings()).mixedSaid, [mixed]);
   // The book it took from kept in the Bin: not deleted for good when the entry finishes.
   assert.equal(by['q-5'].earlier, undefined);
   assert.ok((await store.get('books', victim)));
-  assert.ok(!/May be mixed up: “Solo Leveling”/.test(said), 'a book carried on rightly said to be mixed up');
+  assert.ok(!/May be mixed up: “Solo Leveling”/.test(said()), 'a book carried on rightly said to be mixed up');
   // And at the last moment too: a download not owning its book begins its own.
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /if \(job\.bookId != null && !jobOwns\(job, before\)\) \{\s*before = null;/);

@@ -8255,6 +8255,9 @@ async function checkSavedBooks() {
   let let_go = 0;
   let dropped = 0;
   const was = { queue: 0, leftovers: 0, stops: 0 };
+  // Each said by name: which download, and which book it had wrongly been pointed at.
+  const named = [];
+  const titleOf = (book) => (book ? `“${library.displayTitle(book)}”` : 'a book no longer here');
   for (const job of [...webQueue]) {
     if (job.bookId == null || job.status === 'running') continue;
     const book = await look(job.bookId);
@@ -8263,8 +8266,12 @@ async function checkSavedBooks() {
     if (job.kind === 'check' || job.kind === 'refetch') {
       webQueue.splice(webQueue.indexOf(job), 1);
       dropped += 1;
+      named.push(`the queue’s ${job.kind === 'check' ? 'check' : 'refetch'} of “${job.name}” (pointed at ${titleOf(book)}) — taken out`);
       continue;
     }
+    named.push(`the queue’s “${job.name}” (pointed at ${titleOf(book)}) — will begin a book of its own`);
+    // Said on its row in the queue too, so it can be found (jobState), until it has run.
+    job.repointed = titleOf(book);
     delete job.bookId;
     delete job.earlier;
     let_go += 1;
@@ -8273,25 +8280,35 @@ async function checkSavedBooks() {
   was.queue += dropped;
   for (const left of webLeftovers) {
     if (left.bookId == null) continue;
-    if (!sameBookAs(await look(left.bookId), { title: left.bookTitle || left.name, sources: left.sources })) { left.bookId = null; let_go += 1; was.leftovers += 1; }
+    const book = await look(left.bookId);
+    if (!sameBookAs(book, { title: left.bookTitle || left.name, sources: left.sources })) {
+      named.push(`Build’s leftover “${String(left.bookTitle || left.name || '').replace(LEFTOVER_SUFFIX, '')}” (pointed at ${titleOf(book)})`);
+      left.bookId = null; let_go += 1; was.leftovers += 1;
+    }
   }
   for (const stop of webStops) {
     if (stop.bookId == null) continue;
-    if (!sameBookAs(await look(stop.bookId), { title: stop.bookTitle, sources: [stop.url] })) { stop.bookId = null; let_go += 1; was.stops += 1; }
+    const book = await look(stop.bookId);
+    if (!sameBookAs(book, { title: stop.bookTitle, sources: [stop.url] })) {
+      named.push(`where “${stop.bookTitle || stop.url}” stopped (pointed at ${titleOf(book)})`);
+      stop.bookId = null; let_go += 1; was.stops += 1;
+    }
   }
   if (!let_go && !dropped) return 0;
   // Only what changed written back.
   if (was.queue) saveQueue();
   if (was.leftovers) saveLeftovers();
   if (was.stops) saveStops();
-  toast(`${let_go + dropped} saved download${let_go + dropped === 1 ? '' : 's'} pointed at a book that is not theirs (from an older backup)`
-    + ` — ${dropped ? `${dropped} check${dropped === 1 ? '' : 's'} taken out; ` : ''}the rest will begin books of their own. No book was changed.`, 9000);
+  const n = let_go + dropped;
+  toast(`${n} saved download${n === 1 ? '' : 's'} pointed at a book not ${n === 1 ? 'its' : 'their'} own (from an older backup), caught before ${n === 1 ? 'it' : 'they'} ran — no book was changed: `
+    + `${named.slice(0, 8).join('; ')}${named.length > 8 ? `; and ${named.length - 8} more` : ''}.`, 15000);
   return let_go + dropped;
 }
 
 /** One book of the queue, built on its own: carried on from the book so far, if there is one. */
 async function runJob(job) {
   const under = { pausing: false, finish: progress.start(job.name), run: null, startedAt: Date.now() };
+  delete job.repointed;
   under.finish.controls({
     pause: () => pauseRunningJob(job),
     cancel: () => pauseRunningJob(job, { cancel: true }),
@@ -8685,6 +8702,13 @@ const clockAt = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', m
 /** What a queued book is doing, said in a line. */
 function jobState(job) {
   const host = siteOfJob(job);
+  // Its saved book number was another book's (checkSavedBooks): said until it runs.
+  const repointed = job.repointed && job.status !== 'done' && job.status !== 'running'
+    ? ` · was pointed at ${job.repointed}, not its own book — begins a book of its own` : '';
+  return jobWords(job, host) + repointed;
+}
+
+function jobWords(job, host) {
   const chapters = `${job.total || job.links.length} chapters${host ? ` · ${host}` : ''}`;
   switch (job.status) {
     case 'running': {
