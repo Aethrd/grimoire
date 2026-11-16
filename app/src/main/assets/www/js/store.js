@@ -336,7 +336,7 @@ export async function importSettings(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('That file is not a settings file.');
   const patch = {};
   for (const [key, value] of Object.entries(data)) {
-    if (!(key in DEFAULT_SETTINGS) || key === 'lastCrash') continue;
+    if (!(key in DEFAULT_SETTINGS) || key === 'lastCrash' || DEVICE_SETTINGS.includes(key)) continue;
     const wanted = DEFAULT_SETTINGS[key];
     if (key === 'backgroundImage') {
       if (value === null || (typeof value === 'string' && /^data:image\//i.test(value))) patch[key] = value;
@@ -630,6 +630,19 @@ function dataUrlToBlob(url) {
   return new Blob([bytes], { type });
 }
 
+/**
+ * What a backup leaves alone: this phone's downloads and folders, not your
+ * settings. The queue, Build's leftovers and where each website stopped name
+ * books by their number in this phone's storage -- numbers that mean other
+ * books once storage is wiped and the books imported again, so a restored
+ * queue carried on and binned the wrong books. The automatic backup's and
+ * export's state names folders this phone was given, and the files written
+ * there. Never written into a backup; one from before that has them, they
+ * are passed over and this phone's own kept.
+ */
+export const DEVICE_SETTINGS = ['webQueue', 'queueRunning', 'webLeftovers', 'webStops', 'autoExport', 'autoBackup'];
+const withoutDevice = (value) => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !DEVICE_SETTINGS.includes(key)));
+
 export async function exportBackup() {
   const books = await all('books');
   const byId = new Map(books.map((b) => [b.id, b]));
@@ -638,7 +651,7 @@ export async function exportBackup() {
     format: 'grimoire-backup',
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
-    settings: await settings(),
+    settings: withoutDevice(await settings()),
     // Kept out of the settings blob as well, so an export is a record of how
     // imports have actually behaved rather than only the most recent one.
     imports: (await settings()).importHistory || [],
@@ -962,8 +975,12 @@ export async function importBackup(data) {
   if (data.settings) {
     // Merged over the defaults, so a backup from an older version does not
     // remove settings it had never heard of.
-    cache = Object.assign({}, DEFAULT_SETTINGS, data.settings);
+    // This phone's queue, leftovers and folders kept as they are (DEVICE_SETTINGS).
+    const here = await settings();
+    const own = Object.fromEntries(DEVICE_SETTINGS.filter((key) => key in here).map((key) => [key, here[key]]));
+    cache = Object.assign({}, DEFAULT_SETTINGS, withoutDevice(data.settings), own);
     await put('settings', { key: 'app', value: cache });
+    report.skipped = DEVICE_SETTINGS.filter((key) => key in data.settings && (Array.isArray(data.settings[key]) ? data.settings[key].length : data.settings[key] != null));
     report.settings = true;
   }
 

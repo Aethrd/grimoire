@@ -2264,6 +2264,9 @@ async function exportMany(books, limitMB = 0) {
   const base = epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books');
   const staged = [];   // each zip, written and waiting to be saved
   let written = 0;
+  // Stopped from the popup: after the book under way; nothing half-made is saved.
+  let stopped = false;
+  finish.controls({ cancel: () => { stopped = true; } });
 
   /* The zip being filled. Opened only once a book is ready to go in it, so
    * none is ever left empty; closed when the next book would take it over. */
@@ -2290,6 +2293,7 @@ async function exportMany(books, limitMB = 0) {
    * written into the archive on disk, and let go before the next. */
   try {
     for (const [at, book] of ordered.entries()) {
+      if (stopped) break;
       const zipNo = () => (limit ? ` · zip ${staged.length + 1}` : '');
       finish.say(`Writing ${library.displayTitle(book)}${zipNo()}`, null, `${at + 1} of ${books.length}`);
       try {
@@ -2317,6 +2321,12 @@ async function exportMany(books, limitMB = 0) {
         // One book that will not write costs that book, not the batch.
         failed.push({ title: library.displayTitle(book), reason: error.message });
       }
+    }
+    if (stopped) {
+      for (const sink of [...staged, open?.sink].filter(Boolean)) sink.discard();
+      open = null;
+      toast('Export stopped — nothing saved', 4000);
+      return;
     }
     await close();
 
@@ -2582,8 +2592,12 @@ const autoExport = (() => {
     const finish = progress.start(`Exporting ${plan.length} book${plan.length === 1 ? '' : 's'}`);
     let written = 0;
     const failed = [];
+    // Stopped from the popup: after the book under way. What is written stays; the rest goes next time.
+    let stopped = false;
+    finish.controls({ cancel: () => { stopped = true; } });
     try {
       for (const [at, { book, key, path, stamp }] of plan.entries()) {
+        if (stopped) break;
         // Out of the way of reading: a book being built while one is read makes it stutter.
         while (inBook) await new Promise((resolve) => setTimeout(resolve, 5000));
         finish.say(`Exporting ${library.displayTitle(book)}`, at / plan.length, `${at + 1} of ${plan.length}`);
@@ -2604,6 +2618,11 @@ const autoExport = (() => {
           if (/can no longer be written/.test(error.message)) throw error;
           failed.push(`${library.displayTitle(book)}: ${error.message}`);
         }
+      }
+      if (stopped) {
+        await set({ files, lastError: '' });
+        toast(`Automatic export stopped — ${written} book${written === 1 ? '' : 's'} written; the rest next time`, 6000);
+        return true;
       }
       let deleted = 0;
       for (const key of gone) {
@@ -2736,7 +2755,8 @@ function startQueueQuietly() {
  */
 async function runCheck(job, under) {
   const book = await store.get('books', job.bookId);
-  if (!book || book.binnedAt) return { none: true };
+  // Not this check's book (an old number, from a backup): nothing to check.
+  if (!book || book.binnedAt || !jobOwns(job, book)) return { none: true };
   const chapters = await store.byIndex('chapters', 'bookId', book.id);
   const known = new Set(chapters.map((chapter) => chapter.from).filter(Boolean));
   const names = new Set(chapters.map((chapter) => tidyName(chapter.title)).filter(Boolean));
@@ -2813,6 +2833,13 @@ function exportSink(name) {
         // A breath, so the progress bar paints and the app answers taps.
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
+    },
+    /** Not wanted after all: what was written so far let go of. */
+    discard() {
+      held.length = 0;
+      heldBytes = 0;
+      kept.length = 0;
+      if (native) { try { bridge.discardExport?.(handle); } catch { /* gone already */ } }
     },
     /** Written, and its name to save it under -- for saving with others (exportSinksDone). */
     close() {
@@ -3388,8 +3415,10 @@ export const progress = (() => {
     paint();
 
     /** What this operation is doing now. Each row says only its own. */
-    const say = (message, fraction, count) => {
+    const say = (message, fraction, count, force = false) => {
       if (job.ended) return;
+      // Asked to pause or stop: said so, until it has -- not talked over by the chapter it is finishing.
+      if (message && job.asked && !force) message = null;
       if (message) {
         job.label = message;
         job.row.querySelector('.job-label').textContent = message;
@@ -3465,9 +3494,74 @@ export const progress = (() => {
       }, failed ? 2400 : 900);
     };
 
+    /**
+     * Pause and Stop on the row, for an operation that can do them: { pause,
+     * cancel }, each called once when tapped. Made once, when the operation
+     * says it can -- never redrawn while it runs, so nothing is being made
+     * again every second, and no button is swapped out from under a finger.
+     * A tap only asks: the operation stops at its next safe point (after the
+     * chapter or book under way), which costs nothing to wait for. Stop asks
+     * twice -- a slip of the thumb on a long download is hours.
+     */
+    const controls = ({ pause, cancel } = {}) => {
+      if (job.ended) return;
+      const line = job.row.querySelector('.import-line');
+      let box = line.querySelector('.job-controls');
+      if (!box) {
+        box = document.createElement('span');
+        box.className = 'job-controls';
+        line.appendChild(box);
+      }
+      box.replaceChildren();
+      const button = (kind, words, path) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `job-btn job-${kind}`;
+        b.title = words;
+        b.setAttribute('aria-label', words);
+        b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${path}"/></svg>`;
+        box.appendChild(b);
+        return b;
+      };
+      const asked = (kind, words) => {
+        job.row.classList.add('stopping');
+        for (const b of box.querySelectorAll('button')) b.disabled = true;
+        job.asked = kind;
+        say(words, null, null, true);
+      };
+      if (pause) {
+        const b = button('pause', 'Pause', 'M8 5v14M16 5v14');
+        b.onclick = (event) => {
+          event.stopPropagation();
+          if (b.disabled || job.ended) return;
+          asked('pause', 'Pausing — after the part under way, which is kept…');
+          try { pause(); } catch (error) { console.warn('pause', error); }
+        };
+      }
+      if (cancel) {
+        const b = button('cancel', 'Stop', 'M6 6l12 12M18 6L6 18');
+        let armed = 0;
+        b.onclick = (event) => {
+          event.stopPropagation();
+          if (b.disabled || job.ended) return;
+          if (Date.now() - armed > 3000) {
+            armed = Date.now();
+            b.classList.add('armed');
+            b.title = 'Tap again to stop';
+            b.setAttribute('aria-label', 'Tap again to stop');
+            setTimeout(() => { if (!b.disabled) { b.classList.remove('armed'); b.title = 'Stop'; b.setAttribute('aria-label', 'Stop'); } }, 3000);
+            return;
+          }
+          asked('cancel', 'Stopping…');
+          try { cancel(); } catch (error) { console.warn('stop', error); }
+        };
+      }
+    };
+
     // Called as a function, as every caller already does; and with say and
     // step on it for routing progress to this row and no other.
     const handle = () => end(false);
+    handle.controls = controls;
     handle.say = say;
     handle.activity = activity;
     handle.step = (message, fraction) => say(message, fraction);
@@ -3678,10 +3772,14 @@ async function importNow(files, { transient = false, into = '' } = {}, done) {
    * every later operation. */
   let results;
   refused.clear();
+  // Stopped from the popup: after the file under way. The books already in stay.
+  let stopped = false;
+  done.controls({ cancel: () => { stopped = true; } });
   try {
     results = await library.importFiles(files, {
       transient,
       into,
+      shouldStop: () => stopped,
       // Anything the page is not allowed to read is read by the shell
       // instead -- but only when a read is actually refused.
       rescue: (file) => rescueFile(file, done),
@@ -3708,6 +3806,7 @@ async function importNow(files, { transient = false, into = '' } = {}, done) {
    * "0 books added" with a tick read as an import that had broken, when
    * every book in the zip was simply on the shelf already. */
   const besides = [
+    results.stopped ? `stopped — ${results.stopped} not imported` : null,
     results.already ? `${results.already} already on your shelf` : null,
     results.inVault ? `${results.inVault} already in the Vault` : null,
     results.replaced ? `${results.replaced} replaced ${results.replaced === 1 ? 'its copy' : 'their copies'} in the Bin` : null,
@@ -7987,9 +8086,111 @@ function pumpQueue() {
   saveQueue();
 }
 
+/**
+ * A book downloading in the queue, paused -- or stopped, and taken out of the
+ * queue. Either way the same, light way: its own pages under way given up at
+ * once by their exact addresses (each kept to carry on with), nothing else
+ * touched. Stopping every page at once, or the book's earlier chapters
+ * copied again, is what heated the phone; neither happens here. What came is
+ * made into the book either way -- stopping keeps it, it only ends the download.
+ */
+function pauseRunningJob(job, { cancel = false } = {}) {
+  const now = queueJobs.get(job.id);
+  if (!now) return false;
+  if (cancel) now.cancelled = true;
+  if (!now.pausing) {
+    now.pausing = true;
+    web.stopPages([...job.links.map((link) => link.url), ...(job.kind === 'check' ? job.sources : [])]);
+  }
+  paintQueue();
+  return true;
+}
+
+/** Stopped from the popup: out of the queue once it has stopped, and said what was kept. */
+function dropCancelled(job, under) {
+  if (!under.cancelled) return false;
+  const at = webQueue.indexOf(job);
+  if (at !== -1) webQueue.splice(at, 1);
+  const kept = job.kind === 'check' || job.bookId == null ? '' : ' — the chapters that came are in the book on the shelf';
+  whenNotReading(() => toast(`“${job.name}” stopped and taken out of the queue${kept}.`, 6000));
+  return true;
+}
+
+/* ── a saved book number is not the book ───────────────────────────────
+ *
+ * The queue, Build's leftovers and where each website stopped keep the book
+ * they carry on as its number in this app's storage. A number is only a
+ * place: storage wiped and the books imported again, the numbers start over
+ * and the same one is another book. A backup restored with an old queue in
+ * it (as one did, before backups stopped carrying it) then carried on the
+ * wrong book -- its chapters first, under its name, and that book put in the
+ * Bin, deleted for good once the download finished; the queued book's chosen
+ * picture went on it as well. So a number is trusted only if the book there
+ * is that download's: made by that queue entry, from the same website, or of
+ * the same name. Otherwise the download is begun as a book of its own --
+ * never one built onto, or binned, or covered, that it was not for. */
+const addressKey = (url) => {
+  try { const u = new URL(url); return `${u.host.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`; } catch { return String(url || ''); }
+};
+const plainTitle = (text) => String(text || '').normalize('NFKC').toLowerCase()
+  .replace(LEFTOVER_SUFFIX, '').replace(/[^\p{L}\p{N}]+/gu, '');
+function sameBookAs(book, { jobId = null, title = '', sources = [] } = {}) {
+  if (!book) return false;
+  if (jobId && book.queueJob === jobId) return true;
+  const want = new Set((sources || []).filter(Boolean).map(addressKey));
+  if (want.size && (book.webSources || []).some((source) => want.has(addressKey(source)))) return true;
+  const named = plainTitle(title);
+  return !!named && [book.title, library.displayTitle(book)].some((each) => plainTitle(each) === named);
+}
+const jobOwns = (job, book) => sameBookAs(book, { jobId: job.id, title: job.name, sources: job.sources });
+
+/** Every saved book number checked, once, as the app opens; any that is not its book let go of. */
+async function checkSavedBooks() {
+  const look = async (bookId) => (bookId == null ? null : store.get('books', bookId).catch(() => null));
+  let let_go = 0;
+  let dropped = 0;
+  const was = { queue: 0, leftovers: 0, stops: 0 };
+  for (const job of [...webQueue]) {
+    if (job.bookId == null || job.status === 'running') continue;
+    const book = await look(job.bookId);
+    if (jobOwns(job, book)) continue;
+    // A check or a refetch is of its book alone: with no book, nothing to do.
+    if (job.kind === 'check' || job.kind === 'refetch') {
+      webQueue.splice(webQueue.indexOf(job), 1);
+      dropped += 1;
+      continue;
+    }
+    delete job.bookId;
+    delete job.earlier;
+    let_go += 1;
+    was.queue += 1;
+  }
+  was.queue += dropped;
+  for (const left of webLeftovers) {
+    if (left.bookId == null) continue;
+    if (!sameBookAs(await look(left.bookId), { title: left.bookTitle || left.name, sources: left.sources })) { left.bookId = null; let_go += 1; was.leftovers += 1; }
+  }
+  for (const stop of webStops) {
+    if (stop.bookId == null) continue;
+    if (!sameBookAs(await look(stop.bookId), { title: stop.bookTitle, sources: [stop.url] })) { stop.bookId = null; let_go += 1; was.stops += 1; }
+  }
+  if (!let_go && !dropped) return 0;
+  // Only what changed written back.
+  if (was.queue) saveQueue();
+  if (was.leftovers) saveLeftovers();
+  if (was.stops) saveStops();
+  toast(`${let_go + dropped} saved download${let_go + dropped === 1 ? '' : 's'} pointed at a book that is not theirs (from an older backup)`
+    + ` — ${dropped ? `${dropped} check${dropped === 1 ? '' : 's'} taken out; ` : ''}the rest will begin books of their own. No book was changed.`, 9000);
+  return let_go + dropped;
+}
+
 /** One book of the queue, built on its own: carried on from the book so far, if there is one. */
 async function runJob(job) {
   const under = { pausing: false, finish: progress.start(job.name), run: null, startedAt: Date.now() };
+  under.finish.controls({
+    pause: () => pauseRunningJob(job),
+    cancel: () => pauseRunningJob(job, { cancel: true }),
+  });
   queueJobs.set(job.id, under);
   job.status = 'running';
   delete job.resumed;
@@ -8009,6 +8210,7 @@ async function runJob(job) {
     } else if (result.fresh || result.none) webQueue.splice(webQueue.indexOf(job), 1);
     else if (queueHalts(result.reason)) settleJob(job, { rest: [{ url: job.sources[0], text: 'its contents page' }], reason: result.reason, paused: false }, false);
     else { job.status = 'attention'; job.note = `could not check for new chapters: ${result.reason}`; }
+    dropCancelled(job, under);
     saveQueue();
     if (queueState.running) pumpQueue();
     else letScreenGo();
@@ -8023,7 +8225,13 @@ async function runJob(job) {
       outcome = await runRefetch(job, under);
     } else {
       const parts = [];
-      const before = job.bookId != null ? await store.get('books', job.bookId) : null;
+      let before = job.bookId != null ? await store.get('books', job.bookId) : null;
+      // Not this download's book (see sameBookAs): begun as a book of its own, the other left alone.
+      if (job.bookId != null && !jobOwns(job, before)) {
+        before = null;
+        delete job.bookId;
+        delete job.earlier;
+      }
       if (before) parts.push({ ...build.bookPart(before), seamless: true });
       /* The picture chosen for it wins, always -- over the site's, and over the
        * book it carries on. Without one: the book carried on keeps its own
@@ -8079,6 +8287,7 @@ async function runJob(job) {
   }
   // Stepped back for a book resumed by hand: back in line, not paused.
   settleJob(job, outcome, under.pausing && !under.siteStop && !under.yielding);
+  if (dropCancelled(job, under)) outcome.said = '';
   if (outcome.said) whenNotReading(() => toast(outcome.said, 8000, { kind: 'done' }));
   await purgeSuperseded().catch(() => 0);
   if (job.status === 'done' && job.kind !== 'refetch') {
@@ -8533,14 +8742,7 @@ function paintQueue() {
     if (job.status === 'running') {
       const under = queueJobs.get(job.id);
       // Asked to pause: said at once, and stops after the chapter under way (it is kept).
-      const pause = playButton(word('', () => {
-        const now = queueJobs.get(job.id);
-        if (!now || now.pausing) return;
-        now.pausing = true;
-        // Its pages under way given up now (each kept to carry on with), not waited for.
-        web.stopPages([...job.links.map((link) => link.url), ...(job.kind === 'check' ? job.sources : [])]);
-        paintQueue();
-      }), 'pause', `Pause “${job.name}”`);
+      const pause = playButton(word('', () => pauseRunningJob(job)), 'pause', `Pause “${job.name}”`);
       pause.disabled = !!under?.pausing;
       row.appendChild(pause);
     } else {
@@ -8950,6 +9152,7 @@ const saveLeftovers = () => {
 async function coverOnJobBook(job) {
   if (!job?.coverData || job.bookId == null) return false;
   const book = await store.get('books', job.bookId);
+  if (!jobOwns(job, book)) return false;
   if (!book) return false;
   const blob = await fetch(job.coverData).then((response) => response.blob());
   if (book.coverCustom && book.coverBytes === blob.size) return false;
@@ -9362,6 +9565,8 @@ function wireWorkshop() {
     const superseded = build.contents().filter((part) => part.bookId && part.seamless && night.made.has(part.bookId))
       .map((part) => part.bookId);
     const finish = progress.start('Building');
+    // Downloading: Pause & keep from the popup as well as from Build.
+    if (build.contents().some((part) => part.web)) finish.controls({ pause: () => pauseBuild() });
     // Leftovers being tried again in this build: settled by it either way.
     const retried = build.contents().map((part) => part.leftover).filter(Boolean);
     /* The screen kept on while a website is downloading. With it off the
@@ -11507,7 +11712,7 @@ function refetchShort(book, short) {
  */
 async function runRefetch(job, under) {
   const book = await store.get('books', job.bookId);
-  if (!book || book.binnedAt) return { rest: [], reason: '', paused: false, said: `“${job.name}” is no longer on the shelf — nothing fetched.` };
+  if (!book || book.binnedAt || !jobOwns(job, book)) return { rest: [], reason: '', paused: false, said: `“${job.name}” is no longer on the shelf — nothing fetched.` };
   const { gap, jitter } = delaysFor(siteOfJob(job));
   const was = new Map((await shortOf(book.id)).map((chapter) => [chapter.from, chapter]));
   let got;
@@ -12062,6 +12267,10 @@ function wireWeb() {
     if (typeof settings.webPictures === 'boolean') webState.pictures = settings.webPictures;
     if (el('web-pick')) el('web-pick').checked = settings.webPick === true;
     loadQueue(settings);
+    /* Each saved book number its book's, or let go of -- once the queue is
+     * read, never before: saved before, it would be saved empty. A download
+     * starting meanwhile checks its own (runJob, jobOwns). */
+    checkSavedBooks().catch((error) => console.warn('saved books', error));
     if (Number.isFinite(settings.webListDelay)) el('web-list-delay').value = String(settings.webListDelay);
     if (Number.isFinite(settings.webListJitter)) el('web-list-jitter').value = String(settings.webListJitter);
     // What the fields hold now, with no site, are the usual delays.

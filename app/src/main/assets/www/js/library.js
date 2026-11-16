@@ -407,7 +407,7 @@ export const MAX_NESTING = 3;
 /** And how many inner archives, all told, one import will open. */
 const MAX_INNER_ARCHIVES = 200;
 
-export async function importFiles(files, { onProgress, onDone, transient = false, rescue = null, into = '' } = {}) {
+export async function importFiles(files, { onProgress, onDone, transient = false, rescue = null, into = '', shouldStop = null } = {}) {
   /* Timed, in phases.
    *
    * Judging an import from a benchmark on a desktop was a mistake: jsdom
@@ -459,7 +459,11 @@ export async function importFiles(files, { onProgress, onDone, transient = false
    * somebody's filing; a zip that goes on unpacking forever is an attack. */
   const work = [...files].map((file) => ({ file, depth: 1, folder: '', trail: '', label: file.name }));
   let inner = 0;
+  /* Asked to stop: before the next file, never in the middle of one -- a
+   * book half-written is worse than one not started. Counted, so it is said. */
+  const stopNow = () => !!shouldStop?.();
   for (let w = 0; w < work.length; w++) {
+    if (stopNow()) { results.stopped = work.length - w; break; }
     const job = work[w];
     let picked = job.file;
     if (!picked) {
@@ -685,6 +689,8 @@ export async function importFiles(files, { onProgress, onDone, transient = false
     .map((step) => ({ title: step.title, count: step.items.length }));
 
   for (let i = 0; i < queue.length; i++) {
+    if (results.stopped) break;
+    if (stopNow()) { results.stopped = queue.length - i; break; }
     const entry = queue[i];
     // Filed in the folder the shelf was open at, if it was open at one. Only
     // what is new: a book already on the shelf stays where it is.

@@ -947,12 +947,14 @@ await t('many books written out in zips under a size: whole books, folder order,
   const fn = (name) => { const at = app.search(new RegExp(`(?:async )?function ${name}\\(`)); return app.slice(at, app.indexOf('\n}\n', at) + 3); };
   const label = app.match(/const limitLabel = .*;/)[0];
   const MB = 1048576;
-  const run = async (books, limitMB) => {
+  const run = async (books, limitMB, { stopAfter = Infinity } = {}) => {
     const sinks = [];
+    let stop = null;
+    let built = 0;
     const toasts = [];
     let together = null;
     const exportSink = (name) => {
-      const sink = { name, bytes: 0, entries: [], async write(b) { sink.bytes += b.length; }, async done() { together = [sink]; } };
+      const sink = { name, bytes: 0, entries: [], async write(b) { sink.bytes += b.length; }, async done() { together = [sink]; }, discard() { sink.discarded = true; } };
       sinks.push(sink);
       return sink;
     };
@@ -962,8 +964,11 @@ await t('many books written out in zips under a size: whole books, folder order,
       async finish() { await write(new Uint8Array(40)); },
     });
     const sizes = new Map(books.map((b) => [b.id, b.mb * MB]));
-    const epub = { buildEpub: async (id) => ({ blob: { size: sizes.get(id) }, name: `${books.find((b) => b.id === id).title}.epub` }), safeName: (x) => x };
-    const progress = { start: () => Object.assign(() => {}, { say() {}, fail() {} }) };
+    const epub = { buildEpub: async (id) => {
+      if (++built > stopAfter) stop?.();
+      return { blob: { size: sizes.get(id) }, name: `${books.find((b) => b.id === id).title}.epub` };
+    }, safeName: (x) => x };
+    const progress = { start: () => Object.assign(() => {}, { say() {}, fail() {}, controls({ cancel }) { stop = cancel; } }) };
     const exportMany = new Function('library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
       `${label}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('exportMany')}\nreturn exportMany;`)(
       { displayTitle: (b) => b.title }, epub, progress, exportSink, zipWriter,
@@ -988,6 +993,12 @@ await t('many books written out in zips under a size: whole books, folder order,
   assert.ok(all.slice(0, 10).every((name) => +name.match(/\d+/)[0] % 3 === 0), 'Chinese first, all together');
   assert.deepEqual(sinks.map((sink) => sink.name).slice(0, 2), ['Library (part 1).zip', 'Library (part 2).zip']);
   assert.match(toasts.at(-1), new RegExp(`30 books in ${sinks.length} zips, each under 100 MB`));
+  // Stopped from the popup: the book under way finished, then nothing more -- and nothing offered to save.
+  const halted = await run(books, 100, { stopAfter: 12 });
+  assert.equal(halted.together, null, 'a stopped export was still saved');
+  assert.ok(halted.sinks.length && halted.sinks.every((sink) => sink.discarded), 'a stopped zip kept');
+  assert.equal(halted.sinks.flatMap((sink) => sink.entries).length, 13);
+  assert.match(halted.toasts.at(-1), /Export stopped — nothing saved/);
   // No limit: one zip, saved as ever.
   const one = await run(books, 0);
   assert.equal(one.sinks.length, 1);

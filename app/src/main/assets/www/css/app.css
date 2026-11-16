@@ -1403,6 +1403,15 @@ body.jobs-up { --strip-h: 30px; }
 .job.failed .job-label::before { content: "✕ "; }
 .job.failed .job-label { color: var(--muted); }
 .job.failed .bar-fill { background: var(--muted); }
+/* Pause and Stop on a row that can: small, at its end; Stop asks twice. */
+.job-controls { flex: none; display: flex; gap: 4px; align-self: center; }
+.job-btn { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--divider);
+  background: transparent; color: inherit; display: grid; place-items: center; padding: 0; }
+.job-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+.job-btn.armed { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.job-btn:disabled { opacity: .4; }
+.job.done .job-controls, .job.failed .job-controls { display: none; }
+.job.stopping .job-label { color: var(--muted); }
 
 .job.done, .job.failed { opacity: .72; transition: opacity var(--motion) var(--ease); }
 

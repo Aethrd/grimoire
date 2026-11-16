@@ -2118,9 +2118,11 @@ export async function openVault(onVaultChange, host) {
         for (const file of files) read.push(JSON.parse(await readText(file)));
         read.sort((a, b) => (a.part?.n || 1) - (b.part?.n || 1));
         const report = { books: 0, missing: 0, marks: 0, events: 0 };
+        let queueLeft = false;
         for (const data of read) {
           const one = await store.importBackup(data);
           for (const key of Object.keys(report)) report[key] += one[key] || 0;
+          if (one.skipped?.some((key) => ['webQueue', 'webLeftovers', 'webStops'].includes(key))) queueLeft = true;
         }
         const of = read[0]?.part?.of;
         const partly = of && read.length < of
@@ -2134,7 +2136,8 @@ export async function openVault(onVaultChange, host) {
         // before the books are back is half a restore, and should say so.
         toast((report.missing
           ? `${report.books} books restored · ${report.missing} not on the shelf yet — they get their covers, blurs, places and marks back as you import them`
-          : `${report.books} books, ${report.marks} marks and ${report.events} sessions restored`) + partly, 8000);
+          : `${report.books} books, ${report.marks} marks and ${report.events} sessions restored`) + partly
+          + (queueLeft ? ' · the queue in it left out — downloads stay as they are on this phone' : ''), 8000);
         onVaultChange?.();
         openVault(onVaultChange, body);
       } catch (error) {

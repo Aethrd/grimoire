@@ -261,6 +261,15 @@ public class GrimoireBridge {
         }
     }
 
+    /** An export stopped before it was saved: its staged file deleted, nothing offered. */
+    @JavascriptInterface
+    public void discardExport(String handle) {
+        if (handle == null) return;
+        File file = new File(new File(activity.getCacheDir(), "exports"), new File(handle).getName());
+        //noinspection ResultOfMethodCallIgnored
+        file.delete();
+    }
+
     /**
      * Finish, and ask where to put it.
      *
