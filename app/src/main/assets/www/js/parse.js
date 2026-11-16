@@ -1532,7 +1532,13 @@ export function chapterPlainText(chapter) {
  * after every line as well doubled it, and an indent on top of the
  * full-width space the author typed pushed every line in twice. A tenth of
  * its paragraphs blank, and at least three. */
-const BLANK_PARA = /<p>(?:\s|&nbsp;|&#160;|\u00a0|\u3000|<br\s*\/?>)*<\/p>/gi;
+/* Each alternative starts with a different character -- a space of any
+ * kind (\s takes in the no-break and full-width spaces), "&", or "<" -- so
+ * a run is read one way only. With \u00a0 and \u3000 listed beside \s
+ * as well, every such space could be read two ways, and a paragraph opening
+ * with thirty of them before its words took the check billions of tries to
+ * fail: the export, or the chapter, stood frozen on it. */
+const BLANK_PARA = /<p>(?:\s|&nbsp;|&#160;|<br\s*\/?>)*<\/p>/gi;
 export function spacedByLines(html) {
   const all = (String(html || '').match(/<p>/gi) || []).length;
   if (all < 10) return false;

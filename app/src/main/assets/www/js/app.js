@@ -2591,7 +2591,9 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null } = 
 
 /** What is under way, told to the native side (GrimoireBridge.working): said after a crash. */
 function working(what) {
-  try { window.GrimoireNative?.working?.(what || ''); } catch { /* no bridge: nothing to say it to */ }
+  // The page's own memory beside it, where the WebView says (Chromium's performance.memory).
+  const heap = what && performance?.memory?.usedJSHeapSize ? ` · page ${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB` : '';
+  try { window.GrimoireNative?.working?.(what ? what + heap : ''); } catch { /* no bridge: nothing to say it to */ }
 }
 
 /* ── automatic backups ────────────────────────────────────────────────
@@ -13553,6 +13555,9 @@ async function boot() {
    * Android, for memory, or by a crash -- said now, with where it was. */
   const cut = (() => { try { return window.GrimoireNative?.cutOff?.(); } catch { return null; } })();
   if (cut) toast(`The app was closed while ${cut}. Your library is untouched.`, 15000, { kind: 'failed' });
+  // Why, as Android tells it (Android 11 on): low memory, a crash, not responding.
+  const exit = (() => { try { return window.GrimoireNative?.lastExit?.(); } catch { return null; } })();
+  if (exit) toast(`Last time, ${exit}.`, 15000, { kind: 'failed' });
   const unfinished = await exportRun().catch(() => null);
   if (unfinished?.zips) {
     toast(`An export was cut off after zip ${unfinished.zips} (${unfinished.done.length} books saved) — export again to carry on from zip ${unfinished.zips + 1}.`, 12000);

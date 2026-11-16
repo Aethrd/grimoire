@@ -328,5 +328,19 @@ await t('a long book is written a hundred chapters at a time, in order, none hel
   assert.match(src, /await zip\.file\(`OEBPS\/\$\{file\}`,/);
 });
 
+await t('a chapter whose paragraphs open with many spaces is read in a moment, not frozen on', async () => {
+  const { spacedByLines } = await import(www('parse.js'));
+  // Korean and Japanese serials indent with full-width and no-break spaces; sixty before the words.
+  const indented = Array.from({ length: 40 }, (_, i) => `<p>${'\u3000'.repeat(30)}${'\u00a0'.repeat(30)}그는 말했다 ${i}.</p>`).join('');
+  const began = Date.now();
+  assert.equal(spacedByLines(indented), false);
+  assert.ok(Date.now() - began < 500, `took ${Date.now() - began} ms`);
+  // Still finds what it is for: blank paragraphs of any kind of space between the lines.
+  const spaced = Array.from({ length: 12 }, (_, i) => `<p>Line ${i}</p><p>\u3000</p><p>&nbsp;<br/></p>`).join('');
+  assert.equal(spacedByLines(spaced), true);
+  // No pattern left that can read the same space two ways.
+  assert.ok(!/\(\?:\\s\|[^)]*\\u(00a0|3000)/.test(read('app/src/main/assets/www/js/parse.js')));
+});
+
 console.log(`\n${pass} checks passed`);
 process.exit(0);

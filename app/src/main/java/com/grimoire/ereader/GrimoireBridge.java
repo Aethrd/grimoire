@@ -647,8 +647,69 @@ public class GrimoireBridge {
 
     @JavascriptInterface
     public void working(String what) {
-        workingNow = (what == null || what.isEmpty()) ? null : what;
+        workingNow = (what == null || what.isEmpty()) ? null : what + " · " + memoryNow();
         activity.getSharedPreferences("work", Context.MODE_PRIVATE).edit().putString("now", workingNow).apply();
+    }
+
+    /** The app's own memory and the phone's free memory, as it is now: written down with each step of an export. */
+    private String memoryNow() {
+        try {
+            Runtime runtime = Runtime.getRuntime();
+            long java = (runtime.totalMemory() - runtime.freeMemory()) >> 20;
+            long nativeHeap = android.os.Debug.getNativeHeapAllocatedSize() >> 20;
+            android.app.ActivityManager manager = (android.app.ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
+            android.app.ActivityManager.MemoryInfo info = new android.app.ActivityManager.MemoryInfo();
+            if (manager != null) manager.getMemoryInfo(info);
+            return "app " + java + "+" + nativeHeap + " MB, phone free " + (info.availMem >> 20) + " MB"
+                    + (info.lowMemory ? " (low)" : "");
+        } catch (Throwable e) {
+            return "memory unknown";
+        }
+    }
+
+    /**
+     * Why Android says the app last ended, if it ended badly and recently:
+     * closed for low memory, crashed (in Java or native code), stopped
+     * responding, killed for another reason -- Android 11 and later keep it.
+     * Null when it ended normally, or the phone does not say. Each exit is
+     * reported once (by its time).
+     */
+    @JavascriptInterface
+    public String lastExit() {
+        if (Build.VERSION.SDK_INT < 30) return null;
+        try {
+            android.app.ActivityManager manager = (android.app.ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
+            if (manager == null) return null;
+            java.util.List<android.app.ApplicationExitInfo> exits =
+                    manager.getHistoricalProcessExitReasons(activity.getPackageName(), 0, 5);
+            android.content.SharedPreferences prefs = activity.getSharedPreferences("work", Context.MODE_PRIVATE);
+            long seen = prefs.getLong("exitSeen", 0);
+            for (android.app.ApplicationExitInfo exit : exits) {
+                if (exit.getTimestamp() <= seen) break;
+                String why;
+                switch (exit.getReason()) {
+                    case android.app.ApplicationExitInfo.REASON_LOW_MEMORY: why = "Android closed it to free memory (the phone ran low)"; break;
+                    case android.app.ApplicationExitInfo.REASON_CRASH: why = "it crashed (in the app's Java code)"; break;
+                    case android.app.ApplicationExitInfo.REASON_CRASH_NATIVE: why = "it crashed (in native code)"; break;
+                    case android.app.ApplicationExitInfo.REASON_ANR: why = "it stopped responding, and Android closed it"; break;
+                    case android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE: why = "Android closed it for using too much of the phone"; break;
+                    case android.app.ApplicationExitInfo.REASON_SIGNALED: why = "Android stopped it (signal " + exit.getStatus() + ")"; break;
+                    case android.app.ApplicationExitInfo.REASON_OTHER: why = "Android closed it (other)"; break;
+                    case android.app.ApplicationExitInfo.REASON_FREEZER: why = "Android froze it in the background"; break;
+                    default: continue;   // asked to, updated, or a normal exit: nothing to say
+                }
+                prefs.edit().putLong("exitSeen", exits.get(0).getTimestamp()).apply();
+                String said = exit.getDescription();
+                return why + " at " + new java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+                        .format(new java.util.Date(exit.getTimestamp()))
+                        + " · it was using " + (exit.getPss() >> 10) + " MB"
+                        + (said == null || said.isEmpty() ? "" : " · " + said);
+            }
+            if (!exits.isEmpty()) prefs.edit().putLong("exitSeen", exits.get(0).getTimestamp()).apply();
+        } catch (Throwable e) {
+            Log.w(TAG, "No exit reasons", e);
+        }
+        return null;
     }
 
     /** What was under way when the app was last cut off, once; null if it finished. */
