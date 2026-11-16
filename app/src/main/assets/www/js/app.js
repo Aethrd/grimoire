@@ -2280,9 +2280,14 @@ async function askExportParts(books, { kind = 'chosen' } = {}) {
     if (run) {
       const left = await runLeft(run, kind === 'everything' && run.kind === 'everything' ? books : null);
       const folderNow = exportFolder.kept();
+      const was = run.trying != null && !run.done.includes(run.trying) ? await store.get('books', run.trying).catch(() => null) : null;
+      const twice = was && (run.crashes?.[was.id] || 0) >= 1;
       el('export-many-resume-note').textContent = `${run.zips} zip${run.zips === 1 ? '' : 's'} saved in “${folderNow || run.folder}”, `
         + `${run.done.length} books in them; ${left.length} left. Carrying on writes zip ${run.zips + 1} onward`
-        + `${folderNow ? ' into the same folder' : ' (the folder is asked for again)'}, ${limitLabel(run.limitMB)} each.`;
+        + `${folderNow ? ' into the same folder' : ' (the folder is asked for again)'}, ${limitLabel(run.limitMB)} each.`
+        + (was ? ` It was cut off while writing “${library.displayTitle(was)}”: ${twice
+          ? 'that has happened twice, so it is left out this time and named at the end.'
+          : 'that book is tried once more, and left out if it happens again.'}` : '');
       el('export-many-resume-go').onclick = () => {
         sheet.hidden = true;
         if (!left.length) { endExportRun(); toast('Nothing was left to export — that export is finished', 5000); return; }
@@ -2291,9 +2296,12 @@ async function askExportParts(books, { kind = 'chosen' } = {}) {
       el('export-many-restart').onclick = async () => {
         await endExportRun();
         resume.hidden = true;
+        el('export-many-go').hidden = false;
       };
     }
   }
+  // While there is an export to carry on, Save (a new export, from the start) is not offered beside it by mistake.
+  el('export-many-go').hidden = !!run;
   const saved = (await store.settings()).exportZipMB;
   let limit = EXPORT_LIMITS.includes(saved) ? saved : DEFAULT_EXPORT_LIMIT;
   el('export-many-title').textContent = `Write out ${books.length} books`;
@@ -2388,7 +2396,8 @@ const EXPORT_RUN_VERSION = 1;
 async function exportRun() {
   const run = (await store.settings()).exportRun;
   const ids = (list) => Array.isArray(list) && list.every((id) => Number.isInteger(id));
-  const sound = run && run.v === EXPORT_RUN_VERSION && ids(run.order) && ids(run.done)
+  // Version 1 is also the record the first build of this wrote, before it carried a version.
+  const sound = run && (run.v ?? 1) === EXPORT_RUN_VERSION && ids(run.order) && ids(run.done)
     && Number.isInteger(run.zips) && run.zips >= 0 && EXPORT_LIMITS.includes(run.limitMB) && run.limitMB > 0
     && typeof run.base === 'string' && run.base && ['everything', 'chosen'].includes(run.kind);
   return sound ? run : null;
@@ -2409,7 +2418,21 @@ async function runLeft(run, everything = null) {
 
 async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null } = {}) {
   // Carried on: in the order it began with (runLeft), not sorted afresh.
-  const ordered = run ? [...books] : exportOrder(books);
+  let ordered = run ? [...books] : exportOrder(books);
+  /* Carried on after the app was closed part-way through a book (run.trying):
+   * that book is tried once more -- most closings are Android's, not the
+   * book's -- and if it closed the app a second time, it is left out and
+   * said, so one book cannot stop the rest of the library being written. */
+  let leftOut = [];
+  if (run) {
+    if (run.trying != null && !run.done.includes(run.trying)) {
+      const crashes = { ...(run.crashes || {}) };
+      crashes[run.trying] = (crashes[run.trying] || 0) + 1;
+      run = { ...run, crashes, trying: null };
+    }
+    leftOut = ordered.filter((book) => (run.crashes?.[book.id] || 0) >= 2);
+    ordered = ordered.filter((book) => !leftOut.includes(book));
+  }
   const limit = limitMB > 0 ? limitMB * 1048576 : 0;
   const startedReading = inBook;
   // Zips under a size: their folder first, so each can go into it as it fills.
@@ -2487,6 +2510,8 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null } = 
       const zipNo = () => (limit ? ` · zip ${open ? zips : zips + 1}` : '');
       finish.say(`Writing ${library.displayTitle(book)}${zipNo()}`, null, `${at + 1} of ${books.length}`);
       working(`writing out “${library.displayTitle(book)}” (book ${at + 1} of ${books.length}${book.pictureBook ? ', pictures' : ''})`);
+      // Which book it is on, written down: closed part-way through it, the next carry-on knows (above).
+      if (early) { run = { ...run, trying: book.id }; await store.saveSettings({ exportRun: run }); }
       try {
         // In parts, not one Blob (exportSink): bytes the engine can see and free.
         let { blob, name: entry } = await epub.buildEpub(book.id, {
@@ -2519,6 +2544,8 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null } = 
     if (stopped) {
       for (const sink of [...staged, open?.sink].filter(Boolean)) sink.discard();
       open = null;
+      // Stopped by hand: no book closed the app.
+      if (early && run) { run = { ...run, trying: null }; await store.saveSettings({ exportRun: run }); }
       toast(savedZips
         ? `Export stopped — the ${savedZips} zip${savedZips === 1 ? '' : 's'} already full ${savedZips === 1 ? 'is' : 'are'} in “${folder}”; the one under way was let go. Export again to carry on.`
         : 'Export stopped — nothing saved', 7000);
@@ -2539,17 +2566,20 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null } = 
 
     clearSelection();
     await refreshShelf();
-    const skipped = failed.length ? ` · ${failed.length} skipped — ${failed[0].title}: ${failed[0].reason}` : '';
+    const skipped = (failed.length ? ` · ${failed.length} skipped — ${failed[0].title}: ${failed[0].reason}` : '')
+      + (leftOut.length ? ` · left out, having closed the app twice: ${leftOut.map((b) => `“${library.displayTitle(b)}”`).join(', ')} — export ${leftOut.length === 1 ? 'it' : 'them'} on ${leftOut.length === 1 ? 'its' : 'their'} own` : '');
     toast(early
-      ? `${written} books in ${savedZips} zip${savedZips === 1 ? '' : 's'}, each under ${limitLabel(limitMB)}, saved in “${folder}”${skipped}`
+      ? `${written} book${written === 1 ? '' : 's'} in ${savedZips} zip${savedZips === 1 ? '' : 's'}, each under ${limitLabel(limitMB)}, saved in “${folder}”${skipped}`
       : failed.length
         ? `${written} written${skipped}`
         : staged.length > 1
           ? `${written} books in ${staged.length} zips, each under ${limitLabel(limitMB)} — choose a folder for them`
-          : `${written} books written out — choose where to save them`, 8000, { kind: failed.length ? 'failed' : 'done' });
+          : `${written} books written out — choose where to save them`, leftOut.length ? 15000 : 8000, { kind: failed.length || leftOut.length ? 'failed' : 'done' });
   } catch (error) {
     finish.fail();
     open?.sink.discard();
+    // Failed, not closed: no book to blame.
+    if (early && run) { run = { ...run, trying: null }; await store.saveSettings({ exportRun: run }).catch(() => {}); }
     toast(error.message || 'Those books could not be written out', 8000, { kind: 'failed' });
   } finally {
     // The folder kept only while there is an export to carry on (exportRun): let go of when none is.
@@ -3174,13 +3204,18 @@ function askAboutExport(book) {
 
 async function exportBook(book, { share = false, title, author, filename, size } = {}) {
   const finish = progress.start(`Writing ${book.title}`);
+  const named = `“${library.displayTitle(book)}”`;
   try {
+    /* Each step told to Android as it goes (working): one book that closes
+     * the app is then found to the picture or chapter it was on. */
     const { blob, name, saved } = await epub.buildEpub(book.id, {
       title,
       author,
       size,
       onProgress: (fraction, message) => finish.say(message, fraction * 0.9),
+      onStep: (what) => working(`writing out ${named} on its own: ${what}`),
     });
+    working(`writing out ${named} on its own: saving it`);
     const saveAs = filename && /\.epub$/i.test(filename) ? filename : name;
     await writeOut(blob, saveAs, 'application/epub+zip', {
       share,
@@ -3200,6 +3235,7 @@ async function exportBook(book, { share = false, title, author, filename, size }
     finish.fail();
     toast(error.message || 'That book could not be written out', 6000, { kind: 'failed' });
   } finally {
+    working(null);
     finish();
   }
 }

@@ -112,6 +112,16 @@ export async function countBooks() {
   return wrap((await tx('books')).count());
 }
 
+/* A book's chapters a few at a time, in order: for writing out a book too
+ * long to hold every chapter of at once (epub.js). Keyed [bookId, index], so
+ * a range of keys is a run of chapters, in their order. */
+export async function chapterCount(bookId) {
+  return wrap((await tx('chapters')).count(IDBKeyRange.bound([bookId, -Infinity], [bookId, Infinity])));
+}
+export async function chapterBatch(bookId, after = -Infinity, count = 100) {
+  return wrap((await tx('chapters')).getAll(IDBKeyRange.bound([bookId, after], [bookId, Infinity], true, false), count));
+}
+
 /** The newest book's id (books only ever get higher ones), without reading them all. */
 export async function lastBookId() {
   const request = (await tx('books')).openKeyCursor(null, 'prev');

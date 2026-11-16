@@ -306,5 +306,27 @@ await t('a book built in parts is the same book: same bytes, size and checksum a
   } finally { globalThis.Blob = jsdomBlob; }
 });
 
+await t('a long book is written a hundred chapters at a time, in order, none held all at once', async () => {
+  const epub = await import(www('epub.js'));
+  const { Blob: NodeBlob } = await import('node:buffer');
+  const id = await store.add('books', { title: 'Very Long', fingerprint: 'long.epub:1', addedAt: 20, chapters: 250 });
+  for (let i = 0; i < 250; i += 1) await store.put('chapters', { bookId: id, index: i * 2, title: `Chapter ${i + 1}`, html: `<p>Part ${i + 1}</p>` });
+  assert.equal(await store.chapterCount(id), 250);
+  assert.equal((await store.chapterBatch(id, -Infinity, 100)).length, 100);
+  assert.equal((await store.chapterBatch(id, 198, 100))[0].index, 200);
+  globalThis.Blob = NodeBlob;
+  let blob;
+  try { ({ blob } = await epub.buildEpub(id)); } finally { globalThis.Blob = jsdomBlob; }
+  const JSZip = (await import('jszip')).default;
+  const opened = await JSZip.loadAsync(Buffer.from(await blob.arrayBuffer()), { checkCRC32: true });
+  const names = Object.keys(opened.files).filter((name) => /text\/ch\d+\.xhtml$/.test(name)).sort();
+  assert.equal(names.length, 250);
+  assert.match(await opened.file(names[0]).async('string'), /Part 1</);
+  assert.match(await opened.file(names[249]).async('string'), /Part 250</);
+  const src = read('app/src/main/assets/www/js/epub.js');
+  assert.ok(!/byIndex\('chapters'/.test(src), 'every chapter still read at once');
+  assert.match(src, /await zip\.file\(`OEBPS\/\$\{file\}`,/);
+});
+
 console.log(`\n${pass} checks passed`);
 process.exit(0);

@@ -1100,6 +1100,17 @@ await t('many books written out in zips under a size: whole books, folder order,
   assert.equal(new Set(everyEntry).size, 30);
   // Finished: nothing left to carry on, and the folder let go of.
   assert.equal(saved.exportRun, null);
+  // Closed part-way through a book: carried on, that book is tried once more; closed by it again, left out and named.
+  const culprit = cut.order.find((id) => !cut.done.includes(id));
+  const cutAt = { ...cut, trying: culprit };
+  const again = await run(await ref.runLeft(cutAt, books), 100, { run: cutAt, kind: 'everything' });
+  assert.ok(again.sinks.flatMap((sink) => sink.entries).includes(`Novel ${culprit}.epub`), 'not tried once more');
+  const cutTwice = { ...cut, trying: culprit, crashes: { [culprit]: 1 } };
+  const twice = await run(await ref.runLeft(cutTwice, books), 100, { run: cutTwice, kind: 'everything' });
+  assert.ok(!twice.sinks.flatMap((sink) => sink.entries).includes(`Novel ${culprit}.epub`), 'tried a third time');
+  assert.match(twice.toasts.at(-1), new RegExp(`left out, having closed the app twice: “Novel ${culprit}” — export it on its own`));
+  // Which book it is on, written down before each.
+  assert.match(app, /if \(early\) \{ run = \{ \.\.\.run, trying: book\.id \}; await store\.saveSettings\(\{ exportRun: run \}\); \}/);
   // A book added meanwhile goes in the rest of an export of every book; a book gone is just not there.
   const added = [...books.filter((b) => b.id !== 29), { id: 99, title: 'New one', folder: 'Korean', mb: 1 }];
   const leftNow = await ref.runLeft({ ...cut, kind: 'everything' }, added);

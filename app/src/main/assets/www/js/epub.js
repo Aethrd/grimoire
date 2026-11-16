@@ -74,7 +74,7 @@ export function extensionFor(blob, href) {
  *   way into the file and the book on the shelf is left exactly as it is: a
  *   smaller copy is a copy, not an edit.
  */
-export async function buildEpub(bookId, { onProgress, title, author, size, parts = false } = {}) {
+export async function buildEpub(bookId, { onProgress, title, author, size, parts = false, onStep = null } = {}) {
   const stored = await store.get('books', bookId);
   if (!stored) throw new Error('That book is no longer in the library.');
 
@@ -91,9 +91,13 @@ export async function buildEpub(bookId, { onProgress, title, author, size, parts
     author: author ?? stored.author,
   };
 
-  const chapters = (await store.byIndex('chapters', 'bookId', bookId))
-    .sort((a, b) => a.index - b.index);
-  if (!chapters.length) throw new Error('That book has no chapters to write out.');
+  /* Its chapters counted, not read: they are read a hundred at a time below,
+   * each written into the book and let go of before the next -- a book of
+   * ten thousand pages held whole, and again as XHTML, was more than the
+   * app's memory, and the export died on it every time. */
+  const chapterTotal = await store.chapterCount(bookId);
+  if (!chapterTotal) throw new Error('That book has no chapters to write out.');
+  const chapters = { length: chapterTotal };
 
   // Pages taken out of the book keep their rows so they can be put back;
   // writing them into the file would be exporting what was removed.
@@ -161,6 +165,7 @@ export async function buildEpub(bookId, { onProgress, title, author, size, parts
      * help -- an animation, a page already under the target, a re-encode that
      * came out bigger -- so the extension has to be read off what comes back
      * rather than off what went in. */
+    onStep?.(`picture ${at + 1} of ${images.length} (${image.href}, ${Math.round(image.blob.size / 1024)} KB)`);
     const written = wanted ? await shrinkPicture(image.blob, wanted) : image.blob;
     saved += Math.max(0, image.blob.size - written.size);
 
@@ -180,10 +185,18 @@ export async function buildEpub(bookId, { onProgress, title, author, size, parts
   const spine = [];
   const nav = [];
 
-  for (const [at, chapter] of chapters.entries()) {
+  let after = -Infinity;
+  at = -1;   // the pictures are numbered; the chapters now
+  for (;;) {
+   const batch = await store.chapterBatch(bookId, after, 100);
+   if (!batch.length) break;
+   after = batch[batch.length - 1].index;
+   for (const chapter of batch) {
+    at += 1;
     const file = `text/ch${String(at + 1).padStart(4, '0')}.xhtml`;
     const id = `ch${at + 1}`;
 
+    onStep?.(`chapter ${at + 1} of ${chapters.length}`);
     let body = chapterHtml(chapter);
     // Spaced by its own blank lines (parse.js): said on its section, for the stylesheet.
     const lines = spacedByLines(body);
@@ -200,7 +213,8 @@ export async function buildEpub(bookId, { onProgress, title, author, size, parts
     /* The namespace declared once on <html> rather than on every section,
        and no newlines between the parts: with a chapter per scraped page this
        boilerplate is repeated thousands of times. */
-    zip.file(`OEBPS/${file}`,
+    // Waited on (epubArchive writes it now): this chapter deflated and gone before the next is read.
+    await zip.file(`OEBPS/${file}`,
       '<?xml version="1.0" encoding="UTF-8"?>'
       + '<html xmlns="http://www.w3.org/1999/xhtml"'
       + ' xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="'
@@ -215,6 +229,7 @@ export async function buildEpub(bookId, { onProgress, title, author, size, parts
     spine.push(`<itemref idref="${id}"/>`);
     nav.push(`<li><a href="${file}">${escapeXml(chapter.title)}</a></li>`);
     onProgress?.(0.5 + ((at + 1) / chapters.length) * 0.45);
+   }
   }
 
   zip.file('OEBPS/style.css',
@@ -236,8 +251,9 @@ export async function buildEpub(bookId, { onProgress, title, author, size, parts
     // A cover added in the app is a page of its own there, and here.
     + 'figure.grimoire-cover { margin: 0; text-align: center; page-break-after: always; break-after: page; }\n', TEXT);
 
+  const byHref = new Map(images.map((image) => [image.href, image]));
   for (const [href, name] of renamed) {
-    const image = images.find((i) => i.href === href);
+    const image = byHref.get(href);
     if (image?.blob) {
       manifest.push(`<item id="${name.replace(/[^a-z0-9]/gi, '')}" href="${name}" `
         + `media-type="${mediaFor(name)}"/>`);
@@ -288,6 +304,7 @@ export async function buildEpub(bookId, { onProgress, title, author, size, parts
     + `<spine>${spine.join('')}</spine>\n`
     + '</package>', TEXT);
 
+  onStep?.('putting the file together');
   const blob = await zip.generateAsync(
     {
       type: 'blob',
@@ -314,32 +331,39 @@ export async function buildEpub(bookId, { onProgress, title, author, size, parts
  * left out one it would not take, and the book is still made.
  */
 function epubArchive() {
-  const parts = [];
   const pieces = [];
   const encoder = new TextEncoder();
+  /* The book's own checksum kept as it is made -- of its bytes as they
+   * go, and of a picture from the one worked out for it -- so the zip
+   * it goes into has no need to read it all again (zipWriter.add). */
+  let crc = 0;
+  const writer = zipWriter((piece, known) => {
+    pieces.push(piece);
+    crc = piece instanceof Uint8Array ? crcUpdate(crc, piece) : crcCombine(crc, known, piece.size);
+  }, { blobs: true });
+  /* Each part written as it is given, in order: a chapter's text deflated and
+   * let go of at once, rather than every chapter held until the end. The
+   * promise returned is that part written, for a caller that waits. */
+  let queue = Promise.resolve();
   return {
-    file(name, data, options = {}) { parts.push({ name, data, deflate: options.compression === 'DEFLATE' }); },
-    async generateAsync(_options, onUpdate) {
-      /* The book's own checksum kept as it is made -- of its bytes as they
-       * go, and of a picture from the one worked out for it -- so the zip
-       * it goes into has no need to read it all again (zipWriter.add). */
-      let crc = 0;
-      const writer = zipWriter((piece, known) => {
-        pieces.push(piece);
-        crc = piece instanceof Uint8Array ? crcUpdate(crc, piece) : crcCombine(crc, known, piece.size);
-      }, { blobs: true });
-      for (const [at, { name, data, deflate }] of parts.entries()) {
+    file(name, data, options = {}) {
+      const deflate = options.compression === 'DEFLATE';
+      queue = queue.then(async () => {
         if (typeof data === 'string') await writer.addBytes(name, encoder.encode(data), { deflate });
         else {
           try { await writer.add(name, data); } catch { /* unreadable: left out, the rest written */ }
         }
-        onUpdate?.({ percent: ((at + 1) / parts.length) * 100 });
-      }
+      });
+      return queue;
+    },
+    async generateAsync(options, onUpdate) {
+      await queue;
       await writer.finish();
+      onUpdate?.({ percent: 100 });
       /* Asked for in parts (an export of many): the pieces as they are, with
        * their size and checksum -- no Blob made of them, whose memory the
        * script engine cannot see to free (app.js exportSink). */
-      if (_options?.parts) {
+      if (options?.parts) {
         let size = 0;
         for (const piece of pieces) size += piece.size ?? piece.length;
         return { parts: pieces, size, crc32: crc, type: 'application/epub+zip' };

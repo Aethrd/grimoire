@@ -74,7 +74,7 @@ if (phase === 'empty') {
 
   await t('an export cut off is offered to carry on: what was saved, what is left, and from which zip', async () => {
     const all = await store.all('books');
-    await store.saveSettings({ exportRun: { v: 1, kind: 'everything', limitMB: 500, folder: 'Mythos books', base: 'Books', at: 1,
+    await store.saveSettings({ exportRun: { kind: 'everything', limitMB: 500, folder: 'Mythos books', base: 'Books', at: 1,
       order: all.map((b) => b.id), done: all.slice(0, 2).map((b) => b.id), zips: 1 } });
     const panels = await import(www('panels.js'));
     const host = window.document.createElement('div');
@@ -83,10 +83,13 @@ if (phase === 'empty') {
     for (let i = 0; i < 30 && window.document.getElementById('export-many-resume').hidden; i += 1) await new Promise((r) => setTimeout(r, 50));
     const note = window.document.getElementById('export-many-resume-note').textContent;
     assert.match(note, /^1 zip saved in “Mythos books”, 2 books in them; \d+ left\. Carrying on writes zip 2 onward \(the folder is asked for again\), 500 MB each\.$/);
-    // Started over: the record let go of.
+    // Save, which starts afresh, not offered beside Carry on.
+    assert.equal(window.document.getElementById('export-many-go').hidden, true, 'Save offered beside Carry on');
+    // Started over: the record let go of, and Save back.
     window.document.getElementById('export-many-restart').click();
     await new Promise((r) => setTimeout(r, 50));
     assert.equal((await store.settings()).exportRun, null);
+    assert.equal(window.document.getElementById('export-many-go').hidden, false);
     window.document.getElementById('export-many-cancel').click();
     // A record that is not one (from elsewhere, or damaged) is not acted on: no carrying on offered.
     await store.saveSettings({ exportRun: { v: 1, kind: 'everything', limitMB: 500, order: ['x'], done: [], zips: 1 } });
