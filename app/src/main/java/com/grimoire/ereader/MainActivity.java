@@ -134,6 +134,7 @@ public class MainActivity extends AppCompatActivity {
         installBackHandler();
 
         restoreStagedExport(savedInstanceState);
+        clearStaleExports();
 
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState);
@@ -492,6 +493,31 @@ public class MainActivity extends AppCompatActivity {
                 .putString(STAGED_PATH, file == null ? null : file.getAbsolutePath())
                 .putString(STAGED_TYPE, type)
                 .apply();
+    }
+
+    /* What an export cut off left behind in the app's own storage: the zip
+     * it was writing, up to a whole zip's size, kept for nothing -- nothing
+     * cleared it, so each crash left one more. Cleared on start, except a
+     * file still waiting for a place to be saved (staged, stagedSet), and
+     * anything from the last few minutes. */
+    private void clearStaleExports() {
+        try {
+            File dir = new File(getCacheDir(), "exports");
+            File[] files = dir.listFiles();
+            if (files == null) return;
+            java.util.Set<String> keep = new java.util.HashSet<>();
+            if (staged != null) keep.add(staged.getAbsolutePath());
+            String set = getSharedPreferences("exports", MODE_PRIVATE).getString(STAGED_SET, null);
+            if (set != null) for (String path : set.split("\n")) if (!path.isEmpty()) keep.add(path);
+            long before = System.currentTimeMillis() - 10 * 60 * 1000L;
+            for (File file : files) {
+                if (keep.contains(file.getAbsolutePath()) || file.lastModified() > before) continue;
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+            }
+        } catch (Throwable e) {
+            Log.w(TAG, "Could not clear old exports", e);
+        }
     }
 
     private void restoreStagedExport(@Nullable Bundle state) {

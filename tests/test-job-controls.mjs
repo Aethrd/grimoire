@@ -342,5 +342,14 @@ await t('a chapter whose paragraphs open with many spaces is read in a moment, n
   assert.ok(!/\(\?:\\s\|[^)]*\\u(00a0|3000)/.test(read('app/src/main/assets/www/js/parse.js')));
 });
 
+await t('what an export cut off left in the app’s own storage is cleared on start -- but not a file waiting to be saved', () => {
+  const main = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(main, /restoreStagedExport\(savedInstanceState\);\s*clearStaleExports\(\);/);
+  const clear = main.slice(main.indexOf('private void clearStaleExports()'), main.indexOf('private void restoreStagedExport('));
+  assert.match(clear, /if \(staged != null\) keep\.add\(staged\.getAbsolutePath\(\)\);/);
+  assert.match(clear, /getString\(STAGED_SET, null\)/);
+  assert.match(clear, /file\.lastModified\(\) > before\) continue;/);
+});
+
 console.log(`\n${pass} checks passed`);
 process.exit(0);
