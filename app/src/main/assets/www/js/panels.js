@@ -1604,9 +1604,9 @@ export async function openStats({ onOpen = null } = {}) {
 
   /* Coloured by rank among the days read in these weeks, not by words over a
    * ceiling: words cluster low with a few heavy days far above, so nearly
-   * every day sat at the gradient's start and its other colours never came.
-   * Ranked, the lightest day takes its start, the heaviest its end, and the
-   * rest spread between -- every colour of it in use. */
+   * every day sat at one end of the gradient and its other colours never
+   * came. Ranked, the heaviest day takes the gradient's start (its left), the
+   * lightest its end, and the rest spread between -- every colour in use. */
   const shown = days.map((d) => byDay.get(store.dayKey(d.getTime()))?.words || 0);
   const read = [...new Set(shown.filter((n) => n > 0))].sort((x, y) => x - y);
   const rankOf = (words) => (read.length < 2 ? 1 : read.indexOf(words) / (read.length - 1));
@@ -1637,7 +1637,8 @@ export async function openStats({ onOpen = null } = {}) {
     if (level) {
       const fill = rankOf(words);
       cell.style.setProperty('--fill', String(fill));
-      cell.style.setProperty('--heat-c', `var(--grad-s${Math.round(fill * (theme.GRADIENT_SAMPLES - 1))})`);
+      // The heaviest day the gradient's first (left) colour, the lightest its last.
+      cell.style.setProperty('--heat-c', `var(--grad-s${Math.round((1 - fill) * (theme.GRADIENT_SAMPLES - 1))})`);
     }
     if (i === days.length - 1) cell.classList.add('today');
     heat.appendChild(cell);

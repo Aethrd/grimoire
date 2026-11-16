@@ -1944,6 +1944,10 @@ await t('a bundle of editions is one book in every count', async () => {
   await panels.openStats();
   const shades = [...document.querySelectorAll('#stats-body .heat i')].map((c) => c.style.getPropertyValue('--heat-c')).filter(Boolean);
   assert.ok(shades.includes('var(--grad-s0)') && shades.includes('var(--grad-s16)'), `ends of the gradient unused: ${[...new Set(shades)]}`);
+  // The heaviest day (30,000 words) the gradient's left end; the lightest (50) its right.
+  const shadeOf = (ago) => document.querySelector(`#stats-body .heat i[data-day="${store.dayKey(Date.now() - ago * 86400e3)}"]`).style.getPropertyValue('--heat-c');
+  assert.equal(shadeOf(5), 'var(--grad-s0)');
+  assert.equal(shadeOf(2), 'var(--grad-s16)');
   assert.ok(new Set(shades).size >= 5, 'the days not spread across it');
   const stats = document.getElementById('stats-body').textContent;
   assert.match(stats, /2Books — in the library/, `the library is not two books: ${/\d+Books/.exec(stats)?.[0]}`);

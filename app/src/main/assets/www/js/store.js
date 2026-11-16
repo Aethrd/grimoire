@@ -122,6 +122,55 @@ export async function chapterBatch(bookId, after = -Infinity, count = 100) {
   return wrap((await tx('chapters')).getAll(IDBKeyRange.bound([bookId, after], [bookId, Infinity], true, false), count));
 }
 
+/** A reading session by when it was and what it counted -- not by its book, whose number can change. */
+export function eventSignature(event) {
+  return `${event.at}:${event.activeMs || 0}:${event.pages || 0}:${event.words || 0}:${event.elsewhere ? 1 : 0}`;
+}
+
+/**
+ * The log tidied, once: a session there twice (restored twice, under two
+ * books) kept once -- the copy under a book on the shelf, if either is. Said
+ * how many were taken out.
+ */
+export async function dedupeEvents() {
+  const events = await all('events');
+  const books = new Set((await all('books')).filter((b) => !b.binnedAt).map((b) => b.id));
+  const best = new Map();
+  for (const event of events) {
+    const key = eventSignature(event);
+    const kept = best.get(key);
+    if (!kept) { best.set(key, event); continue; }
+    const better = !books.has(kept.bookId) && books.has(event.bookId);
+    const loser = better ? kept : event;
+    if (better) best.set(key, event);
+    await del('events', loser.id);
+  }
+  return events.length - best.size;
+}
+
+/**
+ * The log made right, as far as it can be: each session there once
+ * (dedupeEvents), and none counting more pages than its time allows -- a
+ * page a second and a half, as the reader now counts (reader.js countPage).
+ * Sessions recorded before that counted jumps as reading: thousands of
+ * pages in a few seconds. Those are brought down to what the time allows,
+ * their words with them in the same proportion. Copied-out reading, which
+ * has no pages, is left as it is. Returns what was changed.
+ */
+export async function repairEvents() {
+  const doubled = await dedupeEvents();
+  let capped = 0;
+  for (const event of await all('events')) {
+    if (event.elsewhere || !(event.pages > 0)) continue;
+    const most = Math.max(1, Math.ceil((event.activeMs || 0) / 1500));
+    if (event.pages <= most) continue;
+    const share = most / event.pages;
+    await put('events', { ...event, pages: most, words: Math.round((event.words || 0) * share) });
+    capped += 1;
+  }
+  return { doubled, capped };
+}
+
 /** The newest book's id (books only ever get higher ones), without reading them all. */
 export async function lastBookId() {
   const request = (await tx('books')).openKeyCursor(null, 'prev');
@@ -667,7 +716,10 @@ export async function exportBackup() {
     // imports have actually behaved rather than only the most recent one.
     imports: (await settings()).importHistory || [],
     views: await all('views'),
-    events: await all('events'),
+    /* Each session with the book it was of, by what lasts (its fingerprint):
+     * the number it has here means another book on a phone whose storage was
+     * started afresh, and restored by number the log went to the wrong books. */
+    events: (await all('events')).map((e) => ({ ...e, fingerprint: byId.get(e.bookId)?.fingerprint || e.fingerprint || null })),
     layout: await all('layout'),
 
     books: books
@@ -1066,22 +1118,29 @@ export async function importBackup(data) {
     report.glossaries = (report.glossaries || 0) + 1;
   }
 
-  // The log is keyed by book too, but a reading history is worth keeping even
-  // for books no longer on the shelf.
-  const eventSeen = new Set((await all('events')).map((e) => `${e.bookId}:${e.at}`));
-
+  /* The log is keyed by book too, but a reading history is worth keeping
+   * even for books no longer on the shelf.
+   *
+   * Its book found by fingerprint, as the places are -- never by the number
+   * it had where the backup was made, which is another book here once
+   * storage has been started afresh. A backup from before sessions carried a
+   * fingerprint keeps them, of no book, rather than give them to the wrong
+   * one. And a session already here is known by when it was and what it
+   * counted, whichever book it is under: known by book as well, restoring the
+   * same backup twice added the whole log again under other books. */
+  const eventSeen = new Set((await all('events')).map(eventSignature));
   for (const event of data.events || []) {
-    const { id, ...row } = event;
-    const book = books.find((b) => b.id === event.bookId);
+    const { id, fingerprint, ...row } = event;
+    const book = fingerprint ? byFingerprint.get(fingerprint) : null;
     const bookId = book ? book.id : null;
-
-    const signature = `${bookId}:${row.at}`;
+    const signature = eventSignature(row);
     if (eventSeen.has(signature)) continue;
     eventSeen.add(signature);
-
-    await add('events', { ...row, bookId });
+    await add('events', { ...row, bookId, ...(fingerprint && !book ? { fingerprint } : {}) });
     report.events += 1;
   }
+  // What came in made right too: a backup from before carries the old counting.
+  report.eventsFixed = await repairEvents().catch(() => null);
 
   return report;
 }

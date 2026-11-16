@@ -351,5 +351,56 @@ await t('what an export cut off left in the app’s own storage is cleared on st
   assert.match(clear, /file\.lastModified\(\) > before\) continue;/);
 });
 
+await t('why the app last ended: said only for the app itself, and only when something went wrong', () => {
+  const bridge = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
+  const exit = bridge.slice(bridge.indexOf('public String lastExit()'), bridge.indexOf('public String lastExit()') + 4000);
+  // Not its helper processes, which Android ends as it likes ("isolated not needed").
+  assert.match(exit, /if \(!activity\.getPackageName\(\)\.equals\(exit\.getProcessName\(\)\)\) continue;/);
+  // Low memory, crashes, not responding, too much use -- not an ordinary ending.
+  for (const reason of ['REASON_LOW_MEMORY', 'REASON_CRASH', 'REASON_CRASH_NATIVE', 'REASON_ANR', 'REASON_EXCESSIVE_RESOURCE_USAGE']) assert.ok(exit.includes(reason), reason);
+  for (const ordinary of ['REASON_OTHER', 'REASON_SIGNALED', 'REASON_FREEZER', 'REASON_USER_REQUESTED']) assert.ok(!exit.includes(ordinary), ordinary);
+});
+
+await t('the reading log: jumps not counted as reading, sessions not doubled by restoring, and each kept with its own book', async () => {
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  // A turn counts what its time allows -- a page a second and a half -- not however far the place moved.
+  assert.match(reader, /const credited = Math\.min\(advanced, gap < IDLE_MS \? Math\.max\(1, Math\.ceil\(gap \/ PAGE_MS\)\) : 1\);/);
+  assert.match(reader, /session\.pages \+= credited;/);
+  // What was recorded before, put right: twice-kept sessions once, and jumps brought down to their time.
+  const before = (await store.all('events')).length;
+  const book = (await store.all('books')).find((b) => !b.binnedAt);
+  const day = store.dayKey(Date.now());
+  await store.add('events', { bookId: null, day, at: 111, activeMs: 2523, pages: 13502, words: 555430, chapters: 3, elsewhere: false, lang: 'ko' });
+  await store.add('events', { bookId: book.id, day, at: 111, activeMs: 2523, pages: 13502, words: 555430, chapters: 3, elsewhere: false, lang: 'ko' });
+  await store.add('events', { bookId: book.id, day, at: 222, activeMs: 300000, pages: 25, words: 6000, chapters: 1, elsewhere: false, lang: 'ko' });
+  await store.add('events', { bookId: book.id, day, at: 333, activeMs: 0, pages: 0, words: 9000, chapters: 1, elsewhere: true, lang: 'ko' });
+  const fixed = await store.repairEvents();
+  assert.equal(fixed.doubled, 1);
+  assert.equal(fixed.capped, 1);
+  const after = await store.all('events');
+  assert.equal(after.length, before + 3);
+  const jumped = after.find((e) => e.at === 111);
+  assert.equal(jumped.bookId, book.id, 'the copy kept was not the one with its book');
+  assert.equal(jumped.pages, 2);                       // 2.5 s: two pages at most
+  assert.equal(jumped.words, Math.round(555430 * 2 / 13502));
+  assert.equal(after.find((e) => e.at === 222).pages, 25, 'a real session changed');
+  assert.equal(after.find((e) => e.at === 333).words, 9000, 'reading copied out changed');
+  // Backups: each session with its book's fingerprint, matched by it on restore, and known whatever book it is under.
+  const backup = await store.exportBackup();
+  const mine = backup.events.find((e) => e.at === 222);
+  assert.equal(mine.fingerprint, book.fingerprint);
+  const count = (await store.all('events')).length;
+  await store.importBackup(backup);
+  await store.importBackup({ ...backup, events: backup.events.map((e) => ({ ...e, bookId: 99999 })) });
+  assert.equal((await store.all('events')).length, count, 'restoring added the log again');
+  // Restored onto a shelf where its book has another number: found by fingerprint, not by the old number.
+  await store.del('events', (await store.all('events')).find((e) => e.at === 222).id);
+  await store.importBackup({ ...backup, events: [{ ...mine, bookId: 424242 }] });
+  assert.equal((await store.all('events')).find((e) => e.at === 222).bookId, book.id);
+  // Put right once on start, and said.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /if \(!\(await store\.settings\(\)\)\.logRepaired\) \{/);
+});
+
 console.log(`\n${pass} checks passed`);
 process.exit(0);

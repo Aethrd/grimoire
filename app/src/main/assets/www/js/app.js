@@ -13558,6 +13558,16 @@ async function boot() {
   // Why, as Android tells it (Android 11 on): low memory, a crash, not responding.
   const exit = (() => { try { return window.GrimoireNative?.lastExit?.(); } catch { return null; } })();
   if (exit) toast(`Last time, ${exit}.`, 15000, { kind: 'failed' });
+  /* The reading log made right once (store.repairEvents): sessions counted
+   * twice by restoring, and jumps counted as pages read. Said if it did. */
+  if (!(await store.settings()).logRepaired) {
+    const fixed = await store.repairEvents().catch(() => null);
+    await store.saveSettings({ logRepaired: 1 });
+    if (fixed && (fixed.doubled || fixed.capped)) {
+      toast(`Reading stats put right: ${fixed.doubled} session${fixed.doubled === 1 ? '' : 's'} counted twice taken out, `
+        + `and ${fixed.capped} that counted jumps through a book as pages read brought down to what their time allowed.`, 15000);
+    }
+  }
   const unfinished = await exportRun().catch(() => null);
   if (unfinished?.zips) {
     toast(`An export was cut off after zip ${unfinished.zips} (${unfinished.done.length} books saved) — export again to carry on from zip ${unfinished.zips + 1}.`, 12000);

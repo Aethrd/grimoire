@@ -686,6 +686,11 @@ public class GrimoireBridge {
             long seen = prefs.getLong("exitSeen", 0);
             for (android.app.ApplicationExitInfo exit : exits) {
                 if (exit.getTimestamp() <= seen) break;
+                /* The app itself only: Android also lists the helper processes
+                 * it starts and ends as it likes (the reading page's sandboxed
+                 * renderer, "isolated not needed"), which are not the app
+                 * being closed, and were said as if they were. */
+                if (!activity.getPackageName().equals(exit.getProcessName())) continue;
                 String why;
                 switch (exit.getReason()) {
                     case android.app.ApplicationExitInfo.REASON_LOW_MEMORY: why = "Android closed it to free memory (the phone ran low)"; break;
@@ -693,9 +698,8 @@ public class GrimoireBridge {
                     case android.app.ApplicationExitInfo.REASON_CRASH_NATIVE: why = "it crashed (in native code)"; break;
                     case android.app.ApplicationExitInfo.REASON_ANR: why = "it stopped responding, and Android closed it"; break;
                     case android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE: why = "Android closed it for using too much of the phone"; break;
-                    case android.app.ApplicationExitInfo.REASON_SIGNALED: why = "Android stopped it (signal " + exit.getStatus() + ")"; break;
-                    case android.app.ApplicationExitInfo.REASON_OTHER: why = "Android closed it (other)"; break;
-                    case android.app.ApplicationExitInfo.REASON_FREEZER: why = "Android froze it in the background"; break;
+                    // Signalled, "other", frozen: how Android ends an app it is done with in the
+                    // background, or one swiped away -- ordinary, so nothing to say.
                     default: continue;   // asked to, updated, or a normal exit: nothing to say
                 }
                 prefs.edit().putLong("exitSeen", exits.get(0).getTimestamp()).apply();

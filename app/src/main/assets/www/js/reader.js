@@ -2324,6 +2324,8 @@ function save() {
 }
 
 const IDLE_MS = 3 * 60 * 1000;
+/** The least time a page can be read in: faster than this is moving, not reading (countPage, store.repairEvents). */
+const PAGE_MS = 1500;
 const FLUSH_EVERY_PAGES = 25;
 
 function startSession() {
@@ -2376,13 +2378,21 @@ function countPage() {
 
   noteReading();
 
+  /* Only what could have been read in the time since the last turn: a page
+   * a second and a half at most, and one for a turn after a long pause. A
+   * jump -- the chapter list, the scrubber, a book opening at its place, its
+   * page count worked out after it opened -- moved the position thousands
+   * of pages in a moment, and all of it was counted as read: 13,502 pages in
+   * two seconds, and the words worked out from them. Now the place moves and
+   * the reading counted is what the time allows. */
   const advanced = reached - session.furthest;
   session.furthest = reached;
-  session.pages += advanced;
+  const credited = Math.min(advanced, gap < IDLE_MS ? Math.max(1, Math.ceil(gap / PAGE_MS)) : 1);
+  session.pages += credited;
 
   const chapter = state.chapters.find((c) => c.index === state.chapterIndex);
   if (chapter && state.pageCount) {
-    session.words += Math.round(((chapter.words || 0) / state.pageCount) * advanced);
+    session.words += Math.round(((chapter.words || 0) / state.pageCount) * credited);
   }
 
   // Long reads should survive being killed by the system, not vanish.
