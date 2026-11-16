@@ -2436,6 +2436,10 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.match(src, /const WRITE_SPEED = 37\.5;/);
   assert.match(src, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
   assert.match(src, /const b = effectLook\(c\.was, c, seed, now, c\.wasT \|\| 0\);/);
+  // Lighter to draw, moving the same: the theme's colours read once a second, not every frame; faint, a pixel to the CSS pixel.
+  assert.match(src, /if \(!colours \|\| now - colours\.at > 1000\) colours = \{ at: now, from: hexToRgb\(css\('--grad-from'\)\), to: hexToRgb\(css\('--grad-to'\)\) \};/);
+  assert.equal(src.match(/css\('--grad-from'\)/g).length, 1, 'the colours read somewhere else every frame');
+  assert.match(src, /const dpr = faint \? 1 : Math\.min\(2, window\.devicePixelRatio \|\| 1\);/);
   // Every circle is put together at random, and the pages are plain (no grain).
   for (const part of ["'spiked'", "'crescents'", "'broken'", "'script'", "'petals'", "'orbit'", "'hexagram'"]) assert.ok(src.includes(part), part);
   assert.ok(!/grain(Pattern)?\b/.test(src.replace(/no grain/g, '')), 'no paper grain left');

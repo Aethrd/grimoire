@@ -37,7 +37,10 @@ export function playScene(canvas, { faint = false, glyphs = '' } = {}) {
   let ctx, W, H;
   function fit() {
     const box = canvas.getBoundingClientRect();
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    /* Faint (under 40%), drawn at one pixel to the CSS pixel: at that strength
+     * it looks the same, and is a quarter of the pixels on a phone's screen.
+     * Stronger, as sharp as the screen. */
+    const dpr = faint ? 1 : Math.min(2, window.devicePixelRatio || 1);
     canvas.width = Math.max(1, Math.round(box.width * dpr));
     canvas.height = Math.max(1, Math.round(box.height * dpr));
     ctx = canvas.getContext('2d');
@@ -625,9 +628,15 @@ export function playScene(canvas, { faint = false, glyphs = '' } = {}) {
   for (let i = 0; i < 38; i += 1) { const l = {}; spawn(l, true); l.born -= 2000; letters.push(l); }
   let lastFeed = 0;
 
+  let colours = null;
   function step(dt, now) {
     ctx.clearRect(0, 0, W, H);
-    const from = hexToRgb(css('--grad-from')), to = hexToRgb(css('--grad-to'));
+    /* The theme's colours read once a second, not every frame: reading a
+     * style has the page's styles worked out again if anything on it changed
+     * since -- and with an export saying how far it has got, something has,
+     * every frame. A theme changed shows within the second. */
+    if (!colours || now - colours.at > 1000) colours = { at: now, from: hexToRgb(css('--grad-from')), to: hexToRgb(css('--grad-to')) };
+    const { from, to } = colours;
     state.t += dt;
     const writing = state.right.find((line) => !line.doneAt);
 
