@@ -405,6 +405,25 @@ public class GrimoireBridge {
         if (activity instanceof MainActivity) ((MainActivity) activity).chooseAutoExportFolder();
     }
 
+    /** An export of many zips: its folder, asked for before it starts (exportSetFolderChosen). */
+    @JavascriptInterface
+    public void chooseExportSetFolder() {
+        if (activity instanceof MainActivity) ((MainActivity) activity).chooseExportSetFolder();
+    }
+
+    /** One full zip of that export, saved into its folder now (exportPartSaved). */
+    @JavascriptInterface
+    public void saveExportPart(String handle, String mimeType, String reply) {
+        final File file = new File(new File(activity.getCacheDir(), "exports"), new File(handle).getName());
+        if (activity instanceof MainActivity) ((MainActivity) activity).saveExportPart(file, mimeType, reply);
+    }
+
+    /** That export over: its folder let go of. */
+    @JavascriptInterface
+    public void releaseExportSetFolder() {
+        if (activity instanceof MainActivity) ((MainActivity) activity).releaseExportSetFolder();
+    }
+
     /** The chosen folder's name, or "" when there is none (or it can no longer be written). */
     @JavascriptInterface
     public String autoExportFolderName() {

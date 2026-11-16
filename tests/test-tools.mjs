@@ -938,7 +938,8 @@ await t('many books are written into one zip a book at a time, and it opens anyw
   const many = app.slice(app.indexOf('async function exportMany'), app.indexOf('function exportSink'));
   assert.ok(!/new JSZip|generateAsync/.test(many), 'the batch is still built whole in memory');
   assert.match(many, /await open\.writer\.add\(entry, blob/);
-  assert.match(many, /await open\.writer\.finish\(\);\s*staged\.push\(open\.sink\);/);
+  assert.match(many, /await open\.writer\.finish\(\);\s*if \(early\) \{/);
+  assert.match(many, /staged\.push\(open\.sink\);\s*open = null;/);
   assert.match(many, /if \(staged\.length === 1\) await staged\[0\]\.done\('application\/zip'\);\s*else await exportSinksDone\(staged, 'application\/zip', startedReading\);/);
 });
 
@@ -954,6 +955,9 @@ await t('many books written out in zips under a size: whole books, folder order,
     .replace(/const HEAT_REST = \{[^}]*\};/, 'const HEAT_REST = { between: 1, warm: 5, hot: 10 };');
   const MB = 1048576;
   const waits = [];
+  const events = [];
+  const ref = {};
+  const folderSrc = app.slice(app.indexOf('const exportFolder = (() => {'), app.indexOf('async function exportMany('));
   const saved = {};
   const fakeStore = { settings: async () => saved };
   const run = async (books, limitMB, { stopAfter = Infinity } = {}) => {
@@ -963,8 +967,10 @@ await t('many books written out in zips under a size: whole books, folder order,
     const toasts = [];
     let together = null;
     const exportSink = (name) => {
-      const sink = { name, bytes: 0, entries: [], async write(b) { sink.bytes += b.length; }, async done() { together = [sink]; }, discard() { sink.discarded = true; } };
+      const sink = { name, bytes: 0, entries: [], async write(b) { sink.bytes += b.length; }, async done() { together = [sink]; }, discard() { sink.discarded = true; },
+        async close() { events.push(`close ${name}`); return name; } };
       sinks.push(sink);
+      events.push(`open ${name}`);
       return sink;
     };
     // A zip that counts what it writes: each entry's bytes and a header.
@@ -979,8 +985,8 @@ await t('many books written out in zips under a size: whole books, folder order,
     }, safeName: (x) => x };
     const progress = {
       start: () => Object.assign(() => {}, { say() {}, fail() {}, activity(now) { if (now) waits.push(now.why); }, controls({ cancel }) { stop = cancel; } }) };
-    const exportMany = new Function('window', 'store', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
-      `${label}\n${heatSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('working')}\n${fn('exportMany')}\nreturn exportMany;`)(fakeWindow, fakeStore,
+    const exportMany = new Function('ref', 'window', 'store', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
+      `${label}\n${heatSrc}\n${folderSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('working')}\n${fn('exportMany')}\nref.exportFolder = exportFolder;\nreturn exportMany;`)(ref, fakeWindow, fakeStore,
       { displayTitle: (b) => b.title }, epub, progress, exportSink, zipWriter,
       async (staged) => { together = staged; }, (text) => toasts.push(text), () => 'Library', () => {}, async () => {}, false);
     await exportMany(books, limitMB);
@@ -1047,6 +1053,36 @@ await t('many books written out in zips under a size: whole books, folder order,
   // In Settings and on the export sheet alike.
   assert.match(read('app/src/main/assets/www/js/panels.js'), /toggle\(settings\.exportCoolDown !== false, \(on\) => store\.saveSettings\(\{ exportCoolDown: on \}\)\)/);
   assert.match(read('app/src/main/assets/www/index.html'), /<button class="switch" id="export-many-cool" aria-pressed="true"/);
+  // Where the phone can: the folder asked for first, and each zip saved into it the moment it is full --
+  // before the next is begun -- so a crash part-way leaves those already full in the folder.
+  const savedParts = [];
+  let asked = 0;
+  fakeWindow.GrimoireNative.chooseExportSetFolder = () => { asked += 1; setTimeout(() => ref.exportFolder.chosen('Books backup'), 0); };
+  fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => { savedParts.push(handle); events.push(`saved ${handle}`); setTimeout(() => ref.exportFolder.saved(reply, true, ''), 0); };
+  fakeWindow.GrimoireNative.releaseExportSetFolder = () => events.push('released');
+  events.length = 0;
+  const early = await run(books, 100);
+  assert.equal(asked, 1);
+  assert.equal(early.together, null, 'asked for a folder again at the end');
+  assert.deepEqual(savedParts, early.sinks.map((sink) => sink.name));
+  for (let i = 1; i < early.sinks.length; i += 1) {
+    assert.ok(events.indexOf(`saved ${early.sinks[i - 1].name}`) < events.indexOf(`open ${early.sinks[i].name}`), `zip ${i} not saved before zip ${i + 1} began`);
+  }
+  assert.equal(events.at(-1), 'released');
+  assert.match(early.toasts.at(-1), new RegExp(`30 books in ${early.sinks.length} zips, each under 100 MB, saved in “Books backup”`));
+  // No folder chosen: nothing written at all.
+  fakeWindow.GrimoireNative.chooseExportSetFolder = () => setTimeout(() => ref.exportFolder.chosen(null), 0);
+  const none = await run(books, 100);
+  assert.equal(none.sinks.length, 0);
+  assert.match(none.toasts.at(-1), /Not exported — no folder was chosen/);
+  // A zip that will not save: stopped there, saying how many are already in the folder.
+  let n = 0;
+  fakeWindow.GrimoireNative.chooseExportSetFolder = () => setTimeout(() => ref.exportFolder.chosen('Books backup'), 0);
+  fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => { n += 1; setTimeout(() => ref.exportFolder.saved(reply, n < 3, n < 3 ? '' : 'the phone is full'), 0); };
+  const full = await run(books, 100);
+  assert.match(full.toasts.at(-1), /Zip 3 could not be saved: the phone is full — the 2 before it are in “Books backup”/);
+  delete fakeWindow.GrimoireNative.chooseExportSetFolder;
+  delete fakeWindow.GrimoireNative.saveExportPart;
   // No limit: one zip, saved as ever.
   const one = await run(books, 0);
   assert.equal(one.sinks.length, 1);

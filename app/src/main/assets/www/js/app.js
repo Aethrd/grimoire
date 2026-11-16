@@ -2286,7 +2286,8 @@ async function askExportParts(books) {
       return chip;
     }));
     el('export-many-note').textContent = limit
-      ? `As many zips as it takes, each under ${limitLabel(limit)}. A book bigger than that on its own gets a zip to itself.`
+      ? `As many zips as it takes, each under ${limitLabel(limit)}. A book bigger than that on its own gets a zip to itself. `
+        + 'The folder is asked for first, and each zip is saved there as soon as it is full.'
       : `All ${books.length} in one zip, however large it gets.`;
   };
   paint();
@@ -2318,14 +2319,54 @@ async function askExportParts(books) {
  * things go. One archive is one decision, and unpacks into the same files;
  * several are one decision too, a folder for them all.
  */
+/* An export of several zips: the folder asked for first, each zip saved
+ * into it the moment it is full (MainActivity.saveExportPart), and deleted
+ * from the app's own storage once there. A crash part-way leaves the zips
+ * already full in the folder, and the phone never holds them all twice. */
+const exportFolder = (() => {
+  let choosing = null;
+  const saving = new Map();
+  let made = 0;
+  return {
+    get can() { const b = window.GrimoireNative; return !!(b?.chooseExportSetFolder && b?.saveExportPart); },
+    /** The folder's name, or null if none was chosen. */
+    choose() {
+      return new Promise((resolve) => {
+        choosing = resolve;
+        try { window.GrimoireNative.chooseExportSetFolder(); } catch { choosing = null; resolve(null); }
+      });
+    },
+    chosen(name) { const done = choosing; choosing = null; done?.(name || null); },
+    /** One full zip into it: { ok, why }. */
+    save(handle) {
+      const reply = `part-${Date.now()}-${++made}`;
+      return new Promise((resolve) => {
+        saving.set(reply, resolve);
+        try { window.GrimoireNative.saveExportPart(handle, 'application/zip', reply); } catch (error) { saving.delete(reply); resolve({ ok: false, why: error.message }); }
+      });
+    },
+    saved(reply, ok, why) { const done = saving.get(reply); saving.delete(reply); done?.({ ok: !!ok, why: why || '' }); },
+    release() { try { window.GrimoireNative?.releaseExportSetFolder?.(); } catch { /* nothing held */ } },
+  };
+})();
+
 async function exportMany(books, limitMB = 0) {
   const ordered = exportOrder(books);
   const limit = limitMB > 0 ? limitMB * 1048576 : 0;
   const startedReading = inBook;
-  const finish = progress.start(`Writing ${books.length} books${limit ? ` in zips under ${limitLabel(limitMB)}` : ''}`);
+  // Zips under a size: their folder first, so each can go into it as it fills.
+  const early = !!limit && exportFolder.can;
+  let folder = '';
+  if (early) {
+    folder = await exportFolder.choose();
+    if (!folder) { toast('Not exported — no folder was chosen', 5000); return; }
+  }
+  const finish = progress.start(`Writing ${books.length} books${limit ? ` in zips under ${limitLabel(limitMB)}` : ''}${folder ? ` into “${folder}”` : ''}`);
   const failed = [];
   const base = epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books');
-  const staged = [];   // each zip, written and waiting to be saved
+  const staged = [];   // each zip, written and waiting to be saved (not early)
+  let zips = 0;        // zips begun, for their names
+  let savedZips = 0;   // zips already in the folder (early)
   let written = 0;
   // Stopped from the popup: after the book under way; nothing half-made is saved.
   let stopped = false;
@@ -2335,7 +2376,8 @@ async function exportMany(books, limitMB = 0) {
    * none is ever left empty; closed when the next book would take it over. */
   let open = null;
   const start = () => {
-    const sink = exportSink(limit ? `${base} (part ${staged.length + 1}).zip` : `${base}.zip`);
+    zips += 1;
+    const sink = exportSink(limit ? `${base} (part ${zips}).zip` : `${base}.zip`);
     const zip = { sink, used: new Set(), inZip: 0, size: 0, central: 0 };
     zip.writer = zipWriter(async (bytes) => { zip.size += bytes.size ?? bytes.length; await sink.write(bytes); }, { blobs: true });
     return zip;
@@ -2343,6 +2385,20 @@ async function exportMany(books, limitMB = 0) {
   const close = async () => {
     if (!open) return;
     await open.writer.finish();
+    if (early) {
+      // Into the folder now, before the next zip is begun.
+      const sink = open.sink;
+      open = null;
+      finish.say(`Saving zip ${savedZips + 1} into “${folder}”`);
+      const { ok, why } = await exportFolder.save(await sink.close());
+      if (!ok) {
+        const error = new Error(`Zip ${savedZips + 1} could not be saved: ${why}${savedZips ? ` — the ${savedZips} before it are in “${folder}”` : ''}`);
+        error.writeFailed = true;
+        throw error;
+      }
+      savedZips += 1;
+      return;
+    }
     staged.push(open.sink);
     open = null;
   };
@@ -2359,7 +2415,7 @@ async function exportMany(books, limitMB = 0) {
       if (stopped) break;
       if (at) await letCool(finish, { stopped: () => stopped });
       if (stopped) break;
-      const zipNo = () => (limit ? ` · zip ${staged.length + 1}` : '');
+      const zipNo = () => (limit ? ` · zip ${open ? zips : zips + 1}` : '');
       finish.say(`Writing ${library.displayTitle(book)}${zipNo()}`, null, `${at + 1} of ${books.length}`);
       working(`writing out “${library.displayTitle(book)}” (book ${at + 1} of ${books.length}${book.pictureBook ? ', pictures' : ''})`);
       try {
@@ -2393,7 +2449,9 @@ async function exportMany(books, limitMB = 0) {
     if (stopped) {
       for (const sink of [...staged, open?.sink].filter(Boolean)) sink.discard();
       open = null;
-      toast('Export stopped — nothing saved', 4000);
+      toast(savedZips
+        ? `Export stopped — the ${savedZips} zip${savedZips === 1 ? '' : 's'} already full ${savedZips === 1 ? 'is' : 'are'} in “${folder}”; the one under way was let go`
+        : 'Export stopped — nothing saved', 6000);
       return;
     }
     await close();
@@ -2402,21 +2460,28 @@ async function exportMany(books, limitMB = 0) {
       throw new Error(failed[0] ? `${failed[0].title}: ${failed[0].reason}` : 'Nothing could be written');
     }
 
-    // One zip: saved as ever. Several: one folder asked for, and every zip put in it.
-    if (staged.length === 1) await staged[0].done('application/zip');
-    else await exportSinksDone(staged, 'application/zip', startedReading);
+    // Early: every zip is in the folder already. Otherwise one zip saved as ever, or several into a folder asked for now.
+    if (!early) {
+      if (staged.length === 1) await staged[0].done('application/zip');
+      else await exportSinksDone(staged, 'application/zip', startedReading);
+    }
 
     clearSelection();
     await refreshShelf();
-    toast(failed.length
-      ? `${written} written · ${failed.length} skipped — ${failed[0].title}: ${failed[0].reason}`
-      : staged.length > 1
-        ? `${written} books in ${staged.length} zips, each under ${limitLabel(limitMB)} — choose a folder for them`
-        : `${written} books written out — choose where to save them`, 7000, { kind: 'done' });
+    const skipped = failed.length ? ` · ${failed.length} skipped — ${failed[0].title}: ${failed[0].reason}` : '';
+    toast(early
+      ? `${written} books in ${savedZips} zip${savedZips === 1 ? '' : 's'}, each under ${limitLabel(limitMB)}, saved in “${folder}”${skipped}`
+      : failed.length
+        ? `${written} written${skipped}`
+        : staged.length > 1
+          ? `${written} books in ${staged.length} zips, each under ${limitLabel(limitMB)} — choose a folder for them`
+          : `${written} books written out — choose where to save them`, 8000, { kind: failed.length ? 'failed' : 'done' });
   } catch (error) {
     finish.fail();
-    toast(error.message || 'Those books could not be written out', 6000, { kind: 'failed' });
+    open?.sink.discard();
+    toast(error.message || 'Those books could not be written out', 8000, { kind: 'failed' });
   } finally {
+    if (early) exportFolder.release();
     working(null);
     finish();
   }
@@ -13127,6 +13192,9 @@ window.Grimoire = {
   autoExportWritten(token, ok, message) { autoExport.written(token, ok, message); },
   /** The folder for the automatic export, chosen: its name, or null if none was. */
   autoExportFolderChosen(name) { autoExport.folderChosen(name); },
+  /** An export of several zips: its folder chosen (or not), and each zip saved into it. */
+  exportSetFolderChosen(name) { exportFolder.chosen(name); },
+  exportPartSaved(reply, ok, why) { exportFolder.saved(reply, ok, why); },
   /** An export in parts, saved into the folder chosen: how many of them, and the first that would not go. */
   exportSetSaved(saved, of, failed) {
     toast(saved === of

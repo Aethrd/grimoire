@@ -451,6 +451,9 @@ public class MainActivity extends AppCompatActivity {
     /** Automatic export: the folder every book is written into, chosen once and kept. */
     private static final int PICK_AUTO_EXPORT_FOLDER = 4304;
     private static final String AUTO_EXPORT_TREE = "autoExportTree";
+    /** An export of many zips: its folder asked for first, each zip put in it as soon as it is full. */
+    private static final int PICK_EXPORT_SET_FOLDER = 4305;
+    private static final String EXPORT_SET_TREE = "exportSetTree";
     /** Only these are an automatic backup's, and only these are ever removed. */
     /* Automatic backups' names: the app's name now, and the one it had -- both
      * pruned together, by when they were made, so the newest few are kept
@@ -622,6 +625,99 @@ public class MainActivity extends AppCompatActivity {
             tellReader("window.Grimoire.exportSetSaved(" + saved + "," + files.size() + ","
                     + JSONObject.quote(failed == null ? "" : failed) + ")");
         });
+    }
+
+    /* ── an export of many zips, each saved as soon as it is full ─────────
+     *
+     * The folder is asked for before anything is written, and kept (its
+     * permission held across a restart) until the export ends; each zip goes
+     * into it the moment it is closed, and is deleted from the app's own
+     * storage once it is safely there. So a crash at the sixth zip leaves the
+     * first five where they belong, and the phone never holds every zip
+     * twice over. */
+    void chooseExportSetFolder() {
+        runOnUiThread(() -> {
+            Intent tree = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            tree.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            try {
+                startActivityForResult(tree, PICK_EXPORT_SET_FOLDER);
+            } catch (Exception e) {
+                Log.w(TAG, "No folder picker available", e);
+                tellReader("window.Grimoire.exportSetFolderChosen(null)");
+            }
+        });
+    }
+
+    private void exportSetFolderPicked(@Nullable Uri tree) {
+        if (tree == null) {
+            tellReader("window.Grimoire.exportSetFolderChosen(null)");
+            return;
+        }
+        try {
+            getContentResolver().takePersistableUriPermission(tree,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (Exception e) {
+            Log.w(TAG, "That folder's permission could not be kept", e);
+        }
+        getSharedPreferences("exports", MODE_PRIVATE).edit().putString(EXPORT_SET_TREE, tree.toString()).apply();
+        String name = "the folder chosen";
+        Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
+                android.provider.DocumentsContract.getTreeDocumentId(tree));
+        try (android.database.Cursor c = getContentResolver().query(folder,
+                new String[] { android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null)) {
+            if (c != null && c.moveToFirst()) name = c.getString(0);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not name the folder", e);
+        }
+        tellReader("window.Grimoire.exportSetFolderChosen(" + JSONObject.quote(name) + ")");
+    }
+
+    /** One full zip, into the export's folder; answered by window.Grimoire.exportPartSaved(reply, ok, why). */
+    void saveExportPart(File file, String mime, String reply) {
+        staging.execute(() -> {
+            String why = "";
+            boolean ok = false;
+            try {
+                String saved = getSharedPreferences("exports", MODE_PRIVATE).getString(EXPORT_SET_TREE, null);
+                if (saved == null) throw new java.io.IOException("the folder was not kept — export again");
+                Uri tree = Uri.parse(saved);
+                if (!file.exists()) throw new java.io.IOException("the zip was not there to save");
+                Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
+                        android.provider.DocumentsContract.getTreeDocumentId(tree));
+                Uri doc = android.provider.DocumentsContract.createDocument(getContentResolver(), folder,
+                        mime == null || mime.isEmpty() ? "application/zip" : mime, file.getName());
+                if (doc == null) throw new java.io.IOException("the folder would not take it");
+                copyInto(doc, file);
+                long written = writtenSize(doc);
+                if (written >= 0 && written != file.length()) {
+                    android.provider.DocumentsContract.deleteDocument(getContentResolver(), doc);
+                    throw new java.io.IOException("wrote " + written + " bytes of " + file.length());
+                }
+                ok = true;
+            } catch (Throwable e) {
+                Log.w(TAG, "Could not save " + file.getName(), e);
+                why = e.getMessage() == null ? "it could not be saved" : e.getMessage();
+            } finally {
+                // In the folder, or failed: either way not kept here as well.
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+            }
+            tellReader("window.Grimoire.exportPartSaved(" + JSONObject.quote(reply) + "," + ok + "," + JSONObject.quote(why) + ")");
+        });
+    }
+
+    /** The export over: its folder's permission let go of, unless the automatic backups or export use it. */
+    void releaseExportSetFolder() {
+        android.content.SharedPreferences prefs = getSharedPreferences("exports", MODE_PRIVATE);
+        String saved = prefs.getString(EXPORT_SET_TREE, null);
+        prefs.edit().remove(EXPORT_SET_TREE).apply();
+        if (saved == null || saved.equals(prefs.getString(AUTO_EXPORT_TREE, null))
+                || saved.equals(prefs.getString(BACKUP_TREE, null))) return;
+        try {
+            getContentResolver().releasePersistableUriPermission(Uri.parse(saved),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (Exception ignored) { /* already gone */ }
     }
 
     void chooseBackupFolder() {
@@ -938,6 +1034,10 @@ public class MainActivity extends AppCompatActivity {
         }
         if (request == PICK_EXPORT_FOLDER) {
             savedSetInto(result == RESULT_OK && data != null ? data.getData() : null);
+            return;
+        }
+        if (request == PICK_EXPORT_SET_FOLDER) {
+            exportSetFolderPicked(result == RESULT_OK && data != null ? data.getData() : null);
             return;
         }
         if (request != PICK_EXPORT_TARGET) return;
