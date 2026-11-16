@@ -148,6 +148,8 @@ await t('on its schedule, only once something new has come in: a day with nothin
   await scheduled();
   for (let i = 0; i < 80 && !folder.size; i += 1) await sleep(100);
   assert.deepEqual([...folder.keys()], ['slop/Delta.epub']);
+  // Counted once the export has finished, which on a slow machine is a moment after its file lands.
+  for (let i = 0; i < 100 && !((await store.settings()).autoExport.lastAt > Date.now() - 60000); i += 1) await sleep(100);
   assert.ok((await store.settings()).autoExport.lastAt > Date.now() - 60000);
 });
 

@@ -237,24 +237,73 @@ await t('files written out go to Android as bytes through the pipe, a piece at a
   const blobsShim = { readArrayBuffer: (b) => b.arrayBuffer() };
   const appended = [];
   const bridge = { appendExport: (handle, text) => { appended.push([handle, text]); return true; } };
-  const make = (win) => new Function('window', 'blobs', 'blobBase64', `${src}\nreturn sendPiece;`)(win, blobsShim, async (b) => Buffer.from(await b.arrayBuffer()).toString('base64'));
+  const make = (win) => new Function('window', 'blobs', 'blobBase64', 'Blob', `${src}\nreturn sendPiece;`)(win, blobsShim, async (b) => Buffer.from(await b.arrayBuffer()).toString('base64'), NodeBlob);
   const { Blob: NodeBlob } = await import('node:buffer');
   const send = make(fakeWindow);
-  assert.equal(await send(bridge, 'Books (part 1).zip', new NodeBlob([Buffer.from('abc')])), true);
-  assert.equal(await send(bridge, 'Books (part 1).zip', new NodeBlob([Buffer.from('def')])), true);
+  assert.equal(await send(bridge, 'Books (part 1).zip', new Uint8Array(Buffer.from('abc'))), true);
+  // A piece of a larger buffer: only its own bytes go.
+  assert.equal(await send(bridge, 'Books (part 1).zip', new Uint8Array(Buffer.from('xdefx')).subarray(1, 4)), true);
   assert.deepEqual(received.map((d) => (typeof d === 'string' ? d : Buffer.from(d).toString())),
     ['to:Books (part 1).zip', 'abc', 'to:Books (part 1).zip', 'def']);
   assert.equal(appended.length, 0, 'sent as base64 as well');
   // Not written: said so, so the export stops rather than going on with a hole in the file.
   answer = 'failed';
-  assert.equal(await send(bridge, 'x.zip', new NodeBlob([Buffer.from('g')])), false);
+  assert.equal(await send(bridge, 'x.zip', new Uint8Array(Buffer.from('g'))), false);
   // No pipe: base64, as before.
   const plain = make({});
-  assert.equal(await plain(bridge, 'y.zip', new NodeBlob([Buffer.from('hi')])), true);
+  assert.equal(await plain(bridge, 'y.zip', new Uint8Array(Buffer.from('hi'))), true);
   assert.deepEqual(appended, [['y.zip', Buffer.from('hi').toString('base64')]]);
   const main = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
   assert.match(main, /WebViewCompat\.addWebMessageListener\(webView, "MythosPipe", java\.util\.Collections\.singleton\(ORIGIN\)/);
   assert.match(read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java'), /reply\.postMessage\(ok \? "ok" : "failed"\)/);
+});
+
+await t('many books written out pass through as bytes, no Blob made of them: memory the engine sees, and frees as it goes', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const sinkSrc = app.slice(app.indexOf('function exportSink(name) {'), app.indexOf('/* Remembered between exports, not between sessions.'));
+  const { Blob: NodeBlob } = await import('node:buffer');
+  let made = 0;
+  // Any Blob made in here counted: there should be none.
+  const CountingBlob = class extends NodeBlob { constructor(...args) { super(...args); made += 1; } };
+  const sent = [];
+  const bridge = { beginExport: (name) => name };
+  const sendPiece = async (_bridge, handle, bytes) => { sent.push(Buffer.from(bytes)); return true; };
+  const CHUNK = 64;
+  const exportSink = new Function('inBook', 'window', 'blobs', 'EXPORT_CHUNK', 'sendPiece', 'untilNotReading', 'Blob', 'URL', 'document',
+    `${sinkSrc}\nreturn exportSink;`)(null, { GrimoireNative: bridge }, { readArrayBuffer: (b) => b.arrayBuffer() }, CHUNK, sendPiece, async () => {}, CountingBlob, null, null);
+  const sink = exportSink('Books.zip');
+  // A book in parts -- bytes, and a picture that is a Blob already -- then more bytes.
+  const picture = new NodeBlob([Buffer.alloc(100, 7)]);
+  const book = { parts: [new Uint8Array(30).fill(1), picture, new Uint8Array(50).fill(2)], size: 180 };
+  await sink.write(book);
+  await sink.write(new Uint8Array(10).fill(3));
+  await sink.close();
+  assert.equal(made, 0, `${made} Blob(s) made on the way`);
+  const whole = Buffer.concat(sent);
+  assert.deepEqual(whole, Buffer.concat([Buffer.alloc(30, 1), Buffer.alloc(100, 7), Buffer.alloc(50, 2), Buffer.alloc(10, 3)]));
+  assert.ok(sent.every((piece) => piece.length <= CHUNK), 'a piece over the size sent at once');
+  // The books themselves asked for in parts, by the export of many and the automatic export alike.
+  assert.match(app, /let \{ blob, name: entry \} = await epub\.buildEpub\(book\.id, \{\s*parts: true,/);
+  assert.match(app, /const \{ blob \} = await epub\.buildEpub\(book\.id, \{ parts: true \}\);/);
+});
+
+await t('a book built in parts is the same book: same bytes, size and checksum as built whole', async () => {
+  const epub = await import(www('epub.js'));
+  const { crcUpdate } = await import(www('zipwriter.js'));
+  const { Blob: NodeBlob } = await import('node:buffer');
+  const id = (await store.all('books')).find((b) => b.title === 'Deflated').id;
+  globalThis.Blob = NodeBlob;
+  try {
+    const { blob: whole } = await epub.buildEpub(id);
+    const { blob: inParts } = await epub.buildEpub(id, { parts: true });
+    assert.ok(Array.isArray(inParts.parts));
+    const bytes = Buffer.concat(await Promise.all(inParts.parts.map(async (p) => (p instanceof Uint8Array ? Buffer.from(p) : Buffer.from(await p.arrayBuffer())))));
+    const wholeBytes = Buffer.from(await whole.arrayBuffer());
+    assert.equal(inParts.size, wholeBytes.length);
+    assert.equal(inParts.crc32, crcUpdate(0, wholeBytes));
+    // Built twice a moment apart, the same but for the time stamped in its headers.
+    assert.equal(bytes.length, wholeBytes.length);
+  } finally { globalThis.Blob = jsdomBlob; }
 });
 
 console.log(`\n${pass} checks passed`);

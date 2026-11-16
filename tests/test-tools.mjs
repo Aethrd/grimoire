@@ -948,7 +948,8 @@ await t('many books written out in zips under a size: whole books, folder order,
   const label = app.match(/const limitLabel = .*;/)[0];
   // How warm the phone says it is, in turn; the waits made short for the test.
   const heats = [];
-  const fakeWindow = { GrimoireNative: { heat: () => JSON.stringify(heats.shift() || { status: 0, celsius: 30 }) } };
+  const said = [];
+  const fakeWindow = { GrimoireNative: { heat: () => JSON.stringify(heats.shift() || { status: 0, celsius: 30 }), working: (what) => said.push(what) } };
   const heatSrc = app.slice(app.indexOf('const HEAT_WARM = '), app.indexOf('/** In folder order, then by name'))
     .replace(/const HEAT_REST = \{[^}]*\};/, 'const HEAT_REST = { between: 1, warm: 5, hot: 10 };');
   const MB = 1048576;
@@ -979,7 +980,7 @@ await t('many books written out in zips under a size: whole books, folder order,
     const progress = {
       start: () => Object.assign(() => {}, { say() {}, fail() {}, activity(now) { if (now) waits.push(now.why); }, controls({ cancel }) { stop = cancel; } }) };
     const exportMany = new Function('window', 'store', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
-      `${label}\n${heatSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('exportMany')}\nreturn exportMany;`)(fakeWindow, fakeStore,
+      `${label}\n${heatSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('working')}\n${fn('exportMany')}\nreturn exportMany;`)(fakeWindow, fakeStore,
       { displayTitle: (b) => b.title }, epub, progress, exportSink, zipWriter,
       async (staged) => { together = staged; }, (text) => toasts.push(text), () => 'Library', () => {}, async () => {}, false);
     await exportMany(books, limitMB);
@@ -1008,6 +1009,12 @@ await t('many books written out in zips under a size: whole books, folder order,
   assert.ok(halted.sinks.length && halted.sinks.every((sink) => sink.discarded), 'a stopped zip kept');
   assert.equal(halted.sinks.flatMap((sink) => sink.entries).length, 13);
   assert.match(halted.toasts.at(-1), /Export stopped — nothing saved/);
+  // Each book said to Android as it is written, so a crash can name it; cleared when done.
+  assert.ok(said.includes('writing out “Novel 7” (book 13 of 30)') || said.some((w) => /^writing out “Novel \d+” \(book \d+ of 30\)$/.test(w)));
+  assert.equal(said.at(-1), '');
+  const app2 = read('app/src/main/assets/www/js/app.js');
+  assert.match(app2, /const cut = \(\(\) => \{ try \{ return window\.GrimoireNative\?\.cutOff\?\.\(\); \} catch \{ return null; \} \}\)\(\);/);
+  assert.match(read('app/src/main/java/com/grimoire/ereader/MainActivity.java'), /" while " \+ was \+ "\. Your library is untouched\."/);
   // The phone warm: a breath before the next book; hot, waited out till it is not -- and nothing skipped.
   heats.push({ status: 0, celsius: 40.4 }, { status: 2, celsius: 43 }, { status: 3, celsius: 44 }, { status: 0, celsius: 38.5 });
   waits.length = 0;

@@ -314,6 +314,14 @@ public class MainActivity extends AppCompatActivity {
                         : crashed
                         ? "The reader ran out of room and restarted. Nothing was lost."
                         : "Android reclaimed the reader's memory. Nothing was lost.";
+                // What it was in the middle of, if it said (an export's book): said, and not again on the next start.
+                String was = GrimoireBridge.workingNow;
+                if (was != null) {
+                    pendingNotice = (crashed ? "The reader ran out of memory" : "Android reclaimed the reader's memory")
+                            + " while " + was + ". Your library is untouched.";
+                    getSharedPreferences("work", MODE_PRIVATE).edit().remove("now").apply();
+                    GrimoireBridge.workingNow = null;
+                }
                 GrimoireBridge.building = false;
                 rebuildWebView();
                 return true;

@@ -1518,8 +1518,8 @@ await t('files leave in pieces, not in one', () => {
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /const EXPORT_CHUNK/);
   assert.match(app, /if \(!\(await sendPiece\(bridge, handle, piece\)\)\) \{/);
-  assert.match(app, /if \(!\(await sendPiece\(bridge, handle, all\.slice\(at, Math\.min\(all\.size, at \+ EXPORT_CHUNK\)\)\)\)\) \{/);
-  assert.match(app, /return bridge\.appendExport\(handle, await blobBase64\(blob\)\);/);
+  assert.match(app, /if \(!\(await sendPiece\(bridge, handle, chunk\.subarray\(0, fill\)\)\)\) throw failed\(\);/);
+  assert.match(app, /return bridge\.appendExport\(handle, await blobBase64\(new Blob\(\[bytes\]\)\)\);/);
   // Turned to text by the browser, not a character at a time in script.
   assert.match(app, /reader\.readAsDataURL\(blob\);/);
   assert.ok(!/function base64Of\(/.test(app), 'the script-side base64 is still there');

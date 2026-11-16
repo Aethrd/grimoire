@@ -195,7 +195,12 @@ export function zipWriter(write, { zip64At = MAX32, blobs = false } = {}) {
         [2, nameBytes.length], [2, extra.length],
       ]), nameBytes, extra));
 
-      if (blobs) await emit(blob, crc);
+      // A book made in parts (epub.js, parts): each part as it is, in order.
+      if (blob.parts) {
+        for (const part of blob.parts) {
+          await emit(blobs || part instanceof Uint8Array ? part : await bytesOf(part));
+        }
+      } else if (blobs) await emit(blob, crc);
       else {
         for (let at = 0; at < size; at += PIECE) {
           await emit(await bytesOf(blob.slice(at, Math.min(size, at + PIECE))));

@@ -8,6 +8,7 @@ import android.app.PendingIntent;
 import android.content.pm.PackageManager;
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.content.Context;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.PowerManager;
@@ -612,6 +613,28 @@ public class GrimoireBridge {
     /** Whether a build is under way: if Android reclaims the reader's memory
      *  meanwhile, the build goes with it, and that is what is said after. */
     static volatile boolean building = false;
+
+    /* What the app was in the middle of, written down as it goes (each book
+     * of an export), so that if it is cut off -- its page crashing, or
+     * Android closing the whole app for memory, which leaves no other trace
+     * -- the next start can say where it was. Cleared when the work ends. */
+    static volatile String workingNow = null;
+
+    @JavascriptInterface
+    public void working(String what) {
+        workingNow = (what == null || what.isEmpty()) ? null : what;
+        activity.getSharedPreferences("work", Context.MODE_PRIVATE).edit().putString("now", workingNow).apply();
+    }
+
+    /** What was under way when the app was last cut off, once; null if it finished. */
+    @JavascriptInterface
+    public String cutOff() {
+        android.content.SharedPreferences prefs = activity.getSharedPreferences("work", Context.MODE_PRIVATE);
+        String was = prefs.getString("now", null);
+        prefs.edit().remove("now").apply();
+        workingNow = null;
+        return was;
+    }
 
     @JavascriptInterface
     public void buildRunning(final boolean running) {

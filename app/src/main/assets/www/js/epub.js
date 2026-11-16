@@ -74,7 +74,7 @@ export function extensionFor(blob, href) {
  *   way into the file and the book on the shelf is left exactly as it is: a
  *   smaller copy is a copy, not an edit.
  */
-export async function buildEpub(bookId, { onProgress, title, author, size } = {}) {
+export async function buildEpub(bookId, { onProgress, title, author, size, parts = false } = {}) {
   const stored = await store.get('books', bookId);
   if (!stored) throw new Error('That book is no longer in the library.');
 
@@ -291,6 +291,7 @@ export async function buildEpub(bookId, { onProgress, title, author, size } = {}
   const blob = await zip.generateAsync(
     {
       type: 'blob',
+      parts,
       mimeType: 'application/epub+zip',
       // The default for anything not told otherwise, which is all the markup.
       compression: 'DEFLATE',
@@ -335,6 +336,14 @@ function epubArchive() {
         onUpdate?.({ percent: ((at + 1) / parts.length) * 100 });
       }
       await writer.finish();
+      /* Asked for in parts (an export of many): the pieces as they are, with
+       * their size and checksum -- no Blob made of them, whose memory the
+       * script engine cannot see to free (app.js exportSink). */
+      if (_options?.parts) {
+        let size = 0;
+        for (const piece of pieces) size += piece.size ?? piece.length;
+        return { parts: pieces, size, crc32: crc, type: 'application/epub+zip' };
+      }
       const book = new Blob(pieces, { type: 'application/epub+zip' });
       book.crc32 = crc;
       return book;

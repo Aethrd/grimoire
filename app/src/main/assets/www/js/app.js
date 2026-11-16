@@ -2361,8 +2361,11 @@ async function exportMany(books, limitMB = 0) {
       if (stopped) break;
       const zipNo = () => (limit ? ` · zip ${staged.length + 1}` : '');
       finish.say(`Writing ${library.displayTitle(book)}${zipNo()}`, null, `${at + 1} of ${books.length}`);
+      working(`writing out “${library.displayTitle(book)}” (book ${at + 1} of ${books.length}${book.pictureBook ? ', pictures' : ''})`);
       try {
+        // In parts, not one Blob (exportSink): bytes the engine can see and free.
         let { blob, name: entry } = await epub.buildEpub(book.id, {
+          parts: true,
           onProgress: (fraction) => {
             finish.say(null, ((at + fraction * 0.8) / books.length));
           },
@@ -2414,8 +2417,14 @@ async function exportMany(books, limitMB = 0) {
     finish.fail();
     toast(error.message || 'Those books could not be written out', 6000, { kind: 'failed' });
   } finally {
+    working(null);
     finish();
   }
+}
+
+/** What is under way, told to the native side (GrimoireBridge.working): said after a crash. */
+function working(what) {
+  try { window.GrimoireNative?.working?.(what || ''); } catch { /* no bridge: nothing to say it to */ }
 }
 
 /* ── automatic backups ────────────────────────────────────────────────
@@ -2665,11 +2674,12 @@ const autoExport = (() => {
         if (stopped) break;
         if (at) await letCool(finish, { stopped: () => stopped });
         if (stopped) break;
+        working(`exporting “${library.displayTitle(book)}” automatically (book ${at + 1} of ${plan.length})`);
         // Out of the way of reading: a book being built while one is read makes it stutter.
         while (inBook) await new Promise((resolve) => setTimeout(resolve, 5000));
         finish.say(`Exporting ${library.displayTitle(book)}`, at / plan.length, `${at + 1} of ${plan.length}`);
         try {
-          const { blob } = await epub.buildEpub(book.id);
+          const { blob } = await epub.buildEpub(book.id, { parts: true });
           const sink = exportSink(path.split('/').pop());
           // Handed on as it is: read across in pieces by the sink, not copied here first.
           await sink.write(blob);
@@ -2710,6 +2720,7 @@ const autoExport = (() => {
       toast(`Automatic export failed: ${error.message}`, 7000, { kind: 'failed' });
       return false;
     } finally {
+      working(null);
       finish();
       repaint();
     }
@@ -2873,33 +2884,61 @@ function exportSink(name) {
   const handle = native ? bridge.beginExport(name) : null;
   if (native && !handle) throw new Error('There was nowhere to write the file');
 
-  const held = [];              // bytes, or whole Blobs -- a book's file handed on as it is
+  const held = [];              // bytes, or Blobs that already exist (a book's pictures, a file)
   let heldBytes = 0;
   const kept = [];             // the browser's download, which has to be whole
 
-  /* Sent across in pieces of a few megabytes, each turned to text by the
-   * browser's own code (blobBase64), never copied byte by byte in script. */
+  /* Sent across in pieces of a few megabytes, as bytes -- one buffer, filled
+   * and sent and filled again. No Blob is made of what goes through here:
+   * a Blob's memory is out of the script engine's sight, so it was let go of
+   * only whenever the engine happened to tidy up, and over gigabytes of an
+   * export it piled up until the app was closed for it. Bytes it sees, and
+   * frees as it goes. */
+  let chunk = null;
+  let fill = 0;
+  const failed = () => {
+    const error = new Error('The file could not be written — the phone may be out of space');
+    error.writeFailed = true;
+    return error;
+  };
+  const send = async () => {
+    if (!fill) return;
+    if (!(await sendPiece(bridge, handle, chunk.subarray(0, fill)))) throw failed();
+    fill = 0;
+    // A breath, so the progress bar paints and the app answers taps.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  const put = async (bytes) => {
+    chunk ||= new Uint8Array(EXPORT_CHUNK);
+    for (let at = 0; at < bytes.length;) {
+      const n = Math.min(chunk.length - fill, bytes.length - at);
+      chunk.set(bytes.subarray(at, at + n), fill);
+      fill += n;
+      at += n;
+      if (fill === chunk.length) await send();
+    }
+  };
   const flush = async () => {
     if (!heldBytes) return;
-    const all = new Blob(held);
-    held.length = 0;
+    const items = held.splice(0);
     heldBytes = 0;
-    if (!native) { kept.push(all); return; }
-    for (let at = 0; at < all.size; at += EXPORT_CHUNK) {
-      if (!(await sendPiece(bridge, handle, all.slice(at, Math.min(all.size, at + EXPORT_CHUNK))))) {
-        const error = new Error('The file could not be written — the phone may be out of space');
-        error.writeFailed = true;
-        throw error;
+    if (!native) { kept.push(...items); return; }
+    for (const item of items) {
+      if (item instanceof Uint8Array) { await put(item); continue; }
+      for (let at = 0; at < item.size; at += EXPORT_CHUNK) {
+        await put(new Uint8Array(await blobs.readArrayBuffer(item.slice(at, Math.min(item.size, at + EXPORT_CHUNK)))));
       }
-      // A breath, so the progress bar paints and the app answers taps.
-      await new Promise((resolve) => setTimeout(resolve, 0));
     }
+    await send();
   };
 
   return {
-    async write(bytes) {
-      held.push(bytes);
-      heldBytes += bytes.size ?? bytes.length;
+    /** Bytes, a Blob, or a book made in parts (epub.buildEpub with parts: each part in turn). */
+    async write(piece) {
+      for (const part of piece?.parts || [piece]) {
+        held.push(part);
+        heldBytes += part.size ?? part.length;
+      }
       if (heldBytes >= EXPORT_CHUNK) await flush();
     },
     /** Not wanted after all: what was written so far let go of. */
@@ -2907,16 +2946,20 @@ function exportSink(name) {
       held.length = 0;
       heldBytes = 0;
       kept.length = 0;
+      fill = 0;
+      chunk = null;
       if (native) { try { bridge.discardExport?.(handle); } catch { /* gone already */ } }
     },
     /** Written, and its name to save it under -- for saving with others (exportSinksDone). */
     async close() {
       await flush();
+      chunk = null;
       return native ? handle : new Blob(kept, { type: 'application/zip' });
     },
     name,
     async done(mimeType, share = false) {
       await flush();
+      chunk = null;
       // Android's save screen, not over a page being read.
       await untilNotReading(startedReading);
       if (native) { bridge.finishExport(handle, mimeType, share); return; }
@@ -12873,11 +12916,12 @@ const pipe = (() => {
   };
   return {
     get open() { return !!port(); },
-    async send(handle, blob) {
+    async send(handle, piece) {
       const p = port();
       if (!p) return false;
       wire(p);
-      const bytes = await blobs.readArrayBuffer(blob);
+      // Its own buffer, exactly its bytes: posted, it is copied across, and the piece can be filled again.
+      const bytes = piece.byteOffset === 0 && piece.byteLength === piece.buffer.byteLength ? piece.buffer : piece.slice().buffer;
       const written = new Promise((resolve) => {
         /* An answer that never comes: this file failed (not finished as base64,
          * which could put a piece in twice), and base64 for the files after. */
@@ -12891,10 +12935,10 @@ const pipe = (() => {
   };
 })();
 
-/** A piece of the file, by the pipe if there is one, else as base64 text. */
-async function sendPiece(bridge, handle, blob) {
-  if (pipe.open) return pipe.send(handle, blob);
-  return bridge.appendExport(handle, await blobBase64(blob));
+/** A piece of the file (bytes), by the pipe if there is one, else as base64 text. */
+async function sendPiece(bridge, handle, bytes) {
+  if (pipe.open) return pipe.send(handle, bytes);
+  return bridge.appendExport(handle, await blobBase64(new Blob([bytes])));
 }
 
 /**
@@ -12934,7 +12978,7 @@ async function writeOut(blob, name, mimeType, { share = false, toPictures = fals
   if (!handle) throw new Error('There was nowhere to write the file');
 
   for (let at = 0; at < blob.size; at += EXPORT_CHUNK) {
-    const piece = blob.slice(at, Math.min(at + EXPORT_CHUNK, blob.size));
+    const piece = new Uint8Array(await blobs.readArrayBuffer(blob.slice(at, Math.min(at + EXPORT_CHUNK, blob.size))));
     if (!(await sendPiece(bridge, handle, piece))) {
       throw new Error('The file could not be written');
     }
@@ -13329,6 +13373,10 @@ async function boot() {
       scheduleOvernight(() => carryOnLeftover(left), 'the app was closed', left.links[0]?.url || '');
     }
   }
+  /* Closed in the middle of something it had said (an export's book) -- by
+   * Android, for memory, or by a crash -- said now, with where it was. */
+  const cut = (() => { try { return window.GrimoireNative?.cutOff?.(); } catch { return null; } })();
+  if (cut) toast(`The app was closed while ${cut}. Your library is untouched.`, 15000, { kind: 'failed' });
   const crash = window.GrimoireNative?.lastCrash?.();
   if (crash) {
     await store.saveSettings({ lastCrash: crash });
