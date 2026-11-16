@@ -959,8 +959,8 @@ await t('many books written out in zips under a size: whole books, folder order,
   const ref = {};
   const folderSrc = app.slice(app.indexOf('const exportFolder = (() => {'), app.indexOf('async function exportMany('));
   const saved = {};
-  const fakeStore = { settings: async () => saved };
-  const run = async (books, limitMB, { stopAfter = Infinity } = {}) => {
+  const fakeStore = { settings: async () => saved, saveSettings: async (patch) => { Object.assign(saved, JSON.parse(JSON.stringify(patch))); }, all: async () => [] };
+  const run = async (books, limitMB, { stopAfter = Infinity, ...options } = {}) => {
     const sinks = [];
     let stop = null;
     let built = 0;
@@ -986,10 +986,10 @@ await t('many books written out in zips under a size: whole books, folder order,
     const progress = {
       start: () => Object.assign(() => {}, { say() {}, fail() {}, activity(now) { if (now) waits.push(now.why); }, controls({ cancel }) { stop = cancel; } }) };
     const exportMany = new Function('ref', 'window', 'store', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
-      `${label}\n${heatSrc}\n${folderSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('working')}\n${fn('exportMany')}\nref.exportFolder = exportFolder;\nreturn exportMany;`)(ref, fakeWindow, fakeStore,
+      `${label}\n${heatSrc}\n${folderSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('working')}\n${fn('exportMany')}\nref.exportFolder = exportFolder;\nref.runLeft = runLeft;\nreturn exportMany;`)(ref, fakeWindow, fakeStore,
       { displayTitle: (b) => b.title }, epub, progress, exportSink, zipWriter,
       async (staged) => { together = staged; }, (text) => toasts.push(text), () => 'Library', () => {}, async () => {}, false);
-    await exportMany(books, limitMB);
+    await exportMany(books, limitMB, options);
     return { sinks, together, toasts, progress };
   };
   const books = [];
@@ -1079,8 +1079,33 @@ await t('many books written out in zips under a size: whole books, folder order,
   let n = 0;
   fakeWindow.GrimoireNative.chooseExportSetFolder = () => setTimeout(() => ref.exportFolder.chosen('Books backup'), 0);
   fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => { n += 1; setTimeout(() => ref.exportFolder.saved(reply, n < 3, n < 3 ? '' : 'the phone is full'), 0); };
-  const full = await run(books, 100);
-  assert.match(full.toasts.at(-1), /Zip 3 could not be saved: the phone is full — the 2 before it are in “Books backup”/);
+  const full = await run(books, 100, { kind: 'everything' });
+  assert.match(full.toasts.at(-1), /Zip 3 could not be saved: the phone is full — the 2 before it are in “Books backup”\. Export again to carry on from there\./);
+  // Written down: the two zips saved, and exactly the books in them.
+  const cut = saved.exportRun;
+  assert.equal(cut.zips, 2);
+  assert.deepEqual(cut.done, full.sinks.slice(0, 2).flatMap((sink) => sink.entries).map((name) => +name.match(/\d+/)[0]));
+  assert.equal(cut.order.length, 30);
+  // Carried on: the books in no saved zip, in the order it began with, zips numbered on from 3, into the same folder.
+  fakeWindow.GrimoireNative.exportSetFolderName = () => 'Books backup';
+  fakeWindow.GrimoireNative.chooseExportSetFolder = () => { throw new Error('asked for the folder again'); };
+  const carriedParts = [];
+  fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => { carriedParts.push(handle); setTimeout(() => ref.exportFolder.saved(reply, true, ''), 0); };
+  const left = await ref.runLeft(cut, books);
+  assert.equal(left.length, 30 - cut.done.length);
+  const carried = await run(left, 100, { run: cut, kind: 'everything' });
+  assert.match(carriedParts[0], /\(part 3\)\.zip$/);
+  const everyEntry = [...full.sinks.slice(0, 2), ...carried.sinks].flatMap((sink) => sink.entries);
+  assert.equal(everyEntry.length, 30, 'a book missed or written twice');
+  assert.equal(new Set(everyEntry).size, 30);
+  // Finished: nothing left to carry on, and the folder let go of.
+  assert.equal(saved.exportRun, null);
+  // A book added meanwhile goes in the rest of an export of every book; a book gone is just not there.
+  const added = [...books.filter((b) => b.id !== 29), { id: 99, title: 'New one', folder: 'Korean', mb: 1 }];
+  const leftNow = await ref.runLeft({ ...cut, kind: 'everything' }, added);
+  assert.ok(leftNow.some((b) => b.id === 99) && !leftNow.some((b) => b.id === 29));
+  assert.equal(leftNow.at(-1).id, 99, 'not after the rest');
+  delete fakeWindow.GrimoireNative.exportSetFolderName;
   delete fakeWindow.GrimoireNative.chooseExportSetFolder;
   delete fakeWindow.GrimoireNative.saveExportPart;
   // No limit: one zip, saved as ever.

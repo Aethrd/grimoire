@@ -69,6 +69,31 @@ if (phase === 'empty') {
     chips.find((c) => c.textContent === '250 MB').click();
     assert.match(window.document.getElementById('export-many-note').textContent, /each under 250 MB/);
     window.document.getElementById('export-many-cancel').click();
+    assert.equal(window.document.getElementById('export-many-resume').hidden, true, 'carry on offered with nothing to carry on');
+  });
+
+  await t('an export cut off is offered to carry on: what was saved, what is left, and from which zip', async () => {
+    const all = await store.all('books');
+    await store.saveSettings({ exportRun: { v: 1, kind: 'everything', limitMB: 500, folder: 'Mythos books', base: 'Books', at: 1,
+      order: all.map((b) => b.id), done: all.slice(0, 2).map((b) => b.id), zips: 1 } });
+    const panels = await import(www('panels.js'));
+    const host = window.document.createElement('div');
+    await panels.openVault(() => {}, host);
+    [...host.querySelectorAll('button')].find((b) => b.textContent === 'Export every book').click();
+    for (let i = 0; i < 30 && window.document.getElementById('export-many-resume').hidden; i += 1) await new Promise((r) => setTimeout(r, 50));
+    const note = window.document.getElementById('export-many-resume-note').textContent;
+    assert.match(note, /^1 zip saved in “Mythos books”, 2 books in them; \d+ left\. Carrying on writes zip 2 onward \(the folder is asked for again\), 500 MB each\.$/);
+    // Started over: the record let go of.
+    window.document.getElementById('export-many-restart').click();
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal((await store.settings()).exportRun, null);
+    window.document.getElementById('export-many-cancel').click();
+    // A record that is not one (from elsewhere, or damaged) is not acted on: no carrying on offered.
+    await store.saveSettings({ exportRun: { v: 1, kind: 'everything', limitMB: 500, order: ['x'], done: [], zips: 1 } });
+    [...host.querySelectorAll('button')].find((b) => b.textContent === 'Export every book').click();
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(window.document.getElementById('export-many-resume').hidden, true, 'a damaged record offered to carry on');
+    window.document.getElementById('export-many-cancel').click();
   });
 
   await t('Your data in two halves: the backup (one file), then the books; settings alone folded away', async () => {

@@ -418,6 +418,12 @@ public class GrimoireBridge {
         if (activity instanceof MainActivity) ((MainActivity) activity).saveExportPart(file, mimeType, reply);
     }
 
+    /** The folder of an export cut off, if it can still be written to: its name, else "". */
+    @JavascriptInterface
+    public String exportSetFolderName() {
+        return activity instanceof MainActivity ? ((MainActivity) activity).exportSetFolderName() : "";
+    }
+
     /** That export over: its folder let go of. */
     @JavascriptInterface
     public void releaseExportSetFolder() {

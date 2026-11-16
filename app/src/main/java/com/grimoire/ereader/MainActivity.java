@@ -683,16 +683,38 @@ public class MainActivity extends AppCompatActivity {
                 if (saved == null) throw new java.io.IOException("the folder was not kept — export again");
                 Uri tree = Uri.parse(saved);
                 if (!file.exists()) throw new java.io.IOException("the zip was not there to save");
-                Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
-                        android.provider.DocumentsContract.getTreeDocumentId(tree));
+                String rootId = android.provider.DocumentsContract.getTreeDocumentId(tree);
+                Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, rootId);
+                String name = file.getName();
+                /* Under a name of its own until it is whole, then renamed: a crash
+                 * while it is being copied leaves no half a zip under its real
+                 * name -- and carrying on afterwards writes the same zip again,
+                 * so a leftover of that name is cleared first. */
+                String temp = ".mythos-writing-" + name;
+                String leftover = childOf(tree, rootId, temp);
+                if (leftover != null) android.provider.DocumentsContract.deleteDocument(getContentResolver(),
+                        android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, leftover));
                 Uri doc = android.provider.DocumentsContract.createDocument(getContentResolver(), folder,
-                        mime == null || mime.isEmpty() ? "application/zip" : mime, file.getName());
+                        mime == null || mime.isEmpty() ? "application/zip" : mime, temp);
                 if (doc == null) throw new java.io.IOException("the folder would not take it");
                 copyInto(doc, file);
                 long written = writtenSize(doc);
                 if (written >= 0 && written != file.length()) {
                     android.provider.DocumentsContract.deleteDocument(getContentResolver(), doc);
                     throw new java.io.IOException("wrote " + written + " bytes of " + file.length());
+                }
+                // The same zip saved by an export cut off before it: this one, whole, in its place.
+                String old = childOf(tree, rootId, name);
+                if (old != null) android.provider.DocumentsContract.deleteDocument(getContentResolver(),
+                        android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, old));
+                Uri renamed = null;
+                try {
+                    renamed = android.provider.DocumentsContract.renameDocument(getContentResolver(), doc, name);
+                } catch (Exception e) {
+                    Log.w(TAG, "Could not rename " + temp, e);
+                }
+                if (renamed == null && childOf(tree, rootId, name) == null) {
+                    throw new java.io.IOException("it was written but could not be given its name");
                 }
                 ok = true;
             } catch (Throwable e) {
@@ -705,6 +727,28 @@ public class MainActivity extends AppCompatActivity {
             }
             tellReader("window.Grimoire.exportPartSaved(" + JSONObject.quote(reply) + "," + ok + "," + JSONObject.quote(why) + ")");
         });
+    }
+
+    /** The folder of an export still under way or cut off: its name, if it can still be written to; else "". */
+    String exportSetFolderName() {
+        String saved = getSharedPreferences("exports", MODE_PRIVATE).getString(EXPORT_SET_TREE, null);
+        if (saved == null) return "";
+        Uri tree = Uri.parse(saved);
+        boolean held = false;
+        for (android.content.UriPermission each : getContentResolver().getPersistedUriPermissions()) {
+            if (each.getUri().equals(tree) && each.isWritePermission()) { held = true; break; }
+        }
+        if (!held) return "";
+        Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
+                android.provider.DocumentsContract.getTreeDocumentId(tree));
+        try (android.database.Cursor c = getContentResolver().query(folder,
+                new String[] { android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null)) {
+            if (c != null && c.moveToFirst()) return c.getString(0);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not reach the export's folder", e);
+            return "";
+        }
+        return "the folder chosen";
     }
 
     /** The export over: its folder's permission let go of, unless the automatic backups or export use it. */

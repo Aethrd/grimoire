@@ -983,6 +983,15 @@
       folder order, and all of them go into one folder you choose once.
       Import them in any order: each book gets its folder back.
     </p>
+    <!-- An export cut off (a crash, or stopped): carried on from the zip after the last one saved. -->
+    <div id="export-many-resume" hidden style="border:1px solid var(--divider);border-radius:12px;padding:10px 12px;margin:0 0 12px">
+      <p class="eyebrow" style="margin:0 0 4px">Unfinished export</p>
+      <p class="muted" id="export-many-resume-note" style="font-size:12px;line-height:1.5;margin:0 0 8px"></p>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost" id="export-many-restart" style="flex:1">Start over</button>
+        <button class="btn primary" id="export-many-resume-go" style="flex:1">Carry on</button>
+      </div>
+    </div>
     <p class="eyebrow">Largest zip</p>
     <div class="chip-row wrap" id="export-many-parts"></div>
     <p class="muted" id="export-many-note" style="font-size:12px;margin:6px 0 12px"></p>

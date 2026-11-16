@@ -2249,7 +2249,7 @@ function exportFound(books) {
   const kept = books.filter((book) => library.onShelf(book));
   if (!kept.length) return;
   if (kept.length === 1) return askAboutExport(kept[0]);
-  return askExportParts(kept);
+  return askExportParts(kept, { kind: 'chosen' });
 }
 
 /**
@@ -2267,11 +2267,33 @@ async function exportEverything() {
   const locked = kept.length - books.length;
   if (!books.length) { toast(locked ? 'Every book is in the locked Vault — unlock it to export them' : 'There are no books to export'); return; }
   if (locked) toast(`${locked} book${locked === 1 ? '' : 's'} in the locked Vault left out — unlock it first to include ${locked === 1 ? 'it' : 'them'}`, 7000);
-  await askExportParts(books);
+  await askExportParts(books, { kind: 'everything' });
 }
 
-async function askExportParts(books) {
+async function askExportParts(books, { kind = 'chosen' } = {}) {
   const sheet = el('export-many-sheet');
+  // An export cut off: carried on from here, or started over.
+  const run = await exportRun();
+  const resume = el('export-many-resume');
+  if (resume) {
+    resume.hidden = !run;
+    if (run) {
+      const left = await runLeft(run, kind === 'everything' && run.kind === 'everything' ? books : null);
+      const folderNow = exportFolder.kept();
+      el('export-many-resume-note').textContent = `${run.zips} zip${run.zips === 1 ? '' : 's'} saved in “${folderNow || run.folder}”, `
+        + `${run.done.length} books in them; ${left.length} left. Carrying on writes zip ${run.zips + 1} onward`
+        + `${folderNow ? ' into the same folder' : ' (the folder is asked for again)'}, ${limitLabel(run.limitMB)} each.`;
+      el('export-many-resume-go').onclick = () => {
+        sheet.hidden = true;
+        if (!left.length) { endExportRun(); toast('Nothing was left to export — that export is finished', 5000); return; }
+        exportMany(left, run.limitMB, { kind: run.kind, run });
+      };
+      el('export-many-restart').onclick = async () => {
+        await endExportRun();
+        resume.hidden = true;
+      };
+    }
+  }
   const saved = (await store.settings()).exportZipMB;
   let limit = EXPORT_LIMITS.includes(saved) ? saved : DEFAULT_EXPORT_LIMIT;
   el('export-many-title').textContent = `Write out ${books.length} books`;
@@ -2306,7 +2328,7 @@ async function askExportParts(books) {
   el('export-many-go').onclick = () => {
     sheet.hidden = true;
     store.saveSettings({ exportZipMB: limit }).catch(() => {});
-    exportMany(books, limit);
+    exportMany(books, limit, { kind });
   };
   sheet.hidden = false;
 }
@@ -2347,26 +2369,70 @@ const exportFolder = (() => {
     },
     saved(reply, ok, why) { const done = saving.get(reply); saving.delete(reply); done?.({ ok: !!ok, why: why || '' }); },
     release() { try { window.GrimoireNative?.releaseExportSetFolder?.(); } catch { /* nothing held */ } },
+    /** The folder of an export cut off, if it can still be written to: its name, else ''. */
+    kept() { try { return window.GrimoireNative?.exportSetFolderName?.() || ''; } catch { return ''; } },
   };
 })();
 
-async function exportMany(books, limitMB = 0) {
-  const ordered = exportOrder(books);
+/* ── an export carried on ────────────────────────────────────────────────
+ *
+ * Each time a zip is saved into its folder, which books are in it is written
+ * down (settings.exportRun): the exact books, not a place in an order, so a
+ * book added, renamed or moved meanwhile changes nothing. Cut off -- a
+ * crash, Android closing the app, a zip that would not save, or Stop -- the
+ * books in no saved zip are what is left, and the zips carry on from the
+ * number after the last one saved, into the same folder (kept for it until
+ * the export is finished or started over). */
+const EXPORT_RUN_VERSION = 1;
+/** The record of an export cut off -- only if it is one: anything else (damaged, or of another version) is not acted on. */
+async function exportRun() {
+  const run = (await store.settings()).exportRun;
+  const ids = (list) => Array.isArray(list) && list.every((id) => Number.isInteger(id));
+  const sound = run && run.v === EXPORT_RUN_VERSION && ids(run.order) && ids(run.done)
+    && Number.isInteger(run.zips) && run.zips >= 0 && EXPORT_LIMITS.includes(run.limitMB) && run.limitMB > 0
+    && typeof run.base === 'string' && run.base && ['everything', 'chosen'].includes(run.kind);
+  return sound ? run : null;
+}
+async function endExportRun() {
+  await store.saveSettings({ exportRun: null });
+  exportFolder.release();
+}
+/** What is left of a run: the books in no saved zip, in its order -- and, for every book, any come since. */
+async function runLeft(run, everything = null) {
+  const done = new Set(run.done);
+  const books = (everything || (await store.all('books')))
+    .filter((book) => !book.binnedAt && !book.transient && !book.importing && !done.has(book.id));
+  const at = new Map(run.order.map((id, i) => [id, i]));
+  const left = books.filter((book) => at.has(book.id) || (run.kind === 'everything' && everything));
+  return left.sort((a, b) => (at.get(a.id) ?? Infinity) - (at.get(b.id) ?? Infinity));
+}
+
+async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null } = {}) {
+  // Carried on: in the order it began with (runLeft), not sorted afresh.
+  const ordered = run ? [...books] : exportOrder(books);
   const limit = limitMB > 0 ? limitMB * 1048576 : 0;
   const startedReading = inBook;
   // Zips under a size: their folder first, so each can go into it as it fills.
   const early = !!limit && exportFolder.can;
   let folder = '';
   if (early) {
-    folder = await exportFolder.choose();
+    // Carried on: the same folder, if it can still be written to; else asked for.
+    folder = (run && exportFolder.kept()) || await exportFolder.choose();
     if (!folder) { toast('Not exported — no folder was chosen', 5000); return; }
+    // Written down as it goes (exportRun), so a cut-off export can be carried on.
+    run = run ? { ...run, folder } : {
+      v: EXPORT_RUN_VERSION, kind, limitMB, folder, at: Date.now(),
+      base: epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books'),
+      order: ordered.map((book) => book.id), done: [], zips: 0,
+    };
+    await store.saveSettings({ exportRun: run });
   }
   const finish = progress.start(`Writing ${books.length} books${limit ? ` in zips under ${limitLabel(limitMB)}` : ''}${folder ? ` into “${folder}”` : ''}`);
   const failed = [];
-  const base = epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books');
+  const base = run?.base || epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books');
   const staged = [];   // each zip, written and waiting to be saved (not early)
-  let zips = 0;        // zips begun, for their names
-  let savedZips = 0;   // zips already in the folder (early)
+  let zips = run?.zips || 0;        // zips begun, for their names -- carried on, after the last saved
+  let savedZips = run?.zips || 0;   // zips already in the folder (early)
   let written = 0;
   // Stopped from the popup: after the book under way; nothing half-made is saved.
   let stopped = false;
@@ -2378,7 +2444,7 @@ async function exportMany(books, limitMB = 0) {
   const start = () => {
     zips += 1;
     const sink = exportSink(limit ? `${base} (part ${zips}).zip` : `${base}.zip`);
-    const zip = { sink, used: new Set(), inZip: 0, size: 0, central: 0 };
+    const zip = { sink, used: new Set(), inZip: 0, size: 0, central: 0, ids: [] };
     zip.writer = zipWriter(async (bytes) => { zip.size += bytes.size ?? bytes.length; await sink.write(bytes); }, { blobs: true });
     return zip;
   };
@@ -2387,16 +2453,19 @@ async function exportMany(books, limitMB = 0) {
     await open.writer.finish();
     if (early) {
       // Into the folder now, before the next zip is begun.
-      const sink = open.sink;
+      const { sink, ids } = open;
       open = null;
       finish.say(`Saving zip ${savedZips + 1} into “${folder}”`);
       const { ok, why } = await exportFolder.save(await sink.close());
       if (!ok) {
-        const error = new Error(`Zip ${savedZips + 1} could not be saved: ${why}${savedZips ? ` — the ${savedZips} before it are in “${folder}”` : ''}`);
+        const error = new Error(`Zip ${savedZips + 1} could not be saved: ${why}${savedZips ? ` — the ${savedZips} before it are in “${folder}”` : ''}. Export again to carry on from there.`);
         error.writeFailed = true;
         throw error;
       }
       savedZips += 1;
+      // Its books written down as saved, before the next zip is begun.
+      run = { ...run, done: [...run.done, ...ids], zips: savedZips };
+      await store.saveSettings({ exportRun: run });
       return;
     }
     staged.push(open.sink);
@@ -2437,6 +2506,7 @@ async function exportMany(books, limitMB = 0) {
           finish.say(null, ((at + 0.8 + fraction * 0.2) / books.length));
         });
         open.inZip += 1;
+        open.ids.push(book.id);
         open.central += 100 + entry.length * 3;
         blob = null;
         written += 1;
@@ -2450,8 +2520,8 @@ async function exportMany(books, limitMB = 0) {
       for (const sink of [...staged, open?.sink].filter(Boolean)) sink.discard();
       open = null;
       toast(savedZips
-        ? `Export stopped — the ${savedZips} zip${savedZips === 1 ? '' : 's'} already full ${savedZips === 1 ? 'is' : 'are'} in “${folder}”; the one under way was let go`
-        : 'Export stopped — nothing saved', 6000);
+        ? `Export stopped — the ${savedZips} zip${savedZips === 1 ? '' : 's'} already full ${savedZips === 1 ? 'is' : 'are'} in “${folder}”; the one under way was let go. Export again to carry on.`
+        : 'Export stopped — nothing saved', 7000);
       return;
     }
     await close();
@@ -2460,7 +2530,8 @@ async function exportMany(books, limitMB = 0) {
       throw new Error(failed[0] ? `${failed[0].title}: ${failed[0].reason}` : 'Nothing could be written');
     }
 
-    // Early: every zip is in the folder already. Otherwise one zip saved as ever, or several into a folder asked for now.
+    // Early: every zip is in the folder already, and the run is over. Otherwise one zip saved as ever, or several into a folder asked for now.
+    if (early) { run = null; await endExportRun(); }
     if (!early) {
       if (staged.length === 1) await staged[0].done('application/zip');
       else await exportSinksDone(staged, 'application/zip', startedReading);
@@ -2481,7 +2552,8 @@ async function exportMany(books, limitMB = 0) {
     open?.sink.discard();
     toast(error.message || 'Those books could not be written out', 8000, { kind: 'failed' });
   } finally {
-    if (early) exportFolder.release();
+    // The folder kept only while there is an export to carry on (exportRun): let go of when none is.
+    if (early && !savedZips && run && !run.done.length) await endExportRun();
     working(null);
     finish();
   }
@@ -13445,6 +13517,10 @@ async function boot() {
    * Android, for memory, or by a crash -- said now, with where it was. */
   const cut = (() => { try { return window.GrimoireNative?.cutOff?.(); } catch { return null; } })();
   if (cut) toast(`The app was closed while ${cut}. Your library is untouched.`, 15000, { kind: 'failed' });
+  const unfinished = await exportRun().catch(() => null);
+  if (unfinished?.zips) {
+    toast(`An export was cut off after zip ${unfinished.zips} (${unfinished.done.length} books saved) — export again to carry on from zip ${unfinished.zips + 1}.`, 12000);
+  }
   const crash = window.GrimoireNative?.lastCrash?.();
   if (crash) {
     await store.saveSettings({ lastCrash: crash });
