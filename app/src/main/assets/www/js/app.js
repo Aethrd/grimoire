@@ -3147,7 +3147,7 @@ async function openFolderActions(folder, label, count) {
  *
  * "Already on your shelf" about a book nobody could see on the shelf, nor
  * find by searching, read as the app being wrong: the copy was in a folder
- * hidden from the shelf (found only by most of its title, which may not be
+ * hidden from the shelf (found only by two in five of its title, which may not be
  * the file's name), or off the shelf while a download carries it on. So it
  * is named, by the title it has here, and where it is said.
  */

@@ -743,14 +743,14 @@ await t('a folder hidden from the shelf is only found under Folders', async () =
 
   // The shelf's search leaves it out too -- typed as much as this, less than most of its title.
   screensMod.initFind(() => {}, false);
-  el('find-input').value = 'Bramble';
+  el('find-input').value = 'Bram';
   el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
   await settle(450);
   const found = [...el('find-results').querySelectorAll('[data-book]')].map((n) => Number(n.dataset.book));
   assert.ok(found.includes(out));
   assert.ok(!found.includes(kept) && !found.includes(nested), 'search finds a hidden folder');
 
-  // Unless most of its title is typed right: 60% of it, every word in it -- then found, and said where.
+  // Unless enough of its title is typed right: 40% of it, every word in it -- then found, and said where.
   const findFor = async (text) => {
     el('find-input').value = text;
     el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -763,8 +763,11 @@ await t('a folder hidden from the shelf is only found under Folders', async () =
   assert.ok(!(await findFor('brambleway kepx')).includes(kept), 'a hidden book found by a title typed wrong');
   assert.ok((await findFor('Brambleway Nested')).includes(nested));
   const sweet = { id: -1, title: "A Sweet Girl Won't Be Fooled By The Villainess" };
+  // Two in five of its letters and numbers, typed right.
+  assert.equal(library.TITLE_SHARE, 0.4);
   assert.equal(library.titleTyped(sweet, 'a sweet girl wont be fooled by'), true);   // 24 of 37
-  assert.equal(library.titleTyped(sweet, 'a sweet girl wont be fooled'), false);     // 22 of 37: just short
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont be'), true);             // 16 of 37
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont'), false);               // 14 of 37: just short
   assert.equal(library.titleTyped(sweet, 'sweet girl'), false);
   assert.equal(library.titleTyped(sweet, 'a sweet girl wont be foolex by'), false);
   assert.equal(library.titleTyped({ id: -2, title: '快穿女配：反派BOSS有毒' }, '快穿女配：反派BOSS'), true);

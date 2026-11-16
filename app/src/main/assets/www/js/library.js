@@ -2245,11 +2245,12 @@ function scoreBook(book, words, only) {
  * Whether what was typed is most of a book's title, typed right: every word of it in
  * the title (its own or the one the shelf shows), and those words together making up
  * at least `share` of the title's letters and numbers -- case, accents, spaces and
- * stops aside. "a sweet girl wont be fooled by" is most of "A Sweet Girl Won't Be Fooled
- * By The Villainess" (24 of its 37); "sweet girl" is not. How a book in a folder hidden from the shelf
- * is still found: by someone who knows its name, not by a search anyone could type.
+ * stops aside. "a sweet girl wont be" is enough of "A Sweet Girl Won't Be Fooled By The
+ * Villainess" (16 of its 37, over 40%); "sweet girl" is not. How a book in a folder hidden
+ * from the shelf is still found: by someone who knows its name, not by a search anyone
+ * could type.
  */
-export const TITLE_SHARE = 0.6;
+export const TITLE_SHARE = 0.4;
 const bare = (text) => fold(text).replace(/[^\p{L}\p{N}]+/gu, '');
 export function titleTyped(book, query, share = TITLE_SHARE) {
   const words = fold(query).split(/[^\p{L}\p{N}]+/u).filter(Boolean);

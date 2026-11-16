@@ -896,7 +896,7 @@ async function runFind(query, onGoToMatch) {
     // locked, nothing still being imported, and nothing deleted -- a book in
     // the bin is found in the bin, not offered back as if it were on the shelf.
     // Nor anything in a folder hidden from the shelf -- found by opening the
-    // folder, or by most of its title typed right (titleTyped), but not by a
+    // folder, or by two in five of its title typed right (titleTyped), but not by a
     // word anyone might type. Never one in the vault while it is locked.
     const books = await searchableBooks();
     const hiddenHere = shelfScope === 'author' || shelfScope === 'tags' ? [] : await hiddenBooks(query);
