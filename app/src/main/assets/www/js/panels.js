@@ -1584,33 +1584,128 @@ export async function openStats({ onOpen = null } = {}) {
   body.appendChild(averages);
 
   const heatWrap = document.createElement('section');
-  heatWrap.className = 'block';
+  heatWrap.className = 'block heat-block';
   heatWrap.innerHTML = '<h2>26 weeks</h2>'
     + '<p class="muted" style="font-size:11px;margin:0 0 8px">By words read, '
-    + 'including chapters copied out to read elsewhere.</p>';
+    + 'including chapters copied out to read elsewhere. Oldest on the left, this week on the right; '
+    + 'each column a week, Monday at the top. Tap a day for its pages and time.</p>';
+
+  /* A calendar: whole weeks, Monday first, this week last -- so a row is a
+   * weekday and a column a week, as calendars read. It started on whatever
+   * weekday was 181 days ago, which made neither rows nor columns mean
+   * anything. */
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const weekday = (today.getDay() + 6) % 7;          // Monday 0
+  const first = new Date(today);
+  first.setDate(today.getDate() - weekday - 25 * 7);  // the Monday 25 weeks before this one
+  const days = [];
+  for (const d = new Date(first); d <= today; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+
+  /* Coloured by rank among the days read in these weeks, not by words over a
+   * ceiling: words cluster low with a few heavy days far above, so nearly
+   * every day sat at the gradient's start and its other colours never came.
+   * Ranked, the lightest day takes its start, the heaviest its end, and the
+   * rest spread between -- every colour of it in use. */
+  const shown = days.map((d) => byDay.get(store.dayKey(d.getTime()))?.words || 0);
+  const read = [...new Set(shown.filter((n) => n > 0))].sort((x, y) => x - y);
+  const rankOf = (words) => (read.length < 2 ? 1 : read.indexOf(words) / (read.length - 1));
+
+  const scroller = document.createElement('div');
+  scroller.className = 'heat-scroll';
+  const monthsRow = document.createElement('div');
+  monthsRow.className = 'heat-months';
+  const heatGrid = document.createElement('div');
+  heatGrid.className = 'heat-grid';
+  const dayNames = document.createElement('div');
+  dayNames.className = 'heat-days';
+  dayNames.innerHTML = '<span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span><span>Sun</span>';
   const heat = document.createElement('div');
   heat.className = 'heat';
-  const start = Date.now() - 181 * DAY;
-  for (let i = 0; i < 182; i++) {
-    const key = store.dayKey(start + i * DAY);
+  const weeks = Math.ceil(days.length / 7);
+  monthsRow.style.gridTemplateColumns = `repeat(${weeks}, 11px)`;
+  let lastMonth = -1;
+  days.forEach((d, i) => {
+    const key = store.dayKey(d.getTime());
     const day = byDay.get(key);
     const words = day?.words || 0;
     const level = words === 0 ? 0
       : words <= cuts[0] ? 1 : words <= cuts[1] ? 2 : words <= cuts[2] ? 3 : 4;
     const cell = document.createElement('i');
     cell.dataset.l = String(level);
-    // A continuous shade within the level, so a heavy day reads as heavier
-    // than a merely busy one rather than both flattening to the top step.
-    const ceiling = cuts[3] || 1;
-    const fill = Math.min(1, words / (ceiling * 1.5));
-    cell.style.setProperty('--fill', String(fill));
-    // In the theme's gradient: a light day from its start, the heaviest from its end.
-    if (level) cell.style.setProperty('--heat-c', `var(--grad-s${Math.round(fill * (theme.GRADIENT_SAMPLES - 1))})`);
-    cell.title = `${key} · ${words.toLocaleString()} words`;
+    cell.dataset.day = key;
+    if (level) {
+      const fill = rankOf(words);
+      cell.style.setProperty('--fill', String(fill));
+      cell.style.setProperty('--heat-c', `var(--grad-s${Math.round(fill * (theme.GRADIENT_SAMPLES - 1))})`);
+    }
+    if (i === days.length - 1) cell.classList.add('today');
     heat.appendChild(cell);
-  }
-  heatWrap.appendChild(heat);
+    // The month named above the first week it begins in.
+    if (d.getDate() <= 7 && d.getMonth() !== lastMonth && i % 7 === 0) {
+      lastMonth = d.getMonth();
+      const label = document.createElement('span');
+      label.textContent = d.toLocaleDateString(undefined, { month: 'short' });
+      label.style.gridColumn = String(Math.floor(i / 7) + 1);
+      monthsRow.appendChild(label);
+    }
+  });
+  scroller.append(monthsRow, heat);
+  heatGrid.append(dayNames, scroller);
+  heatWrap.appendChild(heatGrid);
+
+  /* A day's pages, time and date, in a small card by its square: closed by a
+   * tap anywhere else, and moved by a tap on another square. */
+  const tip = document.createElement('div');
+  tip.className = 'heat-tip';
+  tip.hidden = true;
+  heatWrap.appendChild(tip);
+  const minutes = (ms) => {
+    const m = Math.round((ms || 0) / 60000);
+    if (!m) return ms > 0 ? 'under a minute' : 'no time';
+    return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
+  };
+  let tipFor = null;
+  const closeTip = () => {
+    tip.hidden = true;
+    tipFor?.classList.remove('picked');
+    tipFor = null;
+    document.removeEventListener('pointerdown', outside, true);
+  };
+  const outside = (event) => {
+    if (tip.contains(event.target)) return;
+    if (event.target?.closest?.('.heat i[data-day]')) return;   // the square's own tap decides
+    closeTip();
+  };
+  heat.addEventListener('click', (event) => {
+    const cell = event.target?.closest?.('i[data-day]') || null;
+    if (!cell) return;
+    if (tipFor === cell) { closeTip(); return; }
+    tipFor?.classList.remove('picked');
+    tipFor = cell;
+    cell.classList.add('picked');
+    const key = cell.dataset.day;
+    const day = byDay.get(key);
+    const [y, mo, da] = key.split('-').map(Number);
+    const date = new Date(y, mo - 1, da).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+    tip.innerHTML = `<b>${escape(date)}</b>`
+      + (day && (day.pages || day.ms || day.words)
+        ? `<span>${(day.pages || 0).toLocaleString()} page${day.pages === 1 ? '' : 's'} · ${escape(minutes(day.ms))}</span>`
+          + (day.words ? `<small>${day.words.toLocaleString()} words</small>` : '')
+        : '<span class="muted">Nothing read</span>');
+    tip.hidden = false;
+    // By the square, kept inside the section.
+    const box = heatWrap.getBoundingClientRect();
+    const at = cell.getBoundingClientRect();
+    const width = tip.offsetWidth || 160;
+    const left = Math.max(0, Math.min(box.width - width, at.left - box.left + at.width / 2 - width / 2));
+    tip.style.left = `${left}px`;
+    tip.style.top = `${at.bottom - box.top + 6}px`;
+    document.addEventListener('pointerdown', outside, true);
+  });
   body.appendChild(heatWrap);
+  // This week in view, the oldest scrolled off to the left.
+  requestAnimationFrame(() => { scroller.scrollLeft = scroller.scrollWidth; });
 
   const months = new Array(12).fill(0);
   const now = new Date();

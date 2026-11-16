@@ -1915,7 +1915,36 @@ await t('a bundle of editions is one book in every count', async () => {
   assert.match(today.style.getPropertyValue('--heat-c'), /^var\(--grad-s\d+\)$/, 'a day read is not in the gradient');
   assert.equal(cells[0].dataset.l, '0');
   assert.equal(cells[0].style.getPropertyValue('--heat-c'), '');
-  assert.match(read('app/src/main/assets/www/css/app.css'), /background: color-mix\(in srgb, var\(--heat-c, var\(--accent\)\) calc\(35% \+ var\(--fill, \.5\) \* 65%\), var\(--heat-0\)\);/);
+  // A calendar: whole weeks from a Monday, ending today.
+  const firstDay = cells[0].dataset.day.split('-').map(Number);
+  assert.equal(new Date(firstDay[0], firstDay[1] - 1, firstDay[2]).getDay(), 1, 'the grid does not start on a Monday');
+  assert.equal(today.dataset.day, store.dayKey(Date.now()));
+  assert.ok(today.classList.contains('today'));
+  assert.equal(cells.length, 25 * 7 + ((new Date().getDay() + 6) % 7) + 1);
+  assert.equal([...document.querySelectorAll('#stats-body .heat-days span')].map((x) => x.textContent).join(','), 'Mon,,Wed,,Fri,,Sun');
+  // A day tapped: its date, pages and time, by it; another tapped, that one instead; a tap elsewhere, closed.
+  const tip = document.querySelector('#stats-body .heat-tip');
+  assert.equal(tip.hidden, true);
+  today.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(tip.hidden, false);
+  assert.match(tip.textContent, /9 pages · 3 min/);
+  assert.match(tip.textContent, /2,700 words/);
+  assert.ok(today.classList.contains('picked'));
+  cells[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(tip.hidden, false);
+  assert.match(tip.textContent, /Nothing read/);
+  assert.ok(!today.classList.contains('picked') && cells[0].classList.contains('picked'));
+  document.body.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+  assert.equal(tip.hidden, true, 'a tap elsewhere did not close it');
+  assert.ok(!cells[0].classList.contains('picked'));
+  // Every colour of the gradient in use: the lightest day read its start, the heaviest its end, the rest between.
+  for (const [ago, words] of [[2, 50], [3, 400], [4, 1200], [5, 30000], [6, 9000]]) {
+    await store.add('events', { bookId: alone, day: store.dayKey(Date.now() - ago * 86400e3), at: Date.now() - ago * 86400e3, pages: 1, words, activeMs: 1000, chapters: 1 });
+  }
+  await panels.openStats();
+  const shades = [...document.querySelectorAll('#stats-body .heat i')].map((c) => c.style.getPropertyValue('--heat-c')).filter(Boolean);
+  assert.ok(shades.includes('var(--grad-s0)') && shades.includes('var(--grad-s16)'), `ends of the gradient unused: ${[...new Set(shades)]}`);
+  assert.ok(new Set(shades).size >= 5, 'the days not spread across it');
   const stats = document.getElementById('stats-body').textContent;
   assert.match(stats, /2Books — in the library/, `the library is not two books: ${/\d+Books/.exec(stats)?.[0]}`);
   assert.match(stats, /1Finished/, 'finishing one edition is not finishing one book');

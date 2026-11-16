@@ -1157,7 +1157,8 @@ t('the heat map is drawn from words, not pages', () => {
   // A continuous shade within each level, so a heavy day is not flattened
   // into the same step as a merely busy one.
   assert.match(panels, /cell\.style\.setProperty\('--fill'/);
-  assert.match(css, /color-mix\(in srgb, var\(--heat-c, var\(--accent\)\) calc\(35% \+ var\(--fill/);
+  // Each day the gradient's own colour at its rank, whole -- not faded toward the empty shade.
+  assert.match(css, /\.heat i\[data-l\]:not\(\[data-l="0"\]\) \{[^}]*background: var\(--heat-c, var\(--accent\)\);/);
 });
 
 t('the averages hold up when reading happens elsewhere', () => {
