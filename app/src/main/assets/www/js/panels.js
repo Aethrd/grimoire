@@ -1602,7 +1602,10 @@ export async function openStats({ onOpen = null } = {}) {
     // A continuous shade within the level, so a heavy day reads as heavier
     // than a merely busy one rather than both flattening to the top step.
     const ceiling = cuts[3] || 1;
-    cell.style.setProperty('--fill', String(Math.min(1, words / (ceiling * 1.5))));
+    const fill = Math.min(1, words / (ceiling * 1.5));
+    cell.style.setProperty('--fill', String(fill));
+    // In the theme's gradient: a light day from its start, the heaviest from its end.
+    if (level) cell.style.setProperty('--heat-c', `var(--grad-s${Math.round(fill * (theme.GRADIENT_SAMPLES - 1))})`);
     cell.title = `${key} · ${words.toLocaleString()} words`;
     heat.appendChild(cell);
   }

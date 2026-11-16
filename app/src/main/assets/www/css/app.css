@@ -1670,18 +1670,17 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .page-flow .keep-whole { break-inside: avoid; page-break-inside: avoid; }
 
 
-/* A gradient within each heat level rather than five flat steps: a heavy day
-   should read as heavier than a merely busy one. --fill is set per cell from
-   the words read that day. */
+/* The theme's gradient, not five flat steps: a heavy day should read as
+   heavier than a merely busy one. --fill is set per cell from the words read
+   that day, and --heat-c is the gradient at that point (panels.js) -- a
+   light day from its start, the heaviest from its end, and a light one
+   fainter too, so the weight still reads in a gradient of two like colours. */
 .heat i[data-l="0"] { background: var(--heat-0); }
 .heat i[data-l]:not([data-l="0"]) {
-  background: color-mix(in srgb, var(--heat-4) calc(var(--fill, .5) * 100%), var(--heat-1));
+  background: color-mix(in srgb, var(--heat-c, var(--accent)) calc(35% + var(--fill, .5) * 65%), var(--heat-0));
 }
 @supports not (background: color-mix(in srgb, red 50%, blue)) {
-  .heat i[data-l="1"] { background: var(--heat-1); }
-  .heat i[data-l="2"] { background: var(--heat-2); }
-  .heat i[data-l="3"] { background: var(--heat-3); }
-  .heat i[data-l="4"] { background: var(--heat-4); }
+  .heat i[data-l]:not([data-l="0"]) { background: var(--heat-c, var(--accent)); }
 }
 
 

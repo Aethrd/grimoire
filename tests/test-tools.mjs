@@ -1743,6 +1743,13 @@ await t('a bundle of editions is one book in every count', async () => {
   assert.equal(library.countWorks(await store.all('books')), 4, 'the helper does not see the bundle');
 
   await panels.openStats();
+  // The streak grid in the theme's gradient: today, read, coloured from it; a day not read, the empty shade.
+  const cells = [...document.querySelectorAll('#stats-body .heat i')];
+  const today = cells.at(-1);
+  assert.match(today.style.getPropertyValue('--heat-c'), /^var\(--grad-s\d+\)$/, 'a day read is not in the gradient');
+  assert.equal(cells[0].dataset.l, '0');
+  assert.equal(cells[0].style.getPropertyValue('--heat-c'), '');
+  assert.match(read('app/src/main/assets/www/css/app.css'), /background: color-mix\(in srgb, var\(--heat-c, var\(--accent\)\) calc\(35% \+ var\(--fill, \.5\) \* 65%\), var\(--heat-0\)\);/);
   const stats = document.getElementById('stats-body').textContent;
   assert.match(stats, /2Books — in the library/, `the library is not two books: ${/\d+Books/.exec(stats)?.[0]}`);
   assert.match(stats, /1Finished/, 'finishing one edition is not finishing one book');
