@@ -481,7 +481,7 @@ await t('automatic backups: a folder chosen once, written on schedule and after 
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(folder, 'Backups');
   assert.equal(written.length, 1, 'none made once it was due');
-  assert.match(written[0].name, /^quire-backup-auto-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
+  assert.match(written[0].name, /^mythos-backup-auto-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
   assert.equal(written[0].json.format, 'grimoire-backup');
   assert.equal(written[0].keep, 5);
   const kept = (await store.settings()).autoBackup;
@@ -528,8 +528,10 @@ await t('automatic backups: a folder chosen once, written on schedule and after 
   // The native side: the folder's permission kept; only automatic backups ever removed.
   const java = (await import('node:fs')).readFileSync(new URL('../app/src/main/java/com/grimoire/ereader/MainActivity.java', import.meta.url), 'utf8');
   assert.match(java, /takePersistableUriPermission\(tree,/);
-  assert.match(java, /name\.startsWith\(AUTO_BACKUP_PREFIX\) && name\.endsWith\("\.json"\)/);
-  assert.match(java, /private static final String AUTO_BACKUP_PREFIX = "quire-backup-auto-";/);
+  // Renamed Mythos: backups under the old name pruned with the new, by when they were made, not by name.
+  assert.match(java, /private static final String\[\] AUTO_BACKUP_PREFIXES = \{ "mythos-backup-auto-", "quire-backup-auto-" \};/);
+  assert.match(java, /if \(name == null \|\| !name\.endsWith\("\.json"\)\) return null;/);
+  assert.match(java, /found\.sort\(\(a, b\) -> b\[2\]\.compareTo\(a\[2\]\)\);/);
 });
 
 await t('two settings saved at once both stay saved', async () => {

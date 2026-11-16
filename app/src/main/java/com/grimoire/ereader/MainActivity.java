@@ -432,7 +432,18 @@ public class MainActivity extends AppCompatActivity {
     private static final int PICK_AUTO_EXPORT_FOLDER = 4304;
     private static final String AUTO_EXPORT_TREE = "autoExportTree";
     /** Only these are an automatic backup's, and only these are ever removed. */
-    private static final String AUTO_BACKUP_PREFIX = "quire-backup-auto-";
+    /* Automatic backups' names: the app's name now, and the one it had -- both
+     * pruned together, by when they were made, so the newest few are kept
+     * whichever name they carry. */
+    private static final String[] AUTO_BACKUP_PREFIXES = { "mythos-backup-auto-", "quire-backup-auto-" };
+
+    /** An automatic backup's name without its prefix: when it was made, to sort by. */
+    @Nullable
+    private static String autoBackupWhen(String name) {
+        if (name == null || !name.endsWith(".json")) return null;
+        for (String prefix : AUTO_BACKUP_PREFIXES) if (name.startsWith(prefix)) return name.substring(prefix.length());
+        return null;
+    }
     private static final String STAGED_SET = "stagedSet";
     private java.util.List<File> stagedSet = new java.util.ArrayList<>();
     private String stagedSetType;
@@ -697,15 +708,16 @@ public class MainActivity extends AppCompatActivity {
                 android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID }, null, null, null)) {
             while (c != null && c.moveToNext()) {
                 String name = c.getString(0);
-                if (name != null && name.startsWith(AUTO_BACKUP_PREFIX) && name.endsWith(".json")) {
-                    found.add(new String[] { name, c.getString(1) });
+                String when = autoBackupWhen(name);
+                if (when != null) {
+                    found.add(new String[] { name, c.getString(1), when });
                 }
             }
         } catch (Exception e) {
             Log.w(TAG, "Could not list the backup folder", e);
             return;
         }
-        found.sort((a, b) -> b[0].compareTo(a[0]));
+        found.sort((a, b) -> b[2].compareTo(a[2]));
         for (int i = keep; i < found.size(); i++) {
             try {
                 android.provider.DocumentsContract.deleteDocument(getContentResolver(),
@@ -833,7 +845,7 @@ public class MainActivity extends AppCompatActivity {
                 String mime = name.toLowerCase(java.util.Locale.ROOT).endsWith(".epub") ? "application/epub+zip" : "application/octet-stream";
                 Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, folderId);
                 // Beside the old one first, and swapped in only once it is whole.
-                String temp = ".quire-writing-" + name;
+                String temp = ".mythos-writing-" + name;
                 String leftover = childOf(tree, folderId, temp);
                 if (leftover != null) android.provider.DocumentsContract.deleteDocument(getContentResolver(),
                         android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, leftover));
@@ -1220,7 +1232,7 @@ public class MainActivity extends AppCompatActivity {
             Log.w(TAG, "A view intent arrived with no file on it: " + intent.getAction());
             return;
         }
-        // "Back to Quire" from the page shown after signing in to OpenRouter:
+        // "Back to Mythos" from the page shown after signing in to OpenRouter:
         // being brought to the front was all it asked for.
         if ("quire".equals(data.getScheme())) {
             setIntent(new Intent(Intent.ACTION_MAIN));

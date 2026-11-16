@@ -405,7 +405,7 @@ final class LlmTranslator {
                 if (OPENROUTER.equals(setup.provider)) {
                     // Named, so the reader's OpenRouter activity says which app it was.
                     answer = post(base + "/chat/completions", body.toString(),
-                            "Authorization", "Bearer " + setup.key, "X-Title", "Quire");
+                            "Authorization", "Bearer " + setup.key, "X-Title", "Mythos");
                 } else if (setup.key.isEmpty()) {
                     answer = post(base + "/chat/completions", body.toString());
                 } else {

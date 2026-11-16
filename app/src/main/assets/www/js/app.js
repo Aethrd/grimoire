@@ -2361,7 +2361,7 @@ async function saveBackupAsked() {
   el('backup-parts-go').onclick = async () => {
     sheet.hidden = true;
     store.saveSettings({ backupParts: parts }).catch(() => {});
-    const name = `quire-backup-${store.dayKey()}`;
+    const name = `mythos-backup-${store.dayKey()}`;
     try {
       const pieces = store.splitBackup(backup, parts);
       if (pieces.length === 1) {
@@ -2428,7 +2428,7 @@ const autoBackups = (() => {
     try {
       const pad = (n) => String(n).padStart(2, '0');
       const at = new Date();
-      const name = `quire-backup-auto-${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}.json`;
+      const name = `mythos-backup-auto-${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}.json`;
       const backup = await store.exportBackup();
       /* Far fewer books than the last one had: not written on its own. The
        * folder keeps only the newest few, and a backup of a library that did
@@ -12626,7 +12626,7 @@ async function offerPicture(blob, { title = '', href = '' } = {}) {
   };
 
   if (native) {
-    choice('Save to Pictures', 'Into Pictures/Quire, where the gallery finds it', { toPictures: true });
+    choice('Save to Pictures', 'Into Pictures/Mythos, where the gallery finds it', { toPictures: true });
     choice('Save as…', 'Choose the folder and name', {});
     choice('Share', 'Send the picture to another app', { share: true });
   } else {
@@ -12699,7 +12699,7 @@ window.Grimoire = {
   /** Called from Java once a file has been written where it was asked for. */
   exportSaved(name) { toast(`Saved ${name}`, 5000); },
   /** Called from Java once a picture is in the phone's Pictures folder. */
-  pictureSaved(name) { toast(`Saved to Pictures/Quire — ${name}`, 5000, { kind: 'done' }); },
+  pictureSaved(name) { toast(`Saved to Pictures/Mythos — ${name}`, 5000, { kind: 'done' }); },
 
   /* Something the shell needs to say, said once the page can say it.
    *

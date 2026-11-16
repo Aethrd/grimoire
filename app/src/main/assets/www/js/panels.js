@@ -575,7 +575,7 @@ function themesField(settings, redraw) {
     const current = saved.find((t) => sameLook(t, settings));
     const look = theme.themeOf(settings, current?.name || 'My theme');
     const text = JSON.stringify(theme.themeFile(look), null, 2);
-    const file = `${look.name.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'theme'}.quire-theme.json`;
+    const file = `${look.name.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'theme'}.mythos-theme.json`;
     if (onWriteOut) {
       await onWriteOut(new Blob([text], { type: 'application/json' }), file, 'application/json', { share: true });
     } else {
@@ -594,7 +594,7 @@ function importTheme(settings, redraw) {
   picker.onchange = async () => {
     const file = picker.files?.[0];
     if (!file) return;
-    const stem = String(file.name || 'Imported theme').replace(/(\.quire-theme)?\.[a-z0-9]+$/i, '').slice(0, 60);
+    const stem = String(file.name || 'Imported theme').replace(/(\.(?:mythos|quire)-theme)?\.[a-z0-9]+$/i, '').slice(0, 60);
     try {
       let found;
       if (/^image\//.test(file.type || '') || /\.(png|jpe?g|webp|gif|avif|bmp|heic|heif)$/i.test(file.name || '')) {
@@ -748,7 +748,7 @@ function openRouterFields(state, pasteInstead, done) {
   const connected = state.llmConfigured && state.llmProvider === 'openrouter';
 
   if (!connected) {
-    box.appendChild(note('Sign in at openrouter.ai — or make a free account there — and approve Quire. '
+    box.appendChild(note('Sign in at openrouter.ai — or make a free account there — and approve Mythos. '
       + 'Your browser opens for it and you come straight back: no key to copy. '
       + 'Free models cost nothing; others use the credits on your OpenRouter account.'));
     const go = button('Sign in with OpenRouter', 'primary');
@@ -790,7 +790,7 @@ function openRouterFields(state, pasteInstead, done) {
   out.onclick = async () => {
     await translate.clearLlm('openrouter');
     toast(state.llmLinked
-      ? 'Signed out. To cancel the key itself, delete “Quire” at openrouter.ai/keys.'
+      ? 'Signed out. To cancel the key itself, delete it at openrouter.ai/keys (named “Mythos”, or “Quire” if made before the app was renamed).'
       : 'Key removed. No further requests will be made.', 6000);
     done();
   };
@@ -1692,7 +1692,7 @@ export async function openStats({ onOpen = null } = {}) {
   exportBtn.textContent = 'Export the reading log as JSON';
   exportBtn.onclick = () => {
     // Everything is computed locally; the log belongs to the reader.
-    offerDownload('quire-reading-log.json', 'application/json',
+    offerDownload('mythos-reading-log.json', 'application/json',
       JSON.stringify(log, null, 2));
   };
   body.appendChild(exportBtn);
@@ -2079,7 +2079,7 @@ export async function openVault(onVaultChange, host) {
         const backup = await store.exportBackup();
         await onWriteOut?.(
           new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }),
-          `quire-backup-${store.dayKey()}.json`, 'application/json', { share });
+          `mythos-backup-${store.dayKey()}.json`, 'application/json', { share });
       } catch (error) {
         toast(error.message || 'That backup could not be written', 6000);
       } finally {
@@ -2167,7 +2167,7 @@ export async function openVault(onVaultChange, host) {
   exportBtn.style.marginTop = '14px';
   exportBtn.textContent = 'Export settings only';
   exportBtn.onclick = async () => {
-    offerDownload('quire-settings.json', 'application/json',
+    offerDownload('mythos-settings.json', 'application/json',
       JSON.stringify(await store.settings(), null, 2));
   };
   data.appendChild(exportBtn);

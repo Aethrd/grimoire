@@ -337,7 +337,7 @@ public class TranslateBridge {
         activity.runOnUiThread(() -> {
             try {
                 activity.startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse(link.authUrl("Quire"))));
+                        android.net.Uri.parse(link.authUrl("Mythos"))));
             } catch (Exception e) {
                 link.cancel();
                 fail(requestId, "No browser to sign in with.");
@@ -937,7 +937,7 @@ public class TranslateBridge {
             if (known != null) return known.getString("id");
 
             JSONObject body = new JSONObject();
-            body.put("name", "Quire " + from + "-" + into);
+            body.put("name", "Mythos " + from + "-" + into);
             body.put("source_lang", from);
             body.put("target_lang", into.toLowerCase(java.util.Locale.ROOT));
             body.put("entries", tsv.toString());
@@ -1006,7 +1006,7 @@ public class TranslateBridge {
             connection.setReadTimeout(TIMEOUT_MS);
             connection.setRequestProperty("Authorization", "DeepL-Auth-Key " + key);
             if (body != null) connection.setRequestProperty("Content-Type", "application/json");
-            connection.setRequestProperty("User-Agent", "Quire/" + BuildConfig.VERSION_NAME);
+            connection.setRequestProperty("User-Agent", "Mythos/" + BuildConfig.VERSION_NAME);
 
             if (body != null) {
                 connection.setDoOutput(true);

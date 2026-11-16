@@ -1268,10 +1268,10 @@ t('opening another book clears the last one off the reader before it shows', () 
   assert.match(readerSrc, /export function blank\(\) \{[\s\S]{0,200}releaseAllSections\(\);\s*flow\?\.replaceChildren\(\);/);
 });
 
-t('the app is called Quire, and books kept together are editions', () => {
-  assert.match(read('app/src/main/res/values/strings.xml'), /<string name="app_name">Quire<\/string>/);
+t('the app is called Mythos, and books kept together are editions', () => {
+  assert.match(read('app/src/main/res/values/strings.xml'), /<string name="app_name">Mythos<\/string>/);
   const html = read('app/src/main/assets/www/index.html');
-  assert.match(html, /<title>Quire<\/title>/);
+  assert.match(html, /<title>Mythos<\/title>/);
   assert.match(html, /data-act="bundle">[\s\S]{0,200}<span>Editions<\/span>/);
   const seen = [read('app/src/main/assets/www/js/app.js'), read('app/src/main/assets/www/js/library.js'),
     read('app/src/main/assets/www/js/panels.js'), html].join('\n');
