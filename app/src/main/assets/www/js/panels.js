@@ -1973,10 +1973,9 @@ export async function openVault(onVaultChange, host) {
   data.className = 'block';
   data.innerHTML = `<h2>Your data</h2>
     <p class="muted" style="font-size:12px;line-height:1.55">
-      Everything lives in this app on this device. There is no account and the
-      app has no network permission, so nothing is uploaded and nothing can be.
-      Export is here so leaving is easy, not because anything is stored
-      elsewhere.</p>`;
+      Everything lives on this device; nothing is uploaded. Two things to keep
+      safe, and they are separate: the <b>backup</b> (what you did — folders,
+      places, marks, covers chosen, themes) and the <b>books</b> themselves.</p>`;
   /* A backup is everything except the books.
    *
    * The text and pictures are not in it on purpose -- they are gigabytes, and
@@ -2061,6 +2060,19 @@ export async function openVault(onVaultChange, host) {
    * backup is for. Sending hands it to whatever app will take it, which is
    * what you want when the backup is going to another device. Only the second
    * existed, and a backup living in a chat thread is not a backup. */
+  const group = (title, words) => {
+    const head = document.createElement('p');
+    head.className = 'eyebrow data-group';
+    head.textContent = title;
+    const said = document.createElement('p');
+    said.className = 'muted data-group-note';
+    said.textContent = words;
+    data.append(head, said);
+  };
+
+  /* The backup: one file, small, everything but the books. */
+  group('Backup', 'Folders, statuses, places, marks, covers chosen, themes and settings — one small file. '
+    + 'Import the books first, then restore: each gets back what you did with it.');
   const backupRow = document.createElement('div');
   backupRow.style.cssText = 'display:flex;gap:8px';
   for (const [label, share, primary] of [
@@ -2072,8 +2084,6 @@ export async function openVault(onVaultChange, host) {
     button.style.flex = '1';
     button.textContent = label;
     button.onclick = async () => {
-      // Saved: asked whether in parts, as the books are when written out.
-      if (!share && saveBackupHook) { saveBackupHook(); return; }
       button.disabled = true;
       try {
         const backup = await store.exportBackup();
@@ -2089,25 +2099,6 @@ export async function openVault(onVaultChange, host) {
     backupRow.appendChild(button);
   }
   data.appendChild(backupRow);
-  /* The books themselves, which a backup does not hold: every one, hidden
-   * folders included (the shelf's own export takes only what it shows). */
-  if (exportEverything) {
-    const everything = document.createElement('button');
-    everything.className = 'btn ghost block';
-    everything.style.marginTop = '8px';
-    everything.textContent = 'Export every book';
-    everything.onclick = () => exportEverything();
-    data.appendChild(everything);
-    const said = document.createElement('p');
-    said.className = 'muted';
-    said.style.cssText = 'font-size:12px;line-height:1.55;margin:6px 0 0';
-    said.textContent = 'The books themselves, as EPUB files in zips, each in its folder — hidden folders too. '
-      + 'A backup holds everything but the books; this is the books.';
-    data.appendChild(said);
-  }
-  if (backupHooks?.available()) data.appendChild(await autoBackupBlock());
-  if (exportHooks?.available()) data.appendChild(await autoExportBlock());
-
   const restoreBtn = document.createElement('button');
   restoreBtn.className = 'btn ghost block';
   restoreBtn.style.marginTop = '8px';
@@ -2117,7 +2108,7 @@ export async function openVault(onVaultChange, host) {
     picker.type = 'file';
     // As wide as a theme's: a .json from a chat app is often typed as text.
     picker.accept = 'application/json,text/plain,application/octet-stream,.json';
-    // A backup in parts: all of them chosen at once, the first (the settings) restored first.
+    // Several at once: a backup saved in parts by an earlier version, the first (the settings) restored first.
     picker.multiple = true;
     picker.onchange = async () => {
       const files = [...(picker.files || [])];
@@ -2154,29 +2145,47 @@ export async function openVault(onVaultChange, host) {
   };
   data.appendChild(restoreBtn);
 
-  const note = document.createElement('p');
-  note.className = 'muted';
-  note.style.cssText = 'font-size:12px;line-height:1.55;margin:10px 0 0';
-  note.textContent = 'Books are matched by file name and size, so import the '
-    + 'same files first and then restore: folders, statuses, editions, bookmarks, '
-    + 'your place in each book and the reading log all come back.';
-  data.appendChild(note);
+  if (backupHooks?.available()) data.appendChild(await autoBackupBlock());
+
+  /* The books themselves, which a backup does not hold: every one, hidden
+   * folders included (the shelf's own export takes only what it shows), in
+   * zips no bigger than a size chosen -- big ones do not upload well. */
+  group('Books', 'Every book as an EPUB, in its folder, hidden folders too — in zips no bigger than the size you pick, so they upload to cloud storage.');
+  if (exportEverything) {
+    const everything = document.createElement('button');
+    everything.className = 'btn primary block';
+    everything.textContent = 'Export every book';
+    everything.onclick = () => exportEverything();
+    data.appendChild(everything);
+  }
+  if (exportHooks?.available()) data.appendChild(await autoExportBlock());
+
+  /* Settings alone -- to carry a setup to another phone without its books'
+   * places. Rarely wanted, so folded away rather than a third kind of backup. */
+  const settingsOnly = document.createElement('details');
+  settingsOnly.className = 'auto-backup settings-only';
+  settingsOnly.innerHTML = '<summary><span class="eyebrow">Settings only</span>'
+    + '<span class="muted">to copy a setup elsewhere</span></summary>';
+  const settingsRow = document.createElement('div');
+  settingsRow.style.cssText = 'display:flex;gap:8px;margin-top:8px';
+  settingsOnly.appendChild(settingsRow);
+  data.appendChild(settingsOnly);
 
   const exportBtn = document.createElement('button');
-  exportBtn.className = 'btn ghost block';
-  exportBtn.style.marginTop = '14px';
+  exportBtn.className = 'btn ghost';
+  exportBtn.style.flex = '1';
   exportBtn.textContent = 'Export settings only';
   exportBtn.onclick = async () => {
     offerDownload('mythos-settings.json', 'application/json',
       JSON.stringify(await store.settings(), null, 2));
   };
-  data.appendChild(exportBtn);
+  settingsRow.appendChild(exportBtn);
 
   // And back in: only settings the app knows, each as the kind of value it
   // takes. A settings file can carry nothing that reaches outside the app.
   const importBtn = document.createElement('button');
-  importBtn.className = 'btn ghost block';
-  importBtn.style.marginTop = '8px';
+  importBtn.className = 'btn ghost';
+  importBtn.style.flex = '1';
   importBtn.textContent = 'Import settings';
   importBtn.onclick = () => {
     const picker = document.createElement('input');
@@ -2198,7 +2207,7 @@ export async function openVault(onVaultChange, host) {
     };
     picker.click();
   };
-  data.appendChild(importBtn);
+  settingsRow.appendChild(importBtn);
   body.appendChild(data);
 }
 
@@ -2353,21 +2362,31 @@ let exportEverything = null;
 export function onExportEverything(run) { exportEverything = run; }
 let exportHooks = null;
 export function onAutoExport(hooks) { exportHooks = hooks; }
-let saveBackupHook = null;
-/** Saving a backup by hand, which may ask for it in parts (app.js saveBackupAsked). */
-export function onSaveBackup(fn) { saveBackupHook = fn; }
+
+/** A folded block's line: its name, and how it stands. */
+function foldHead(title, status) {
+  const head = document.createElement('summary');
+  const name = document.createElement('span');
+  name.className = 'eyebrow';
+  name.textContent = title;
+  const said = document.createElement('span');
+  said.className = 'muted';
+  said.textContent = status;
+  head.append(name, said);
+  return head;
+}
 
 /** Every book into a folder on a schedule, kept up to date there (app.js autoExport). */
 async function autoExportBlock() {
-  const box = document.createElement('div');
+  const box = document.createElement('details');
   box.className = 'auto-backup auto-export';
   const paint = async () => {
     const state = await exportHooks.state();
     box.replaceChildren();
-    const head = document.createElement('p');
-    head.className = 'eyebrow';
-    head.textContent = 'Automatic export';
-    box.appendChild(head);
+    // Folded, it says only whether it is on: the rest is for setting it up.
+    box.appendChild(foldHead('Automatic export',
+      state.folder && state.every ? `Every ${state.every}${state.lastError ? ' · failed last time' : ''}` : 'Off'));
+    if (state.lastError) box.open = true;
     const said = document.createElement('p');
     said.className = 'muted auto-backup-note';
     const when = state.lastAt ? new Date(state.lastAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
@@ -2433,15 +2452,15 @@ async function autoExportBlock() {
 
 /** How often, how many kept, into which folder, and when the last was made. */
 async function autoBackupBlock() {
-  const box = document.createElement('div');
+  const box = document.createElement('details');
   box.className = 'auto-backup';
   const paint = async () => {
     const state = await backupHooks.state();
     box.replaceChildren();
-    const head = document.createElement('p');
-    head.className = 'eyebrow';
-    head.textContent = 'Automatic backups';
-    box.appendChild(head);
+    const on = state.folder && (state.every || state.afterQueue);
+    box.appendChild(foldHead('Automatic backups', on
+      ? `${state.every ? `Every ${state.every}` : 'When the queue finishes'}${state.lastError ? ' · failed last time' : ''}` : 'Off'));
+    if (state.lastError) box.open = true;
     const said = document.createElement('p');
     said.className = 'muted auto-backup-note';
     const when = state.lastAt ? new Date(state.lastAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';

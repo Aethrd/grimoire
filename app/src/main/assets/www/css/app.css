@@ -2836,6 +2836,17 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .auto-backup .chip-row { align-items: center; gap: 6px; margin: 6px 0; }
 .auto-backup .chip-row > .muted { font-size: 12px; min-width: 44px; }
 .auto-backup-note { font-size: 12px; line-height: 1.55; margin: 0 0 6px; }
+/* Folded: a line saying whether it is on; opened, the setting up. */
+details.auto-backup > summary { display: flex; align-items: center; gap: 8px; cursor: pointer;
+  list-style: none; padding: 2px 0; }
+details.auto-backup > summary::-webkit-details-marker { display: none; }
+details.auto-backup > summary > .muted { margin-left: auto; font-size: 12px; text-align: right; }
+details.auto-backup > summary::after { content: '▾'; color: var(--muted); font-size: 12px; }
+details.auto-backup[open] > summary::after { content: '▴'; }
+details.auto-backup[open] > summary { margin-bottom: 6px; }
+/* Your data's two halves: what you did, and the books. */
+.data-group { margin-top: 18px; }
+.data-group-note { font-size: 12px; line-height: 1.55; margin: 4px 0 8px; }
 
 /* Read a site's chapters in the browser: a box and its reason, under the delays. */
 .web-in-browser { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 12px; font-size: 14px; }

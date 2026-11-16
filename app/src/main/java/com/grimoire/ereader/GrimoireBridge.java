@@ -548,8 +548,8 @@ public class GrimoireBridge {
                     PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             String body = text == null ? "" : text;
             NotificationCompat.Builder notice = new NotificationCompat.Builder(activity, BUILD_CHANNEL)
-                    .setSmallIcon(R.drawable.ic_launcher_monochrome)
-                    .setContentTitle(title == null ? "Grimoire" : title)
+                    .setSmallIcon(R.mipmap.ic_launcher_monochrome)
+                    .setContentTitle(title == null ? "Mythos" : title)
                     .setContentText(body)
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
                     .setContentIntent(tap)

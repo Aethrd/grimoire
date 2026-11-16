@@ -810,7 +810,7 @@ t('several books write out as one archive', () => {
   assert.ok(!/act === 'export'/.test(app.slice(app.indexOf('const single ='), app.indexOf('const single =') + 120)),
     'export is still restricted to a single book');
   // Two books of the same name would otherwise replace each other.
-  assert.match(app, /while \(used\.has\(entry\)\)/);
+  assert.match(app, /while \(open\.used\.has\(entry\)\)/);
   // And one that will not write costs that book, not the batch.
   assert.match(app, /failed\.push\(\{ title: library\.displayTitle\(book\)/);
 });

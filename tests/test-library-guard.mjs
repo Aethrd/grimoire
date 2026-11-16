@@ -62,6 +62,28 @@ if (phase === 'empty') {
     await new Promise((r) => setTimeout(r, 200));
     assert.equal(window.document.getElementById('export-many-sheet').hidden, false);
     assert.equal(window.document.getElementById('export-many-title').textContent, 'Write out 6 books');
+    // Asked as a largest size, not a number of zips; remembered as 1 GB to begin with.
+    const chips = [...window.document.querySelectorAll('#export-many-parts .chip')];
+    assert.deepEqual(chips.map((c) => c.textContent), ['One zip', '2 GB', '1 GB', '500 MB', '250 MB', '100 MB']);
+    assert.equal(chips.find((c) => c.getAttribute('aria-pressed') === 'true').textContent, '1 GB');
+    chips.find((c) => c.textContent === '250 MB').click();
+    assert.match(window.document.getElementById('export-many-note').textContent, /each under 250 MB/);
+    window.document.getElementById('export-many-cancel').click();
+  });
+
+  await t('Your data in two halves: the backup (one file), then the books; settings alone folded away', async () => {
+    const panels = await import(www('panels.js'));
+    const host = window.document.createElement('div');
+    await panels.openVault(() => {}, host);
+    const text = host.textContent;
+    const at = (words) => { const i = text.indexOf(words); assert.ok(i >= 0, `no ${words}`); return i; };
+    assert.ok(at('Save a backup') < at('Restore from a backup'));
+    assert.ok(at('Restore from a backup') < at('Export every book'), 'the books are not apart from the backup');
+    const groups = [...host.querySelectorAll('.data-group')].map((g) => g.textContent);
+    assert.deepEqual(groups, ['Backup', 'Books']);
+    const folded = host.querySelector('details.settings-only');
+    assert.ok(folded && !folded.open, 'settings only is not folded away');
+    assert.ok(folded.querySelector('button') && [...folded.querySelectorAll('button')].some((b) => b.textContent === 'Import settings'));
   });
 }
 

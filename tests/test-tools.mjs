@@ -937,33 +937,68 @@ await t('many books are written into one zip a book at a time, and it opens anyw
   // book held, then the whole archive again.
   const many = app.slice(app.indexOf('async function exportMany'), app.indexOf('function exportSink'));
   assert.ok(!/new JSZip|generateAsync/.test(many), 'the batch is still built whole in memory');
-  assert.match(many, /await zip\.add\(entry, blob/);
-  assert.match(many, /await zip\.finish\(\);\s*staged\.push\(sink\);/);
+  assert.match(many, /await open\.writer\.add\(entry, blob/);
+  assert.match(many, /await open\.writer\.finish\(\);\s*staged\.push\(open\.sink\);/);
   assert.match(many, /if \(staged\.length === 1\) await staged\[0\]\.done\('application\/zip'\);\s*else await exportSinksDone\(staged, 'application\/zip', startedReading\);/);
 });
 
-await t('many books written out in parts: even shares in folder order, a zip each, saved into one folder chosen once', async () => {
+await t('many books written out in zips under a size: whole books, folder order, saved into one folder chosen once', async () => {
   const app = read('app/src/main/assets/www/js/app.js');
-  const fn = (name) => { const at = app.indexOf(`function ${name}(`); return app.slice(at, app.indexOf('\n}\n', at) + 3); };
-  const library = { displayTitle: (b) => b.title };
-  const shares = new Function('library', `${fn('exportShares')}; return exportShares;`)(library);
+  const fn = (name) => { const at = app.search(new RegExp(`(?:async )?function ${name}\\(`)); return app.slice(at, app.indexOf('\n}\n', at) + 3); };
+  const label = app.match(/const limitLabel = .*;/)[0];
+  const MB = 1048576;
+  const run = async (books, limitMB) => {
+    const sinks = [];
+    const toasts = [];
+    let together = null;
+    const exportSink = (name) => {
+      const sink = { name, bytes: 0, entries: [], async write(b) { sink.bytes += b.length; }, async done() { together = [sink]; } };
+      sinks.push(sink);
+      return sink;
+    };
+    // A zip that counts what it writes: each entry's bytes and a header.
+    const zipWriter = (write) => ({
+      async add(name, blob) { sinks.at(-1).entries.push(name); await write(new Uint8Array(blob.size + 60)); },
+      async finish() { await write(new Uint8Array(40)); },
+    });
+    const sizes = new Map(books.map((b) => [b.id, b.mb * MB]));
+    const epub = { buildEpub: async (id) => ({ blob: { size: sizes.get(id) }, name: `${books.find((b) => b.id === id).title}.epub` }), safeName: (x) => x };
+    const progress = { start: () => Object.assign(() => {}, { say() {}, fail() {} }) };
+    const exportMany = new Function('library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
+      `${label}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('exportMany')}\nreturn exportMany;`)(
+      { displayTitle: (b) => b.title }, epub, progress, exportSink, zipWriter,
+      async (staged) => { together = staged; }, (text) => toasts.push(text), () => 'Library', () => {}, async () => {}, false);
+    await exportMany(books, limitMB);
+    return { sinks, together, toasts };
+  };
   const books = [];
-  for (let i = 0; i < 250; i += 1) books.push({ title: `Novel ${i}`, folder: i % 3 ? 'Korean' : 'Chinese' });
-  const four = shares(books, 4);
-  assert.deepEqual(four.map((share) => share.length), [63, 62, 63, 62]);
-  assert.equal(four.flat().length, 250);
-  assert.equal(new Set(four.flat()).size, 250, 'a book written twice, or left out');
-  // In folder order, then by name (numbers counted): Chinese first, all together.
-  assert.ok(four[0].every((b) => b.folder === 'Chinese') && four.at(-1).every((b) => b.folder === 'Korean'));
-  assert.deepEqual(four[0].slice(0, 3).map((b) => b.title), ['Novel 0', 'Novel 3', 'Novel 6']);
-  // Never more zips than books, and one is one.
-  assert.equal(shares(books.slice(0, 3), 10).length, 3);
-  assert.equal(shares(books, 1).length, 1);
-  // Named in parts; each closed and saved together: one folder asked for, every part written into it.
-  assert.match(app, /const name = several \? `\$\{base\} \(\$\{part \+ 1\} of \$\{shares\.length\}\)\.zip` : `\$\{base\}\.zip`;/);
-  assert.match(app, /bridge\.finishExportSet\(JSON\.stringify\(closed\.map\(\(each\) => each\.made\)\), mimeType\);/);
+  for (let i = 0; i < 30; i += 1) books.push({ id: i, title: `Novel ${i}`, folder: i % 3 ? 'Korean' : 'Chinese', mb: i === 7 ? 140 : 9 });
+  // Under 100 MB each: nothing over, every book once and whole, a folder's books together.
+  const { sinks, together, toasts } = await run(books, 100);
+  assert.ok(sinks.length > 3, `${sinks.length} zips`);
+  assert.equal(together.length, sinks.length, 'not all saved into the one folder');
+  for (const sink of sinks) {
+    if (sink.entries.length > 1) assert.ok(sink.bytes <= 100 * MB, `${sink.name} is ${(sink.bytes / MB).toFixed(1)} MB`);
+  }
+  // A book bigger than the limit by itself has a zip to itself.
+  assert.deepEqual(sinks.find((sink) => sink.entries.includes('Novel 7.epub')).entries, ['Novel 7.epub']);
+  const all = sinks.flatMap((sink) => sink.entries);
+  assert.equal(all.length, 30);
+  assert.equal(new Set(all).size, 30);
+  assert.ok(all.slice(0, 10).every((name) => +name.match(/\d+/)[0] % 3 === 0), 'Chinese first, all together');
+  assert.deepEqual(sinks.map((sink) => sink.name).slice(0, 2), ['Library (part 1).zip', 'Library (part 2).zip']);
+  assert.match(toasts.at(-1), new RegExp(`30 books in ${sinks.length} zips, each under 100 MB`));
+  // No limit: one zip, saved as ever.
+  const one = await run(books, 0);
+  assert.equal(one.sinks.length, 1);
+  assert.equal(one.sinks[0].name, 'Library.zip');
+  assert.equal(one.sinks[0].entries.length, 30);
+  // The size asked once and remembered; the choices; a book named twice kept twice.
+  assert.match(app, /const EXPORT_LIMITS = \[0, 2048, 1024, 500, 250, 100\];/);
+  assert.match(app, /store\.saveSettings\(\{ exportZipMB: limit \}\)/);
   assert.match(app, /return askExportParts\(books\);/);
-  assert.match(app, /store\.saveSettings\(\{ exportParts: parts \}\)/);
+  assert.match(app, /while \(open\.used\.has\(entry\)\) entry = first\.replace/);
+  assert.match(app, /bridge\.finishExportSet\(JSON\.stringify\(closed\.map\(\(each\) => each\.made\)\), mimeType\);/);
   const java = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
   assert.match(java, /new Intent\(Intent\.ACTION_OPEN_DOCUMENT_TREE\)/);
   assert.match(java, /DocumentsContract\.createDocument\(\s*getContentResolver\(\), folder, type, file\.getName\(\)\);/);
