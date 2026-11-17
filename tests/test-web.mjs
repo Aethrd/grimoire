@@ -2567,6 +2567,17 @@ await t('a chapter that is only "Verifying access…" is never kept, and one kep
   assert.equal(web.waitScreen(long), '');
   assert.equal(web.waitScreen('<p>He was verifying access to the vault.</p><p>It took a while.</p>'), '');
   assert.equal(web.waitScreen('<p>A short chapter, all there.</p>'), '');
+  // xszj.org: a third of a chapter, short, with a hidden "scan to read on
+  // your phone" box that says 加载中… until opened. It is the chapter.
+  const part = ['朝霞流转，金光万道。', '山门之外，云海翻腾，一座座青峰若隐若现。', '少年立于石阶之上，望着远处的天际。',
+    '“师兄，今日便是大比之日了吧？”', '他点了点头，没有说话。', '风吹过衣角，带来山间草木的清香。'].map((p) => `<p>${p}</p>`).join('');
+  const modal = '<div class="modal fade" id="qrcodeModal" style="display:none"><div class="modal-body"><p>扫一扫 手机继续阅读</p><div>加载中…</div></div></div>';
+  assert.equal(web.waitScreen(`<h1>第1章 (1/3)</h1>${part}${modal}`), '');
+  assert.equal(web.waitScreen(`<h1>第1章</h1>${part}<div hidden>加载中…</div>`), '');
+  assert.equal(web.waitScreen(`<h1>第1章</h1>${part}<div aria-hidden="true">加载中…</div>`), '');
+  // Shown, and nothing else on the page: still a page that has not come.
+  assert.equal(web.waitScreen('<h1>第1章</h1><div>加载中…</div><p>上一章</p><p>目录</p><p>下一章</p>'), '加载中…');
+  assert.equal(web.waitScreen(`<h1>第1章</h1><div class="modal">x</div><div>加载中…</div>`), '加载中…');
   // Read, it is a chapter not yet come: tried again, patiently -- never kept.
   const code = read('app/src/main/assets/www/js/web.js');
   assert.match(code, /const waitLine = waitScreen\(body\);\s+if \(waitLine\) throw Object\.assign\(new Error\([^)]*\), \{ notLoaded: true \}\);/);
@@ -3450,6 +3461,26 @@ await t('a contents in numbered pages joined by "下一页" (hetushu): every pag
   const found = await web.findLinks(['https://m.hetushu.com/book/4892/catalog-1.html'], { fetchPage: site, listGap: 0, listJitter: 0 });
   assert.equal(found.links.filter((l) => /第\d+章/.test(l.text)).length, 9);
   assert.deepEqual(asked.map((u) => /catalog-(\d+)/.exec(u)[1]), ['1', '2', '3']);
+});
+
+await t('a contents whose pages are bare numbers (xszj.org /cs/1, /cs/2): followed by "下一页", never by "下一章"', async () => {
+  const page = (n, last) => `<html><body><span>上一页</span>${n < last ? `<a href="https://xszj.org/b/352734/cs/${n + 1}">下一页</a>` : ''}
+<ul>${Array.from({ length: 3 }, (_, i) => `<li><a href="https://xszj.org/b/352734/c/${6042804 + (n - 1) * 3 + i}">第${(n - 1) * 3 + i + 1}章 题</a></li>`).join('')}</ul></body></html>`;
+  const doc = (html) => new window.DOMParser().parseFromString(html, 'text/html');
+  assert.equal(web.nextListOf(doc(page(1, 3)), 'https://xszj.org/b/352734/cs/1'), 'https://xszj.org/b/352734/cs/2');
+  assert.equal(web.nextListOf(doc(page(3, 3)), 'https://xszj.org/b/352734/cs/3'), null);
+  // A bare number behind "next" alone, or two on, may be a chapter: not taken.
+  assert.equal(web.nextListOf(doc('<a href="/b/1/c/2">下一章</a>'), 'https://xszj.org/b/1/c/1'), null);
+  assert.equal(web.nextListOf(doc('<a href="/b/1/cs/3">下一页</a>'), 'https://xszj.org/b/1/cs/1'), null);
+  const asked = [];
+  const site = async (url) => {
+    asked.push(url);
+    const n = Number(/cs\/(\d+)/.exec(url)[1]);
+    return { url, blob: new Blob([page(n, 3)]), type: 'text/html', rendered: false };
+  };
+  const found = await web.findLinks(['https://xszj.org/b/352734/cs/1'], { fetchPage: site, listGap: 0, listJitter: 0 });
+  assert.equal(found.links.filter((l) => /第\d+章/.test(l.text)).length, 9);
+  assert.deepEqual(asked.map((u) => /cs\/(\d+)/.exec(u)[1]), ['1', '2', '3']);
 });
 
 await t('one book from several sites: the first list, its gaps filled from the others in place, their copies to fall back on', async () => {

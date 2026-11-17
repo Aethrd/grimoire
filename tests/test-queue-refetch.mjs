@@ -68,6 +68,10 @@ await t('a book\'s short chapters, queued, are fetched again in place: nothing a
   assert.equal(chapters[2].html, long(2));
   assert.equal((await store.all('books')).length, booksBefore);
   assert.ok(!(await store.get('books', id)).binnedAt);
+  // The list is drawn just after the job is marked done: given a moment, on a busy machine.
+  for (let wait = Date.now() + 3000; Date.now() < wait && !/Done ·/.test(document.getElementById('build-queue-list').textContent);) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
   assert.match(document.getElementById('build-queue-list').textContent, /Done · 1 of 1 short chapters came back longer/);
 });
 

@@ -1045,7 +1045,10 @@ export function nextListOf(doc, pageUrl) {
     /* The same list, or the same address with its page number on (catalog-1.html
      * to catalog-2.html, list_2, index/3): onward, never back. */
     if (path !== base) {
-      const numbered = numberedPage(here.pathname, url.pathname);
+      let numbered = numberedPage(here.pathname, url.pathname);
+      /* A bare number may be a chapter's address -- but not behind a link
+       * that says it is the next *page*: xszj.org's list is /cs/1, /cs/2. */
+      if (numbered === null && PAGE_WORD.test(tidy(found.textContent))) numbered = bareStep(here.pathname, url.pathname);
       if (numbered === null || numbered <= 0) continue;
     }
     // Onward only: a "›" on the last page that leads to itself, or to page 1, is not.
@@ -1054,6 +1057,16 @@ export function nextListOf(doc, pageUrl) {
     return url.href;
   }
   return null;
+}
+
+const PAGE_WORD = /下一?[页頁]|next\s*page|다음\s*페이지/i;
+/** /cs/1 to /cs/2: one step on, and nothing else changed. Null otherwise. */
+function bareStep(fromPath, toPath) {
+  const last = /(\d+)(?!.*\d)/;
+  const a = last.exec(fromPath);
+  const b = last.exec(toPath);
+  if (!a || !b || fromPath.replace(last, '#') !== toPath.replace(last, '#')) return null;
+  return Number(b[1]) - Number(a[1]) === 1 ? 1 : null;
 }
 
 /** Two addresses alike but for the last number in them (catalog-1.html, catalog-2.html):
@@ -3374,11 +3387,29 @@ export const connectionTrouble = (error) => !error?.notLoaded && !blocked(error)
  * "Verifying access…", "Loading chapter…", "불러오는 중". The line, or ''. The
  * same lines the renderer waits out (WebBridge, SHAPE). */
 const WAIT_LINE = /^(verifying( your)? access|checking( your)? access|verifying|authenticating|loading( the)?( chapter| content| story)?|preparing( the)?( chapter| content)?|fetching( the)?( chapter| content)?|decrypting( the)?( chapter| content)?|unlocking( the)? chapter|불러오는 ?중|로딩 ?중|加载中|載入中|正在加载)\s*(…|\.{2,})?$/i;
+/* What a page hides is not what it says: a "scan to read on your phone" box,
+ * a popup, a dialog -- each saying "加载中…" until it is opened. xszj.org
+ * has one on every chapter, and a third of a chapter there is short: every
+ * chapter was taken for a page still saying to wait, and nothing downloaded. */
+const HIDDEN = '[hidden], [aria-hidden="true"], [style*="display:none" i], [style*="display: none" i], '
+  + '[style*="visibility:hidden" i], [style*="visibility: hidden" i], [class*="modal" i], [class*="popup" i], '
+  + '[class*="dialog" i], [class*="qrcode" i], [id*="qrcode" i], [class*="toast" i], [id*="modal" i], [id*="popup" i], '
+  + 'script, style, template, noscript';
 export function waitScreen(html) {
-  const pieces = String(html || '').split(/<[^>]*>/)
+  let source = String(html || '');
+  if (typeof DOMParser === 'function' && /<[a-z]/i.test(source)) {
+    const doc = new DOMParser().parseFromString(`<body>${source}</body>`, 'text/html');
+    for (const hidden of doc.body.querySelectorAll(HIDDEN)) hidden.remove();
+    source = doc.body.innerHTML;
+  }
+  const pieces = source.split(/<[^>]*>/)
     .map((piece) => piece.replace(/&nbsp;|&#160;/g, ' ').replace(/&hellip;|&#8230;/g, '…').replace(/\s+/g, ' ').trim())
     .filter(Boolean);
   if (pieces.join('').replace(/\s+/g, '').length >= 1500) return '';
+  /* Paragraphs of a story on it, and it is the chapter, whatever else it
+   * says: a page that is only waiting has a line or two and its menus. */
+  const prose = pieces.filter((piece) => piece.length >= 12 && !WAIT_LINE.test(piece));
+  if (prose.length >= 5 && prose.join('').length >= 200) return '';
   return pieces.find((piece) => piece.length < 40 && WAIT_LINE.test(piece)) || '';
 }
 
