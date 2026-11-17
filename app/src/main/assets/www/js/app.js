@@ -2837,7 +2837,8 @@ const autoExport = (() => {
       repaint();
       return true;
     }
-    const finish = progress.start(`Exporting ${plan.length} book${plan.length === 1 ? '' : 's'}`);
+    // Named as the schedule's own, so it is never taken for an export asked for by hand.
+    const finish = progress.start(`Automatic export · ${plan.length} book${plan.length === 1 ? '' : 's'}`);
     let written = 0;
     const failed = [];
     // Stopped from the popup: after the book under way. What is written stays; the rest goes next time.

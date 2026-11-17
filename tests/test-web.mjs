@@ -2578,6 +2578,12 @@ await t('a chapter that is only "Verifying access…" is never kept, and one kep
   // Shown, and nothing else on the page: still a page that has not come.
   assert.equal(web.waitScreen('<h1>第1章</h1><div>加载中…</div><p>上一章</p><p>目录</p><p>下一章</p>'), '加载中…');
   assert.equal(web.waitScreen(`<h1>第1章</h1><div class="modal">x</div><div>加载中…</div>`), '加载中…');
+  // A sidebar of other books' titles beside it is no story: still waiting.
+  const titles = ['The Villain Wants to Live', 'Return of the Mount Hua Sect', 'Omniscient Reader Viewpoint',
+    'Solo Leveling Ragnarok Side', 'The Novel’s Extra Remake', 'Second Life Ranker Volume 2'].map((n) => `<li><a>${n}</a></li>`).join('');
+  assert.equal(web.waitScreen(`<h1>Chapter 1</h1><p>Loading...</p><ul>${titles}</ul>`), 'Loading...');
+  // A story told in dialogue spans is no dialog box: it stays, and counts.
+  assert.equal(web.waitScreen(`${['“Who goes there, at this hour of the night?”', '“A friend, come up from the south with the wool carts.”', '“State your business here, and be quick about it.”', '“Only passing through, sir, on my way to the coast.”', '“Then pass, and quickly now, before the bell rings.”'].map((l) => `<p class="dialogue">${l}</p>`).join('')}<p>Loading...</p>`), '');
   // Read, it is a chapter not yet come: tried again, patiently -- never kept.
   const code = read('app/src/main/assets/www/js/web.js');
   assert.match(code, /const waitLine = waitScreen\(body\);\s+if \(waitLine\) throw Object\.assign\(new Error\([^)]*\), \{ notLoaded: true \}\);/);

@@ -3393,7 +3393,7 @@ const WAIT_LINE = /^(verifying( your)? access|checking( your)? access|verifying|
  * chapter was taken for a page still saying to wait, and nothing downloaded. */
 const HIDDEN = '[hidden], [aria-hidden="true"], [style*="display:none" i], [style*="display: none" i], '
   + '[style*="visibility:hidden" i], [style*="visibility: hidden" i], [class*="modal" i], [class*="popup" i], '
-  + '[class*="dialog" i], [class*="qrcode" i], [id*="qrcode" i], [class*="toast" i], [id*="modal" i], [id*="popup" i], '
+  + '[role="dialog"], [class*="dialog" i]:not([class*="dialogue" i]), [class*="qrcode" i], [id*="qrcode" i], [class*="toast" i], [id*="modal" i], [id*="popup" i], '
   + 'script, style, template, noscript';
 export function waitScreen(html) {
   let source = String(html || '');
@@ -3407,8 +3407,9 @@ export function waitScreen(html) {
     .filter(Boolean);
   if (pieces.join('').replace(/\s+/g, '').length >= 1500) return '';
   /* Paragraphs of a story on it, and it is the chapter, whatever else it
-   * says: a page that is only waiting has a line or two and its menus. */
-  const prose = pieces.filter((piece) => piece.length >= 12 && !WAIT_LINE.test(piece));
+   * says: a page that is only waiting has a line or two and its menus.
+   * Sentences, ended as sentences are -- a sidebar of titles is not prose. */
+  const prose = pieces.filter((piece) => piece.length >= 12 && /[.!?。！？…”"』」~～]$/.test(piece) && !WAIT_LINE.test(piece));
   if (prose.length >= 5 && prose.join('').length >= 200) return '';
   return pieces.find((piece) => piece.length < 40 && WAIT_LINE.test(piece)) || '';
 }
