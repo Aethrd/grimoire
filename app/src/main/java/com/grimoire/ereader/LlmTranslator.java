@@ -78,16 +78,31 @@ final class LlmTranslator {
     /** One provider, as set up. */
     static final class Setup {
         final String provider, key, model, base;
+        /** How freely the model words it (0 exact .. 1 loose); NaN: the service's own default. */
+        final double temperature;
 
         Setup(String provider, String key, String model, String base) {
+            this(provider, key, model, base, Double.NaN);
+        }
+
+        Setup(String provider, String key, String model, String base, double temperature) {
             this.provider = provider;
             this.key = key;
             this.model = model == null || model.trim().isEmpty() ? defaultModel(provider) : model.trim();
             this.base = base == null ? "" : base.trim().replaceAll("/+$", "");
+            this.temperature = temperature;
         }
 
         Setup withKey(String other) {
-            return new Setup(provider, other, model, base);
+            return new Setup(provider, other, model, base, temperature);
+        }
+
+        Setup withTemperature(double value) {
+            return new Setup(provider, key, model, base, value);
+        }
+
+        boolean hasTemperature() {
+            return !Double.isNaN(temperature);
         }
     }
 
@@ -118,6 +133,8 @@ final class LlmTranslator {
         String imageType = "image/jpeg";
         /** Asked again because parts came back untranslated: say so. */
         boolean insist;
+        /** A run's own temperature (a whole book's translation); null: the service's default. */
+        Double temperature;
 
         static Options of(String json) {
             Options options = new Options();
@@ -128,6 +145,10 @@ final class LlmTranslator {
                 options.instructions = o.optString("instructions", null);
                 options.previous = o.optString("previous", null);
                 options.insist = o.optBoolean("insist", false);
+                if (o.has("temperature") && !o.isNull("temperature")) {
+                    double t = o.optDouble("temperature", Double.NaN);
+                    if (!Double.isNaN(t)) options.temperature = Math.max(0, Math.min(2, t));
+                }
                 JSONObject image = o.optJSONObject("image");
                 if (image != null) {
                     options.imageData = image.optString("data", null);
@@ -178,6 +199,7 @@ final class LlmTranslator {
 
     static List<String> translate(Setup setup, List<String> texts, String target, String source,
                                   Options options) throws IOException, JSONException {
+        if (options.temperature != null) setup = setup.withTemperature(options.temperature);
         List<String> out = new ArrayList<>();
         int start = 0;
         String before = options.context;
@@ -337,6 +359,7 @@ final class LlmTranslator {
                 JSONObject body = new JSONObject();
                 body.put("model", setup.model);
                 body.put("max_tokens", 8192);
+                if (setup.hasTemperature()) body.put("temperature", Math.min(1, setup.temperature));
                 body.put("system", system);
                 JSONArray content = new JSONArray();
                 if (imageData != null) {
@@ -368,6 +391,7 @@ final class LlmTranslator {
                 JSONArray contents = new JSONArray();
                 contents.put(new JSONObject().put("role", "user").put("parts", parts));
                 body.put("contents", contents);
+                if (setup.hasTemperature()) body.put("generationConfig", new JSONObject().put("temperature", setup.temperature));
                 String url = "https://generativelanguage.googleapis.com/v1beta/models/"
                         + setup.model + ":generateContent";
                 String answer = post(url, body.toString(), "x-goog-api-key", setup.key);
@@ -401,6 +425,7 @@ final class LlmTranslator {
                     messages.put(new JSONObject().put("role", "user").put("content", user));
                 }
                 body.put("messages", messages);
+                if (setup.hasTemperature()) body.put("temperature", setup.temperature);
                 String answer;
                 if (OPENROUTER.equals(setup.provider)) {
                     // Named, so the reader's OpenRouter activity says which app it was.

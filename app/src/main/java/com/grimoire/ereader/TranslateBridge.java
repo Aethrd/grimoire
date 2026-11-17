@@ -61,6 +61,10 @@ public class TranslateBridge {
 
     private static final String TAG = "GrimoireTranslate";
     private static final String PREFS = "grimoire_translate";
+    /** Turn to the next key every so many requests (0: only when one runs out). */
+    private static final String KEY_LLM_ROTATE = "llm_rotate_every";
+    /** The service asked when every key of the main one fails ("" for none). */
+    private static final String KEY_LLM_FALLBACK = "llm_fallback";
     private static final String KEY_AUTH = "deepl_key";
     private static final String KEY_ENGINE = "engine";
     private static final String KEY_LIBRE_URL = "libre_url";
@@ -135,6 +139,18 @@ public class TranslateBridge {
                     && prefs.getBoolean(KEY_OPENROUTER_LINKED, false));
             out.put("llmHint", llmKey == null || llmKey.length() < 10 ? null
                     : llmKey.substring(0, 6) + "\u2026" + llmKey.substring(llmKey.length() - 3));
+            // How keys are used, and every service set up (for a fallback), by count only.
+            out.put("llmRotateEvery", prefs.getInt(KEY_LLM_ROTATE, 0));
+            out.put("llmFallback", prefs.getString(KEY_LLM_FALLBACK, ""));
+            JSONObject ready = new JSONObject();
+            for (String each : new String[] { LlmTranslator.ANTHROPIC, LlmTranslator.OPENAI, LlmTranslator.GEMINI,
+                    LlmTranslator.OPENROUTER, LlmTranslator.CUSTOM }) {
+                if (!llmReady(each)) continue;
+                ready.put(each, new JSONObject()
+                        .put("keys", keysIn(prefs.getString("llm_key_" + each, null)).size())
+                        .put("model", prefs.getString("llm_model_" + each, LlmTranslator.defaultModel(each))));
+            }
+            out.put("llmReady", ready);
 
             // On-device needs nothing configured, which is the point of it.
             out.put("configured", ENGINE_ONDEVICE.equals(engine)
@@ -210,13 +226,31 @@ public class TranslateBridge {
     @JavascriptInterface
     public void setLlm(final String requestId, final String provider, final String key,
                        final String model, final String base) {
+        saveLlm(requestId, provider, key, model, base, true);
+    }
+
+    /**
+     * Set up a service's keys and model without making it the translator:
+     * one to fall back on when the main one's keys are all refused or spent
+     * (setLlmOptions), kept ready beside it.
+     */
+    @JavascriptInterface
+    public void addLlm(final String requestId, final String provider, final String key,
+                       final String model, final String base) {
+        saveLlm(requestId, provider, key, model, base, false);
+    }
+
+    private void saveLlm(final String requestId, final String provider, final String key,
+                         final String model, final String base, final boolean makeMain) {
         if (!LlmTranslator.known(provider)) { fail(requestId, "Unknown model service"); return; }
         // No key given: the one already kept for that service, so that only
         // the model can be changed.
         String given = key == null ? "" : key.trim();
         if (given.isEmpty()) given = prefs.getString("llm_key_" + provider, "");
         final String cleanKey = given;
-        final String cleanBase = base == null ? "" : base.trim().replaceAll("/+$", "");
+        final String cleanBase = base == null || base.trim().isEmpty()
+                ? (LlmTranslator.CUSTOM.equals(provider) ? prefs.getString(KEY_LLM_BASE, "") : "")
+                : base.trim().replaceAll("/+$", "");
         if (!LlmTranslator.CUSTOM.equals(provider) && cleanKey.isEmpty()) { fail(requestId, "No key given"); return; }
         if (LlmTranslator.CUSTOM.equals(provider)
                 && !cleanBase.startsWith("https://") && !cleanBase.startsWith("http://")) {
@@ -227,26 +261,29 @@ public class TranslateBridge {
             try {
                 LlmTranslator.Setup setup = new LlmTranslator.Setup(provider, cleanKey, model, cleanBase);
                 if (setup.model.isEmpty()) { fail(requestId, "Name the model to use"); return; }
-                // Each key tried with a word of translation: several, one to a line,
-                // are taken in turn when one runs out.
+                /* Each key tried with a word of translation. The ones that work
+                 * are kept, and the ones that do not are said, each with why --
+                 * one bad key among ten no longer turns the other nine away. */
                 List<String> keys = keysIn(cleanKey);
                 if (keys.isEmpty()) keys.add("");
+                List<String> working = new ArrayList<>();
+                JSONArray rejected = new JSONArray();
                 for (int i = 0; i < keys.size(); i++) {
-                    try {
-                        List<String> probe = LlmTranslator.translate(setup.withKey(keys.get(i)),
-                                java.util.Collections.singletonList("こんにちは"), "EN-GB", "ja", (String) null);
-                        if (probe.isEmpty()) throw new IOException("The model gave no answer.");
-                    } catch (Exception e) {
-                        fail(requestId, (keys.size() > 1 ? "Key " + (i + 1) + ": " : "") + describe(e));
-                        return;
-                    }
+                    JSONObject tried = probeKey(setup.withKey(keys.get(i)), i);
+                    if (tried.optBoolean("ok")) working.add(keys.get(i));
+                    else rejected.put(tried);
+                }
+                if (working.isEmpty()) {
+                    JSONObject first = rejected.optJSONObject(0);
+                    fail(requestId, (keys.size() > 1 ? "No key worked. Key 1: " : "") + (first == null ? "it was refused" : first.optString("why")));
+                    return;
                 }
                 SharedPreferences.Editor edit = prefs.edit()
-                        .putString(KEY_LLM_PROVIDER, provider)
-                        .putString("llm_model_" + provider, setup.model)
-                        .putString(KEY_ENGINE, ENGINE_LLM);
-                if (!cleanKey.isEmpty()) {
-                    edit.putString("llm_key_" + provider, String.join("\n", keysIn(cleanKey)))
+                        .putString("llm_model_" + provider, setup.model);
+                if (makeMain) edit.putString(KEY_LLM_PROVIDER, provider).putString(KEY_ENGINE, ENGINE_LLM);
+                boolean keyless = working.size() == 1 && working.get(0).isEmpty();
+                if (!keyless) {
+                    edit.putString("llm_key_" + provider, String.join("\n", working))
                             .putInt("llm_key_" + provider + "_at", 0);
                 }
                 else edit.remove("llm_key_" + provider);
@@ -258,20 +295,107 @@ public class TranslateBridge {
                     edit.putString(KEY_LLM_BASE, cleanBase).putBoolean("llm_ready_custom", true);
                 }
                 edit.apply();
-                succeed(requestId, status());
+                JSONObject out = new JSONObject(status());
+                out.put("rejected", rejected);
+                succeed(requestId, out.toString());
             } catch (Exception e) {
                 fail(requestId, describe(e));
             }
         });
     }
 
+    /** One key tried with a word of translation: {n, hint, ok, why, ms}. Never the key itself. */
+    private JSONObject probeKey(LlmTranslator.Setup setup, int index) throws JSONException {
+        JSONObject out = new JSONObject();
+        out.put("n", index + 1);
+        out.put("hint", hintOf(setup.key));
+        long began = System.currentTimeMillis();
+        try {
+            List<String> probe = LlmTranslator.translate(setup,
+                    java.util.Collections.singletonList("こんにちは"), "EN-GB", "ja", (String) null);
+            if (probe.isEmpty() || probe.get(0) == null || probe.get(0).trim().isEmpty()) {
+                throw new IOException("The model gave no answer.");
+            }
+            out.put("ok", true);
+        } catch (Exception e) {
+            out.put("ok", false);
+            out.put("why", describe(e));
+        }
+        out.put("ms", System.currentTimeMillis() - began);
+        return out;
+    }
+
+    private static String hintOf(String key) {
+        if (key == null || key.isEmpty()) return "no key";
+        if (key.length() < 10) return "\u2026" + key.substring(Math.max(0, key.length() - 3));
+        return key.substring(0, 6) + "\u2026" + key.substring(key.length() - 3);
+    }
+
+    /**
+     * Each kept key of a service tried now, one by one, with a word of
+     * translation: which work, which do not and why, and how long each took.
+     * Before a long run, so a spent or mistyped key is found first.
+     */
+    @JavascriptInterface
+    public void testKeys(final String requestId, final String provider) {
+        if (!LlmTranslator.known(provider)) { fail(requestId, "Unknown model service"); return; }
+        io.execute(() -> {
+            try {
+                LlmTranslator.Setup setup = new LlmTranslator.Setup(provider, "",
+                        prefs.getString("llm_model_" + provider, ""),
+                        LlmTranslator.CUSTOM.equals(provider) ? prefs.getString(KEY_LLM_BASE, "") : "");
+                List<String> keys = keysIn(prefs.getString("llm_key_" + provider, ""));
+                if (keys.isEmpty()) {
+                    if (!LlmTranslator.CUSTOM.equals(provider)) { fail(requestId, "No keys are kept for that service"); return; }
+                    keys.add("");
+                }
+                JSONArray out = new JSONArray();
+                for (int i = 0; i < keys.size(); i++) out.put(probeKey(setup.withKey(keys.get(i)), i));
+                succeed(requestId, out.toString());
+            } catch (Exception e) {
+                fail(requestId, describe(e));
+            }
+        });
+    }
+
+    /**
+     * How the keys are used: turned to the next every so many requests (0:
+     * only when one is refused or spent), and the service fallen back on
+     * when every key of the main one is ("" for none). The fallback must
+     * already be set up (addLlm), and not be the main one.
+     */
+    @JavascriptInterface
+    public void setLlmOptions(final String requestId, final int rotateEvery, final String fallback) {
+        String back = fallback == null ? "" : fallback.trim();
+        String main = prefs.getString(KEY_LLM_PROVIDER, LlmTranslator.ANTHROPIC);
+        if (!back.isEmpty()) {
+            if (!LlmTranslator.known(back)) { fail(requestId, "Unknown model service"); return; }
+            if (back.equals(main)) { fail(requestId, "The fallback is the service already in use"); return; }
+            if (!llmReady(back)) { fail(requestId, "Set that service up first, then choose it to fall back on"); return; }
+        }
+        prefs.edit().putInt(KEY_LLM_ROTATE, Math.max(0, Math.min(1000, rotateEvery)))
+                .putString(KEY_LLM_FALLBACK, back).apply();
+        succeed(requestId, status());
+    }
+
+    /** Whether a service has what it needs to be asked: keys, or for another service its address. */
+    private boolean llmReady(String provider) {
+        if (LlmTranslator.CUSTOM.equals(provider)) {
+            return !prefs.getString(KEY_LLM_BASE, "").isEmpty() && prefs.getBoolean("llm_ready_custom", false);
+        }
+        return !keysIn(prefs.getString("llm_key_" + provider, null)).isEmpty();
+    }
+
     /** Forget a model service's key. */
     @JavascriptInterface
     public void clearLlm(final String requestId, final String provider) {
         SharedPreferences.Editor edit = prefs.edit().remove("llm_key_" + provider);
+        if (provider.equals(prefs.getString(KEY_LLM_FALLBACK, ""))) edit.remove(KEY_LLM_FALLBACK);
         if (LlmTranslator.CUSTOM.equals(provider)) edit.remove("llm_ready_custom");
         if (LlmTranslator.OPENROUTER.equals(provider)) edit.remove(KEY_OPENROUTER_LINKED);
-        if (ENGINE_LLM.equals(engine())) edit.putString(KEY_ENGINE, ENGINE_ONDEVICE);
+        if (ENGINE_LLM.equals(engine()) && provider.equals(prefs.getString(KEY_LLM_PROVIDER, LlmTranslator.ANTHROPIC))) {
+            edit.putString(KEY_ENGINE, ENGINE_ONDEVICE);
+        }
         edit.apply();
         succeed(requestId, status());
     }
@@ -873,9 +997,29 @@ public class TranslateBridge {
     }
 
     private <T> T withKeys(String pref, Keyed<T> work) throws Exception {
+        return withKeys(pref, work, 0);
+    }
+
+    /**
+     * As withKeys, and turned to the next key every so many requests
+     * (rotateEvery; 0 only when one is refused or spent): the requests of a
+     * long run spread over the keys rather than one key used up first.
+     */
+    private <T> T withKeys(String pref, Keyed<T> work, int rotateEvery) throws Exception {
         List<String> keys = keysIn(prefs.getString(pref, ""));
         if (keys.isEmpty()) keys.add("");
         int start = Math.max(0, prefs.getInt(pref + "_at", 0)) % keys.size();
+        if (rotateEvery > 0 && keys.size() > 1) {
+            synchronized (this) {
+                int count = prefs.getInt(pref + "_n", 0) + 1;
+                if (count >= rotateEvery) {
+                    count = 0;
+                    start = (start + 1) % keys.size();
+                    prefs.edit().putInt(pref + "_at", start).apply();
+                }
+                prefs.edit().putInt(pref + "_n", count).apply();
+            }
+        }
         Exception last = null;
         for (int n = 0; n < keys.size(); n++) {
             int at = (start + n) % keys.size();
@@ -905,9 +1049,37 @@ public class TranslateBridge {
 
     private <T> T withLlmKeys(Modelled<T> work) throws Exception {
         String provider = prefs.getString(KEY_LLM_PROVIDER, LlmTranslator.ANTHROPIC);
+        int rotate = prefs.getInt(KEY_LLM_ROTATE, 0);
+        try {
+            return withProvider(provider, work, rotate);
+        } catch (Exception e) {
+            /* Every key of the main service refused or spent, or the service
+             * itself failing: the fallback service, if one is set up, asked
+             * instead -- the same request, its own keys and model. A mistake
+             * in the request itself (a bad model name, say) is not passed on:
+             * the fallback would only make the same mistake. */
+            String back = prefs.getString(KEY_LLM_FALLBACK, "");
+            if (back.isEmpty() || back.equals(provider) || !llmReady(back) || !fallsBack(e)) throw e;
+            Log.w(TAG, "Falling back from " + provider + " to " + back + ": " + e.getMessage());
+            return withProvider(back, work, rotate);
+        }
+    }
+
+    private <T> T withProvider(String provider, Modelled<T> work, int rotate) throws Exception {
         LlmTranslator.Setup setup = new LlmTranslator.Setup(provider, "",
-                prefs.getString("llm_model_" + provider, ""), prefs.getString(KEY_LLM_BASE, ""));
-        return withKeys("llm_key_" + provider, (key) -> work.run(setup.withKey(key)));
+                prefs.getString("llm_model_" + provider, ""),
+                LlmTranslator.CUSTOM.equals(provider) ? prefs.getString(KEY_LLM_BASE, "") : "");
+        return withKeys("llm_key_" + provider, (key) -> work.run(setup.withKey(key)), rotate);
+    }
+
+    /** Whether a failure is the service's (keys spent, limits, its servers), not the request's. */
+    static boolean fallsBack(Exception e) {
+        if (e instanceof LlmTranslator.HttpError) {
+            LlmTranslator.HttpError http = (LlmTranslator.HttpError) e;
+            return http.keySpent || http.code == 429 || http.code >= 500 || http.code == 401 || http.code == 403;
+        }
+        // Every key gone, or the service not answering at all.
+        return e instanceof IOException;
     }
 
     /* ── DeepL glossaries ─────────────────────────────────────────────────

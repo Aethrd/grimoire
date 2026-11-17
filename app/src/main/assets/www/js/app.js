@@ -13570,7 +13570,16 @@ async function boot() {
   }
   const unfinished = await exportRun().catch(() => null);
   if (unfinished?.zips) {
-    toast(`An export was cut off after zip ${unfinished.zips} (${unfinished.done.length} books saved) — export again to carry on from zip ${unfinished.zips + 1}.`, 12000);
+    // The book it was on when cut off, by name: tried once more on carrying on, left out if it does it again.
+    const on = unfinished.trying != null && !unfinished.done.includes(unfinished.trying)
+      ? await store.get('books', unfinished.trying).catch(() => null) : null;
+    const again = on && (unfinished.crashes?.[on.id] || 0) >= 1;
+    toast(`An export was cut off after zip ${unfinished.zips} (${unfinished.done.length} books saved)`
+      + (on ? `, while writing “${library.displayTitle(on)}”` : '')
+      + ` — export again to carry on from zip ${unfinished.zips + 1}.`
+      + (on ? (again ? ' It has stopped an export there twice, so it will be left out and named at the end.'
+        : ' That book is tried once more; if it stops the export again, it is left out and named.') : ''),
+    15000, { kind: on ? 'failed' : undefined });
   }
   const crash = window.GrimoireNative?.lastCrash?.();
   if (crash) {

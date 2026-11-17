@@ -402,5 +402,11 @@ await t('the reading log: jumps not counted as reading, sessions not doubled by 
   assert.match(app, /if \(!\(await store\.settings\(\)\)\.logRepaired\) \{/);
 });
 
+await t('an export cut off says, on the next start, which book it was writing', () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /\+ \(on \? `, while writing “\$\{library\.displayTitle\(on\)\}”` : ''\)/);
+  assert.match(app, /const on = unfinished\.trying != null && !unfinished\.done\.includes\(unfinished\.trying\)/);
+});
+
 console.log(`\n${pass} checks passed`);
 process.exit(0);
