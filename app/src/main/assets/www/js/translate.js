@@ -236,6 +236,14 @@ export const LLM_PROVIDERS = [
 export const setLlm = (provider, key, model, base) =>
   call('setLlm', [provider, key || '', model || '', base || ''], 60000).then(parse);
 export const clearLlm = (provider) => call('clearLlm', [provider]).then(parse);
+/** Set up a service beside the main one (to fall back on), without making it the translator. */
+export const addLlm = (provider, key, model, base) =>
+  call('addLlm', [provider, key || '', model || '', base || ''], 60000).then(parse);
+/** Each kept key of a service tried now: [{n, hint, ok, why, ms}] -- never the keys themselves. */
+export const testKeys = (provider) => call('testKeys', [provider], 5 * 60000).then(parse);
+/** Turn to the next key every so many requests (0: only when one runs out); the service to fall back on ('' none). */
+export const setLlmOptions = (rotateEvery, fallback) =>
+  call('setLlmOptions', [Math.max(0, Math.round(rotateEvery) || 0), fallback || '']).then(parse);
 
 /* OpenRouter: signing in at openrouter.ai, in the browser, gives the app a key
  * of the reader's own (OpenRouterLink.java), kept natively like a pasted one.
@@ -296,6 +304,18 @@ export async function clearCache(bookId = null) {
     if (bookId === null || row.bookId === bookId) await store.del('translations', row.key);
   }
   return rows.length;
+}
+
+/**
+ * One chapter's translation forgotten: its paragraphs and how it ended, so
+ * the next asking translates it afresh rather than handing back what was
+ * kept -- a refusal, say, or a paragraph left in the original.
+ */
+export async function forgetChapter(bookId, index, lang) {
+  const mine = (await store.all('translations')).filter((row) => row.bookId === bookId && row.lang === lang && !isKey(row)
+    && (String(row.field).startsWith(`body:${index}:`) || row.field === `tail:${index}`));
+  for (const row of mine) await store.del('translations', row.key);
+  return mine.length;
 }
 
 export async function cacheSize() {
@@ -377,7 +397,7 @@ export function untranslated(text, out, target = '') {
 }
 
 export async function translateBatch(bookId, items, lang, sourceLang = '',
-  { context = '', previous = '', image = null, glossary: given = null } = {}) {
+  { context = '', previous = '', image = null, glossary: given = null, temperature = null } = {}) {
   const results = new Map();
   const misses = [];
 
@@ -423,6 +443,8 @@ export async function translateBatch(bookId, items, lang, sourceLang = '',
       ...(instructions ? { instructions } : {}),
       ...(image && engine === 'llm' ? { image } : {}),
       ...(insist ? { insist: true } : {}),
+      // A run's own temperature (a whole book's translation), for an AI model only.
+      ...(temperature != null && engine === 'llm' ? { temperature } : {}),
     };
     // ML Kit needs to be told the source language; it does not sniff. The
     // book's own declared language is the answer nearly every time. Context
@@ -519,7 +541,7 @@ export async function translateChapterNames(bookId, chapters, lang, sourceLang) 
  * straight back onto the paragraphs they came from. The original is never
  * replaced -- the caller decides what to show.
  */
-export async function translateChapterBody(bookId, chapter, lang, sourceLang) {
+export async function translateChapterBody(bookId, chapter, lang, sourceLang, { temperature = null } = {}) {
   const holder = document.createElement('div');
   holder.innerHTML = chapterHtml(chapter);
 
@@ -534,7 +556,7 @@ export async function translateChapterBody(bookId, chapter, lang, sourceLang) {
   const { results, translated, characters } = await translateBatch(
     bookId,
     blocks.map((node, i) => ({ field: `body:${chapter.index}:${i}`, text: node.textContent.trim() })),
-    lang, sourceLang, { previous: previous || '' });
+    lang, sourceLang, { previous: previous || '', temperature });
 
   const done = [];
   blocks.forEach((node, i) => {

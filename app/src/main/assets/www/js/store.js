@@ -700,7 +700,7 @@ function dataUrlToBlob(url) {
  * are passed over and this phone's own kept.
  */
 // exportRun too: the books an export cut off had saved, by this phone's numbers for them.
-export const DEVICE_SETTINGS = ['webQueue', 'queueRunning', 'webLeftovers', 'webStops', 'autoExport', 'autoBackup', 'exportRun'];
+export const DEVICE_SETTINGS = ['webQueue', 'queueRunning', 'webLeftovers', 'webStops', 'autoExport', 'autoBackup', 'exportRun', 'translateJobs'];
 const withoutDevice = (value) => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !DEVICE_SETTINGS.includes(key)));
 
 export async function exportBackup() {

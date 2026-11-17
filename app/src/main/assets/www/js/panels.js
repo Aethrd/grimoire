@@ -896,6 +896,114 @@ function keysBox(placeholder) {
  * the honorifics, leave the sound effects, romanise names this way. The
  * reply's form is not theirs to change, and is added to whatever they write.
  */
+/** Keys a service turned away when set up, each said with why; the rest kept. */
+function sayRejected(result, done) {
+  const rejected = result?.rejected || [];
+  if (!rejected.length) { toast(done, 3000, { kind: 'done' }); return; }
+  toast(`${done} — ${rejected.length} key${rejected.length === 1 ? '' : 's'} not kept: `
+    + rejected.map((r) => `key ${r.n} (${r.hint}): ${r.why}`).join('; '), 12000, { kind: 'failed' });
+}
+
+/**
+ * How the keys are used, and testing them: turned to the next every so many
+ * requests, the service fallen back on when all of one's keys are refused or
+ * spent, and each key tried now -- before a long run finds a bad one for it.
+ */
+function keysCard(state, reopen) {
+  const card = document.createElement('div');
+  card.className = 'card keys-card';
+  const names = Object.fromEntries(translate.LLM_PROVIDERS.map(([code, label]) => [code, label]));
+  const main = state.llmProvider;
+  card.innerHTML = `<h2>Keys</h2>
+    <p class="muted" style="font-size:12px;line-height:1.55;margin:0 0 10px">
+      ${names[main] || main}: ${state.llmKeys || 0} key${state.llmKeys === 1 ? '' : 's'}. A key refused or out of credit is
+      passed over for the next one by itself; these are for spreading a long run over them all, and for when they all run out.</p>`;
+
+  // Turned every so many requests.
+  const rotate = document.createElement('div');
+  rotate.className = 'row';
+  rotate.innerHTML = `<div class="row-text"><b>Turn to the next key every</b><small>requests — 0 only when one runs out</small></div>`;
+  const every = document.createElement('input');
+  every.type = 'number';
+  every.min = '0';
+  every.max = '1000';
+  every.inputMode = 'numeric';
+  every.value = String(state.llmRotateEvery || 0);
+  every.style.width = '72px';
+  every.onchange = async () => {
+    try {
+      await translate.setLlmOptions(Number(every.value) || 0, translate.status().llmFallback || '');
+      toast(Number(every.value) > 0 ? `Keys turned every ${Number(every.value)} request${Number(every.value) === 1 ? '' : 's'}` : 'Keys turned only when one runs out', 2500);
+    } catch (error) { toast(error.message, 6000); }
+  };
+  rotate.appendChild(every);
+  card.appendChild(rotate);
+
+  // The fallback: any other service set up.
+  const others = Object.keys(state.llmReady || {}).filter((code) => code !== main);
+  const fallTitle = document.createElement('p');
+  fallTitle.className = 'eyebrow';
+  fallTitle.style.marginTop = '12px';
+  fallTitle.textContent = 'When every key runs out, fall back to';
+  const chips = document.createElement('div');
+  chips.className = 'chip-row wrap';
+  for (const code of ['', ...others]) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.style.textTransform = 'none';
+    chip.textContent = code ? `${names[code] || code} · ${state.llmReady[code].model}` : 'Nothing';
+    chip.setAttribute('aria-pressed', String((state.llmFallback || '') === code));
+    chip.onclick = async () => {
+      try { await translate.setLlmOptions(Number(every.value) || 0, code); reopen(); } catch (error) { toast(error.message, 6000); }
+    };
+    chips.appendChild(chip);
+  }
+  const fallNote = document.createElement('p');
+  fallNote.className = 'muted';
+  fallNote.style.cssText = 'font-size:12px;line-height:1.5;margin:6px 0 0';
+  fallNote.textContent = others.length
+    ? 'Used only for requests the main service cannot take: its keys all refused or spent, or its servers failing.'
+    : 'To have one, pick another service above, paste its key and tap “Keep as fallback instead”.';
+  card.append(fallTitle, chips, fallNote);
+
+  // Each key tried now.
+  const test = document.createElement('button');
+  test.className = 'btn ghost block';
+  test.style.marginTop = '12px';
+  test.textContent = 'Test all keys';
+  const results = document.createElement('div');
+  results.className = 'key-results';
+  test.onclick = async () => {
+    test.disabled = true;
+    test.textContent = 'Testing…';
+    results.replaceChildren();
+    for (const code of [main, ...(state.llmFallback ? [state.llmFallback] : [])]) {
+      const head = document.createElement('p');
+      head.className = 'eyebrow';
+      head.style.marginTop = '8px';
+      head.textContent = names[code] || code;
+      results.appendChild(head);
+      try {
+        for (const r of await translate.testKeys(code)) {
+          const line = document.createElement('p');
+          line.className = `key-result ${r.ok ? 'ok' : 'bad'}`;
+          line.textContent = `${r.ok ? '✓' : '✗'} Key ${r.n} (${r.hint}) — ${r.ok ? `works, ${(r.ms / 1000).toFixed(1)} s` : r.why}`;
+          results.appendChild(line);
+        }
+      } catch (error) {
+        const line = document.createElement('p');
+        line.className = 'key-result bad';
+        line.textContent = `✗ ${error.message}`;
+        results.appendChild(line);
+      }
+    }
+    test.disabled = false;
+    test.textContent = 'Test all keys';
+  };
+  card.append(test, results);
+  return card;
+}
+
 async function instructionsCard() {
   const settings = await store.settings();
   const card = document.createElement('div');
@@ -1167,8 +1275,8 @@ export async function openLanguage(host) {
         connect.disabled = true;
         connect.textContent = 'Checking…';
         try {
-          await translate.setLlm(code, key.value.trim(), modelBox.value.trim(), base.value.trim());
-          toast('Connected', 3000, { kind: 'done' });
+          const result = await translate.setLlm(code, key.value.trim(), modelBox.value.trim(), base.value.trim());
+          sayRejected(result, 'Connected');
           openLanguage(body);
           refreshTheme();
         } catch (error) {
@@ -1180,6 +1288,31 @@ export async function openLanguage(host) {
       fields.append(hint);
       if (code === 'custom') fields.append(base);
       fields.append(key, modelBox, connect);
+      /* Another service than the one in use: kept beside it to fall back on
+       * when all its keys are refused or spent, without becoming the translator. */
+      if (state.llmConfigured && state.llmProvider !== code) {
+        const spare = document.createElement('button');
+        spare.className = 'btn ghost block';
+        spare.style.marginTop = '8px';
+        spare.textContent = 'Keep as fallback instead';
+        spare.onclick = async () => {
+          if (code !== 'custom' && !key.value.trim() && !state.llmReady?.[code]) return toast('Paste its key first');
+          spare.disabled = true;
+          spare.textContent = 'Checking…';
+          try {
+            const result = await translate.addLlm(code, key.value.trim(), modelBox.value.trim(), base.value.trim());
+            // As set now, not as when this screen opened.
+            await translate.setLlmOptions(translate.status().llmRotateEvery || 0, code);
+            sayRejected(result, `Kept to fall back on when ${info[1]}’s keys run out`);
+            openLanguage(body);
+          } catch (error) {
+            spare.disabled = false;
+            spare.textContent = 'Keep as fallback instead';
+            toast(error.message, 7000);
+          }
+        };
+        fields.append(spare);
+      }
       if (state.llmConfigured && state.llmProvider === code) {
         const forget = document.createElement('button');
         forget.className = 'btn ghost block';
@@ -1206,6 +1339,7 @@ export async function openLanguage(host) {
     card.append(providers, fields);
     paint();
     body.appendChild(card);
+    if (state.llmConfigured) body.appendChild(keysCard(state, () => openLanguage(body)));
     body.appendChild(await instructionsCard());
   }
 

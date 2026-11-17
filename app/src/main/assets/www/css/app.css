@@ -3020,3 +3020,13 @@ details.auto-backup[open] > summary { margin-bottom: 6px; }
 .library-missing-card { max-width: 440px; display: grid; gap: 12px; color: var(--text, #efeef3); line-height: 1.5; }
 .library-missing-card h2 { margin: 0; font-size: 22px; }
 .library-missing-card p { margin: 0; }
+
+/* Keys tried: each on its line, worked or not. */
+.key-result { font-size: 12px; line-height: 1.5; margin: 2px 0; }
+.key-result.ok { color: var(--text); }
+.key-result.bad { color: var(--danger, var(--accent)); }
+
+/* A whole book's translation: what its check found, one chapter a line. */
+.translate-book-sheet { max-height: 85vh; overflow-y: auto; }
+.translate-flags { max-height: 30vh; overflow-y: auto; margin-top: 4px; }
+.translate-flag { font-size: 12px; line-height: 1.45; margin: 3px 0; }

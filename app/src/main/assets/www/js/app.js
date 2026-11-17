@@ -12,6 +12,7 @@ import * as syosetu from './syosetu.js';
 import * as check from './check.js';
 import { nameWithFormat, chapterHtml, plainTextOf } from './parse.js';
 import * as glossary from './glossary.js';
+import * as booktranslate from './booktranslate.js';
 import * as build from './build.js';
 import * as epub from './epub.js';
 import * as trim from './trim.js';
@@ -1001,6 +1002,10 @@ function wireSelection() {
      * one book gets its whole details sheet, several get the part of it that
      * applies to all of them at once. */
     // Checked for missing or broken content, one book at a time; a bundle asks which edition.
+    translate: () => oneSelected({ text: 'Choose one book to translate', verb: 'Translate which edition?' }, (book) => {
+      clearSelection();
+      return openTranslateBook(book);
+    }),
     check: () => oneSelected({ text: 'Choose one book to check', verb: 'Check which edition?' }, (book) => {
       clearSelection();
       checkBook(book);
@@ -4944,6 +4949,175 @@ const dividePages = blobs.urlCache();
 
 /** Which of the two ways of cutting is being used: 'chapters' or 'pages'. */
 let divideMode = 'chapters';
+
+/* ── a whole book translated (booktranslate.js) ────────────────────────
+ *
+ * The sheet that begins one, carries one on, and shows what its check found:
+ * which translator it will use (as set in Settings), into which language,
+ * how freely, how long to rest between chapters -- and, once some is done,
+ * how far it is and the chapters to look at, to be done again. */
+const translateRunDeps = () => ({ progress, toast, refresh: () => refreshShelf().catch(() => {}) });
+
+async function openTranslateBook(book) {
+  if (book.translatedFrom) {
+    const original = await store.get('books', book.translatedFrom.id);
+    if (original) book = original;
+  }
+  const settings = await store.settings();
+  const engine = translate.status();
+  const existing = (await booktranslate.jobs()).filter((job) => job.sourceId === book.id);
+  let job = existing.find((j) => j.status !== 'done') || existing[0] || null;
+  let lang = job?.lang || settings.translateTarget || 'EN-US';
+  let temperature = job ? job.temperature : booktranslate.DEFAULTS.temperature;
+  let delay = job ? job.delay : booktranslate.DEFAULTS.delay;
+  const terms = await glossary.termsFor(book.id).catch(() => []);
+
+  const scrim = document.createElement('div');
+  scrim.className = 'sheet-scrim';
+  const sheet = document.createElement('div');
+  sheet.className = 'sheet translate-book-sheet';
+  scrim.appendChild(sheet);
+  const close = () => scrim.remove();
+  scrim.onclick = (event) => { if (event.target === scrim) close(); };
+
+  const chips = (values, label, current, pick) => {
+    const row = document.createElement('div');
+    row.className = 'chip-row wrap';
+    for (const value of values) {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.style.textTransform = 'none';
+      chip.textContent = label(value);
+      chip.setAttribute('aria-pressed', String(value === current()));
+      chip.onclick = () => { pick(value); for (const c of row.children) c.setAttribute('aria-pressed', String(c === chip)); };
+      row.appendChild(chip);
+    }
+    return row;
+  };
+  const section = (title) => {
+    const head = document.createElement('p');
+    head.className = 'eyebrow';
+    head.style.marginTop = '12px';
+    head.textContent = title;
+    sheet.appendChild(head);
+  };
+  const note = (text, style = '') => {
+    const p = document.createElement('p');
+    p.className = 'muted';
+    p.style.cssText = `font-size:12px;line-height:1.5;margin:4px 0 0;${style}`;
+    p.textContent = text;
+    sheet.appendChild(p);
+    return p;
+  };
+
+  const head = document.createElement('p');
+  head.className = 'eyebrow';
+  head.textContent = `Translate “${library.displayTitle(book)}”`;
+  sheet.appendChild(head);
+
+  if (!engine.configured) {
+    note('Set up a translator first: Settings → Language. An AI model with your own keys translates best; on-device works with none.');
+    const ok = document.createElement('button');
+    ok.className = 'btn ghost block';
+    ok.style.marginTop = '12px';
+    ok.textContent = 'Close';
+    ok.onclick = close;
+    sheet.appendChild(ok);
+    document.body.appendChild(scrim);
+    return;
+  }
+  const using = engine.engine === 'llm'
+    ? `${translate.LLM_PROVIDERS.find(([c]) => c === engine.llmProvider)?.[1] || engine.llmProvider}, model ${engine.llmModel}`
+      + ` · ${engine.llmKeys || 0} key${engine.llmKeys === 1 ? '' : 's'}`
+      + (engine.llmRotateEvery ? `, turned every ${engine.llmRotateEvery} requests` : '')
+      + (engine.llmFallback ? ` · falls back to ${translate.LLM_PROVIDERS.find(([c]) => c === engine.llmFallback)?.[1] || engine.llmFallback}` : '')
+    : (translate.ENGINES.find(([c]) => c === engine.engine)?.[1] || engine.engine);
+  note(`A new edition of it, chapter by chapter, beside the original: readable as it comes in. Using ${using} (change in Settings → Language).`);
+
+  // How far a run is, and what its check found.
+  if (job) {
+    const where = job.status === 'done' ? `Done: all ${job.total} chapters.`
+      : booktranslate.isRunning(job.id) ? `Translating now: ${job.done} of ${job.total} chapters.`
+        : `${job.done} of ${job.total} chapters translated so far${job.lastError ? ` — stopped: ${job.lastError}` : ''}.`;
+    section(`Into ${translate.TARGETS.find(([c]) => c === job.lang)?.[1] || job.lang}`);
+    note(where);
+    if (job.flagged?.length) {
+      section(`To look at · ${job.flagged.length}`);
+      const list = document.createElement('div');
+      list.className = 'translate-flags';
+      for (const flag of job.flagged.slice().sort((a, b) => a.index - b.index).slice(0, 60)) {
+        const line = document.createElement('p');
+        line.className = 'translate-flag';
+        line.textContent = `${flag.title || `Chapter ${flag.index + 1}`} — ${flag.problems.map((p) => booktranslate.PROBLEM_WORDS[p] || p).join('; ')}`;
+        list.appendChild(line);
+      }
+      if (job.flagged.length > 60) note(`…and ${job.flagged.length - 60} more.`);
+      sheet.appendChild(list);
+    }
+  } else {
+    section('Into');
+    sheet.appendChild(chips(translate.TARGETS.map(([code]) => code), (code) => translate.TARGETS.find(([c]) => c === code)?.[1] || code, () => lang, (v) => { lang = v; }));
+  }
+
+  if (engine.engine === 'llm') {
+    section('How freely');
+    sheet.appendChild(chips(booktranslate.TEMPERATURES, (t) => (t == null ? 'The model’s own' : t <= 0.2 ? `Close · ${t}` : t >= 0.8 ? `Free · ${t}` : `${t}`), () => temperature, (v) => { temperature = v; }));
+    note('Lower keeps close to the original; higher reads more naturally but strays more.');
+  }
+  section('Rest between chapters');
+  sheet.appendChild(chips(booktranslate.DELAYS, (d) => (d ? `${d} s` : 'None'), () => delay, (v) => { delay = v; }));
+  note('Some services limit how fast they are asked; a rest keeps a long run from being turned away.');
+
+  if (!terms.length && !(job?.status === 'done')) {
+    note('This book has no glossary yet, so names may be spelt differently from chapter to chapter. Finding them first is worth it for a long book.', 'margin-top:12px');
+    const names = document.createElement('button');
+    names.className = 'btn ghost block';
+    names.style.marginTop = '8px';
+    names.textContent = 'Find names first';
+    names.onclick = () => { close(); openGlossary(book); };
+    sheet.appendChild(names);
+  }
+
+  const buttons = document.createElement('div');
+  buttons.style.cssText = 'display:flex;gap:8px;margin-top:14px;flex-wrap:wrap';
+  const button = (text, kind, act) => {
+    const b = document.createElement('button');
+    b.className = `btn ${kind}`;
+    b.style.flex = '1';
+    b.textContent = text;
+    b.onclick = act;
+    buttons.appendChild(b);
+    return b;
+  };
+  button('Close', 'ghost', close);
+  if (job?.flagged?.length && !booktranslate.isRunning(job.id)) {
+    button(`Redo ${job.flagged.length}`, 'ghost', () => {
+      close();
+      booktranslate.redo(job.id, job.flagged.map((f) => f.index), translateRunDeps());
+    });
+  }
+  if (job?.status === 'done' && !booktranslate.isRunning(job.id)) {
+    button('Check again', 'ghost', async () => {
+      close();
+      const checked = await booktranslate.recheck(job.id);
+      toast(checked?.flagged?.length ? `${checked.flagged.length} chapter${checked.flagged.length === 1 ? '' : 's'} to look at — open Translate to see them` : 'Checked: nothing to look at', 6000);
+    });
+  }
+  if (!job || (job.status !== 'done' && !booktranslate.isRunning(job.id))) {
+    button(job ? 'Carry on' : 'Start', 'primary', async () => {
+      close();
+      try {
+        const begun = await booktranslate.begin(book.id, { lang, temperature, delay, sourceLang: book.lang || '' });
+        refreshShelf().catch(() => {});
+        booktranslate.run(begun.id, translateRunDeps());
+      } catch (error) {
+        toast(error.message, 6000, { kind: 'failed' });
+      }
+    });
+  }
+  sheet.appendChild(buttons);
+  document.body.appendChild(scrim);
+}
 
 async function openDivide(book, mode) {
   const chapters = (await store.byIndex('chapters', 'bookId', book.id))
@@ -13567,6 +13741,11 @@ async function boot() {
       toast(`Reading stats put right: ${fixed.doubled} session${fixed.doubled === 1 ? '' : 's'} counted twice taken out, `
         + `and ${fixed.capped} that counted jumps through a book as pages read brought down to what their time allowed.`, 15000);
     }
+  }
+  // A whole book's translation the app was closed in the middle of: paused, said.
+  for (const cut of await booktranslate.pauseInterrupted().catch(() => [])) {
+    const name = (await store.get('books', cut.targetId).catch(() => null))?.title || 'a book';
+    toast(`Translating “${name}” was cut off at ${cut.done} of ${cut.total} chapters — open Translate on it to carry on.`, 10000);
   }
   const unfinished = await exportRun().catch(() => null);
   if (unfinished?.zips) {
