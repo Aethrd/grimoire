@@ -135,6 +135,7 @@ public class MainActivity extends AppCompatActivity {
 
         restoreStagedExport(savedInstanceState);
         clearStaleExports();
+        forgetAutoExportFolder();
 
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState);
@@ -450,7 +451,6 @@ public class MainActivity extends AppCompatActivity {
     private static final int PICK_BACKUP_FOLDER = 4303;
     private static final String BACKUP_TREE = "backupTree";
     /** Automatic export: the folder every book is written into, chosen once and kept. */
-    private static final int PICK_AUTO_EXPORT_FOLDER = 4304;
     private static final String AUTO_EXPORT_TREE = "autoExportTree";
     /** An export of many zips: its folder asked for first, each zip put in it as soon as it is full. */
     private static final int PICK_EXPORT_SET_FOLDER = 4305;
@@ -777,13 +777,12 @@ public class MainActivity extends AppCompatActivity {
         return "the folder chosen";
     }
 
-    /** The export over: its folder's permission let go of, unless the automatic backups or export use it. */
+    /** The export over: its folder's permission let go of, unless the automatic backups use it. */
     void releaseExportSetFolder() {
         android.content.SharedPreferences prefs = getSharedPreferences("exports", MODE_PRIVATE);
         String saved = prefs.getString(EXPORT_SET_TREE, null);
         prefs.edit().remove(EXPORT_SET_TREE).apply();
-        if (saved == null || saved.equals(prefs.getString(AUTO_EXPORT_TREE, null))
-                || saved.equals(prefs.getString(BACKUP_TREE, null))) return;
+        if (saved == null || saved.equals(prefs.getString(BACKUP_TREE, null))) return;
         try {
             getContentResolver().releasePersistableUriPermission(Uri.parse(saved),
                     Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
@@ -914,76 +913,19 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /* ── automatic export ────────────────────────────────────────────────
-     *
-     * Every book written out as a file into a folder chosen once, in folders
-     * as on the shelf, on a schedule. A book written again replaces its own
-     * file -- written beside it first and swapped in once whole, so a failed
-     * write never leaves the folder without it -- and a book gone, moved or
-     * renamed has its old file deleted (the app says which: only files it
-     * wrote itself are ever touched). */
-
-    void chooseAutoExportFolder() {
-        runOnUiThread(() -> {
-            Intent tree = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-            tree.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-            try {
-                startActivityForResult(tree, PICK_AUTO_EXPORT_FOLDER);
-            } catch (Exception e) {
-                Log.w(TAG, "No folder picker available", e);
-                tellReader("window.Grimoire.autoExportFolderChosen(null)");
-            }
-        });
-    }
-
-    private void autoExportFolderPicked(@Nullable Uri tree) {
-        if (tree == null) {
-            tellReader("window.Grimoire.autoExportFolderChosen(null)");
-            return;
-        }
+    /* An automatic export of loose files into a folder was here once; it is
+     * gone (the zips are the export). The folder it was given is let go of,
+     * once -- unless the backups or an export of zips still use it. */
+    private void forgetAutoExportFolder() {
+        android.content.SharedPreferences prefs = getSharedPreferences("exports", MODE_PRIVATE);
+        String saved = prefs.getString(AUTO_EXPORT_TREE, null);
+        if (saved == null) return;
+        prefs.edit().remove(AUTO_EXPORT_TREE).apply();
+        if (saved.equals(prefs.getString(BACKUP_TREE, null)) || saved.equals(prefs.getString(EXPORT_SET_TREE, null))) return;
         try {
-            getContentResolver().takePersistableUriPermission(tree,
+            getContentResolver().releasePersistableUriPermission(Uri.parse(saved),
                     Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        } catch (Exception e) {
-            Log.w(TAG, "That folder's permission could not be kept", e);
-        }
-        String before = getSharedPreferences("exports", MODE_PRIVATE).getString(AUTO_EXPORT_TREE, null);
-        String backups = getSharedPreferences("exports", MODE_PRIVATE).getString(BACKUP_TREE, null);
-        // The folder before it let go -- unless the backups still use it.
-        if (before != null && !before.equals(tree.toString()) && !before.equals(backups)) {
-            try {
-                getContentResolver().releasePersistableUriPermission(Uri.parse(before),
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            } catch (Exception ignored) { /* already gone */ }
-        }
-        getSharedPreferences("exports", MODE_PRIVATE).edit().putString(AUTO_EXPORT_TREE, tree.toString()).apply();
-        tellReader("window.Grimoire.autoExportFolderChosen(" + JSONObject.quote(autoExportFolderName()) + ")");
-    }
-
-    @Nullable
-    private Uri autoExportTree() {
-        String saved = getSharedPreferences("exports", MODE_PRIVATE).getString(AUTO_EXPORT_TREE, null);
-        if (saved == null) return null;
-        Uri tree = Uri.parse(saved);
-        for (android.content.UriPermission held : getContentResolver().getPersistedUriPermissions()) {
-            if (held.getUri().equals(tree) && held.isWritePermission()) return tree;
-        }
-        return null;
-    }
-
-    String autoExportFolderName() {
-        Uri tree = autoExportTree();
-        if (tree == null) return "";
-        Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
-                android.provider.DocumentsContract.getTreeDocumentId(tree));
-        try (android.database.Cursor c = getContentResolver().query(folder,
-                new String[] { android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null)) {
-            if (c != null && c.moveToFirst()) return c.getString(0);
-        } catch (Exception e) {
-            Log.w(TAG, "Could not name the export folder", e);
-        }
-        return "the folder chosen";
+        } catch (Exception ignored) { /* already gone */ }
     }
 
     /** A child of a folder by its name: its document id, or null. */
@@ -1000,104 +942,9 @@ public class MainActivity extends AppCompatActivity {
         return null;
     }
 
-    /** The folder a path's file goes in, made as needed: its document id. */
-    private String folderFor(Uri tree, String[] parts, boolean make) throws java.io.IOException {
-        String at = android.provider.DocumentsContract.getTreeDocumentId(tree);
-        for (int i = 0; i < parts.length - 1; i++) {
-            if (parts[i].isEmpty()) continue;
-            String next = childOf(tree, at, parts[i]);
-            if (next == null) {
-                if (!make) return null;
-                Uri made = android.provider.DocumentsContract.createDocument(getContentResolver(),
-                        android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, at),
-                        android.provider.DocumentsContract.Document.MIME_TYPE_DIR, parts[i]);
-                if (made == null) throw new java.io.IOException("the folder " + parts[i] + " could not be made");
-                next = android.provider.DocumentsContract.getDocumentId(made);
-            }
-            at = next;
-        }
-        return at;
-    }
-
-    void writeAutoExport(File file, String path, String reply) {
-        staging.execute(() -> {
-            Uri tree = autoExportTree();
-            try {
-                if (tree == null) throw new java.io.IOException("the export folder can no longer be written — choose it again");
-                if (!file.exists()) throw new java.io.IOException("nothing was staged");
-                String[] parts = path.split("/");
-                String name = parts[parts.length - 1];
-                String folderId = folderFor(tree, parts, true);
-                String mime = name.toLowerCase(java.util.Locale.ROOT).endsWith(".epub") ? "application/epub+zip" : "application/octet-stream";
-                Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, folderId);
-                // Beside the old one first, and swapped in only once it is whole.
-                String temp = ".mythos-writing-" + name;
-                String leftover = childOf(tree, folderId, temp);
-                if (leftover != null) android.provider.DocumentsContract.deleteDocument(getContentResolver(),
-                        android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, leftover));
-                Uri doc = android.provider.DocumentsContract.createDocument(getContentResolver(), folder,
-                        mime, temp);
-                if (doc == null) throw new java.io.IOException("the folder would not take it");
-                copyInto(doc, file);
-                long written = writtenSize(doc);
-                if (written >= 0 && written != file.length()) {
-                    android.provider.DocumentsContract.deleteDocument(getContentResolver(), doc);
-                    throw new java.io.IOException("wrote " + written + " bytes of " + file.length());
-                }
-                String old = childOf(tree, folderId, name);
-                if (old != null) android.provider.DocumentsContract.deleteDocument(getContentResolver(),
-                        android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, old));
-                Uri renamed = null;
-                try {
-                    renamed = android.provider.DocumentsContract.renameDocument(getContentResolver(), doc, name);
-                } catch (Exception e) {
-                    Log.w(TAG, "Could not rename into place " + name, e);
-                }
-                if (renamed == null && childOf(tree, folderId, name) == null) {
-                    // A folder that cannot rename: written again under its own name.
-                    Uri plain = android.provider.DocumentsContract.createDocument(getContentResolver(), folder,
-                            mime, name);
-                    if (plain == null) throw new java.io.IOException("the folder would not take it");
-                    copyInto(plain, file);
-                    android.provider.DocumentsContract.deleteDocument(getContentResolver(), doc);
-                }
-                tellReader("window.Grimoire.autoExportWritten(" + JSONObject.quote(reply) + ",true,\"\")");
-            } catch (Throwable e) {
-                Log.w(TAG, "Could not write " + path, e);
-                tellReader("window.Grimoire.autoExportWritten(" + JSONObject.quote(reply) + ",false,"
-                        + JSONObject.quote(String.valueOf(e.getMessage())) + ")");
-            } finally {
-                //noinspection ResultOfMethodCallIgnored
-                file.delete();
-            }
-        });
-    }
-
-    /** An exported file the app wrote before, deleted. True if it is gone (or never was). */
-    boolean deleteAutoExport(String path) {
-        Uri tree = autoExportTree();
-        if (tree == null) return false;
-        try {
-            String[] parts = path.split("/");
-            String folderId = folderFor(tree, parts, false);
-            if (folderId == null) return true;
-            String doc = childOf(tree, folderId, parts[parts.length - 1]);
-            if (doc == null) return true;
-            return android.provider.DocumentsContract.deleteDocument(getContentResolver(),
-                    android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, doc));
-        } catch (Throwable e) {
-            Log.w(TAG, "Could not delete " + path, e);
-            return false;
-        }
-    }
-
     @Override
     protected void onActivityResult(int request, int result, @Nullable Intent data) {
         super.onActivityResult(request, result, data);
-        if (request == PICK_AUTO_EXPORT_FOLDER) {
-            autoExportFolderPicked(result == RESULT_OK && data != null ? data.getData() : null);
-            return;
-        }
         if (request == PICK_BACKUP_FOLDER) {
             backupFolderPicked(result == RESULT_OK && data != null ? data.getData() : null);
             return;

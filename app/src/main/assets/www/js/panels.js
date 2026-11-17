@@ -2395,7 +2395,6 @@ export async function openVault(onVaultChange, host) {
   data.appendChild(row('Wait for the phone to cool',
     'Exports pause between books when the phone is warm (40°C), and wait when hot (43°C). Off: they keep going.',
     toggle(settings.exportCoolDown !== false, (on) => store.saveSettings({ exportCoolDown: on }))));
-  if (exportHooks?.available()) data.appendChild(await autoExportBlock());
 
   /* Settings alone -- to carry a setup to another phone without its books'
    * places. Rarely wanted, so folded away rather than a third kind of backup. */
@@ -2597,8 +2596,6 @@ let backupHooks = null;
 export function onAutoBackup(hooks) { backupHooks = hooks; }
 let exportEverything = null;
 export function onExportEverything(run) { exportEverything = run; }
-let exportHooks = null;
-export function onAutoExport(hooks) { exportHooks = hooks; }
 
 /** A folded block's line: its name, and how it stands. */
 function foldHead(title, status) {
@@ -2611,80 +2608,6 @@ function foldHead(title, status) {
   said.textContent = status;
   head.append(name, said);
   return head;
-}
-
-/** Every book into a folder on a schedule, kept up to date there (app.js autoExport). */
-async function autoExportBlock() {
-  const box = document.createElement('details');
-  box.className = 'auto-backup auto-export';
-  const paint = async () => {
-    const state = await exportHooks.state();
-    box.replaceChildren();
-    // Folded, it says only whether it is on: the rest is for setting it up.
-    box.appendChild(foldHead('Automatic export',
-      state.folder && state.every ? `Every ${state.every}${state.lastError ? ' · failed last time' : ''}` : 'Off'));
-    if (state.lastError) box.open = true;
-    const said = document.createElement('p');
-    said.className = 'muted auto-backup-note';
-    const when = state.lastAt ? new Date(state.lastAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
-    const count = Object.keys(state.files).length;
-    said.textContent = !state.folder
-      ? 'Every book written out as an EPUB into a folder you choose, in its folders as on the shelf — at most daily or weekly, and only once something new has come in. '
-        + 'Only books that changed are written again; a book’s older file is replaced, and a book that is gone has its file deleted. '
-        + 'Nothing else in the folder is touched.'
-      : `${state.every ? `Every ${state.every}` : 'Off'} · into “${state.folder}” · ${count} book${count === 1 ? '' : 's'} there`
-        + `${state.pending ? ' · waiting for the queue to bring new chapters' : ''}`
-        + `${when ? ` · last ${when}` : ' · none yet'}${state.lastError ? ` · last time: ${state.lastError}` : ''}.`
-        + ' Only once something new has come in (a book imported or downloaded), at most this often.'
-        + ' Made while the app is open (Android does not let it wake itself for this).';
-    box.appendChild(said);
-    const chips = (label, options, current, pick) => {
-      const row = document.createElement('div');
-      row.className = 'chip-row wrap';
-      const name = document.createElement('span');
-      name.className = 'muted';
-      name.textContent = label;
-      row.appendChild(name);
-      for (const [text, value] of options) {
-        const chip = document.createElement('button');
-        chip.className = 'chip';
-        chip.textContent = text;
-        chip.setAttribute('aria-pressed', String(value === current));
-        chip.onclick = async () => { await pick(value); paint(); };
-        row.appendChild(chip);
-      }
-      box.appendChild(row);
-    };
-    const needFolder = async () => state.folder || (await exportHooks.chooseFolder());
-    chips('Every', [['Off', null], ['Day', 'day'], ['Week', 'week']], state.every, async (every) => {
-      if (every && !(await needFolder())) return;
-      await exportHooks.set({ every });
-    });
-    chips('First', [['Check for new chapters', true], ['No', false]], state.update, (update) => exportHooks.set({ update }));
-    const note = document.createElement('p');
-    note.className = 'muted auto-backup-note';
-    note.textContent = 'Checking: every book from a website (but those marked Dropped) has its contents page read in the queue, '
-      + 'at its site’s own delays, and any new chapters are downloaded before the export.';
-    box.appendChild(note);
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:8px;margin-top:6px';
-    const folder = document.createElement('button');
-    folder.className = 'btn ghost';
-    folder.style.flex = '1';
-    folder.textContent = state.folder ? 'Change folder' : 'Choose folder';
-    folder.onclick = async () => { await exportHooks.chooseFolder(); paint(); };
-    const now = document.createElement('button');
-    now.className = 'btn ghost';
-    now.style.flex = '1';
-    now.textContent = 'Export now';
-    now.disabled = !state.folder;
-    now.onclick = async () => { now.disabled = true; await exportHooks.now(); paint(); };
-    row.append(folder, now);
-    box.appendChild(row);
-  };
-  exportHooks.repaint = paint;
-  await paint();
-  return box;
 }
 
 /** How often, how many kept, into which folder, and when the last was made. */

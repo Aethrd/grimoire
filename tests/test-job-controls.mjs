@@ -282,9 +282,8 @@ await t('many books written out pass through as bytes, no Blob made of them: mem
   const whole = Buffer.concat(sent);
   assert.deepEqual(whole, Buffer.concat([Buffer.alloc(30, 1), Buffer.alloc(100, 7), Buffer.alloc(50, 2), Buffer.alloc(10, 3)]));
   assert.ok(sent.every((piece) => piece.length <= CHUNK), 'a piece over the size sent at once');
-  // The books themselves asked for in parts, by the export of many and the automatic export alike.
+  // The books themselves asked for in parts by the export of many.
   assert.match(app, /let \{ blob, name: entry \} = await epub\.buildEpub\(book\.id, \{\s*parts: true,/);
-  assert.match(app, /const \{ blob \} = await epub\.buildEpub\(book\.id, \{ parts: true \}\);/);
 });
 
 await t('a book built in parts is the same book: same bytes, size and checksum as built whole', async () => {

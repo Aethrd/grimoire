@@ -2729,276 +2729,10 @@ const autoBackups = (() => {
   };
 })();
 
-/* ── automatic export ───────────────────────────────────────────────────
- *
- * Every book written out as an EPUB into a folder chosen once, kept in its
- * folders as on the shelf, daily or weekly -- and, if asked, every book from
- * a website checked for new chapters first, through the queue, and written
- * out once those have come. Only what changed is written again: a book's
- * file is replaced in place when it grows, is renamed or moves, and deleted
- * when the book goes (an older version purged, a book binned for good).
- * The app keeps the list of files it wrote, and only ever touches those --
- * nothing else in the folder. Like the backups, it runs while the app is
- * open: Android does not let a web page wake itself.
- */
-const autoExport = (() => {
-  const EVERY = { day: 24 * 3600e3, week: 7 * 24 * 3600e3 };
-  let running = false;
-  let picking = null;
-  const waiting = new Map();   // token -> resolve, for each file being written
-  let tokens = 0;
-  const bridge = () => window.GrimoireNative;
-  const available = () => !!bridge()?.writeAutoExport;
-
-  async function state() {
-    const kept = (await store.settings()).autoExport || {};
-    let folder = '';
-    try { folder = available() ? bridge().autoExportFolderName() || '' : ''; } catch { /* none */ }
-    return { every: kept.every || null, update: !!kept.update, lastAt: kept.lastAt || 0, lastError: kept.lastError || '',
-      lastCount: kept.lastCount || 0, files: kept.files || {}, pending: !!kept.pending, folder,
-      checkedAt: kept.checkedAt || 0, lastSig: kept.lastSig || '' };
-  }
-  async function set(changes) {
-    const kept = (await store.settings()).autoExport || {};
-    await store.saveSettings({ autoExport: { ...kept, ...changes } });
-  }
-  function chooseFolder() {
-    if (!available()) return Promise.resolve('');
-    return new Promise((resolve) => { picking = resolve; bridge().chooseAutoExportFolder(); });
-  }
-  const repaint = () => { try { panelHooks.repaint?.(); } catch { /* not shown */ } };
-
-  /** Where a book's file goes: its folder's path, then its title. */
-  const segment = (text) => String(text || '').replace(/[\\:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 80);
-  function pathOf(book) {
-    const folders = String(book.folder || '').split('/').map(segment).filter(Boolean);
-    return [...folders, `${epub.safeName(library.displayTitle(book))}.epub`].join('/');
-  }
-  // What a book's file is a copy of: written again when any of it changes.
-  const stampOf = (book) => [book.chapters || 0, book.words || 0, book.coverBytes || 0,
-    library.displayTitle(book), book.author || '', book.folder || ''].join('|');
-  const keyOf = (book) => book.fingerprint || `id:${book.id}`;
-
-  function writeFile(handle, path) {
-    const token = `x${++tokens}`;
-    return new Promise((resolve) => {
-      waiting.set(token, resolve);
-      bridge().writeAutoExport(handle, path, token);
-    });
-  }
-
-  /* Something new in the library since the last export: a book added (an
-   * import, a download, one carried on -- each a new book, with a higher id)
-   * or one gone. Read without reading the books. */
-  const signature = async () => `${await store.countBooks()}:${await store.lastBookId()}`;
-
-  /** Every book that has changed since, written; every file of a book gone, deleted. */
-  async function exportAll({ byHand = false } = {}) {
-    const now = await state();
-    if (!now.folder) return false;
-    /* On the schedule, only once something new has come: a day with nothing
-     * imported or downloaded is not an export, and the day or week is
-     * counted from the last one made. By hand, always looked through. */
-    const sig = await signature().catch(() => '');
-    if (!byHand && sig && sig === now.lastSig) {
-      await set({ pending: false });
-      repaint();
-      return true;
-    }
-    const all = await store.all('books');
-    const live = all.filter((book) => !book.binnedAt && !book.transient && !book.importing && !library.isDownloading?.(book));
-    // A locked Vault's books: not written, and their files from before left as they are.
-    const locked = new Set(live.filter((book) => book.inVault && !library.vaultUnlocked).map(keyOf));
-    const books = live.filter((book) => !locked.has(keyOf(book))).sort((a, b) => a.id - b.id);
-    const files = { ...now.files };
-    /* A library much smaller than what was written last: not trusted -- one
-     * that did not open properly would have every file deleted. Written,
-     * but nothing deleted. */
-    const known = Object.keys(files).length;
-    const shrunk = known >= 10 && books.length + locked.size < known * 0.5;
-    const used = new Set();
-    const plan = [];
-    for (const book of books) {
-      let path = pathOf(book);
-      const first = path;
-      let n = 2;
-      while (used.has(path.toLowerCase())) path = first.replace(/\.epub$/i, ` (${n++}).epub`);
-      used.add(path.toLowerCase());
-      const key = keyOf(book);
-      const stamp = stampOf(book);
-      if (files[key]?.path === path && files[key]?.stamp === stamp) continue;
-      plan.push({ book, key, path, stamp });
-    }
-    const wanted = new Set(books.map(keyOf));
-    const gone = shrunk ? [] : Object.keys(files).filter((key) => !wanted.has(key) && !locked.has(key));
-    if (!plan.length && !gone.length) {
-      await set({ lastSig: sig, lastError: '', pending: false });
-      if (byHand) toast('Every book in the export folder is up to date', 4000, { kind: 'done' });
-      repaint();
-      return true;
-    }
-    // Named as the schedule's own, so it is never taken for an export asked for by hand.
-    const finish = progress.start(`Automatic export · ${plan.length} book${plan.length === 1 ? '' : 's'}`);
-    let written = 0;
-    const failed = [];
-    // Stopped from the popup: after the book under way. What is written stays; the rest goes next time.
-    let stopped = false;
-    finish.controls({ cancel: () => { stopped = true; } });
-    try {
-      for (const [at, { book, key, path, stamp }] of plan.entries()) {
-        if (stopped) break;
-        if (at) await letCool(finish, { stopped: () => stopped });
-        if (stopped) break;
-        working(`exporting “${library.displayTitle(book)}” automatically (book ${at + 1} of ${plan.length})`);
-        // Out of the way of reading: a book being built while one is read makes it stutter.
-        while (inBook) await new Promise((resolve) => setTimeout(resolve, 5000));
-        finish.say(`Exporting ${library.displayTitle(book)}`, at / plan.length, `${at + 1} of ${plan.length}`);
-        try {
-          const { blob } = await epub.buildEpub(book.id, { parts: true });
-          const sink = exportSink(path.split('/').pop());
-          // Handed on as it is: read across in pieces by the sink, not copied here first.
-          await sink.write(blob);
-          const { ok, message } = await writeFile(await sink.close(), path);
-          if (!ok) throw new Error(message || 'it could not be written');
-          // Moved or renamed: the file it had before goes -- unless another book's is there now.
-          if (files[key]?.path && files[key].path !== path && !used.has(files[key].path.toLowerCase())) bridge().deleteAutoExport(files[key].path);
-          files[key] = { path, stamp };
-          written += 1;
-          // Kept as it goes: a run cut short starts where it stopped.
-          if (written % 10 === 0) await set({ files });
-        } catch (error) {
-          if (/can no longer be written/.test(error.message)) throw error;
-          failed.push(`${library.displayTitle(book)}: ${error.message}`);
-        }
-      }
-      if (stopped) {
-        await set({ files, lastError: '' });
-        toast(`Automatic export stopped — ${written} book${written === 1 ? '' : 's'} written; the rest next time`, 6000);
-        return true;
-      }
-      let deleted = 0;
-      for (const key of gone) {
-        /* A book carried on is a new book of the same name: its file is the one
-         * just written, at the path the one before it had. Only forgotten. */
-        if (used.has(files[key].path.toLowerCase())) { delete files[key]; continue; }
-        if (bridge().deleteAutoExport(files[key].path)) { delete files[key]; deleted += 1; }
-      }
-      await set({ files, lastAt: Date.now(), lastSig: sig, pending: false, lastCount: written,
-        lastError: failed.length ? `${failed.length} not written — ${failed[0]}` : '' });
-      const said = `Exported ${written} book${written === 1 ? '' : 's'}${deleted ? ` · ${deleted} old file${deleted === 1 ? '' : 's'} deleted` : ''}`
-        + `${failed.length ? ` · ${failed.length} could not be written` : ''}${shrunk ? ' · nothing deleted: the library is much smaller than the last export' : ''}`;
-      whenNotReading(() => toast(said, 7000, { kind: failed.length ? 'failed' : 'done' }));
-      return true;
-    } catch (error) {
-      finish.fail();
-      await set({ files, lastError: error.message || 'the export could not be written' });
-      toast(`Automatic export failed: ${error.message}`, 7000, { kind: 'failed' });
-      return false;
-    } finally {
-      working(null);
-      finish();
-      repaint();
-    }
-  }
-
-  /** Every book from a website, queued to be checked for new chapters (each a "check" in the queue). */
-  async function queueChecks() {
-    const books = (await store.all('books')).filter((book) => book.webSources?.length && !book.binnedAt
-      && !book.transient && library.statusOf(book) !== 'dropped');
-    const busy = new Set(webQueue.filter((job) => job.status !== 'done' && job.bookId != null).map((job) => job.bookId));
-    let added = 0;
-    for (const book of books) {
-      if (busy.has(book.id)) continue;
-      webQueue.push({
-        id: `q-${Date.now()}-${book.id}`, kind: 'check', name: library.displayTitle(book), author: book.author || '',
-        sources: book.webSources, cover: '', links: [], total: 0, done: 0, status: 'queued', stops: 0, bookId: book.id,
-      });
-      added += 1;
-    }
-    if (added) saveQueue();
-    return added;
-  }
-
-  async function run({ byHand = false } = {}) {
-    if (running || !available() || libraryHeld) return false;
-    const now = await state();
-    if (!now.folder) return false;
-    running = true;
-    try {
-      // The checks keep their own day or week: they are how anything new is found.
-      if (now.update && (byHand || Date.now() - now.checkedAt >= EVERY[now.every || 'day'])) {
-        await set({ checkedAt: Date.now() });
-        const added = await queueChecks();
-        if (added) {
-          // Exported once the queue has finished: the new chapters in the files.
-          await set({ pending: true });
-          if (!queueState.running) startQueueQuietly();
-          else pumpQueue();
-          renderWorkshop();
-          whenNotReading(() => toast(`Checking ${added} book${added === 1 ? '' : 's'} for new chapters — exported once the queue finishes`, 6000, { topic: 'downloads' }));
-          return true;
-        }
-      }
-      return await exportAll({ byHand });
-    } finally {
-      running = false;
-    }
-  }
-
-  async function check() {
-    if (!available() || running) return;
-    const now = await state();
-    if (!now.every || !now.folder || now.pending) return;
-    const due = (at) => Date.now() - at >= EVERY[now.every];
-    if ((now.update && due(now.checkedAt)) || due(now.lastAt)) run();
-  }
-
-  const panelHooks = {
-    available,
-    state,
-    set: async (changes) => { await set(changes); check(); },
-    chooseFolder,
-    now: () => run({ byHand: true }),
-  };
-
-  return {
-    start() {
-      panels.onAutoExport(panelHooks);
-      if (!available()) return;
-      setTimeout(check, 20000);
-      setInterval(check, 30 * 60000);
-      document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(check, 4000); });
-    },
-    /** The queue has finished: the export waiting on its new chapters. */
-    async afterQueue() {
-      const now = await state();
-      if (now.pending && !running) {
-        running = true;
-        try { await exportAll(); } finally { running = false; }
-      }
-    },
-    written(token, ok, message) {
-      const resolve = waiting.get(token);
-      waiting.delete(token);
-      resolve?.({ ok: !!ok, message });
-    },
-    folderChosen(name) {
-      const resolve = picking;
-      picking = null;
-      resolve?.(name || '');
-      repaint();
-    },
-    run,
-  };
-})();
-
-/** The queue started by the schedule: books paused by hand stay paused. */
-function startQueueQuietly() {
-  queueState.running = true;
-  try { window.GrimoireNative?.keepScreenOn?.(true); } catch { /* not in a browser */ }
-  saveQueue();
-  pumpQueue();
-}
+/* An automatic export of every book as loose files into a folder was here.
+ * It is gone: the export of zips is the export. Its settings, left from
+ * before, are dropped once (see boot) -- so an export it had waiting on the
+ * queue never runs. */
 
 /**
  * A queued check of a book from a website: its contents page read (only as
@@ -8552,7 +8286,6 @@ function pumpQueue() {
     notifyBuild({ title: 'Queue done', text: message });
     letScreenGo();
     autoBackups.afterQueue();
-    autoExport.afterQueue();
   }
   saveQueue();
 }
@@ -13473,10 +13206,6 @@ window.Grimoire = {
   backupWritten(ok, message) { autoBackups.written(!!ok, message); },
   /** The folder for automatic backups, chosen: its name, or null if none was. */
   backupFolderChosen(name) { autoBackups.folderChosen(name); },
-  /** A book's file written into the automatic export folder, or why not. */
-  autoExportWritten(token, ok, message) { autoExport.written(token, ok, message); },
-  /** The folder for the automatic export, chosen: its name, or null if none was. */
-  autoExportFolderChosen(name) { autoExport.folderChosen(name); },
   /** An export of several zips: its folder chosen (or not), and each zip saved into it. */
   exportSetFolderChosen(name) { exportFolder.chosen(name); },
   exportPartSaved(reply, ok, why) { exportFolder.saved(reply, ok, why); },
@@ -13774,7 +13503,7 @@ async function boot() {
   panels.onGuides(refreshGuides);
   panels.onWrite((blob, name, type, opts) => writeOut(blob, name, type, opts));
   autoBackups.start();
-  autoExport.start();
+  store.settings().then((kept) => { if (kept.autoExport) store.saveSettings({ autoExport: null }); }).catch(() => {});
   panels.onExportEverything(exportEverything);
   panels.onFolderMenu(openFolderActions);
 
