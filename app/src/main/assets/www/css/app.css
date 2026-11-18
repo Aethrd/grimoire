@@ -385,7 +385,12 @@ section.block > h2 { margin-top: 18px; }
    through, not space at the two ends of the chapter: padding would only be
    seen at the very top and the very bottom, and the text would run to the
    edges of the screen everywhere in between. */
+/* overflow-anchor: none -- the reader keeps its own place when a chapter is
+   added above or dropped off the top (reader.js extendIfNeeded, trimWindow).
+   Left on, the browser kept it as well, and the two together threw the view a
+   whole chapter forward or back: the "random" flick in endless scroll. */
 .page-viewport.scrolling { overflow-y: auto; overscroll-behavior: contain;
+                           overflow-anchor: none;
                            -webkit-overflow-scrolling: touch;
                            top: var(--read-vmargin); bottom: var(--read-vmargin);
                            padding-top: 0; padding-bottom: 0; }

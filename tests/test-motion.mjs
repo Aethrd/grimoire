@@ -179,6 +179,18 @@ t('dragging the rail does not fight endless loading', () => {
   assert.match(reader, /Math\.min\(1, viewport\.clientHeight \/ viewport\.scrollHeight\)/);
 });
 
+t('a chapter added above or dropped off the top keeps the place once, not twice', () => {
+  /* The reader moves the scroll by the chapter's height itself (extendIfNeeded,
+   * trimWindow). The browser's scroll anchoring, left on, moved it as well: in
+   * Chromium the view was thrown a whole chapter back on a trim and forward on
+   * a prepend -- the flick between chapters in endless scroll. Anchoring is off
+   * for the scrolling view, so only the reader's own correction is made. */
+  assert.match(css, /\.page-viewport\.scrolling \{[^}]*overflow-anchor: none;/);
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /viewport\.scrollTop \+= viewport\.scrollHeight - before;/);
+  assert.match(reader, /section\.remove\(\);\s+releaseSection\(index\);\s+viewport\.scrollTop -= height;/);
+});
+
 t('the overlay never takes a touch, so text can be selected', () => {
   // It sat over the words, so a long press landed on it and Android's Copy,
   // Translate and Web search never appeared.
