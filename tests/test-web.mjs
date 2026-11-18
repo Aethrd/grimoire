@@ -1416,6 +1416,59 @@ await t('a script-built contents page is rendered, and its chapters listed', asy
   delete window.GrimoireWeb;
 });
 
+await t('the wait before reading: each site its own, a chapter page only, on top of the delay -- never taken off it', async () => {
+  const waits = { 'slow.example': 300, 'plain.example': 250 };
+  web.setReadWait((host) => waits[host] || 0);
+  try {
+    // In the browser: asked to leave the page that long before looking ("@300").
+    const asks = [];
+    const chapter = 'https://slow.example/series/1/2';
+    window.GrimoireWeb = {
+      fetch: (id) => web.settleWeb(id, false, 'not this way'),
+      render: (id, url, patience, list) => {
+        asks.push([url, patience, list]);
+        const path = `data:text/html;base64,${Buffer.from(chapterPage(2), 'utf8').toString('base64')}`;
+        setTimeout(() => web.settleWeb(id, true, JSON.stringify({ url, status: 200, type: 'text/html', path, rendered: true, dwell: 0 })), 0);
+      },
+      release() {},
+    };
+    let began = Date.now();
+    await web.download(chapter, { render: true });
+    assert.deepEqual(asks.at(-1), [chapter, '0@300', '0']);
+    // The phone waits it out, not the page: no second wait here.
+    assert.ok(Date.now() - began < 250, `waited ${Date.now() - began} ms more`);
+    // Never a list, a picture, or another site.
+    await web.download('https://slow.example/series/1/', { render: true, list: true });
+    assert.ok(!asks.at(-1)[1].includes('@'), asks.at(-1).join(' '));
+    await web.download('https://other.example/series/1/2', { render: true });
+    assert.ok(!asks.at(-1)[1].includes('@'));
+    // A page as sent: waited out once it has come.
+    const plain = 'https://plain.example/ch/1';
+    fakeBridge({ sent: { [plain]: chapterPage(1) } });
+    began = Date.now();
+    await web.download(plain);
+    assert.ok(Date.now() - began >= 240, `only ${Date.now() - began} ms`);
+    // On top of the delay: wait 250 + delay 100, two pages, the second begun 350 ms or more after the first.
+    const starts = [];
+    const paced = web.pacer(async (url) => { starts.push(Date.now()); return web.download(url); }, { gap: 100 });
+    fakeBridge({ sent: { [plain]: chapterPage(1), [`${plain}0`]: chapterPage(2) } });
+    await paced(plain);
+    await paced(`${plain}0`);
+    assert.ok(starts[1] - starts[0] >= 340, `${starts[1] - starts[0]} ms apart`);
+  } finally {
+    web.setReadWait(() => 0);
+    delete window.GrimoireWeb;
+  }
+  // Natively: parsed, held before the first look, every limit counted from after it.
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  assert.match(java, /int waitAt = asked\.indexOf\('@'\);/);
+  assert.match(java, /final long readWait = scroll \? 0 : waitAsked;/);
+  assert.match(java, /startedAt \+= readWait;\s+main\.postDelayed\(this::poll, RENDER_POLL_MS \+ readWait\);/);
+  assert.match(java, /if \(!loaded && view != null\) begin\(\);/);
+  // The time stayed on to confirm (taken off the next delay) is counted from the story, never the wait.
+  assert.match(java, /settled = now - confirmAt >= confirmFor \|\| now - confirmBegan >= CONFIRM_MAX_MS;\s+if \(settled\) dwell = now - confirmBegan;/);
+});
+
 await t('a site behind a bot check is rendered instead', async () => {
   const url = 'https://guarded.example/book/1';
   const calls = fakeBridge({
@@ -2172,7 +2225,7 @@ await t('the delay is kept for every page -- retries too -- from when the last o
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /private static final long RENDER_WAIT_MS = 180000;/);
   assert.match(java, /: holding \? RENDER_WAIT_MS : presses > 0 \? PRESS_MAX_MS : maxMs;/);
-  assert.match(read('app/src/main/assets/www/js/web.js'), /if \(method === 'render'\) timeout = Math\.max\(timeout, press \? 16 \* 60000 : 240000\) \+ \(ocr \? 180000 : 0\) \+ \(book \? 240000 : 0\);/);
+  assert.match(read('app/src/main/assets/www/js/web.js'), /if \(method === 'render'\) timeout = Math\.max\(timeout, press \? 16 \* 60000 : 240000\) \+ \(ocr \? 180000 : 0\) \+ \(book \? 240000 : 0\) \+ readWait;/);
 });
 
 await t('a spinner left going once the chapter is there holds nothing; waiting and retries are said', async () => {

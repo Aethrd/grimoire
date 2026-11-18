@@ -76,6 +76,21 @@ export const available = () => typeof window.GrimoireWeb?.fetch === 'function';
  *   any redirects, which is what its own links are relative to.
  */
 export async function download(url, options = {}) {
+  /* The reader's wait before a page is read, for its site (READ_WAIT_MAX at
+   * most): a chapter's page only -- never a list, a picture or a file. In the
+   * browser, the page is left that long before it is looked at at all (WebBridge);
+   * a page as sent, waited out once it has come. Its own time, on top of the
+   * delay between pages: never taken off it. */
+  let readWait = 0;
+  if (!options.picture && !options.list && !FILE_ADDRESS.test(url)) {
+    try { readWait = Math.max(0, Math.min(READ_WAIT_MAX, Math.round(Number(readWaitOf(new URL(url).hostname)) || 0))); } catch { readWait = 0; }
+  }
+  const page = await downloadAs(url, readWait ? { ...options, readWait } : options);
+  if (readWait && !page?.rendered) await pause(readWait);
+  return page;
+}
+
+async function downloadAs(url, options = {}) {
   /* A picture (or any file) is fetched as it is, always: the renderer is
    * for pages, and would wait out a page's settling for every picture and
    * hand it back wrapped in one. */
@@ -134,6 +149,10 @@ const renderedHosts = new Set();
 /** Which sites the reader has said to read in the browser (app.js keeps them, by site). */
 let readInBrowser = () => false;
 export function setReadInBrowser(test) { readInBrowser = typeof test === 'function' ? test : () => false; }
+/** Each site's wait before reading a page, in ms (app.js, its delays): 0 for none. */
+export const READ_WAIT_MAX = 60000;
+let readWaitOf = () => 0;
+export function setReadWait(of) { readWaitOf = typeof of === 'function' ? of : () => 0; }
 /** Sites whose scrambled text the reader has said to keep as it comes (app.js keeps them). */
 let keepScrambled = () => false;
 export function setKeepScrambled(test) { keepScrambled = typeof test === 'function' ? test : () => false; }
@@ -484,12 +503,12 @@ export function scriptBuilt(html) {
   return tidy(body.textContent).length < 400 && body.querySelectorAll('a[href]').length < 8;
 }
 
-function fetchNative(method, url, { timeout = 90000, list = false, textOnly = false, press = null, ocr = null, pictureBook: book = false, referer = '' } = {}) {
+function fetchNative(method, url, { timeout = 90000, list = false, textOnly = false, press = null, ocr = null, pictureBook: book = false, referer = '', readWait = 0 } = {}) {
   // A page that says to wait is waited on for up to three minutes, there; a
   // list whose "show more" is pressed, for as long as that takes (WebBridge);
   // a chapter read by OCR, three minutes more for the reading; a picture
   // book's episode, four more for walking through its pictures.
-  if (method === 'render') timeout = Math.max(timeout, press ? 16 * 60000 : 240000) + (ocr ? 180000 : 0) + (book ? 240000 : 0);
+  if (method === 'render') timeout = Math.max(timeout, press ? 16 * 60000 : 240000) + (ocr ? 180000 : 0) + (book ? 240000 : 0) + readWait;
   return new Promise((resolve, reject) => {
     if (!available()) {
       reject(new Error('Downloading needs the app: this copy of the reader cannot reach the web.'));
@@ -544,7 +563,9 @@ function fetchNative(method, url, { timeout = 90000, list = false, textOnly = fa
       // "1:gap:jitter": a list whose "show more" is pressed, that far apart.
       const listing = list ? (press ? `1:${Math.round(press.gap)}:${Math.round(press.jitter || 0)}` : '1') : null;
       // "x": read by OCR; "a": by OCR where the words as sent are garbled (see WebBridge).
-      const reading = ocr === 'always' ? 'x' : ocr === 'auto' ? 'a' : '';
+      const reading = (ocr === 'always' ? 'x' : ocr === 'auto' ? 'a' : '')
+        // "@1500": left that long before it is looked at (the reader's wait before reading).
+        + (readWait > 0 && !list ? `@${Math.round(readWait)}` : '');
       // "p": a picture book's episode, walked through for its pictures (see WebBridge PB_WALK).
       if (method === 'render') window.GrimoireWeb.render(id, url, renderAsk(url, list) + reading, listing || (book ? 'p' : textOnly ? 't' : '0'));
       // A picture, saying the page it is on, as the browser does (a picture server may check).

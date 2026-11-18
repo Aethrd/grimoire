@@ -12257,7 +12257,19 @@ function paintWebRange() {
   const delay = webDelay();
   const jitter = webJitter();
   range.textContent = jitter ? `· ${Math.max(0, delay - jitter)}–${delay + jitter} ms` : '';
+  // The wait before reading, added to the delay: "· 200 ms with the delay".
+  const total = el('web-read-total');
+  const wait = webReadWait();
+  if (total) total.textContent = wait ? `· ${wait + delay} ms with the delay` : '';
 }
+
+/* The wait before reading (see index.html, web.js download): each chapter's
+ * page left this long before it is read. Kept for each site with its delays. */
+function webReadWait() {
+  const value = Math.round(Number(el('web-read-wait')?.value));
+  return Number.isFinite(value) ? Math.max(0, Math.min(web.READ_WAIT_MAX, value)) : 0;
+}
+web.setReadWait((host) => delaysFor(siteKey(host)).readWait || 0);
 
 /* The list's own pace (see index.html): reading the pages of a contents list,
  * which a reader flips through in seconds, not a chapter's full delay. */
@@ -12287,8 +12299,8 @@ function paintWebListRange() {
  * address pasted, they come back; a site not seen before starts from the
  * usual ones -- what was last set with no site in the box. The queue reads
  * each book's site's own. */
-let siteDelays = {};                       // site -> { gap, jitter, listGap, listJitter, at }
-let delayDefaults = { gap: 250, jitter: 0, listGap: 4000, listJitter: 2000 };
+let siteDelays = {};                       // site -> { gap, jitter, listGap, listJitter, readWait, at }
+let delayDefaults = { gap: 250, jitter: 0, listGap: 4000, listJitter: 2000, readWait: 0 };
 let delaysShownFor = '';                   // the site the fields now hold, '' for the usual
 
 const SITE_DELAYS_KEPT = 300;
@@ -12322,12 +12334,13 @@ function setDelayFields(delays) {
   el('web-jitter').value = String(delays.jitter);
   el('web-list-delay').value = String(delays.listGap);
   el('web-list-jitter').value = String(delays.listJitter);
+  el('web-read-wait').value = String(delays.readWait || 0);
   paintWebRange();
   paintWebListRange();
 }
 
 function delayFields() {
-  return { gap: webDelay(), jitter: webJitter(), listGap: webListDelay(), listJitter: webListJitter() };
+  return { gap: webDelay(), jitter: webJitter(), listGap: webListDelay(), listJitter: webListJitter(), readWait: webReadWait() };
 }
 
 /* Sites read in the browser, by the reader's say: kept by site (mirrors one),
@@ -12396,7 +12409,7 @@ function keepDelays({ site = delaysShownFor } = {}) {
   const now = delayFields();
   if (!site) {
     delayDefaults = now;
-    store.saveSettings({ webDelay: now.gap, webJitter: now.jitter, webListDelay: now.listGap, webListJitter: now.listJitter }).catch(() => {});
+    store.saveSettings({ webDelay: now.gap, webJitter: now.jitter, webListDelay: now.listGap, webListJitter: now.listJitter, webReadWait: now.readWait }).catch(() => {});
     return;
   }
   siteDelays[site] = { ...now, at: Date.now() };
@@ -12530,6 +12543,7 @@ function wireWeb() {
   store.settings().then((settings) => {
     if (Number.isFinite(settings.webDelay)) el('web-delay').value = String(settings.webDelay);
     if (Number.isFinite(settings.webJitter)) el('web-jitter').value = String(settings.webJitter);
+    if (Number.isFinite(settings.webReadWait)) el('web-read-wait').value = String(settings.webReadWait);
     if (settings.siteDelays && typeof settings.siteDelays === 'object') siteDelays = { ...settings.siteDelays, ...siteDelays };
     if (settings.browserSites && typeof settings.browserSites === 'object') browserSites = { ...settings.browserSites, ...browserSites };
     if (settings.pictureBookSites && typeof settings.pictureBookSites === 'object') pictureBookSites = { ...settings.pictureBookSites, ...pictureBookSites };
@@ -12568,6 +12582,12 @@ function wireWeb() {
     paintWebRange();
   });
   el('web-jitter').addEventListener('input', paintWebRange);
+  el('web-read-wait').addEventListener('change', () => {
+    el('web-read-wait').value = String(webReadWait());
+    keepDelays();
+    paintWebRange();
+  });
+  el('web-read-wait').addEventListener('input', paintWebRange);
   el('web-list-delay').addEventListener('change', () => {
     const value = webListDelay();
     el('web-list-delay').value = String(value);

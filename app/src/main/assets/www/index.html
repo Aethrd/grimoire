@@ -594,6 +594,11 @@
         <label class="web-rate"><span>Give or take <small class="muted" id="web-range"></small></span>
           <input id="web-jitter" type="number" inputmode="numeric" min="0" max="60000" step="50" value="0">
           <span>ms</span></label>
+        <!-- Wait before reading: each chapter's page left this long before it is read,
+             for a site that puts its chapter up late. On top of the delay, never taken off it. -->
+        <label class="web-rate"><span>Wait before reading <small class="muted" id="web-read-total"></small></span>
+          <input id="web-read-wait" type="number" inputmode="numeric" min="0" max="60000" step="100" value="0">
+          <span>ms</span></label>
         <!-- Where the book is filed: the folder the shelf was open at, or another. -->
         <div class="web-folder" id="web-folder"></div>
         <!-- What is ticked, and how it comes: every button in view, none behind a

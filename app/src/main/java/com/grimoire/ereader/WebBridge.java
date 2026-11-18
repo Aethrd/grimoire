@@ -171,6 +171,8 @@ public class WebBridge {
     private static final long READY_LIST_QUIET_MS = 1200;
     /** A chapter's story, in one block of text, long enough to be the chapter. */
     private static final int READY_STORY = 1500;
+    /** The longest wait before reading a page the reader may set (web.js READ_WAIT_MAX). */
+    private static final long READ_WAIT_MAX_MS = 60000;
     /** A short chapter: this much, over at least this many lines. */
     private static final int SHORT_STORY = 400;
     private static final int SHORT_STORY_LINES = 8;
@@ -284,6 +286,20 @@ public class WebBridge {
         // "2", or "0o": a level, and "o" when the site has been found to need
         // nothing kept out (its pages come only with everything let in).
         String asked = String.valueOf(patience).trim();
+        /* "@1500" at its end: the reader's wait before reading, for this site -- the page
+         * left that long before it is looked at at all. A chapter's only; its own time,
+         * on top of the delay between pages (web.js, download). */
+        long waitAsked = 0;
+        int waitAt = asked.indexOf('@');
+        if (waitAt >= 0) {
+            try {
+                waitAsked = Math.max(0, Math.min(READ_WAIT_MAX_MS, Long.parseLong(asked.substring(waitAt + 1).trim())));
+            } catch (NumberFormatException ignored) {
+                // Unreadable: no wait.
+            }
+            asked = asked.substring(0, waitAt);
+        }
+        final long readWait = scroll ? 0 : waitAsked;
         // "x": the chapter's words read by OCR, from the page as it shows (see readStory);
         // "a": so only where the words as sent come out garbled (see GARBLED).
         final boolean ocr = (asked.endsWith("x") || asked.endsWith("a")) && !scroll;
@@ -328,6 +344,7 @@ public class WebBridge {
                 job.ocr = ocr;
                 job.pictureBook = pictureBook;
                 job.ocrAuto = ocrAuto;
+                job.readWait = readWait;
                 // One page of a site at a time: another of its pages waits its turn here.
                 String siteKey = job.site == null ? address : job.site;
                 synchronized (renderingSites) {
@@ -340,7 +357,7 @@ public class WebBridge {
                 }
                 try {
                     main.post(job::start);
-                    if (!job.done.await((pressGap >= 0 ? PRESS_MAX_MS : RENDER_WAIT_MS) + 20000 + (ocr ? OCR_MAX_MS : 0) + (pictureBook ? PB_MAX_MS : 0), TimeUnit.MILLISECONDS)) {
+                    if (!job.done.await((pressGap >= 0 ? PRESS_MAX_MS : RENDER_WAIT_MS) + 20000 + (ocr ? OCR_MAX_MS : 0) + (pictureBook ? PB_MAX_MS : 0) + readWait, TimeUnit.MILLISECONDS)) {
                         main.post(job::finish);
                         throw new IOException("the site took too long to answer");
                     }
@@ -1267,6 +1284,8 @@ public class WebBridge {
         private boolean checkingAccess;
         private long stillSince;
         private long startedAt;
+        /** The reader's wait before reading this page, in ms (0: none). */
+        long readWait;
 
         Rendering(String address, long quietMs, long maxMs, boolean scroll, boolean ownSiteOnly, boolean lean,
                   boolean textOnly) {
@@ -1291,7 +1310,8 @@ public class WebBridge {
                 view.loadUrl(address);
                 main.postDelayed(() -> {
                     finished = true;
-                    if (!loaded && view != null) { loaded = true; poll(); }
+                    // Never seen to start: looked at now -- after the reader's wait, if one is set.
+                    if (!loaded && view != null) begin();
                 }, maxMs / 2);
             } catch (Exception e) {
                 fail(describe(e));
@@ -1309,7 +1329,12 @@ public class WebBridge {
         void begin() {
             if (!loaded && view != null) {
                 loaded = true;
-                main.postDelayed(this::poll, RENDER_POLL_MS);
+                /* The reader's wait before reading: the page left alone that long, then
+                 * looked at as ever -- every limit counted from then, so the wait takes
+                 * nothing off the time the page is given. Not counted in the time stayed
+                 * on it to confirm (dwell), so not taken off the delay after it. */
+                startedAt += readWait;
+                main.postDelayed(this::poll, RENDER_POLL_MS + readWait);
             }
         }
 

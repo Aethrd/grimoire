@@ -319,16 +319,23 @@ await t("each site's delays are remembered, and come back with its address", asy
   type('web-list-delay', '7000');
   let kept = (await store.settings()).siteDelays;
   assert.deepEqual([kept.marumaru.gap, kept.marumaru.listGap], [12000, 7000]);
+  // The wait before reading: kept with them, and said added to the delay.
+  type('web-read-wait', '1500');
+  kept = (await store.settings()).siteDelays;
+  assert.equal(kept.marumaru.readWait, 1500);
+  assert.equal(field('web-read-total').textContent, '· 13500 ms with the delay');
   assert.match(field('web-site-delays').textContent, /remembered for marumaru/);
   // A site not seen before: the usual ones, untouched by marumaru's. One queued
   // before keeps what it was queued at.
   paste('https://fresh.example/x');
   assert.equal(field('web-delay').value, '150');
+  assert.equal(field('web-read-wait').value, '0');
+  assert.equal(field('web-read-total').textContent, '');
   paste('https://012.bookkor.com/c');
   assert.ok(kept.bookkor || (await store.settings()).siteDelays.bookkor, 'a site queued kept no delays');
   // A mirror of the first: its delays again.
   paste('https://marumaru110.com/novel/2');
-  assert.deepEqual([field('web-delay').value, field('web-list-delay').value], ['12000', '7000']);
+  assert.deepEqual([field('web-delay').value, field('web-list-delay').value, field('web-read-wait').value], ['12000', '7000', '1500']);
   // Read in the browser, said for the site and kept for it (and its mirrors).
   assert.equal(field('web-in-browser-row').hidden, false);
   field('web-in-browser').checked = true;
