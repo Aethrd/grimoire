@@ -2177,7 +2177,7 @@ await t('the delay is kept for every page -- retries too -- from when the last o
 
 await t('a spinner left going once the chapter is there holds nothing; waiting and retries are said', async () => {
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
-  assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\) \|\| noStoryYet\);/);
+  assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\) \|\| noStoryYet \|\| noteOnlyYet\);/);
   assert.match(java, /: holding \? RENDER_WAIT_MS : presses > 0 \? PRESS_MAX_MS : maxMs;/);
   // The progress line: the delay being waited out, and why a chapter is tried again.
   const notes = [];
@@ -2337,6 +2337,40 @@ await t('a chapter is there when its story is, not when the page has a lot of te
   assert.match(css, /\.import-line span:first-child \{ min-width: 0; overflow-wrap: anywhere; \}/);
 });
 
+await t('storyseedling: its Author’s Thoughts box, up 17 s before the chapter, is not taken for it -- and no other site changes', async () => {
+  const { JSDOM } = await import('jsdom');
+  const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
+  const at = java.indexOf('String SHAPE = ');
+  const code = [...java.slice(at, java.indexOf('})()";', at) + 6).split('\n')
+    .filter((l) => /^\s*(\+ |String SHAPE)/.test(l)).join('\n').matchAll(/"((?:[^"\\]|\\.)*)"/g)]
+    .map((m) => JSON.parse(`"${m[1]}"`)).join('');
+  const shape = (page, url) => new JSDOM(`<html><body>${page}</body></html>`, { url, runScripts: 'outside-only' }).window.eval(code).split('|');
+  // As filmed: the chapter's heading, a spinner, and the note -- the chapter itself not yet come.
+  const note = `<div class="prose"><p>❝ Author’s Thoughts</p><p>🎉 Exciting News! 🎉 I just launched my Patreon! Get early access to advanced chapters for ALL my translated novels up to 60 chapters.</p>
+<p>Thank you for reading~!</p><p>Please rate the series ★★★★★ (5 stars) in Novel Updates~!</p><p>If you are interested with my other series, you can check it here: https://www.novelupdates.com/viewlist/39449/</p>
+<p>Support me on Ko-fi: https://ko-fi.com/amalynne</p><p>Support me on Patreon: patreon.com/amalynne</p></div>`;
+  const waiting = `<main><h1>Chapter 1 - We Are Desk Mates (1)</h1><div id="content"></div>${note}</main>`;
+  const there = shape(waiting, 'https://storyseedling.com/series/103843/1');
+  assert.equal(there[6], '3', there.join('|'));
+  assert.ok(Number(there[7]) < 200, there.join('|'));
+  // The same page on any other site: measured as it always was.
+  const elsewhere = shape(waiting, 'https://example.com/series/103843/1');
+  assert.equal(elsewhere[6], '0');
+  assert.ok(Number(elsewhere[7]) >= 200, elsewhere.join('|'));
+  // The chapter come: there, the note beside it or not.
+  const line = (i) => `Qiao Wei stood at the rooftop’s edge, her gaze vacant as she looked down below, line ${i}.`;
+  const story = `<div id="content">${Array.from({ length: 30 }, (_, i) => `<p>${line(i)}</p>`).join('')}</div>`;
+  const come = shape(`<main><h1>Chapter 1</h1>${story}${note}</main>`, 'https://storyseedling.com/series/103843/1');
+  assert.equal(come[6], '0');
+  assert.ok(Number(come[7]) >= 1500, come.join('|'));
+  // A story paragraph that only mentions the author is story.
+  const mention = shape(`<div>${Array.from({ length: 30 }, (_, i) => `<p>The author's note said nothing of it. ${line(i)}</p>`).join('')}</div>`, 'https://storyseedling.com/series/1/2');
+  assert.ok(Number(mention[7]) >= 1500);
+  // Held as a chapter with no story yet is -- never longer -- and only on that word from the page.
+  assert.match(java, /notesOnly = "3"\.equals\(parts\[6\]\);/);
+  assert.match(java, /boolean noteOnlyYet = notesOnly && !scroll && mainStatus < 400 && now - startedAt < STORY_WAIT_MS && !deadStill;/);
+});
+
 await t('a chapter is taken as soon as its story is there and still, not when the page finishes', async () => {
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   // Looked at from the page's start and its first paint, not only once "finished".
@@ -2359,7 +2393,7 @@ await t('a chapter is taken as soon as its story is there and still, not when th
   assert.match(java, /private static final long STORY_GIVE_UP_MS = 20000;/);
   assert.match(java, /boolean deadStill = still >= STORY_GIVE_UP_MS && pending == 0;/);
   assert.match(java, /boolean noStoryYet = textOnly && !scroll && storyLength < STORY_SOME && mainStatus < 400\s+&& now - startedAt < STORY_WAIT_MS && !deadStill;/);
-  assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\) \|\| noStoryYet\);/);
+  assert.match(java, /boolean holding = !there && \(waiting \|\| \(!scroll && loading\) \|\| noStoryYet \|\| noteOnlyYet\);/);
   // Pictures, fonts and video are not loaded by the unseen browser, but at the most patient try.
   // (A picture book loads its pictures: they are what is taken.)
   assert.match(java, /final boolean skipHeavy = ownSiteOnly && !pictureBook;/);

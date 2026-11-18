@@ -1345,6 +1345,8 @@ public class WebBridge {
                 boolean loading = false;
                 // "Verifying access…" on show: the site has not yet decided to show the chapter.
                 boolean accessCheck = false;
+                // storyseedling: only its author's note on show, no story yet -- the chapter still to come.
+                boolean notesOnly = false;
                 int storyLength = 0;
                 int storyLines = 0;
                 try {
@@ -1359,6 +1361,7 @@ public class WebBridge {
                     allLinks = Integer.parseInt(parts[2]);
                     loading = "1".equals(parts[6]) || "2".equals(parts[6]);
                     accessCheck = "2".equals(parts[6]);
+                    notesOnly = "3".equals(parts[6]);
                 } catch (Exception ignored) {
                     // Unreadable: as though nothing were there yet.
                 }
@@ -1439,7 +1442,10 @@ public class WebBridge {
                 boolean deadStill = still >= STORY_GIVE_UP_MS && pending == 0;
                 boolean noStoryYet = textOnly && !scroll && storyLength < STORY_SOME && mainStatus < 400
                         && now - startedAt < STORY_WAIT_MS && !deadStill;
-                boolean holding = !there && (waiting || (!scroll && loading) || noStoryYet);
+                /* storyseedling's note alone on show (only ever said there): held the same way,
+                 * pictures wanted or not -- never longer, and then taken as it is. */
+                boolean noteOnlyYet = notesOnly && !scroll && mainStatus < 400 && now - startedAt < STORY_WAIT_MS && !deadStill;
+                boolean holding = !there && (waiting || (!scroll && loading) || noStoryYet || noteOnlyYet);
                 checkingAccess = accessCheck && !there;
                 boolean busy = pending > 0 || holding;
                 /* A chapter is taken once its story is there and has stopped growing --
@@ -2235,9 +2241,15 @@ public class WebBridge {
             + "IN=/^(P|SPAN|B|I|EM|STRONG|FONT|U|S|SMALL|BIG|SUB|SUP|MARK|RUBY|RT|BR|CENTER)$/,"
             + "NO=/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|A|BUTTON|SELECT|OPTION|LI|NAV|HEADER|FOOTER|ASIDE|TEXTAREA|LABEL)$/,"
             + "CM=/comment|reply|\uB313\uAE00|disqus|cmt/i,"
+            + "SS=/(^|\\.)storyseedling\\.com$/i.test(location.hostname),nb=0,"
+            + "NT=/^[^A-Za-z0-9]{0,4}(?:author|translator|editor|tl)(?:['\u2019]?s)?\\s*(?:thoughts?|notes?|words?)\\b/i,"
             + "ex=function(e){if(X.has(e))return X.get(e);var r=false,a=e;"
             + "for(var d=0;a&&a!==b&&d<6;d++,a=a.parentElement){var cn=a.className;"
-            + "if(CM.test(String(a.id||'')+' '+String(cn&&cn.baseVal!==undefined?cn.baseVal:cn||''))){r=true;break;}}"
+            + "if(CM.test(String(a.id||'')+' '+String(cn&&cn.baseVal!==undefined?cn.baseVal:cn||''))){r=true;break;}"
+            /* storyseedling only: its "Author's Thoughts" box, short, is up at once and the
+             * chapter some seconds after (17 s, filmed) -- the box was taken for the chapter.
+             * Not counted as story there; no other site's measure changes. */
+            + "if(SS){var at=a.textContent||'';if(at.length<1200&&NT.test(at.trim().slice(0,60))){r=true;nb=1;break;}}}"
             + "X.set(e,r);return r;},"
             + "add=function(e,l){var v=(M.get(e)||0)+l,c=(N.get(e)||0)+1;M.set(e,v);N.set(e,c);if(v>s){s=v;sl=c;window.__gStory=e;}};"
             /* A line on its own saying the chapter is on its way -- "Verifying access…",
@@ -2273,6 +2285,8 @@ public class WebBridge {
              * An access check's line (2) holds while no full chapter is there: what
              * looks like a short one beside it is not counted as the chapter. */
             + "if(wa&&s<1500)w=2;else if(wt&&s<1500)w=1;"
+            // storyseedling: its note on show and next to no story yet (3) -- the chapter still to come.
+            + "if(!w&&nb&&s<400)w=3;"
             + "window.__gS=[n,L.length,(blk?'blocked':c?'checking':''),k,w,s,sl];"
             + "return (window.__grimoirePending||0)+'|'+n+'|'+L.length+'|'+(blk?'blocked':c?'checking':'')+'|'+r+'|'+k+'|'+w+'|'+s+'|'+sl+'|'+t;"
             + "}catch(e){return '0|0|0||0|0|0|0|0|';}})()";
