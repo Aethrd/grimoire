@@ -11,7 +11,7 @@ import {
   setVaultUnlocked, vaultUnlocked, countWorks, workOf, onShelf, hiddenBy, hiddenFolderList,
   collapseBundles, displayTitle, naturalOrder,
 } from './library.js';
-import { toast, setNoticeTopicsOff } from './screens.js';
+import { toast, setNoticeTopicsOff, textBorderField } from './screens.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
 import * as frames from './frame.js';
@@ -2542,12 +2542,12 @@ async function renderTextPane(body) {
     ['size', 'Font size', 13, 30, 1, 'px'],
     ['leading', 'Line spacing', 1.1, 2.6, 0.05, ''],
     ['para', 'Paragraph spacing', 0, 44, 1, 'px'],
-    ['margin', 'Side margins', 8, 64, 1, 'px'],
-    ['vmargin', 'Top and bottom margins', 0, 80, 1, 'px'],
   ]) {
     body.appendChild(slider(label, layout[key], min, max, step, unit,
       (value) => store.saveLayout(0, { [key]: value })));
   }
+  // Margins: the text border, set on the page of the book that is open.
+  body.appendChild(textBorderField(layout));
 
   body.appendChild(row('Justified', 'Adds a first-line indent, or paragraph breaks vanish',
     toggle(layout.justified, (on) => store.saveLayout(0, { justified: on }))));

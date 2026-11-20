@@ -437,6 +437,7 @@ export const DEFAULT_LAYOUT = {
   para: 12,          // 0–44
   margin: 24,        // 8–64, left and right
   vmargin: 16,       // 0–80, top and bottom
+  edges: null,       // { l, r, t, b } px: the text border drawn on the page, over the two above
   justified: false,
   ink: null,         // null inherits the theme's text colour
 };
@@ -448,7 +449,7 @@ export const DEFAULT_LAYOUT = {
  * a margin set once in one book and changed later in Settings never reached
  * it -- which is how the margin setting came to look as though it did
  * nothing. So these are always the app's, wherever they are changed from. */
-export const SCREEN_KEYS = ['margin', 'vmargin'];
+export const SCREEN_KEYS = ['margin', 'vmargin', 'edges'];
 
 /**
  * What a book has been set to itself.

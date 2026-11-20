@@ -154,6 +154,8 @@ async function show(name, { replace = false } = {}) {
   document.body.dataset.view = name;
   viewChanged();
   el('tabbar').hidden = name === 'reader' || selecting();
+  // Android's own bar at the foot (Back, Home, Recents): put away while a book is open.
+  try { window.GrimoireNative?.readingBars?.(name === 'reader'); } catch { /* an older app */ }
   if (name !== 'reader') { hideEdgeHint(); el('chapter-pad').hidden = true; }
   else store.settings().then(paintChapterPad);
   for (const button of el('tabbar').children) {
@@ -357,6 +359,42 @@ async function drawShelf() {
   // an import or a build finishing behind them: once it has (statsLive).
   if (current === 'stats') statsLive.changed();
 }
+
+/* The text border, set on the page (frame.js editTextBorder): from Layout or
+ * Settings, the reader is gone to, its bars put away, and the border drawn
+ * over the open page. Each drag let go lays the page out in it; Save keeps
+ * it for every book (it is the screen's, as margins are), Cancel puts back
+ * what was there. */
+async function openTextBorder() {
+  if (!reader.state.book) { toast('Open a book first: the text border is set on its page.', 4000); return; }
+  if (current !== 'reader') await show('reader');
+  const bookId = reader.state.book.id;
+  const before = await store.layoutFor(bookId);
+  const chrome = reader.state.chrome;
+  reader.setChrome('none');
+  const box = () => {
+    const r = el('page-host').getBoundingClientRect();
+    return { left: r.left, top: r.top, width: r.width, height: r.height };
+  };
+  const shown = (edges) => { reader.applyLayout({ ...before, edges }); reader.repaginate(); };
+  const kept = await frames.editTextBorder(reader.textEdges(before), {
+    box,
+    onTry: shown,
+    defaults: { l: store.DEFAULT_LAYOUT.margin, r: store.DEFAULT_LAYOUT.margin, t: store.DEFAULT_LAYOUT.vmargin, b: store.DEFAULT_LAYOUT.vmargin },
+  });
+  if (kept) {
+    // The two margins of before kept as near as they go, for what still reads them.
+    const next = await store.saveLayout(bookId, {
+      edges: kept, margin: Math.round((kept.l + kept.r) / 2), vmargin: Math.round((kept.t + kept.b) / 2),
+    });
+    reader.applyLayout(next);
+  } else {
+    reader.applyLayout(before);
+  }
+  reader.repaginate();
+  reader.setChrome(chrome || 'none');
+}
+window.addEventListener('grimoire:text-border', () => { openTextBorder().catch((error) => toast(`Text border: ${error.message || error}`)); });
 
 /* The stats page, kept up to date while it is open: every minute, the heat
  * map and all -- unless an operation is under way (a download, an export, an

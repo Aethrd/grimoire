@@ -59,6 +59,9 @@
   --read-para: 12px;
   --read-margin: 24px;
   --read-vmargin: 16px;
+  /* Each side of the text border on its own (reader.js applyLayout). */
+  --read-margin-l: 24px; --read-margin-r: 24px;
+  --read-vmargin-t: 16px; --read-vmargin-b: 16px;
   --read-align: left;
   --read-indent: 0;
   --read-face: var(--font-body);
@@ -396,7 +399,7 @@ section.block > h2 { margin-top: 18px; }
 /* Padding lives on the viewport, not the flow: it keeps each column exactly
    one viewport wide, so turning a page is a translate of exactly 100%. */
 .page-viewport { position: absolute; inset: 0; overflow: hidden;
-                 padding: var(--read-vmargin) var(--read-margin); }
+                 padding: var(--read-vmargin-t) var(--read-margin-r) var(--read-vmargin-b) var(--read-margin-l); }
 
 /* Scroll mode: the same text, flowing down instead of across.
    The top and bottom margins are the edges of the window the text scrolls
@@ -410,7 +413,7 @@ section.block > h2 { margin-top: 18px; }
 .page-viewport.scrolling { overflow-y: auto; overscroll-behavior: contain;
                            overflow-anchor: none;
                            -webkit-overflow-scrolling: touch;
-                           top: var(--read-vmargin); bottom: var(--read-vmargin);
+                           top: var(--read-vmargin-t); bottom: var(--read-vmargin-b);
                            padding-top: 0; padding-bottom: 0; }
 
 /* Pagination is CSS columns: one column exactly the viewport's width, and the
@@ -516,7 +519,7 @@ section.block > h2 { margin-top: 18px; }
 
 .page-flow .pic {
   display: block;
-  margin: .5em calc(-1 * var(--read-margin));
+  margin: .5em calc(-1 * var(--read-margin-r)) .5em calc(-1 * var(--read-margin-l));
   max-width: none;
 }
 /* Small pictures -- a divider, an ornament, an icon in the text -- stay the
@@ -2526,6 +2529,10 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
   touch-action: none;
 }
 .frame-edit-svg .shade { fill: rgba(0, 0, 0, .55); }
+/* The text border is drawn over the open page, which shows through it: the
+   page is what is being set. */
+.frame-edit.text-border { background: transparent; }
+.frame-edit.text-border .frame-edit-svg .shade { fill: rgba(0, 0, 0, .35); }
 .frame-edit-svg .outline { fill: none; stroke: var(--accent); stroke-width: 2px; }
 .frame-edit-svg .corner { fill: #fff; stroke: var(--accent); stroke-width: 2px; }
 .frame-edit-svg .edge { fill: var(--accent); stroke: #fff; stroke-width: 1.5px; }

@@ -187,6 +187,14 @@ public class GrimoireBridge {
         ((MainActivity) activity).stageForRead(id, name, (long) size);
     }
 
+    /** Android's bar at the foot put away (a book open) or shown again (anywhere else). */
+    @JavascriptInterface
+    public void readingBars(boolean hide) {
+        if (!(activity instanceof MainActivity)) return;
+        final MainActivity host = (MainActivity) activity;
+        activity.runOnUiThread(() -> host.setReadingBars(hide));
+    }
+
     /** The reader has booted and can take a file handed to it from outside. */
     @JavascriptInterface
     public void ready() {

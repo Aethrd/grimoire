@@ -398,7 +398,7 @@ await (async () => {
 
   await t('a picture fills the width of the screen, not the width of the text', () => {
     // The text's side margins framed every picture in empty page.
-    assert.match(css, /\.page-flow \.pic \{[^}]*margin: [^;]*calc\(-1 \* var\(--read-margin\)\)/);
+    assert.match(css, /\.page-flow \.pic \{[^}]*margin: \.5em calc\(-1 \* var\(--read-margin-r\)\) \.5em calc\(-1 \* var\(--read-margin-l\)\);/);
     // And Fit screen is sized from the picture's own shape, so it fills the
     // page whichever way it runs out of room first.
     assert.match(css, /\[data-images="screen"\] \.page-flow img \{[^}]*width: min\(100%, calc\(var\(--page-h, 88vh\) \* var\(--ar/);

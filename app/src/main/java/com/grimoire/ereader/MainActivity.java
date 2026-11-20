@@ -32,7 +32,9 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.splashscreen.SplashScreen;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.webkit.WebSettingsCompat;
 import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewFeature;
@@ -420,6 +422,8 @@ public class MainActivity extends AppCompatActivity {
         if (webView == null) return;
         if (lastWindowInsets != null) pushFrom(lastWindowInsets);
         ViewCompat.requestApplyInsets(webView);
+        // Back from a dialog, the shade or another app with the bar shown: put away again.
+        if (hasFocus && readingBarsHidden) applyReadingBars();
     }
 
     /* With them, whether the keyboard shows -- and the last moment it did
@@ -1388,6 +1392,25 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         webView.onResume();
+        if (readingBarsHidden) applyReadingBars();
+    }
+
+    /* Android's own bar at the foot -- Back, Home, Recents -- put away while a
+     * book is open, and back everywhere else. A swipe up from the edge shows it
+     * for a moment, over the page, and it goes again by itself. Put away, it
+     * takes no room: the page's foot inset is 0 (pushFrom), so the page has it. */
+    private boolean readingBarsHidden = false;
+
+    void setReadingBars(boolean hide) {
+        readingBarsHidden = hide;
+        applyReadingBars();
+    }
+
+    private void applyReadingBars() {
+        WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
+        bars.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        if (readingBarsHidden) bars.hide(WindowInsetsCompat.Type.navigationBars());
+        else bars.show(WindowInsetsCompat.Type.navigationBars());
     }
 
     @Override

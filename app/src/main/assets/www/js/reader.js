@@ -1441,14 +1441,31 @@ export function shownFit(settings) {
 
 /* ── layout override ──────────────────────────────────────────────────── */
 
+/** The text's distance from each side of the page, in px: the border drawn
+ *  on the page if there is one, else the side and top-and-bottom margins. */
+export function textEdges(layout = state.layout || {}) {
+  const side = Number.isFinite(layout.margin) ? layout.margin : 24;
+  const ends = Number.isFinite(layout.vmargin) ? layout.vmargin : 16;
+  const own = layout.edges && typeof layout.edges === 'object' ? layout.edges : {};
+  const px = (value, fallback) => (Number.isFinite(value) ? Math.max(0, Math.min(600, Math.round(value))) : fallback);
+  return { l: px(own.l, side), r: px(own.r, side), t: px(own.t, ends), b: px(own.b, ends) };
+}
+
 export function applyLayout(layout, settings) {
   state.layout = layout;
   const root = document.documentElement.style;
   root.setProperty('--read-size', `${layout.size}px`);
   root.setProperty('--read-leading', String(layout.leading));
   root.setProperty('--read-para', `${layout.para}px`);
-  root.setProperty('--read-margin', `${layout.margin}px`);
-  root.setProperty('--read-vmargin', `${Number.isFinite(layout.vmargin) ? layout.vmargin : 16}px`);
+  /* The text border: each side its own (drawn on the page, frame.js
+   * editTextBorder), or the side and top-and-bottom margins of before. */
+  const edges = textEdges(layout);
+  root.setProperty('--read-margin-l', `${edges.l}px`);
+  root.setProperty('--read-margin-r', `${edges.r}px`);
+  root.setProperty('--read-vmargin-t', `${edges.t}px`);
+  root.setProperty('--read-vmargin-b', `${edges.b}px`);
+  root.setProperty('--read-margin', `${(edges.l + edges.r) / 2}px`);
+  root.setProperty('--read-vmargin', `${(edges.t + edges.b) / 2}px`);
   root.setProperty('--read-align', layout.justified ? 'justify' : 'left');
   // Justified text needs a first-line indent or the paragraph breaks vanish.
   root.setProperty('--read-indent', layout.justified ? '1.2em' : '0');

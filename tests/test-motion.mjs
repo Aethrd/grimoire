@@ -203,6 +203,19 @@ t('both bars come and go over the text: the page is the same page in every state
   assert.match(activity, /webView\.setHorizontalScrollBarEnabled\(false\);/);
 });
 
+t("Android's own bar at the foot is put away while a book is open, and comes back by a swipe", () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /window\.GrimoireNative\?\.readingBars\?\.\(name === 'reader'\)/);
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /bars\.setSystemBarsBehavior\(WindowInsetsControllerCompat\.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE\);/);
+  assert.match(activity, /if \(readingBarsHidden\) bars\.hide\(WindowInsetsCompat\.Type\.navigationBars\(\)\);\s+else bars\.show\(WindowInsetsCompat\.Type\.navigationBars\(\)\);/);
+  // Put away again after a dialog, the shade, or coming back to the app.
+  assert.match(activity, /if \(hasFocus && readingBarsHidden\) applyReadingBars\(\);/);
+  assert.match(activity, /webView\.onResume\(\);\s+if \(readingBarsHidden\) applyReadingBars\(\);/);
+  const bridge = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
+  assert.match(bridge, /public void readingBars\(boolean hide\) \{/);
+});
+
 t('a chapter added above or dropped off the top keeps the place once, not twice', () => {
   /* The reader moves the scroll by the chapter's height itself (extendIfNeeded,
    * trimWindow). The browser's scroll anchoring, left on, moved it as well: in

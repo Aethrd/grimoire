@@ -3417,9 +3417,64 @@ await t("the book's own indents give way to the reader's margins", async () => {
   assert.match(css, /\.page-flow \.book-indent \{ margin: 0 !important; padding: 0 !important; border: 0 !important; \}/);
   // Top and bottom margins: the page's padding when paged, the edges of the
   // window the text scrolls through when scrolling.
-  assert.match(css, /padding: var\(--read-vmargin\) var\(--read-margin\);/);
-  assert.match(css, /top: var\(--read-vmargin\); bottom: var\(--read-vmargin\);/);
-  assert.match(src, /root\.setProperty\('--read-vmargin'/);
+  assert.match(css, /padding: var\(--read-vmargin-t\) var\(--read-margin-r\) var\(--read-vmargin-b\) var\(--read-margin-l\);/);
+  assert.match(css, /top: var\(--read-vmargin-t\); bottom: var\(--read-vmargin-b\);/);
+  assert.match(src, /root\.setProperty\('--read-vmargin-t'/);
+});
+
+await t('the text border: drawn on the page, each side its own, kept for every book', async () => {
+  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
+  const frames = await import(new URL('../app/src/main/assets/www/js/frame.js', import.meta.url).href);
+  // Before one is drawn: the side and top-and-bottom margins of before.
+  assert.deepEqual(reader.textEdges({ margin: 20, vmargin: 10 }), { l: 20, r: 20, t: 10, b: 10 });
+  assert.deepEqual(reader.textEdges({ margin: 20, vmargin: 10, edges: { l: 30, r: 12, t: 40, b: 8 } }), { l: 30, r: 12, t: 40, b: 8 });
+  // Applied: each side to the page.
+  reader.applyLayout({ size: 17, leading: 1.6, para: 8, margin: 24, vmargin: 16, edges: { l: 30, r: 12, t: 40, b: 8 }, justified: false, face: 'Newsreader' });
+  const rootStyle = document.documentElement.style;
+  assert.deepEqual(['l', 'r'].map((k) => rootStyle.getPropertyValue(`--read-margin-${k}`)), ['30px', '12px']);
+  assert.deepEqual(['t', 'b'].map((k) => rootStyle.getPropertyValue(`--read-vmargin-${k}`)), ['40px', '8px']);
+  // The screen's, as margins are: drawn in one book, there in every book.
+  await store.resetLayout(0);
+  await store.saveLayout(911, { edges: { l: 50, r: 20, t: 30, b: 10 } });
+  assert.deepEqual((await store.layoutFor(912)).edges, { l: 50, r: 20, t: 30, b: 10 });
+  await store.resetLayout(0);
+
+  // The editor: dragged as the picture frame is; each drag let go tried on the page.
+  const tries = [];
+  const box = { left: 0, top: 0, width: 400, height: 800 };
+  const editing = frames.editTextBorder({ l: 24, r: 24, t: 16, b: 16 }, { box: () => box, onTry: (e) => tries.push(e) });
+  const host = document.querySelector('.frame-edit.text-border');
+  assert.ok(host, 'no border over the page');
+  const svg = host.querySelector('.frame-edit-svg');
+  const fire = (type, x, y) => svg.dispatchEvent(Object.assign(new window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }), { pointerId: 1 }));
+  // The left edge's dot, from 24 to 64.
+  fire('pointerdown', 24, 400); fire('pointermove', 64, 400); fire('pointerup', 64, 400);
+  assert.deepEqual(tries.at(-1), { l: 64, r: 24, t: 16, b: 16 });
+  assert.match(host.querySelector('.frame-edit-caption').textContent, /left 64 · right 24 · top 16 · bottom 16/);
+  // The bottom-right corner, up and in.
+  fire('pointerdown', 376, 784); fire('pointermove', 356, 744); fire('pointerup', 356, 744);
+  assert.deepEqual(tries.at(-1), { l: 64, r: 44, t: 16, b: 56 });
+  // Even sides: left and right alike, top and bottom alike.
+  host.querySelector('[data-act="even"]').click();
+  assert.deepEqual(tries.at(-1), { l: 54, r: 54, t: 36, b: 36 });
+  host.querySelector('[data-act="save"]').click();
+  assert.deepEqual(await editing, { l: 54, r: 54, t: 36, b: 36 });
+  assert.ok(!document.querySelector('.frame-edit'));
+  // Cancelled (Back): nothing kept.
+  const cancelled = frames.editTextBorder({ l: 24, r: 24, t: 16, b: 16 }, { box: () => box });
+  assert.ok(frames.closeFrameEditor());
+  assert.equal(await cancelled, undefined);
+
+  // No sliders for it any more: a button to the page, in Layout and in Settings.
+  const screensSrc = fs.readFileSync(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url), 'utf8');
+  assert.ok(!/margin: \[8, 64, 1, 'px'\]/.test(screensSrc));
+  assert.match(screensSrc, /button\.onclick = \(\) => window\.dispatchEvent\(new CustomEvent\('grimoire:text-border'\)\);/);
+  const panelsSrc = fs.readFileSync(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url), 'utf8');
+  assert.ok(!/\['margin', 'Side margins'/.test(panelsSrc));
+  assert.match(panelsSrc, /body\.appendChild\(textBorderField\(layout\)\);/);
+  const appSrc = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(appSrc, /window\.addEventListener\('grimoire:text-border'/);
+  assert.match(appSrc, /edges: kept, margin: Math\.round\(\(kept\.l \+ kept\.r\) \/ 2\), vmargin: Math\.round\(\(kept\.t \+ kept\.b\) \/ 2\)/);
 });
 
 await t('the bars coming and going leave the page where it is', async () => {

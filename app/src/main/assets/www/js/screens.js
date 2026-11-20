@@ -135,8 +135,6 @@ const RANGES = {
   size: [13, 30, 1, 'px'],
   leading: [1.1, 2.6, 0.05, ''],
   para: [0, 44, 1, 'px'],
-  margin: [8, 64, 1, 'px'],
-  vmargin: [0, 80, 1, 'px'],
 };
 
 const LABELS = {
@@ -148,6 +146,22 @@ const LABELS = {
    sheet says so: a margin changed here that turned up in the next book would
    otherwise look like a fault. */
 const EVERY_BOOK = new Set(['margin', 'vmargin']);
+
+/** The text border: what it is now, and a button to set it on the page. */
+export function textBorderField(layout) {
+  const edges = reader.textEdges(layout);
+  const field = document.createElement('div');
+  field.className = 'field text-border-field';
+  field.innerHTML = `<label><span>Text border <small class="muted">· every book</small></span>
+    <span>${edges.l} · ${edges.r} · ${edges.t} · ${edges.b}px</span></label>
+    <p class="muted" style="font-size:11px;margin:0 0 6px">Left, right, top, bottom. Drawn on the page, as the picture frame is.</p>`;
+  const button = document.createElement('button');
+  button.className = 'btn';
+  button.textContent = 'Set on the page';
+  button.onclick = () => window.dispatchEvent(new CustomEvent('grimoire:text-border'));
+  field.appendChild(button);
+  return field;
+}
 
 export async function openLayout(bookId) {
   const layout = await store.layoutFor(bookId);
@@ -287,6 +301,8 @@ export async function openLayout(bookId) {
   }
   faces.appendChild(faceRow);
   body.appendChild(faces);
+
+  body.appendChild(textBorderField(layout));
 
   for (const [key, [min, max, step, unit]] of Object.entries(RANGES)) {
     const field = document.createElement('label');
