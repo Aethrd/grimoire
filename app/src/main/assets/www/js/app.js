@@ -291,7 +291,8 @@ let cameFrom = 'library';
 
 async function openFolder(folder) {
   activeFolder = folder;
-  await store.saveSettings({ shelfFolder: folder });
+  // Kept for next time, not waited on: the folder opens even if saving is slow, or fails.
+  store.saveSettings({ shelfFolder: folder }).catch(() => {});
   // show() returns early when the screen is already showing, so clearing the
   // filter from the shelf itself would otherwise change nothing on screen.
   if (current === 'library') await refreshShelf();
@@ -359,6 +360,17 @@ async function drawShelf() {
   // an import or a build finishing behind them: once it has (statsLive).
   if (current === 'stats') statsLive.changed();
 }
+
+/* The library's storage not answering, while the app is in use (store.js):
+ * said once, plainly, with what to do -- not left as buttons that do nothing.
+ * Not said over the "did not open" card, which says it already. */
+let troubleSaid = false;
+window.addEventListener('grimoire:storage-trouble', () => {
+  if (troubleSaid || libraryHeld) return;
+  troubleSaid = true;
+  toast('The app’s storage has stopped answering. Your books are not lost: close the app fully (swipe it away) and open it again. Do not import or restore anything until they are back.', 15000, { topic: 'files' });
+  setTimeout(() => { troubleSaid = false; }, 10 * 60 * 1000);
+});
 
 /* The text border, set on the page (frame.js editTextBorder): from Layout or
  * Settings, the reader is gone to, its bars put away, and the border drawn
@@ -13500,34 +13512,85 @@ async function libraryMissing() {
   let mark = -1;
   try { mark = Number(window.GrimoireNative?.libraryMark?.() ?? -1); } catch { mark = -1; }
   if (!(mark >= 5)) return false;
-  let count = 0;
-  try { count = await store.countBooks(); } catch { count = 0; }
-  if (count > 0) return false;
+  // Storage that does not answer at all is not opened either: not waited on for ever.
+  if (await booksAnswering() > 0) return false;
   showLibraryMissing(mark);
   return true;
 }
 
+/** The library's book count, or 0 if it cannot be had within a few seconds. */
+async function booksAnswering(within = 10000) {
+  try {
+    return await Promise.race([store.countBooks(), new Promise((resolve) => setTimeout(() => resolve(0), within))]);
+  } catch { return 0; }
+}
+
+const sizeSaid = (bytes) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`);
+
 let libraryHeld = false;   // shown as not opened: its size is not noted over
+/* What the card says rests on what is on the phone: the library's own
+ * files, read from outside the web storage. Gigabytes there, and the books
+ * have not gone -- they have not opened, and it says so, and to wait: it
+ * looks again by itself every little while and opens them when it can, and
+ * Restart starts the whole app again (a reload kept the same storage that
+ * would not open). It no longer says to restore and import after a few
+ * tries -- which, done while the books were only out of reach, is how a
+ * library came to be imported over again. Only with the files gone from the
+ * phone is starting again offered as the way on. */
+const LIBRARY_LOOK_MS = 20000;
+const LIBRARY_LOOKS = 30;            // ten minutes
+const LIBRARY_STILL_HERE = 50e6;     // the files of a library, not of an empty one
 function showLibraryMissing(mark) {
   libraryHeld = true;
+  let disk = -1;
+  try { disk = Number(window.GrimoireNative?.libraryOnDisk?.() ?? -1); } catch { disk = -1; }
+  const here = disk >= LIBRARY_STILL_HERE;
+  const gone = disk >= 0 && !here;
   const box = document.createElement('div');
   box.className = 'library-missing';
   box.setAttribute('role', 'alertdialog');
   box.innerHTML = `<div class="library-missing-card">
     <h2>Your library did not open</h2>
-    <p>Last time there were ${mark.toLocaleString()} books here. They are most likely still on the phone:
-    the app could not reach them just now, which can happen just after a crash.</p>
-    <p><b>Nothing has been changed.</b> Close the app (swipe it away) and open it again. Do not import
-    or restore anything while this shows.</p>
-    <p class="muted">Still here after a few tries? Then restore your newest backup, and import your files again.</p>
+    <p>Last time there were ${mark.toLocaleString()} books here.
+    ${here ? `<b>Their files are still on the phone (${sizeSaid(disk)}):</b> they have not been lost. The app could not open them just now, which can happen after a crash, and clears by itself.`
+    : gone ? `Their files are no longer on the phone (${sizeSaid(disk)} left), so this is not only the library failing to open.`
+    : 'They are most likely still on the phone: the app could not reach them just now, which can happen after a crash.'}</p>
+    ${gone ? '<p>Restore your newest backup (Settings, Your data), and import your files again.</p>'
+    : `<p><b>Nothing has been changed. Do not import or restore anything while this shows</b> — wait, or restart the app.
+    This looks again by itself and opens your books when it can.</p>`}
+    <p class="muted library-missing-look"></p>
     <div class="web-row"><button class="btn ghost" data-empty>Start with no books</button>
-    <button class="btn primary" data-retry>Try again</button></div></div>`;
-  box.querySelector('[data-retry]').onclick = () => location.reload();
-  box.querySelector('[data-empty]').onclick = () => {
+    <button class="btn primary" data-retry>Restart the app</button></div></div>`;
+  const look = box.querySelector('.library-missing-look');
+  const restart = () => {
+    try { if (typeof window.GrimoireNative?.restartApp === 'function') { window.GrimoireNative.restartApp(); return; } } catch { /* reload instead */ }
+    location.reload();
+  };
+  box.querySelector('[data-retry]').onclick = restart;
+  // With the files still here, starting with none asks twice.
+  let asked = gone;
+  box.querySelector('[data-empty]').onclick = (event) => {
+    if (!asked) {
+      asked = true;
+      event.target.textContent = 'Sure? Tap again';
+      look.textContent = `Starting with no books leaves ${mark.toLocaleString()} books' worth of files out of reach. Waiting or restarting is almost always what brings them back.`;
+      return;
+    }
     // Said to be so: the empty library is the real one from now on.
     try { window.GrimoireNative?.markLibrary?.(0); } catch { /* not in the app */ }
     location.reload();
   };
+  // Looked at again by itself: back, and the app opens on them.
+  let looks = 0;
+  const lookAgain = async () => {
+    if (!box.isConnected || gone) return;
+    looks += 1;
+    if (await booksAnswering(8000) > 0) { location.reload(); return; }
+    if (looks >= LIBRARY_LOOKS) { look.textContent = 'Still not open after ten minutes: restart the app. If they still do not come, they may truly be gone.'; return; }
+    look.textContent = `Looked again ${looks === 1 ? 'once' : `${looks} times`}: not open yet. Looking again in ${LIBRARY_LOOK_MS / 1000} s.`;
+    setTimeout(lookAgain, LIBRARY_LOOK_MS);
+  };
+  if (!gone) setTimeout(lookAgain, LIBRARY_LOOK_MS);
   document.body.appendChild(box);
 }
 

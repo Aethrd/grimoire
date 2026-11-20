@@ -18,7 +18,8 @@ const store = await import(www('store.js'));
 const marks = [];
 
 if (phase === 'empty') {
-  window.GrimoireNative = { libraryMark: () => 783, markLibrary: (n) => marks.push(n) };
+  const restarts = [];
+  window.GrimoireNative = { libraryMark: () => 783, markLibrary: (n) => marks.push(n), libraryOnDisk: () => 8.1e9, restartApp: () => restarts.push(1) };
   globalThis.GrimoireNative = window.GrimoireNative;
   await import(www('app.js'));
   await new Promise((r) => setTimeout(r, 500));
@@ -34,9 +35,39 @@ if (phase === 'empty') {
     assert.deepEqual(marks, []);
   });
 
-  // The second run: a library that opens whole.
-  const run = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'whole'], { stdio: 'inherit' });
-  assert.equal(run.status, 0, 'the run with a whole library failed');
+  await t('its files still on the phone: said so, and to wait -- never to restore and import', async () => {
+    const box = window.document.querySelector('.library-missing');
+    assert.match(box.textContent, /Their files are still on the phone \(8\.1 GB\)/);
+    assert.match(box.textContent, /Do not import or restore anything while this shows/);
+    assert.match(box.textContent, /looks again by itself/);
+    assert.ok(!/restore your newest backup/i.test(box.textContent), 'told to restore while the books are only out of reach');
+    // Restart starts the whole app again, not the page.
+    box.querySelector('[data-retry]').click();
+    assert.deepEqual(restarts, [1]);
+    // Starting with no books asks twice, and says what it leaves.
+    const empty = box.querySelector('[data-empty]');
+    empty.click();
+    assert.equal(empty.textContent, 'Sure? Tap again');
+    assert.match(box.querySelector('.library-missing-look').textContent, /out of reach/);
+    assert.deepEqual(marks, [], 'started with none on one tap');
+  });
+
+  // The files gone from the phone too; and a library that opens whole.
+  for (const next of ['gone', 'whole']) {
+    const run = spawnSync(process.execPath, [fileURLToPath(import.meta.url), next], { stdio: 'inherit' });
+    assert.equal(run.status, 0, `the run "${next}" failed`);
+  }
+} else if (phase === 'gone') {
+  window.GrimoireNative = { libraryMark: () => 783, markLibrary: (n) => marks.push(n), libraryOnDisk: () => 2e6 };
+  globalThis.GrimoireNative = window.GrimoireNative;
+  await import(www('app.js'));
+  await new Promise((r) => setTimeout(r, 500));
+  await t('its files gone from the phone as well: not "wait", but restore', async () => {
+    const box = window.document.querySelector('.library-missing');
+    assert.match(box.textContent, /Their files are no longer on the phone \(2 MB left\)/);
+    assert.match(box.textContent, /Restore your newest backup/);
+    assert.ok(!/looks again by itself/.test(box.textContent));
+  });
 } else {
   for (let i = 0; i < 6; i += 1) {
     await store.add('books', { title: `Book ${i}`, fingerprint: `b${i}.epub:${i}`, addedAt: i + 1, chapters: 1, folder: i < 2 ? 'secret' : '' });
@@ -50,6 +81,15 @@ if (phase === 'empty') {
   await t('a library that opens whole is shown, and its size noted where a wiped web storage cannot take it', async () => {
     assert.equal(window.document.querySelector('.library-missing'), null);
     assert.ok(marks.includes(6), `noted ${JSON.stringify(marks)}`);
+  });
+
+  await t('its connection closed under it, the library is opened again and read -- not failed for good', async () => {
+    await store.dropConnectionForTest();
+    assert.equal(await store.countBooks(), 6);
+    await store.dropConnectionForTest();
+    await store.saveSettings({ shelfFolder: 'secret' });
+    assert.equal((await store.settings()).shelfFolder, 'secret');
+    await store.saveSettings({ shelfFolder: null });
   });
 
   await t('Export every book takes the hidden folders too, which the shelf does not show', async () => {

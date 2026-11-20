@@ -11,10 +11,29 @@ const DB_VERSION = 3;
 
 let dbPromise = null;
 
+/* Storage that stops answering is said, not left as buttons that do nothing.
+ *
+ * The WebView can drop the connection to the library (its storage running
+ * into trouble underneath), and an opening can fail. Either was for good:
+ * the dropped connection was kept and every read and write after it failed,
+ * and a failed opening was remembered, so nothing tried again until the app
+ * was closed -- a folder tapped did nothing, as the setting it saves first
+ * failed. A dropped connection is now let go of and opened again at the next
+ * read or write; a failed opening is tried again the next time. If it still
+ * cannot be had, app.js is told (grimoire:storage-trouble), to say so. */
+const STORAGE_SLOW_MS = 20000;
+function storageTrouble(why) {
+  try {
+    window.dispatchEvent(new CustomEvent('grimoire:storage-trouble', { detail: String(why?.message || why || 'storage not answering') }));
+  } catch { /* no window: tests in Node */ }
+}
+
 function open() {
   if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
+  const opening = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
+    // An opening that has not answered in a while is said; it is still waited on.
+    const slow = setTimeout(() => storageTrouble('the library has not opened'), STORAGE_SLOW_MS);
     req.onupgradeneeded = (e) => {
       const db = req.result;
 
@@ -90,14 +109,45 @@ function open() {
       db.createObjectStore('views', { keyPath: 'id', autoIncrement: true });
       db.createObjectStore('layout', { keyPath: 'bookId' }); // bookId 0 = app default
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      clearTimeout(slow);
+      const db = req.result;
+      // Dropped by the WebView: let go of, so the next read or write opens it again.
+      db.onclose = () => { if (dbPromise === opening) dbPromise = null; };
+      db.onversionchange = () => { db.close(); if (dbPromise === opening) dbPromise = null; };
+      resolve(db);
+    };
+    req.onerror = () => {
+      clearTimeout(slow);
+      // Not remembered: the next read or write tries again.
+      if (dbPromise === opening) dbPromise = null;
+      storageTrouble(req.error);
+      reject(req.error);
+    };
   });
-  return dbPromise;
+  dbPromise = opening;
+  return opening;
+}
+
+/** The connection closed as the WebView closes it under the app: for the tests. */
+export async function dropConnectionForTest() { (await open()).close(); }
+
+/** A transaction, begun again on a fresh connection if the one held was closing under it. */
+function transaction(stores, mode = 'readonly') {
+  return open().then((db) => {
+    try {
+      return db.transaction(stores, mode);
+    } catch (error) {
+      if (error?.name !== 'InvalidStateError') throw error;
+      dbPromise = null;
+      return open().then((again) => again.transaction(stores, mode))
+        .catch((still) => { storageTrouble(still); throw still; });
+    }
+  });
 }
 
 function tx(store, mode = 'readonly') {
-  return open().then((db) => db.transaction(store, mode).objectStore(store));
+  return transaction(store, mode).then((t) => t.objectStore(store));
 }
 
 function wrap(request) {
@@ -199,8 +249,7 @@ export async function add(store, value) {
  */
 export async function putAll(store, values) {
   if (!values.length) return;
-  const db = await open();
-  const t = db.transaction(store, 'readwrite');
+  const t = await transaction(store, 'readwrite');
   const s = t.objectStore(store);
   for (const value of values) s.put(value);
   return new Promise((res, rej) => {
@@ -232,8 +281,7 @@ export async function del(store, key) {
 
 /** Delete a book and everything hanging off it, in one pass. */
 export async function deleteBook(bookId) {
-  const db = await open();
-  const t = db.transaction(['books', 'chapters', 'images', 'marks', 'positions'], 'readwrite');
+  const t = await transaction(['books', 'chapters', 'images', 'marks', 'positions'], 'readwrite');
   t.objectStore('books').delete(bookId);
   t.objectStore('positions').delete(bookId);
   for (const store of ['chapters', 'images', 'marks']) {

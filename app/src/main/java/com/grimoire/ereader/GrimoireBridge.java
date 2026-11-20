@@ -124,6 +124,50 @@ public class GrimoireBridge {
         activity.getSharedPreferences("library", Activity.MODE_PRIVATE).edit().putInt("books", Math.max(0, books)).apply();
     }
 
+    /**
+     * How much the library's own files hold on the phone, in bytes: the web
+     * storage's folder, read from outside it. A library that opens empty with
+     * gigabytes still here has not been lost; it has not opened. -1 if the
+     * folder cannot be found.
+     */
+    @JavascriptInterface
+    public long libraryOnDisk() {
+        long total = -1;
+        java.io.File data = new java.io.File(activity.getApplicationInfo().dataDir);
+        for (String place : new String[] {"app_webview/Default/IndexedDB", "app_webview/IndexedDB"}) {
+            java.io.File dir = new java.io.File(data, place);
+            if (!dir.isDirectory()) continue;
+            total = Math.max(0, total) + sizeOf(dir, 0);
+        }
+        return total;
+    }
+
+    private static long sizeOf(java.io.File file, int depth) {
+        if (depth > 8) return 0;
+        if (file.isFile()) return file.length();
+        long sum = 0;
+        java.io.File[] inside = file.listFiles();
+        if (inside != null) for (java.io.File each : inside) sum += sizeOf(each, depth + 1);
+        return sum;
+    }
+
+    /**
+     * The whole app started again: a new process, so the web storage is
+     * opened afresh. Reloading the page keeps the same process -- and the
+     * same storage that would not open.
+     */
+    @JavascriptInterface
+    public void restartApp() {
+        activity.runOnUiThread(() -> {
+            Intent again = activity.getPackageManager().getLaunchIntentForPackage(activity.getPackageName());
+            if (again == null) return;
+            Intent fresh = Intent.makeRestartActivityTask(again.getComponent());
+            activity.startActivity(fresh);
+            activity.finishAffinity();
+            Runtime.getRuntime().exit(0);
+        });
+    }
+
     @JavascriptInterface
     public String platform() {
         return "android";
