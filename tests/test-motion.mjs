@@ -179,15 +179,24 @@ t('dragging the rail does not fight endless loading', () => {
   assert.match(reader, /Math\.min\(1, viewport\.clientHeight \/ viewport\.scrollHeight\)/);
 });
 
-t('the top bar comes and goes over the text: the top of the page never moves', () => {
-  /* In the bar's own room, showing it moved the page down and hiding it up,
-   * and the reader moved the text back each time -- a blank band where the
-   * bar had been, and sometimes the text left a bar's height off. Measured in
-   * Chromium with this stylesheet: the top of the reading area is the same in
-   * every state of the bars, in scroll and in pages; only its foot moves. */
-  assert.match(css, /\.reader-screen \.reader-top \{\s*position: absolute; top: 0; left: var\(--safe-left\); right: var\(--safe-right\); z-index: 23;\s*\}/);
-  // The foot keeps its room, so the copy row never covers the last lines.
-  assert.ok(!/\.reader-bottom \{[^}]*position: absolute/.test(css));
+t('both bars come and go over the text: the page is the same page in every state of them', () => {
+  /* In their own room, the top bar moved the page down and up and the reader
+   * moved the text back each time -- a blank band where the bar had been, and
+   * sometimes the text left a bar's height off -- and the bar at the foot put
+   * the page's last lines onto the next. Measured in Chromium with this
+   * stylesheet: the reading area is the same, top and foot, in all three
+   * states of the bars, in scroll and in pages. */
+  assert.match(css, /\.reader-screen \.reader-top \{\s*position: absolute; top: 0; left: var\(--safe-left\); right: var\(--safe-right\); z-index: 25;\s*\}/);
+  assert.match(css, /\.reader-screen \.reader-bottom \{\s*position: absolute; bottom: 0; left: var\(--safe-left\); right: var\(--safe-right\); z-index: 25;\s*\}/);
+  // Above the chapter pad, so a pad left low never sits on the bar's buttons.
+  assert.match(css, /\.chapter-pad \{\s*position: absolute;\s*z-index: 24;/);
+  // What sits at the foot rises above the bar while it shows; the end of a scroll has room to clear it.
+  assert.match(css, /\.reader-screen \.scrub-rail \{ bottom: calc\(12% \+ var\(--reader-foot, 0px\)\); \}/);
+  assert.match(css, /\.reader-screen \.edge-hint \{ bottom: calc\(14px \+ var\(--reader-foot, 0px\)\); \}/);
+  assert.match(css, /\.page-flow\.scrolling \{[^}]*padding-bottom: var\(--reader-foot, 0px\);/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /foot\.parentElement\?\.style\.setProperty\('--reader-foot', `\$\{foot\.offsetHeight \|\| 0\}px`\)/);
+  assert.match(app, /new ResizeObserver\(keepFoot\)\.observe\(foot\);/);
   // And no scrollbar of the WebView's own flashed on the page's edge as they did.
   const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
   assert.match(activity, /webView\.setVerticalScrollBarEnabled\(false\);/);

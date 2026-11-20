@@ -10182,6 +10182,13 @@ function wireReader() {
     refreshBookmarkState();
   };
 
+  /* The bar at the foot is over the page (app.css): its height, kept as it
+   * changes -- 0 when put away -- for what has to rise above it. */
+  const foot = el('reader-bottom');
+  const keepFoot = () => foot.parentElement?.style.setProperty('--reader-foot', `${foot.offsetHeight || 0}px`);
+  if (typeof ResizeObserver === 'function') new ResizeObserver(keepFoot).observe(foot);
+  keepFoot();
+
   // Scrub rail: drag to move through the chapter, bubble tracks the thumb.
   const rail = el('scrub-rail');
   const bubble = el('scrub-bubble');
