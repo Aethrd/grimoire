@@ -8,7 +8,7 @@ import * as library from './library.js';
 import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, collapseBundles, vaultUnlocked, offShelf, hiddenFolderList, titleTyped } from './library.js';
 import { pool, measure } from './blobs.js';
 import { holdPicture } from './picturesave.js';
-import { tagKey, tagsOf, usedTags, withEveryTag } from './tags.js';
+import { isSerialTag, tagKey, tagsOf, usedTags, withEveryTag } from './tags.js';
 
 const el = (id) => document.getElementById(id);
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -713,9 +713,12 @@ async function runTagFind(query, onGoToMatch) {
   const picked = (tag) => findTags.some((t) => tagKey(t) === tagKey(tag));
   const row = document.createElement('div');
   row.className = 'chip-row find-tags';
+  // Picked first, then where books are in being written (Ongoing, Completed...), then the rest.
+  const unpicked = used.filter(([tag]) => !picked(tag) && (!key || tagKey(tag).includes(key)));
   const offered = [
     ...used.filter(([tag]) => picked(tag)),
-    ...used.filter(([tag]) => !picked(tag) && (!key || tagKey(tag).includes(key))),
+    ...unpicked.filter(([tag]) => isSerialTag(tag)),
+    ...unpicked.filter(([tag]) => !isSerialTag(tag)),
   ];
   for (const [tag, count] of offered) {
     const chip = document.createElement('button');

@@ -1255,7 +1255,7 @@ body[data-view="reader"] .stepper {
 .tag-group[open] > summary::before { content: '▾ '; }
 .tag-chip, .tag-new, .tag-more, .details-tags .chip, .find-tags .chip { text-transform: none; letter-spacing: 0; }
 .tag-chip small, .find-tags .chip small { margin-left: 6px; opacity: .65; font-size: 11px; }
-.tag-more { opacity: .75; }
+.tag-more, .details-tags-more { opacity: .75; }
 .chip.struck { text-decoration: line-through; opacity: .55; }
 /* The search's tags: one scrolling line, not a wall above the results. */
 .find-tags { flex-wrap: nowrap; overflow-x: auto; padding: 4px 16px 10px; scrollbar-width: none; }

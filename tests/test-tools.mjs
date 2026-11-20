@@ -651,7 +651,7 @@ await t('tags: one of each, spelled as the list spells them, and found by search
   const tg = await import(new URL('../app/src/main/assets/www/js/tags.js', import.meta.url).href);
   const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
   // The list: every kind from the directory, the Chinese table left out, each tag once.
-  assert.equal(tg.TAG_GROUPS.length, 15);
+  assert.equal(tg.TAG_GROUPS.length, 16);
   const all = tg.TAG_GROUPS.flatMap(([, list]) => list);
   assert.equal(new Set(all.map(tg.tagKey)).size, all.length, 'a tag is listed twice');
   assert.ok(!all.some((t) => /[一-鿿]/.test(t)), 'a Chinese tag got in');
@@ -706,7 +706,48 @@ await t('tags are set from Details, for one book, a bundle, or several', async (
   assert.match(app, /if \(tags\.closeTagPicker\(\)\) return true;/);
   const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/tags.js', import.meta.url), 'utf8');
   // The long list stays out of the way: folded until searched, capped when it is.
-  assert.match(src, /section\(label, tags\.filter\(fits\), \{ open: searching, cap: searching \? 8 : Infinity \}\)/);
+  assert.match(src, /section\(label, tags\.filter\(fits\), \{ open: searching \|\| tags === SERIAL_TAGS, cap: searching \? 8 : Infinity \}\)/);
+});
+
+await t('serialisation tags: their own kind, first, one at a time; a book of many tags shows a few', async () => {
+  const tg = await import(new URL('../app/src/main/assets/www/js/tags.js', import.meta.url).href);
+  assert.deepEqual(tg.TAG_GROUPS[0], ['Serialisation', ['Ongoing', 'Completed', 'Hiatus', 'Season Break', 'Dropped', 'Axed']]);
+  assert.equal(tg.normaliseTag('season-break'), 'Season Break');
+  assert.ok(tg.isSerialTag('completed') && !tg.isSerialTag('Fantasy'));
+  assert.deepEqual(tg.serialFirst(['Fantasy', 'Harem', 'Completed']), ['Completed', 'Fantasy', 'Harem']);
+
+  // In the picker: open where the other kinds are folded, and picking one takes off the one it had.
+  const picking = tg.openTagPicker({ chosen: ['Fantasy', 'Ongoing'], used: [] });
+  const groups = [...el('tag-list').querySelectorAll('.tag-group')];
+  const serial = groups.find((g) => g.querySelector('summary').textContent.startsWith('Serialisation'));
+  assert.ok(serial?.open, 'Serialisation folded');
+  assert.ok(!groups.find((g) => g.querySelector('summary').textContent.startsWith('Genres')).open);
+  [...serial.querySelectorAll('.tag-chip')].find((c) => c.textContent === 'Completed').click();
+  const chosen = () => [...el('tag-chosen').querySelectorAll('.chip')].map((c) => c.textContent.replace(/\s+✕$/, ''));
+  assert.deepEqual(chosen(), ['Completed', 'Fantasy']);
+  assert.equal([...serial.querySelectorAll('.tag-chip')].find((c) => c.textContent === 'Ongoing').getAttribute('aria-pressed'), 'false');
+  el('tag-done').click();
+  assert.deepEqual(await picking, ['Fantasy', 'Completed']);
+
+  // The search's tags: serialisation first after what is picked.
+  const a = await aBook({ title: 'Serial A', tags: ['Fantasy', 'Harem', 'Ongoing'] });
+  const b = await aBook({ title: 'Serial B', tags: ['Fantasy', 'Harem'] });
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  screensMod.initFind(() => {}, false);
+  [...el('find-scope').children].find((chip) => chip.textContent === 'Tags').click();
+  await settle(300);
+  const first = el('find-results').querySelector('.find-tags .chip');
+  assert.ok(first.textContent.startsWith('Ongoing'), first.textContent);
+  el('find-scope').firstElementChild.click();   // back to Everything, for what follows
+  await settle(300);
+  await library.binBooks([a, b]);
+
+  // Details: ten shown, serialisation first, the rest on asking -- unless there are only a couple more.
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /const DETAILS_TAGS = 10;/);
+  assert.match(app, /const ordered = tags\.serialFirst\(tagList\);/);
+  assert.match(app, /const shown = allTagsShown \|\| ordered\.length <= DETAILS_TAGS \+ 2 \? ordered : ordered\.slice\(0, DETAILS_TAGS\);/);
+  assert.match(app, /fold\.textContent = allTagsShown \? 'Fewer' : `\$\{ordered\.length - shown\.length\} more`;/);
 });
 
 await t('a folder hidden from the shelf is only found under Folders', async () => {

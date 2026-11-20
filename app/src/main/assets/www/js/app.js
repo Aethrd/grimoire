@@ -1159,6 +1159,9 @@ function wireSelection() {
 
 }
 
+/** How many of a book's tags its Details show before "N more". */
+const DETAILS_TAGS = 10;
+
 async function openDetails(tapped, { editions = [] } = {}) {
   // The book as it is stored, not the copy the menu was opened from -- which
   // can be older, and saving it would undo whatever changed since.
@@ -1256,9 +1259,14 @@ async function openDetails(tapped, { editions = [] } = {}) {
   const tagRow = document.createElement('div');
   tagRow.className = 'chip-row wrap details-tags';
   tagField.appendChild(tagRow);
+  /* A book of forty tags pushed its title and author off the sheet: a few are
+   * shown -- where it is in being written first -- and the rest on asking. */
+  let allTagsShown = false;
   const paintTags = () => {
     tagRow.innerHTML = '';
-    for (const tag of tagList) {
+    const ordered = tags.serialFirst(tagList);
+    const shown = allTagsShown || ordered.length <= DETAILS_TAGS + 2 ? ordered : ordered.slice(0, DETAILS_TAGS);
+    for (const tag of shown) {
       const chip = document.createElement('button');
       chip.className = 'chip';
       chip.setAttribute('aria-pressed', 'true');
@@ -1266,6 +1274,13 @@ async function openDetails(tapped, { editions = [] } = {}) {
       chip.title = `Take off ${tag}`;
       chip.onclick = () => { tagList = tagList.filter((t) => t !== tag); paintTags(); };
       tagRow.appendChild(chip);
+    }
+    if (ordered.length > DETAILS_TAGS + 2) {
+      const fold = document.createElement('button');
+      fold.className = 'chip details-tags-more';
+      fold.textContent = allTagsShown ? 'Fewer' : `${ordered.length - shown.length} more`;
+      fold.onclick = () => { allTagsShown = !allTagsShown; paintTags(); };
+      tagRow.appendChild(fold);
     }
     const add = document.createElement('button');
     add.className = 'chip details-tags-add';
