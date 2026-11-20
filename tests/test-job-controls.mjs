@@ -292,17 +292,26 @@ await t('a book built in parts is the same book: same bytes, size and checksum a
   const { Blob: NodeBlob } = await import('node:buffer');
   const id = (await store.all('books')).find((b) => b.title === 'Deflated').id;
   globalThis.Blob = NodeBlob;
+  /* Both built at the same moment: the time is stamped in the book and its
+   * zip headers, and a second ticking over between the two changed the
+   * deflated size by a byte now and then. */
+  const RealDate = Date;
+  globalThis.Date = class extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [1763600000000])); }
+    static now() { return 1763600000000; }
+  };
   try {
     const { blob: whole } = await epub.buildEpub(id);
     const { blob: inParts } = await epub.buildEpub(id, { parts: true });
+    globalThis.Date = RealDate;
     assert.ok(Array.isArray(inParts.parts));
     const bytes = Buffer.concat(await Promise.all(inParts.parts.map(async (p) => (p instanceof Uint8Array ? Buffer.from(p) : Buffer.from(await p.arrayBuffer())))));
     const wholeBytes = Buffer.from(await whole.arrayBuffer());
     assert.equal(inParts.size, wholeBytes.length);
     assert.equal(inParts.crc32, crcUpdate(0, wholeBytes));
-    // Built twice a moment apart, the same but for the time stamped in its headers.
-    assert.equal(bytes.length, wholeBytes.length);
-  } finally { globalThis.Blob = jsdomBlob; }
+    // Built twice at the same moment: the same bytes.
+    assert.ok(bytes.equals(wholeBytes));
+  } finally { globalThis.Blob = jsdomBlob; globalThis.Date = RealDate; }
 });
 
 await t('a long book is written a hundred chapters at a time, in order, none held all at once', async () => {
