@@ -995,6 +995,53 @@ await t('a backup from a library imported twice over: each book here gets its re
   assert.equal((await store.get('books', edition)).bundleId, leader, 'a bundle led by a copy was not joined');
 });
 
+await t('a restore never takes a book back: read since the backup, it keeps its own place and shelf', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const now = Date.now();
+  const DAY = 86400000;
+  const backup = (over = {}) => ({
+    format: 'grimoire-backup', version: 1,
+    books: [{ fingerprint: 'Since.epub:1', title: 'Read Since', folder: 'kept', lastReadAt: now - 20 * DAY, percent: 0.2, status: 'onHold', heldAt: now - 10 * DAY, heldAutomatically: true, ...over }],
+    positions: [{ fingerprint: 'Since.epub:1', bookId: 1, chapterIndex: 2, anchor: 0, percent: 0.2, updatedAt: now - 20 * DAY }],
+    covers: [], marks: [],
+  });
+  // Read here since: its own reading kept, its place too; the rest (the folder) from the backup.
+  const id = await aBook({ title: 'Read Since', fingerprint: 'Since.epub:1', lastReadAt: now - DAY, percent: 0.7 });
+  await store.put('positions', { bookId: id, chapterIndex: 9, anchor: 0, percent: 0.7, updatedAt: now - DAY });
+  await store.importBackup(backup());
+  let book = await store.get('books', id);
+  assert.equal(book.percent, 0.7, 'taken back to the backup');
+  assert.equal(library.statusOf(book), 'reading', 'put On hold by an older backup');
+  assert.equal(book.folder, 'kept');
+  assert.equal((await store.get('positions', id)).chapterIndex, 9, 'its place taken back');
+  // Not read since: as backed up -- On hold, by the app, and said so.
+  const other = await aBook({ title: 'Not Since', fingerprint: 'NotSince.epub:1' });
+  await store.importBackup({ ...backup({ fingerprint: 'NotSince.epub:1', title: 'Not Since' }), positions: [] });
+  book = await store.get('books', other);
+  assert.equal(book.status, 'onHold');
+  assert.equal(book.heldAutomatically, true, 'a hold by the app restored as one by hand');
+  // Backups carry it.
+  const out = await store.exportBackup();
+  assert.equal(out.books.find((b) => b.fingerprint === 'NotSince.epub:1').heldAutomatically, true);
+});
+
+await t('after a restore, books being read stay Reading: days to On hold counted from the restore', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const now = Date.now();
+  const DAY = 86400000;
+  const shelf = [
+    { id: 1, title: 'Being read', lastReadAt: now - 8 * DAY },
+    { id: 2, title: 'Read last', lastReadAt: now - 6 * DAY },
+  ];
+  assert.deepEqual(library.goneQuiet(shelf, { days: 5, now }).map((b) => b.title), ['Being read']);
+  assert.deepEqual(library.goneQuiet(shelf, { days: 5, now, since: now - 2 * DAY }), [], 'held at once after a restore');
+  assert.deepEqual(library.goneQuiet(shelf, { days: 5, now: now + 4 * DAY, since: now - 2 * DAY }).map((b) => b.title), ['Being read']);
+  // A restore says when it was, and it is this phone's alone.
+  await store.importBackup({ format: 'grimoire-backup', version: 1, books: [], positions: [], covers: [], marks: [] });
+  assert.ok(Date.now() - (await store.settings()).restoredAt < 60000);
+  assert.ok(store.DEVICE_SETTINGS.includes('restoredAt'));
+});
+
 await t('a book imported from an export is matched by what it came from, recorded in the backup', async () => {
   const src = read('app/src/main/assets/www/js/store.js');
   assert.match(src, /if \(book\.sourceId\) kept\.sourceId = book\.sourceId;/);

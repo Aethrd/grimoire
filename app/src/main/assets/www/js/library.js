@@ -279,7 +279,7 @@ const touchedAt = (book) => Math.max(book.lastReadAt || 0, book.lastOpenedAt || 
  * The books to put on hold: on the shelf, Reading, and not read for `days`
  * days -- except the book read last, and any edition bundled with it.
  */
-export function goneQuiet(books, { days, now = Date.now() } = {}) {
+export function goneQuiet(books, { days, now = Date.now(), since = 0 } = {}) {
   if (!(days > 0)) return [];
   const shelf = books.filter(onShelf);
   const byId = new Map(books.map((b) => [b.id, b]));
@@ -294,7 +294,10 @@ export function goneQuiet(books, { days, now = Date.now() } = {}) {
   }
   return shelf.filter((book) => statusOf(book) === 'reading'
     && touchedAt(book) > 0
-    && now - workTouched.get(workOf(book, byId)) >= days * DAY
+    /* Counted from a restore at the latest: the dates it put back are the
+     * backup's, days old, and the shelf comes back as it was backed up --
+     * not with every book being read put on hold at once. */
+    && now - Math.max(workTouched.get(workOf(book, byId)), since || 0) >= days * DAY
     && workOf(book, byId) !== spared);
 }
 
@@ -302,7 +305,7 @@ export function goneQuiet(books, { days, now = Date.now() } = {}) {
 export async function holdQuietBooks({ now = Date.now() } = {}) {
   const settings = await store.settings();
   const days = settings.autoHoldDays ?? 5;
-  const quiet = goneQuiet(await store.all('books'), { days, now });
+  const quiet = goneQuiet(await store.all('books'), { days, now, since: settings.restoredAt || 0 });
   for (const book of quiet) {
     book.status = 'onHold';
     // Said, so the shelf can tell put-aside from put-on-hold-by-hand.

@@ -707,7 +707,16 @@ const BOOK_FIELDS = [
    * binned book back on the shelf, uncovered, would undo exactly the two
    * decisions somebody made deliberately. */
   'binnedAt', 'coverBlur',
+  /* Put on hold by the app (not read for days), not by hand: kept apart in a
+   * backup as on the shelf, so a restore does not turn one into the other. */
+  'heldAt', 'heldAutomatically',
 ];
+
+/* A book's reading as it stands: where it is, how far, whether being read.
+ * A restore puts these back only onto a book not read since the backup --
+ * restored over a book read since, it took the book back to then, its place
+ * and its shelf (Reading to On hold) with it. */
+const READING_FIELDS = new Set(['status', 'percent', 'lastReadAt', 'lastOpenedAt', 'finishedAt', 'heldAt', 'heldAutomatically']);
 
 /**
  * A cover picked by hand, small enough to carry in a backup.
@@ -749,7 +758,7 @@ function dataUrlToBlob(url) {
  * are passed over and this phone's own kept.
  */
 // exportRun too: the books an export cut off had saved, by this phone's numbers for them.
-export const DEVICE_SETTINGS = ['webQueue', 'queueRunning', 'webLeftovers', 'webStops', 'autoExport', 'autoBackup', 'exportRun', 'translateJobs'];
+export const DEVICE_SETTINGS = ['webQueue', 'queueRunning', 'webLeftovers', 'webStops', 'autoExport', 'autoBackup', 'exportRun', 'translateJobs', 'restoredAt'];
 const withoutDevice = (value) => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !DEVICE_SETTINGS.includes(key)));
 
 export async function exportBackup() {
@@ -860,9 +869,18 @@ function recordsOf(data) {
  */
 async function restoreInto(book, record, report = null) {
   const { saved } = record;
+  const readSince = !!saved && (book.lastReadAt || 0) > (saved.lastReadAt || 0);
   if (saved) {
     for (const field of BOOK_FIELDS) {
+      if (readSince && READING_FIELDS.has(field)) continue;
       if (saved[field] !== undefined) book[field] = saved[field];
+    }
+    /* Put on hold here by the app, and not so in the backup: as backed up.
+     * (A hold set by hand here stays.) */
+    if (!readSince && book.heldAutomatically && saved.heldAt === undefined) {
+      if (book.status === 'onHold' && saved.status === undefined) delete book.status;
+      delete book.heldAt;
+      delete book.heldAutomatically;
     }
     /* Absent means it was not in the bin, not "leave it as it is".
      *
@@ -907,8 +925,11 @@ async function restoreInto(book, record, report = null) {
     }
   }
 
+  // A place read on to here since the backup is kept: never taken back to the backup's.
+  const here = await get('positions', book.id).catch(() => null);
   for (const position of record.positions) {
     const { fingerprint, ...row } = position;
+    if (readSince || (here?.updatedAt && row.updatedAt && here.updatedAt > row.updatedAt)) continue;
     await put('positions', { ...row, bookId: book.id });
   }
 
@@ -1251,6 +1272,9 @@ export async function importBackup(data) {
   }
   // What came in made right too: a backup from before carries the old counting.
   report.eventsFixed = await repairEvents().catch(() => null);
+
+  // The shelf as backed up: nothing put on hold for days counted before now (library.goneQuiet).
+  await saveSettings({ restoredAt: Date.now() });
 
   return report;
 }
