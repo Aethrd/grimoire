@@ -367,6 +367,16 @@ section.block > h2 { margin-top: 18px; }
   padding: calc(var(--safe-top) + 4px) 6px 4px;
   background: var(--surface); border-bottom: 1px solid var(--divider);
 }
+/* Over the text, not above it. Taking room, the bar moved the top of the
+   page down when it came and up when it went, and the reader moved the text
+   back by as much each time -- a blank band where the bar had been, and now
+   and then the text left a bar's height off after the bars were put away.
+   Over the page, its coming and going moves nothing; the line or two under it
+   while it shows is a scroll or a tap away. The bar at the foot keeps its
+   room: making room at the foot only shortens the page, and moves nothing. */
+.reader-screen .reader-top {
+  position: absolute; top: 0; left: var(--safe-left); right: var(--safe-right); z-index: 23;
+}
 .reader-title { flex: 1; min-width: 0; }
 .reader-title > span:first-child { display: block; font-family: var(--font-heading);
   font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden;

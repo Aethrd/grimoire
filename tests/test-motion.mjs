@@ -179,6 +179,17 @@ t('dragging the rail does not fight endless loading', () => {
   assert.match(reader, /Math\.min\(1, viewport\.clientHeight \/ viewport\.scrollHeight\)/);
 });
 
+t('the top bar comes and goes over the text: the top of the page never moves', () => {
+  /* In the bar's own room, showing it moved the page down and hiding it up,
+   * and the reader moved the text back each time -- a blank band where the
+   * bar had been, and sometimes the text left a bar's height off. Measured in
+   * Chromium with this stylesheet: the top of the reading area is the same in
+   * every state of the bars, in scroll and in pages; only its foot moves. */
+  assert.match(css, /\.reader-screen \.reader-top \{\s*position: absolute; top: 0; left: var\(--safe-left\); right: var\(--safe-right\); z-index: 23;\s*\}/);
+  // The foot keeps its room, so the copy row never covers the last lines.
+  assert.ok(!/\.reader-bottom \{[^}]*position: absolute/.test(css));
+});
+
 t('a chapter added above or dropped off the top keeps the place once, not twice', () => {
   /* The reader moves the scroll by the chapter's height itself (extendIfNeeded,
    * trimWindow). The browser's scroll anchoring, left on, moved it as well: in
