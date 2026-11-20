@@ -189,7 +189,7 @@ async function enter(name) {
     case 'settings': return panels.openSettings(refreshShelf);
     case 'appearance': return panels.openAppearance();
     case 'language': return panels.openLanguage();
-    case 'stats': return panels.openStats({ onOpen: openFromStats });
+    case 'stats': return statsLive.open();
     case 'vault': return panels.openVault(refreshShelf);
     case 'reader': return;   // opened by picking a book, never by a tab
     default: return;
@@ -354,9 +354,68 @@ async function drawShelf() {
     onClearFolder: () => openFolder(null),
   });
   // The folder lists on the stats page follow the shelf, even while shown --
-  // an import or a build finishing behind them.
-  if (current === 'stats') panels.openStats({ onOpen: openFromStats });
+  // an import or a build finishing behind them: once it has (statsLive).
+  if (current === 'stats') statsLive.changed();
 }
+
+/* The stats page, kept up to date while it is open: every minute, the heat
+ * map and all -- unless an operation is under way (a download, an export, an
+ * import, a translation: anything with a row in the progress panel), when
+ * it waits: drawn once the last of them has finished, or once a day if they
+ * run that long. Redrawn where it was: the page scrolled where it was, the
+ * weeks where they were, and not under a day's card left open. */
+const STATS_EVERY_MS = 60 * 1000;
+const STATS_AT_LEAST_MS = 24 * 60 * 60 * 1000;
+const statsLive = (() => {
+  let timer = null;
+  let drawnAt = 0;
+  let owed = false;
+  const shown = () => current === 'stats';
+  async function draw() {
+    const body = el('stats-body');
+    const scrolled = body?.scrollTop || 0;
+    const weeks = body?.querySelector('.heat-scroll');
+    // Scrolled back to older weeks: kept there. At this week (the end): this week still.
+    const back = weeks && weeks.scrollLeft < weeks.scrollWidth - weeks.clientWidth - 2 ? weeks.scrollLeft : null;
+    drawnAt = Date.now();
+    owed = false;
+    await panels.openStats({ onOpen: openFromStats });
+    if (!body) return;
+    body.scrollTop = scrolled;
+    if (back != null) {
+      const now = body.querySelector('.heat-scroll');
+      requestAnimationFrame(() => { if (now) now.scrollLeft = back; });
+    }
+  }
+  /** Drawn now, or owed until nothing is running (or a day has gone by). */
+  function due() {
+    if (!shown()) { stop(); return; }
+    const reading = !!el('stats-body')?.querySelector('.heat-tip:not([hidden])');
+    if (progress.running || reading) {
+      owed = true;
+      if (!reading && Date.now() - drawnAt >= STATS_AT_LEAST_MS) draw().catch(() => {});
+      return;
+    }
+    draw().catch(() => {});
+  }
+  function stop() { clearInterval(timer); timer = null; }
+  // Listened to from the first opening (progress is made further down this file).
+  let listening = false;
+  return {
+    /** The page opened: drawn, and every minute after while it is open. */
+    open() {
+      if (!listening) {
+        listening = true;
+        progress.listen((running) => { if (!running && owed && shown()) due(); });
+      }
+      stop();
+      timer = setInterval(due, STATS_EVERY_MS);
+      return draw();
+    },
+    /** Something it shows has changed (the shelf): drawn, or once operations finish. */
+    changed: due,
+  };
+})();
 
 /** A title tapped in the stats page's folder lists: a book opens, a
  *  bundle asks which edition, as on the shelf. */
@@ -3446,6 +3505,16 @@ export const progress = (() => {
     return row;
   }
 
+  /* Who wants to know when an operation starts, or the last one ends (the
+   * stats page, which waits for them): told the number still running. */
+  const listeners = new Set();
+  const told = () => {
+    const running = jobs.filter((job) => !job.ended).length;
+    for (const listener of listeners) {
+      try { listener(running); } catch { /* one listener's trouble is its own */ }
+    }
+  };
+
   function start(label) {
     watchSeat();
     wireScene();
@@ -3459,6 +3528,7 @@ export const progress = (() => {
     job.row = makeRow(job.label);
     jobs.push(job);
     paint();
+    told();
 
     /** What this operation is doing now. Each row says only its own. */
     const say = (message, fraction, count, force = false) => {
@@ -3532,6 +3602,7 @@ export const progress = (() => {
       if (job.ended) return;
       clearInterval(job.ticker);
       job.ended = true;
+      told();
       job.row.classList.add(failed ? 'failed' : 'done');
       if (!failed) job.row.querySelector('.bar-fill').style.width = '100%';
       paint();
@@ -3634,6 +3705,8 @@ export const progress = (() => {
       return true;
     },
     get running() { return jobs.filter((job) => !job.ended).length; },
+    /** Told the number running whenever one starts or ends; returns a way to stop. */
+    listen(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     /* Kept for callers outside an operation: they speak for the newest
      * row, which is the one they started. */
     say: (message, fraction, count) => {
