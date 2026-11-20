@@ -188,6 +188,10 @@ t('the top bar comes and goes over the text: the top of the page never moves', (
   assert.match(css, /\.reader-screen \.reader-top \{\s*position: absolute; top: 0; left: var\(--safe-left\); right: var\(--safe-right\); z-index: 23;\s*\}/);
   // The foot keeps its room, so the copy row never covers the last lines.
   assert.ok(!/\.reader-bottom \{[^}]*position: absolute/.test(css));
+  // And no scrollbar of the WebView's own flashed on the page's edge as they did.
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /webView\.setVerticalScrollBarEnabled\(false\);/);
+  assert.match(activity, /webView\.setHorizontalScrollBarEnabled\(false\);/);
 });
 
 t('a chapter added above or dropped off the top keeps the place once, not twice', () => {

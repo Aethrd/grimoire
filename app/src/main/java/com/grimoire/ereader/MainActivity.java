@@ -221,6 +221,11 @@ public class MainActivity extends AppCompatActivity {
         }
 
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
+        /* The app scrolls inside its own screens, whose scrollbars the stylesheet
+         * hides; the WebView's own bars only ever flashed on the edge of the page
+         * when the bars of the reader came and went. */
+        webView.setVerticalScrollBarEnabled(false);
+        webView.setHorizontalScrollBarEnabled(false);
         bridge = new GrimoireBridge(this, webView);
         webView.addJavascriptInterface(bridge, "GrimoireNative");
         /* Files written out carried as bytes, not base64 (GrimoireBridge.pipeMessage):
