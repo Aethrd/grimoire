@@ -264,6 +264,29 @@ export async function get(store, key) {
   return wrap(s.get(key));
 }
 
+/**
+ * A record changed where it stands: read and written in one transaction, so
+ * nothing written to it in between -- an import finishing, a download's
+ * progress -- is put back as it was. `change` gets the record as it is now
+ * and returns it changed, or nothing to leave it; it must not wait on
+ * anything. Resolves to what was written, or null.
+ */
+export async function update(store, key, change) {
+  const t = await transaction(store, 'readwrite');
+  const s = t.objectStore(store);
+  return new Promise((resolve, reject) => {
+    let written = null;
+    const request = s.get(key);
+    request.onsuccess = () => {
+      const next = request.result ? change(request.result) : null;
+      if (next) { s.put(next); written = next; }
+    };
+    t.oncomplete = () => resolve(written);
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error);
+  });
+}
+
 export async function all(store) {
   const s = await tx(store);
   return wrap(s.getAll());

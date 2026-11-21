@@ -1187,6 +1187,84 @@ await t('the shelf’s covers: small copies, kept with the book and remade when 
   assert.ok(!/coverThumb/.test(read('app/src/main/assets/www/js/epub.js')));
 });
 
+await t('a cover’s small copy is written onto the book as it is by then, and never onto one still landing', async () => {
+  // Read and written in one go: two changes made at once both stay. (Read,
+  // wait, write -- as the copy was first written -- lost whichever came first:
+  // an import marking itself finished, put back to still importing.)
+  const id = await aBook({ importing: true, chapters: 0 });
+  await Promise.all([
+    store.update('books', id, (fresh) => ({ ...fresh, coverThumb: 'self', coverThumbOf: 5 })),
+    store.update('books', id, (fresh) => ({ ...fresh, importing: false, chapters: 3 })),
+  ]);
+  const both = await store.get('books', id);
+  assert.equal(both.coverThumb, 'self');
+  assert.equal(both.importing, false);
+  assert.equal(both.chapters, 3);
+  // Nothing to change: nothing written.
+  assert.equal(await store.update('books', id, () => null), null);
+  assert.equal(await store.update('books', 999999, (b) => b), null);
+  assert.deepEqual(await store.get('books', id), both);
+  // A book still being imported or downloaded is not given one, at the shelf or when made.
+  const src = read('app/src/main/assets/www/js/library.js');
+  assert.match(src, /const inMotion = \(book\) => !!\(book\.importing \|\| book\.transient\);/);
+  assert.match(src, /if \(book\.coverBlob && !thumbFits\(book\) && !inMotion\(book\)\) queueThumb\(book\);/);
+  assert.match(src, /store\.update\('books', id, \(fresh\) =>\s*\(inMotion\(fresh\) \|\| coverSign\(fresh\) !== sign \? null/);
+  assert.ok(!/await store\.put\('books', fresh\)/.test(src.slice(src.indexOf('async function nextThumb'), src.indexOf('async function nextThumb') + 1500)));
+});
+
+await t('with small copies kept: an export and its import, and a backup restores round it', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const epub = await import(new URL('../app/src/main/assets/www/js/epub.js', import.meta.url).href);
+  const cover = new window.Blob([new Uint8Array(70 * 1024)], { type: 'image/png' });
+  const copy = new window.Blob([new Uint8Array([1, 2, 3, 4])], { type: 'image/webp' });
+  const id = await aBook({
+    title: 'Round Trip Cover', author: 'Someone', fingerprint: 'trip:cover', words: 30, chapters: 2,
+    coverBlob: cover, coverBytes: cover.size, coverThumb: copy, coverThumbOf: cover.size,
+    folder: 'Kept', percent: 0.5, status: 'reading', lastReadAt: 5000,
+  });
+  for (let i = 0; i < 2; i++) {
+    await store.put('chapters', { bookId: id, index: i, title: `Part ${i + 1}`, html: `<p>Part ${i + 1} is here, and it goes on.</p>`, words: 15 });
+  }
+  /* The export. (Which picture it carries -- the cover, never the copy -- is
+   * pinned above: the harness's storage gives Blobs back empty, so a stored
+   * cover cannot be followed into the file here.) */
+  const { blob, name } = await epub.buildEpub(id);
+  const bytes = Buffer.from(await new Promise((resolve, reject) => {
+    const reader = new window.FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(blob);
+  }));
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(bytes);
+  assert.ok(!Object.keys(zip.files).some((f) => /thumb/i.test(f)));
+  assert.match(await zip.file('OEBPS/text/ch0002.xhtml').async('string'), /Part 2 is here/);
+  // A backup: no copy in it.
+  const backup = JSON.parse(JSON.stringify(await store.exportBackup()));
+  assert.ok(!JSON.stringify(backup).includes('coverThumb'));
+  // Imported again on its own -- the same book on the shelf: kept once, its copy untouched.
+  const again = await library.importFiles([new window.File([bytes], name)], {});
+  assert.deepEqual(again.existing, [id]);
+  assert.ok(library.thumbFits(await store.get('books', id)));
+  // The shelf lost (a reinstall), the export imported: all its chapters, no copy carried over.
+  await store.deleteBook(id);
+  const before = new Set((await store.all('books')).map((b) => b.id));
+  await library.importFiles([new window.File([bytes], name)], {});
+  const imported = (await store.all('books')).find((b) => !before.has(b.id));
+  assert.ok(imported, 'not imported');
+  assert.equal(imported.title, 'Round Trip Cover');
+  assert.ok(!imported.importing);
+  assert.equal((await store.byIndex('chapters', 'bookId', imported.id)).length, 2);
+  assert.equal(imported.coverThumb, undefined);
+  // And the backup restored onto it: its folder and its reading back.
+  await store.importBackup(backup);
+  const restored = await store.get('books', imported.id);
+  assert.equal(restored.folder, 'Kept');
+  assert.equal(restored.percent, 0.5);
+  assert.equal(restored.coverThumb, undefined);
+  await store.deleteBook(imported.id);
+});
+
 await t('a book imported from an export is matched by what it came from, recorded in the backup', async () => {
   const src = read('app/src/main/assets/www/js/store.js');
   assert.match(src, /if \(book\.sourceId\) kept\.sourceId = book\.sourceId;/);

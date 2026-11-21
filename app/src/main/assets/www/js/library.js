@@ -1145,9 +1145,12 @@ export const thumbFits = (book) => book.coverThumb != null && coverSign(book) !=
 const thumbs = urlCache();
 export function shelfCoverUrl(book) {
   if (thumbFits(book) && book.coverThumb !== 'self') return thumbs.url(book.id, book.coverThumb, `t${book.coverThumbOf}`);
-  if (book.coverBlob && !thumbFits(book)) queueThumb(book);
+  if (book.coverBlob && !thumbFits(book) && !inMotion(book)) queueThumb(book);
   return coverUrlFor(book);
 }
+/* A book still being imported or downloaded is written to as it goes: its
+ * copy waits until it has landed (the shelf asks again then). */
+const inMotion = (book) => !!(book.importing || book.transient);
 
 const thumbQueue = new Map();
 let thumbing = false;
@@ -1179,13 +1182,14 @@ async function nextThumb() {
   thumbQueue.delete(id);
   try {
     const book = await store.get('books', id);
-    if (book?.coverBlob && coverSign(book) === sign && !thumbFits(book)) {
+    if (book?.coverBlob && !inMotion(book) && coverSign(book) === sign && !thumbFits(book)) {
       const thumb = await makeThumb(book.coverBlob);
-      const fresh = await store.get('books', id);
-      if (thumb && fresh && coverSign(fresh) === sign) {
-        fresh.coverThumb = thumb;
-        fresh.coverThumbOf = sign;
-        await store.put('books', fresh);
+      // Written onto the book as it is by then, in one go: whatever else was
+      // written to it while the copy was made stays written.
+      const kept = thumb && await store.update('books', id, (fresh) =>
+        (inMotion(fresh) || coverSign(fresh) !== sign ? null
+          : { ...fresh, coverThumb: thumb, coverThumbOf: sign }));
+      if (kept) {
         // On the shelf now: shown small at once.
         const img = document.querySelector(`.tile[data-book="${id}"] .tile-cover img`);
         if (img && thumb !== 'self') img.src = thumbs.url(id, thumb, `t${sign}`);
