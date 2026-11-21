@@ -407,6 +407,11 @@ async function openTextBorder() {
   reader.setChrome(chrome || 'none');
 }
 window.addEventListener('grimoire:text-border', () => { openTextBorder().catch((error) => toast(`Text border: ${error.message || error}`)); });
+// A book named in "What takes the room" (panels.js), made smaller from there.
+window.addEventListener('grimoire:keep-smaller', async (event) => {
+  const books = (await Promise.all((event.detail?.ids || []).map((id) => store.get('books', id)))).filter(Boolean);
+  if (books.length) askKeepSmaller(books, books.length === 1 ? `“${library.displayTitle(books[0])}”` : `${books.length} books`);
+});
 
 /* The stats page, kept up to date while it is open: every minute, the heat
  * map and all -- unless an operation is under way (a download, an export, an
@@ -1225,6 +1230,12 @@ function wireSelection() {
       clearSelection();
       return openRedactPick(book);
     }),
+
+    // Their pictures kept no bigger than this phone shows them (askKeepSmaller).
+    shrink: async () => {
+      const books = await selectedBooks();
+      askKeepSmaller(books, books.length === 1 ? `“${library.displayTitle(books[0])}”` : `${books.length} books`);
+    },
 
     delete: () => {
       resetConfirm();
@@ -3176,6 +3187,74 @@ function commonTitle(titles) {
  * three equal choices: deleting says how many books it will destroy, and asks
  * again before it does.
  */
+/* The pictures books keep, made no bigger than this phone shows them
+ * (shrink.keepSmaller). It changes the books for good, so it says what it
+ * does and leaves alone, and each size asks twice. Shown in the folder sheet,
+ * whether asked from a folder or for the books selected. */
+function askKeepSmaller(books, label) {
+  const ids = books.filter((b) => !b.importing && !b.transient).map((b) => b.id);
+  if (!ids.length) { toast('No book there to make smaller'); return; }
+  const sheet = el('folder-actions');
+  el('folder-actions-name').textContent = `Keep pictures smaller · ${label}`;
+  const list = el('folder-actions-list');
+  list.innerHTML = '';
+  const screen = shrink.readingScreen();
+  const note = document.createElement('p');
+  note.className = 'muted keep-small-note';
+  note.textContent = `Sized for this phone's screen (${screen.short} × ${screen.long}), upright or on its side. `
+    + 'Pictures bigger than that are made smaller for good: the originals are not kept, and exports carry the smaller ones. '
+    + 'Long strips keep their full length — only their width is limited. Left as they are: pictures already small enough, '
+    + 'animations, see-through pictures and blacked-out ones.';
+  list.appendChild(note);
+  for (const [key, size] of Object.entries(shrink.KEEP_SIZES)) {
+    const button = document.createElement('button');
+    const paint = (armed) => {
+      button.innerHTML = armed
+        ? `<span>Sure? ${escapeText(size.label)}, for good</span><span>Tap again</span>`
+        : `<span>${escapeText(size.label)}${key === 'zoom' ? ' (suggested)' : ''}</span><span>${escapeText(size.note)}</span>`;
+    };
+    paint(false);
+    let armed = 0;
+    button.onclick = () => {
+      if (Date.now() - armed > 4000) {
+        armed = Date.now();
+        paint(true);
+        setTimeout(() => { if (Date.now() - armed >= 4000) paint(false); }, 4100);
+        return;
+      }
+      sheet.hidden = true;
+      keepSmaller(ids, key, label);
+    };
+    list.appendChild(button);
+  }
+  sheet.hidden = false;
+}
+
+async function keepSmaller(ids, size, label) {
+  const finish = progress.start(`Keeping pictures smaller: ${label}`);
+  let stopped = false;
+  finish.controls({ cancel: () => { stopped = true; } });
+  try {
+    const done = await shrink.keepSmaller(ids, {
+      size,
+      shouldStop: () => stopped,
+      onProgress: ({ book, books, title, picture, pictures, saved }) => finish.say(
+        `${title} · picture ${picture} of ${pictures}${saved ? ` · ${shrink.describeSaving(saved)} saved` : ''}`,
+        (book + picture / Math.max(1, pictures)) / Math.max(1, books)),
+    });
+    const s = (n) => (n === 1 ? '' : 's');
+    toast(done.pictures
+      ? `${done.pictures} picture${s(done.pictures)} in ${done.books} book${s(done.books)} kept smaller · ${shrink.describeSaving(done.saved)} saved${done.stopped ? ' · stopped' : ''}`
+      : `${done.stopped ? 'Stopped. ' : ''}Nothing made smaller: ${done.looked ? 'every picture already fits this screen, or is one left alone' : 'no pictures there'}`,
+    6000, { kind: 'done' });
+  } catch (error) {
+    finish.fail();
+    toast(`Pictures not made smaller: ${error.message || error}`, 6000, { kind: 'failed' });
+  } finally {
+    finish();
+  }
+}
+
 async function openFolderActions(folder, label, count) {
   const sheet = el('folder-actions');
   el('folder-actions-name').textContent = `${label} · ${count} book${count === 1 ? '' : 's'}`;
@@ -3231,6 +3310,10 @@ async function openFolderActions(folder, label, count) {
         toast(showing ? `“${label}” is off the shelf. Open it from Folders.` : `“${target}” is back on the shelf`);
       });
   }
+
+  choice('Keep its pictures smaller', 'Sized for this phone, for good — asked first', async () => {
+    askKeepSmaller(await library.booksInFolder(folder), `“${label}”`);
+  });
 
   choice('Blur every cover', 'Hide what is on them, on this shelf only', async () => {
     sheet.hidden = true;

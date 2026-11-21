@@ -134,7 +134,8 @@ export async function dropConnectionForTest() { (await open()).close(); }
 
 /** A transaction, begun again on a fresh connection if the one held was closing under it. */
 function transaction(stores, mode = 'readonly') {
-  return open().then((db) => {
+  const ended = mode === 'readwrite' && touchesBooks(stores) ? booksWrite() : null;
+  const made = open().then((db) => {
     try {
       return db.transaction(stores, mode);
     } catch (error) {
@@ -144,7 +145,64 @@ function transaction(stores, mode = 'readonly') {
         .catch((still) => { storageTrouble(still); throw still; });
     }
   });
+  if (!ended) return made;
+  return made.then((t) => {
+    t.addEventListener('complete', ended);
+    t.addEventListener('abort', ended);
+    return t;
+  }, (error) => { ended(); throw error; });
 }
+
+/* Every book, held once.
+ *
+ * The shelf, search, folders, stats and the rest each asked for every book's
+ * record -- some thirty places, several of them on every change to the shelf
+ * -- and each time the whole library was read out of storage again. The
+ * records are read once and kept; each caller is given its own copy (so
+ * nothing it changes reaches the next one), Blobs in it shared, not copied.
+ *
+ * Kept true by the one door every write goes through (transaction above): a
+ * write that can touch books lets the kept list go the moment it is asked
+ * for, and nothing read while one is under way is kept -- a list read across
+ * a write might be from either side of it. */
+let booksHeld = null;
+let booksAge = 0;
+let booksWriting = 0;
+const touchesBooks = (stores) => (Array.isArray(stores) ? stores.includes('books') : stores === 'books');
+function booksWrite() {
+  booksHeld = null;
+  booksAge += 1;
+  booksWriting += 1;
+  let over = false;
+  return () => {
+    if (over) return;
+    over = true;
+    booksWriting -= 1;
+    booksAge += 1;
+    booksHeld = null;
+  };
+}
+/** A record copied: its objects and arrays its own, its Blobs (and other such things) shared. */
+function copied(value) {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(copied);
+  if (value instanceof Date) return new Date(value.getTime());
+  // A plain object from whichever page or realm made it; a Blob, File, Map
+  // or buffer is shared as it is.
+  if (Object.prototype.toString.call(value) !== '[object Object]') return value;
+  const out = {};
+  for (const key of Object.keys(value)) out[key] = copied(value[key]);
+  return out;
+}
+async function allBooks() {
+  if (booksHeld && !booksWriting) return booksHeld.map(copied);
+  const age = booksAge;
+  const books = await wrap((await tx('books')).getAll());
+  if (age === booksAge && !booksWriting) booksHeld = books.map(copied);
+  return books;
+}
+/** For the tests: whether every book is held. */
+export const booksHeldForTest = () => booksHeld != null;
 
 function tx(store, mode = 'readonly') {
   return transaction(store, mode).then((t) => t.objectStore(store));
@@ -288,6 +346,7 @@ export async function update(store, key, change) {
 }
 
 export async function all(store) {
+  if (store === 'books') return allBooks();
   const s = await tx(store);
   return wrap(s.getAll());
 }
@@ -321,6 +380,67 @@ export async function deleteBook(bookId) {
 }
 
 /**
+ * Where the room goes, read without reading the books through: the pictures
+ * by their sizes (each record's picture is a handle to it, not its bytes),
+ * covers and their small copies off the book records, and the rest -- the
+ * chapters' text, the reading log, settings -- as what the phone says is
+ * used, less those. Pictures are told apart for books in the Bin, and the
+ * books holding most are named, for choosing what to keep smaller.
+ * @returns {{ usage, quota, pictures, pictureCount, picturesInBin, covers,
+ *   shelfCovers, rest, biggest: [{ id, title, bytes, count, binned }] }}
+ */
+export async function storageBreakdown({ onProgress, top = 8 } = {}) {
+  const books = new Map((await all('books')).map((b) => [b.id, b]));
+  const size = (blob) => (typeof blob?.size === 'number' ? blob.size : 0);
+  let covers = 0;
+  let shelfCovers = 0;
+  for (const book of books.values()) {
+    covers += book.coverBytes ?? size(book.coverBlob);
+    shelfCovers += size(book.coverThumb);
+  }
+  const perBook = new Map();
+  let pictures = 0;
+  let pictureCount = 0;
+  await new Promise((resolve, reject) => {
+    transaction('images').then((t) => {
+      const request = t.objectStore('images').openCursor();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(); return; }
+        const image = cursor.value;
+        const bytes = size(image.blob) + size(image.original);
+        pictures += bytes;
+        pictureCount += 1;
+        const mine = perBook.get(image.bookId) || { bytes: 0, count: 0 };
+        mine.bytes += bytes;
+        mine.count += 1;
+        perBook.set(image.bookId, mine);
+        if (pictureCount % 500 === 0) onProgress?.(pictureCount);
+        cursor.continue();
+      };
+    }, reject);
+  });
+  let picturesInBin = 0;
+  const biggest = [];
+  for (const [id, { bytes, count }] of perBook) {
+    const book = books.get(id);
+    if (book?.binnedAt) picturesInBin += bytes;
+    biggest.push({ id, title: book?.title || 'A deleted book', bytes, count, binned: !!book?.binnedAt, gone: !book });
+  }
+  biggest.sort((a, b) => b.bytes - a.bytes);
+  let usage = null;
+  let quota = null;
+  try {
+    const estimate = await navigator.storage?.estimate?.();
+    usage = estimate?.usage ?? null;
+    quota = estimate?.quota ?? null;
+  } catch { /* not told */ }
+  const rest = usage == null ? null : Math.max(0, usage - pictures - covers - shelfCovers);
+  return { usage, quota, pictures, pictureCount, picturesInBin, covers, shelfCovers, rest, biggest: biggest.slice(0, top) };
+}
+
+/**
  * What books no longer here left behind: chapters, pictures, marks, places,
  * translations and layouts whose book is gone -- a delete from before they
  * went with it, or one cut off. Found by their keys alone (nothing read in
@@ -329,37 +449,49 @@ export async function deleteBook(bookId) {
  * @returns { [store]: rows removed }
  */
 export async function tidyStorage() {
-  const live = new Set(await keysOf('books'));
-  const gone = (id) => typeof id === 'number' && id > 0 && !live.has(id);
+  /* All in one transaction, the books' list read inside it: no book can be
+   * added between reading which books there are and clearing what is not
+   * theirs. (Read first and cleared after, a book imported in between --
+   * its record written, then its chapters -- had its chapters cleared as
+   * left behind.) A book list that comes back empty clears nothing: an empty
+   * library has nothing left behind worth the risk. Nothing newer than the
+   * newest book is touched either. */
+  const names = ['chapters', 'images', 'marks', 'translations', 'positions', 'layout'];
+  const t = await transaction(['books', ...names], 'readwrite');
   const removed = {};
-  for (const name of ['chapters', 'images', 'marks', 'translations']) {
-    const t = await transaction(name, 'readwrite');
-    const store = t.objectStore(name);
-    let count = 0;
-    store.index('bookId').openKeyCursor().onsuccess = (e) => {
-      const cursor = e.target.result;
-      if (!cursor) return;
-      if (gone(cursor.key)) { store.delete(cursor.primaryKey); count += 1; }
-      cursor.continue();
-    };
-    await new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
-    if (count) removed[name] = count;
-  }
-  for (const name of ['positions', 'layout']) {
-    const ids = (await keysOf(name)).filter(gone);
-    if (!ids.length) continue;
-    const t = await transaction(name, 'readwrite');
-    for (const id of ids) t.objectStore(name).delete(id);
-    await new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
-    removed[name] = ids.length;
-  }
+  const finished = new Promise((res, rej) => {
+    t.oncomplete = res;
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error || new Error('Tidying was stopped'));
+  });
+  const keys = t.objectStore('books').getAllKeys();
+  keys.onsuccess = () => {
+    const live = new Set(keys.result);
+    if (!live.size) return;
+    const newest = Math.max(...live);
+    const gone = (id) => typeof id === 'number' && id > 0 && id < newest && !live.has(id);
+    const count = (name) => { removed[name] = (removed[name] || 0) + 1; };
+    for (const name of ['chapters', 'images', 'marks', 'translations']) {
+      const store = t.objectStore(name);
+      store.index('bookId').openKeyCursor().onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (!cursor) return;
+        if (gone(cursor.key)) { store.delete(cursor.primaryKey); count(name); }
+        cursor.continue();
+      };
+    }
+    for (const name of ['positions', 'layout']) {
+      const store = t.objectStore(name);
+      const ids = store.getAllKeys();
+      ids.onsuccess = () => {
+        for (const id of ids.result) if (gone(id)) { store.delete(id); count(name); }
+      };
+    }
+  };
+  await finished;
   return removed;
 }
 
-async function keysOf(name) {
-  const t = await transaction(name);
-  return wrap(t.objectStore(name).getAllKeys());
-}
 
 /* ── settings ──────────────────────────────────────────────────────────
  * Theme, background, veil, font roles, translation scope and reader input

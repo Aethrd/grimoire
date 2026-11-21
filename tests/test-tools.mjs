@@ -1152,8 +1152,13 @@ await t('storage: a book deleted takes its translations; what deleted books left
   assert.equal(await store.get('translations', `t:${doomed}:0`), undefined, 'its translations left behind');
   assert.equal(await store.get('layout', doomed), undefined);
   assert.ok(await store.get('translations', `t:${keep}:0`));
-  // Left behind by a delete from before: rows of a book that is no longer here.
-  const ghost = 987654;
+  // Left behind by a delete from before: rows of a book that is no longer here
+  // (one older than a book still here, as every deleted book is but the newest).
+  const ghost = doomed;
+  const later = await aBook({ title: 'Added Since' });
+  // Rows of a number newer than any book -- a book being added -- are never touched.
+  const coming = later + 1000;
+  await store.put('chapters', { bookId: coming, index: 0, title: 'Coming', html: '<p>c</p>' });
   await store.put('chapters', { bookId: ghost, index: 0, title: 'Gone', html: '<p>g</p>' });
   await store.put('images', { bookId: ghost, href: 'a.png', blob: new Blob(['a']) });
   await store.add('marks', { bookId: ghost, kind: 'bookmark', chapterIndex: 0, anchor: 0 });
@@ -1163,8 +1168,84 @@ await t('storage: a book deleted takes its translations; what deleted books left
   const removed = await store.tidyStorage();
   assert.deepEqual(removed, { chapters: 1, images: 1, marks: 1, translations: 1, positions: 1 });
   assert.ok(await store.get('chapters', [keep, 0]), 'a live book tidied away');
+  assert.ok(await store.get('chapters', [coming, 0]), 'a book being added tidied away');
+  await store.del('chapters', [coming, 0]);
+  // A book imported while it tidies: its record, then its chapters -- all kept.
+  const tidying = store.tidyStorage();
+  const arriving = await aBook({ title: 'Arriving', importing: true });
+  await store.putAll('chapters', [0, 1, 2].map((index) => ({ bookId: arriving, index, title: `C${index}`, html: '<p>a</p>' })));
+  await tidying;
+  assert.equal((await store.byIndex('chapters', 'bookId', arriving)).length, 3, 'an import under way had its chapters cleared');
+  assert.equal((await store.tidyStorage()).chapters, undefined);
+  assert.equal((await store.byIndex('chapters', 'bookId', arriving)).length, 3);
+  await store.deleteBook(arriving);
+  await store.deleteBook(later);
+  // One transaction, the book list read in it; an empty list clears nothing.
+  const src = read('app/src/main/assets/www/js/store.js');
+  const tidy = src.slice(src.indexOf('export async function tidyStorage'), src.indexOf('/* ── settings'));
+  assert.match(tidy, /const t = await transaction\(\['books', \.\.\.names\], 'readwrite'\);/);
+  assert.match(tidy, /if \(!live\.size\) return;/);
+  assert.equal((tidy.match(/await transaction\(/g) || []).length, 1);
   assert.ok(await store.get('translations', 'glossary:any'), 'a glossary for no one book tidied away');
   assert.ok(store.DEVICE_SETTINGS.includes('tidiedAt'));
+});
+
+await t('what takes the room: pictures by book, the Bin’s apart, covers, and the rest; a book named there made smaller from there', async () => {
+  // Sizes as the records give them (the harness's storage keeps a size, not a Blob).
+  const big = await aBook({ title: 'Mostly Pictures', coverBytes: 400 });
+  const binned = await aBook({ title: 'Binned Pictures', binnedAt: 5, coverThumb: { size: 50 } });
+  await store.putAll('images', [
+    { bookId: big, href: 'a.png', blob: { size: 5000 } },
+    { bookId: big, href: 'b.png', blob: { size: 3000 } },
+    { bookId: binned, href: 'c.png', blob: { size: 1000 }, original: { size: 500 } },
+  ]);
+  const realStorage = Object.getOwnPropertyDescriptor(globalThis.navigator, 'storage');
+  Object.defineProperty(globalThis.navigator, 'storage', { configurable: true, value: { estimate: async () => ({ usage: 1e9, quota: 5e9 }) } });
+  try {
+    const room = await store.storageBreakdown({ top: 50 });
+    const mine = room.biggest.filter((b) => b.id === big || b.id === binned);
+    assert.deepEqual(mine.map((b) => [b.title, b.bytes, b.count, b.binned]),
+      [['Mostly Pictures', 8000, 2, false], ['Binned Pictures', 1500, 1, true]]);
+    assert.ok(room.pictures >= 9500 && room.pictureCount >= 3);
+    assert.ok(room.picturesInBin >= 1500);
+    assert.ok(room.covers >= 400 && room.shelfCovers >= 50);
+    assert.equal(room.rest, 1e9 - room.pictures - room.covers - room.shelfCovers);
+    assert.equal(room.usage, 1e9);
+    // Shown in Settings, beside Tidy storage.
+    const panelsMod = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+    await panelsMod.openSettings(() => {});
+    const find = () => [...document.querySelectorAll('#settings-body button')].find((b) => b.textContent === 'What takes the room');
+    let look = find();
+    for (const tab of document.getElementById('settings-strip').children) {
+      if (look) break;
+      tab.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 150));
+      look = find();
+    }
+    assert.ok(look, 'no "What takes the room" in Settings');
+    look.click();
+    for (let i = 0; i < 40 && !document.querySelector('.room-book'); i += 1) await new Promise((r) => setTimeout(r, 50));
+    const shown = document.querySelector('.room-shown').textContent;
+    assert.match(shown, /Pictures in books/);
+    assert.match(shown, /in books in the Bin/);
+    assert.match(shown, /Text, reading log and the rest/);
+    const row = [...document.querySelectorAll('.room-book')].find((r) => r.textContent.includes('Mostly Pictures'));
+    assert.ok(row.querySelector('button'), 'no Smaller beside a book on the shelf');
+    const binnedRow = [...document.querySelectorAll('.room-book')].find((r) => r.textContent.includes('Binned Pictures'));
+    assert.ok(!binnedRow.querySelector('button'), 'Smaller offered for a book in the Bin');
+    let asked = null;
+    const hear = (event) => { asked = event.detail; };
+    window.addEventListener('grimoire:keep-smaller', hear);
+    row.querySelector('button').click();
+    window.removeEventListener('grimoire:keep-smaller', hear);
+    assert.deepEqual(asked, { ids: [big] });
+    assert.match(read('app/src/main/assets/www/js/app.js'), /window\.addEventListener\('grimoire:keep-smaller', async \(event\) => \{[\s\S]{0,200}askKeepSmaller\(books,/);
+  } finally {
+    if (realStorage) Object.defineProperty(globalThis.navigator, 'storage', realStorage);
+    else delete globalThis.navigator.storage;
+    await store.deleteBook(big);
+    await store.deleteBook(binned);
+  }
 });
 
 await t('the shelf’s covers: small copies, kept with the book and remade when the cover changes; loaded as they come near', async () => {
@@ -1185,6 +1266,73 @@ await t('the shelf’s covers: small copies, kept with the book and remade when 
   const store_ = read('app/src/main/assets/www/js/store.js');
   assert.ok(!/'coverThumb'/.test(store_.slice(store_.indexOf('const BOOK_FIELDS'), store_.indexOf('const READING_FIELDS'))));
   assert.ok(!/coverThumb/.test(read('app/src/main/assets/www/js/epub.js')));
+});
+
+await t('every book held once: read again only after a write, each caller its own copy', async () => {
+  const id = await aBook({ title: 'Held', tags: ['a'], building: { webParts: [{ url: 'x' }] } });
+  const first = await store.all('books');
+  // The first read overlaps the add finishing, so is given and not kept; the next is kept.
+  await store.all('books');
+  assert.ok(store.booksHeldForTest(), 'not held after a quiet read');
+  // Each caller's own: what one changes, the next does not see.
+  const mine = first.find((b) => b.id === id);
+  mine.title = 'Changed in hand';
+  mine.tags.push('b');
+  mine.building.webParts[0].url = 'y';
+  const again = (await store.all('books')).find((b) => b.id === id);
+  assert.equal(again.title, 'Held');
+  assert.deepEqual(again.tags, ['a']);
+  assert.equal(again.building.webParts[0].url, 'x');
+  // Every way a book is written lets it go, and the next read is the library as it is.
+  const seen = async () => (await store.all('books')).find((b) => b.id === id);
+  await store.put('books', { ...(await store.get('books', id)), title: 'Put' });
+  assert.equal((await seen()).title, 'Put');
+  await store.update('books', id, (b) => ({ ...b, title: 'Updated' }));
+  assert.equal((await seen()).title, 'Updated');
+  await store.putAll('books', [{ ...(await store.get('books', id)), title: 'All' }]);
+  assert.equal((await seen()).title, 'All');
+  const added = await aBook({ title: 'Added' });
+  assert.ok((await store.all('books')).some((b) => b.id === added));
+  await store.del('books', added);
+  assert.ok(!(await store.all('books')).some((b) => b.id === added));
+  const gone = await aBook({ title: 'Gone' });
+  await store.all('books');
+  await store.deleteBook(gone);
+  assert.ok(!(await store.all('books')).some((b) => b.id === gone));
+  // Written and read at once, not waiting between: the read sees the write.
+  store.put('books', { ...(await store.get('books', id)), title: 'Not waited for' });
+  assert.equal((await seen()).title, 'Not waited for');
+  // Read while a write is under way: given, not kept.
+  const writing = store.put('books', { ...(await store.get('books', id)), title: 'During' });
+  await store.all('books');
+  assert.ok(!store.booksHeldForTest(), 'kept a list read across a write');
+  await writing;
+  assert.equal((await seen()).title, 'During');
+  // A write that fails: let go all the same, and read again true.
+  await assert.rejects(store.add('books', { ...(await store.get('books', id)) }));
+  assert.equal((await seen()).title, 'During');
+  // Binned: seen.
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const binned = await aBook({ title: 'Binned Held' });
+  await store.all('books');
+  await library.binBooks([binned]);
+  assert.ok((await store.all('books')).find((b) => b.id === binned).binnedAt);
+  await store.deleteBook(binned);
+  // A restore writes books too.
+  const backup = JSON.parse(JSON.stringify(await store.exportBackup()));
+  await store.put('books', { ...(await store.get('books', id)), folder: 'Moved away' });
+  await store.all('books');
+  backup.books.find((b) => b.title === 'During').folder = 'Restored';
+  await store.importBackup(backup);
+  const restored = (await store.all('books')).find((b) => b.id === id);
+  assert.equal(restored.folder, (await store.get('books', id)).folder);
+  // Other stores are not held.
+  await store.all('marks');
+  // A connection dropped under it: still the library as it is.
+  await store.dropConnectionForTest();
+  await store.put('books', { ...(await store.get('books', id)), title: 'After drop' });
+  assert.equal((await seen()).title, 'After drop');
+  await store.deleteBook(id);
 });
 
 await t('a cover’s small copy is written onto the book as it is by then, and never onto one still landing', async () => {

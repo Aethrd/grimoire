@@ -2565,7 +2565,7 @@ function tidyBlock() {
   go.textContent = 'Tidy storage';
   const said = document.createElement('p');
   said.className = 'muted doubles-result';
-  const size = (bytes) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : `${Math.round(bytes / 1e6)} MB`);
+  const size = (bytes) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : bytes >= 1e6 ? `${Math.round(bytes / 1e6)} MB` : `${Math.round(bytes / 1e3)} kB`);
   const usage = async () => {
     try { return (await navigator.storage?.estimate?.())?.usage ?? null; } catch { return null; }
   };
@@ -2588,7 +2588,55 @@ function tidyBlock() {
     go.disabled = false;
     go.textContent = 'Tidy storage';
   };
-  box.append(go, said);
+  // Where the room goes (store.storageBreakdown): asked for, as it reads every picture's record.
+  const look = document.createElement('button');
+  look.className = 'btn ghost block';
+  look.textContent = 'What takes the room';
+  const shown = document.createElement('div');
+  shown.className = 'doubles-result room-shown';
+  look.onclick = async () => {
+    look.disabled = true;
+    look.textContent = 'Looking…';
+    try {
+      const room = await store.storageBreakdown({ onProgress: (n) => { look.textContent = `Looking… ${n.toLocaleString()} pictures`; } });
+      shown.innerHTML = '';
+      const line = (label, value, note) => {
+        const row = document.createElement('p');
+        row.className = 'room-line';
+        row.innerHTML = `<span>${escape(label)}</span><b>${escape(value)}</b>${note ? `<small class="muted">${escape(note)}</small>` : ''}`;
+        shown.appendChild(row);
+      };
+      if (room.usage != null) line('The library in all', size(room.usage), room.quota ? `of ${size(room.quota)} the phone allows it` : '');
+      line('Pictures in books', size(room.pictures), `${room.pictureCount.toLocaleString()} pictures${room.picturesInBin ? ` · ${size(room.picturesInBin)} of it in books in the Bin` : ''}`);
+      line('Covers', size(room.covers + room.shelfCovers), room.shelfCovers ? `${size(room.shelfCovers)} of it the shelf’s small copies` : '');
+      if (room.rest != null) line('Text, reading log and the rest', size(room.rest), '');
+      if (room.biggest.length) {
+        const head = document.createElement('p');
+        head.className = 'muted room-head';
+        head.textContent = 'Most pictures:';
+        shown.appendChild(head);
+        for (const book of room.biggest) {
+          const row = document.createElement('div');
+          row.className = 'room-book';
+          row.innerHTML = `<span>${escape(book.title)}${book.binned ? ' <small class="muted">(in the Bin)</small>' : ''}</span>`
+            + `<small class="muted">${size(book.bytes)} · ${book.count.toLocaleString()} pictures</small>`;
+          if (!book.binned && !book.gone) {
+            const smaller = document.createElement('button');
+            smaller.className = 'btn ghost';
+            smaller.textContent = 'Smaller';
+            smaller.onclick = () => window.dispatchEvent(new window.CustomEvent('grimoire:keep-smaller', { detail: { ids: [book.id] } }));
+            row.appendChild(smaller);
+          }
+          shown.appendChild(row);
+        }
+      }
+    } catch (error) {
+      shown.textContent = `Could not look: ${error.message || error}`;
+    }
+    look.disabled = false;
+    look.textContent = 'What takes the room';
+  };
+  box.append(go, said, look, shown);
   return box;
 }
 

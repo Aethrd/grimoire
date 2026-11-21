@@ -1308,6 +1308,8 @@ body[data-view="reader"] .stepper {
                      justify-content: space-between; gap: 10px; }
 .sheet-list button:active { background: var(--accent-soft); }
 .sheet-list button span:last-child { color: var(--muted); font-size: 12px; }
+/* What keeping pictures smaller does, above its two sizes. */
+.sheet-list .keep-small-note { margin: 0 4px 6px; font-size: 12.5px; line-height: 1.45; }
 
 
 /* ── settings strip ──────────────────────────────────────────────────── */
@@ -2897,6 +2899,16 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 .auto-backup { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--divider); }
 .doubles { margin: 10px 0 4px; }
 .doubles-result p { font-size: 12px; line-height: 1.5; margin: 8px 0; }
+/* What takes the room (panels.js tidyBlock): a line a kind, then the books holding most pictures. */
+.room-shown { margin-top: 8px; }
+.room-shown .room-line { display: grid; grid-template-columns: 1fr auto; gap: 0 10px; margin: 6px 0; }
+.room-shown .room-line small { grid-column: 1 / -1; font-size: 11px; }
+.room-shown .room-head { margin: 12px 0 4px; }
+.room-book { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 10px; padding: 6px 0;
+  border-top: 1px solid var(--line, rgba(127,127,127,.2)); font-size: 12.5px; }
+.room-book > span { overflow-wrap: anywhere; }
+.room-book > small { grid-column: 1; font-size: 11px; }
+.room-book > button { grid-column: 2; grid-row: 1 / span 2; padding: 4px 12px; font-size: 12px; min-height: 0; }
 .doubles-list { max-height: 220px; overflow-y: auto; margin: 6px 0 10px; padding-left: 18px; font-size: 12px; }
 .auto-backup .chip-row { align-items: center; gap: 6px; margin: 6px 0; }
 .auto-backup .chip-row > .muted { font-size: 12px; min-width: 44px; }
