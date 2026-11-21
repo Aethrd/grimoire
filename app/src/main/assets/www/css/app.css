@@ -2895,6 +2895,9 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 
 /* Automatic backups, under Save a backup. */
 .auto-backup { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--divider); }
+.doubles { margin: 10px 0 4px; }
+.doubles-result p { font-size: 12px; line-height: 1.5; margin: 8px 0; }
+.doubles-list { max-height: 220px; overflow-y: auto; margin: 6px 0 10px; padding-left: 18px; font-size: 12px; }
 .auto-backup .chip-row { align-items: center; gap: 6px; margin: 6px 0; }
 .auto-backup .chip-row > .muted { font-size: 12px; min-width: 44px; }
 .auto-backup-note { font-size: 12px; line-height: 1.55; margin: 0 0 6px; }

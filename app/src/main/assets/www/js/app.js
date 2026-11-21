@@ -13722,6 +13722,7 @@ async function boot() {
   store.settings().then((kept) => { if (kept.autoExport) store.saveSettings({ autoExport: null }); }).catch(() => {});
   panels.onExportEverything(exportEverything);
   panels.onFolderMenu(openFolderActions);
+  panels.onDoublesRemoved(() => shelfChanged());
 
 
   await refreshShelf();

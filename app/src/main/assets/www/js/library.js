@@ -1518,6 +1518,146 @@ async function outgrownText(book) {
   });
 }
 
+/* ── books kept twice ─────────────────────────────────────────────────────
+ *
+ * A library imported over itself held most books twice -- the book and its
+ * copy, alike but for the file each came from: twice the room, a restore
+ * unable to tell which was meant, every count doubled. Two books are the same
+ * book here only if they are word for word: one title, as many words, as many
+ * chapters (and both in the vault, or neither). Two downloads of a novel with
+ * a chapter more in one, or a translation beside its original, are not.
+ *
+ * Of each such set one is kept, and the rest go to the Bin -- after what they
+ * held is carried onto it: read further on, its place and its reading; its
+ * bookmarks, its sessions in the log, its tags, a cover chosen for it.
+ *
+ * Bundles are decided as bundles. A bundle of editions kept twice (an English
+ * book and its Korean raw, and copies of both together in a bundle of their
+ * own) keeps one bundle whole: every set between the two keeps its book from
+ * the same one -- read last, then the larger -- never one edition from each,
+ * which would leave two halves. An edition only in the bundle going is moved
+ * into the bundle kept, not binned with it. A book and its own copy in one
+ * bundle: the copy goes, and if it led the bundle, the book kept leads it. */
+const doubleKey = (book) => {
+  if (!(book.words > 0) || !(book.chapterCount > 0)) return null;
+  const title = String(book.title || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+  return title ? `${title}|${book.words}|${book.chapterCount}|${book.inVault ? 1 : 0}` : null;
+};
+
+/** Sets of books that are the same book, the one to keep first. */
+export function findDoubles(books) {
+  const live = books.filter((b) => onShelf(b) && !isDownloading(b));
+  const byId = new Map(live.map((b) => [b.id, b]));
+  const bundleOf = (book) => {
+    const leader = book.bundleId != null ? byId.get(book.bundleId) : null;
+    return leader && leader.bundleId === leader.id ? leader.id : null;
+  };
+  // A bundle's standing: read last (any edition), then how many editions, then the older.
+  const bundles = new Map();
+  for (const book of live) {
+    const id = bundleOf(book);
+    if (id == null) continue;
+    const at = bundles.get(id) || { read: 0, size: 0 };
+    at.read = Math.max(at.read, book.lastReadAt || 0);
+    at.size += 1;
+    bundles.set(id, at);
+  }
+  const rank = (book) => {
+    const id = bundleOf(book);
+    const bundle = id != null ? bundles.get(id) : null;
+    return [bundle ? 1 : 0, bundle?.read || 0, bundle?.size || 0, -(id ?? 0),
+      bundle && book.id === id ? 1 : 0, book.lastReadAt || 0, book.percent || 0, -book.id];
+  };
+  const before = (a, b) => {
+    const x = rank(a); const y = rank(b);
+    for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return y[i] - x[i];
+    return 0;
+  };
+  const sets = new Map();
+  for (const book of live) {
+    const key = doubleKey(book);
+    if (!key) continue;
+    if (!sets.has(key)) sets.set(key, []);
+    sets.get(key).push(book);
+  }
+  return [...sets.values()].filter((set) => set.length > 1).map((set) => set.slice().sort(before));
+}
+
+const READING = ['status', 'percent', 'lastReadAt', 'lastOpenedAt', 'finishedAt', 'heldAt', 'heldAutomatically'];
+
+/**
+ * Keep one of each set and put the rest in the Bin, carrying onto the one
+ * kept what they held. @returns how many went to the Bin
+ */
+export async function removeDoubles(sets) {
+  const going = new Set(sets.flatMap((set) => set.slice(1).map((b) => b.id)));
+  if (!going.size) return 0;
+  const events = await store.all('events');
+  const fresh = async (id) => store.get('books', id);
+  for (const set of sets) {
+    const kept = await fresh(set[0].id);
+    if (!kept) continue;
+    for (const copy of set.slice(1)) {
+      const gone = await fresh(copy.id);
+      if (!gone) continue;
+      // Read further on in the copy: its reading and its place.
+      if ((gone.lastReadAt || 0) > (kept.lastReadAt || 0)) {
+        for (const field of READING) {
+          if (gone[field] === undefined) delete kept[field];
+          else kept[field] = gone[field];
+        }
+        const place = await store.get('positions', gone.id);
+        if (place) await store.put('positions', { ...place, bookId: kept.id });
+      }
+      kept.tags = [...new Set([...(kept.tags || []), ...(gone.tags || [])])];
+      if (!kept.tags.length) delete kept.tags;
+      if (gone.coverCustom && !kept.coverCustom && gone.coverBlob) {
+        kept.coverBlob = gone.coverBlob;
+        kept.coverBytes = gone.coverBytes;
+        kept.coverCustom = true;
+      }
+      // Bookmarks and highlights, each once.
+      const have = new Set((await store.byIndex('marks', 'bookId', kept.id)).map((m) => `${m.kind}:${m.chapterIndex}:${m.anchor}`));
+      for (const mark of await store.byIndex('marks', 'bookId', gone.id)) {
+        const sign = `${mark.kind}:${mark.chapterIndex}:${mark.anchor}`;
+        if (have.has(sign)) continue;
+        have.add(sign);
+        const { id, ...row } = mark;
+        await store.add('marks', { ...row, bookId: kept.id });
+      }
+      // Its sessions in the log, the kept book's now.
+      for (const event of events) {
+        if (event.bookId !== gone.id) continue;
+        event.bookId = kept.id;
+        await store.put('events', event);
+      }
+      // A bundle it led: led by the book kept, or its editions not going moved into the kept one's.
+      if (gone.bundleId === gone.id) {
+        const editions = (await store.all('books')).filter((b) => b.bundleId === gone.id && b.id !== gone.id && !going.has(b.id));
+        const sameBundle = kept.bundleId === gone.id;
+        const into = sameBundle || kept.bundleId == null ? kept.id : kept.bundleId;
+        if (sameBundle || kept.bundleId == null) kept.bundleId = kept.id;
+        for (const edition of editions) {
+          if (edition.id === kept.id) continue;
+          edition.bundleId = into;
+          await store.put('books', edition);
+        }
+      }
+    }
+    await store.put('books', kept);
+  }
+  const moved = await binBooks([...going]);
+  // A bundle left with its leader alone is no bundle.
+  const after = (await store.all('books')).filter(onShelf);
+  for (const leader of after.filter((b) => b.bundleId === b.id)) {
+    if (!after.some((b) => b.bundleId === leader.id && b.id !== leader.id)) {
+      delete leader.bundleId;
+      await store.put('books', leader);
+    }
+  }
+  return moved;
+}
+
 /** Out of the way, with the time it happened kept so the bin can be ordered. */
 export async function binBooks(ids) {
   let moved = 0;

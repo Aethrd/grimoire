@@ -9,7 +9,7 @@ import * as theme from './theme.js';
 import * as reader from './reader.js';
 import {
   setVaultUnlocked, vaultUnlocked, countWorks, workOf, onShelf, hiddenBy, hiddenFolderList,
-  collapseBundles, displayTitle, naturalOrder,
+  collapseBundles, displayTitle, naturalOrder, findDoubles, removeDoubles,
 } from './library.js';
 import { toast, setNoticeTopicsOff, textBorderField } from './screens.js';
 import * as translate from './translate.js';
@@ -2391,6 +2391,7 @@ export async function openVault(onVaultChange, host) {
     everything.onclick = () => exportEverything();
     data.appendChild(everything);
   }
+  data.appendChild(doublesBlock());
   // Exports pausing for a warm phone: on unless turned off (app.js letCool).
   data.appendChild(row('Wait for the phone to cool',
     'Exports pause between books when the phone is warm (40°C), and wait when hot (43°C). Off: they keep going.',
@@ -2551,6 +2552,67 @@ async function renderTextPane(body) {
 
   body.appendChild(row('Justified', 'Adds a first-line indent, or paragraph breaks vanish',
     toggle(layout.justified, (on) => store.saveLayout(0, { justified: on }))));
+}
+
+/* Books kept twice (library.findDoubles): found and shown first, put in the
+ * Bin only when asked -- the kept one taking what each copy held. */
+let doublesChanged = () => {};
+export function onDoublesRemoved(fn) { doublesChanged = fn; }
+function doublesBlock() {
+  const box = document.createElement('div');
+  box.className = 'doubles';
+  const find = document.createElement('button');
+  find.className = 'btn ghost block';
+  find.textContent = 'Find books kept twice';
+  const result = document.createElement('div');
+  result.className = 'doubles-result';
+  find.onclick = async () => {
+    find.disabled = true;
+    const books = await store.all('books');
+    const sets = findDoubles(books);
+    find.disabled = false;
+    result.innerHTML = '';
+    if (!sets.length) { result.innerHTML = '<p class="muted">No book is here twice.</p>'; return; }
+    const extra = sets.reduce((n, set) => n + set.length - 1, 0);
+    const bundled = sets.filter((set) => set.some((b) => b.bundleId != null)).length;
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = `${extra} book${extra === 1 ? ' is' : 's are'} here twice — word for word, as many chapters`
+      + `${bundled ? `; ${bundled} in edition bundles, kept whole` : ''}. One of each is kept; the other goes to the Bin, `
+      + 'its reading (if read further), bookmarks, log and tags carried onto the one kept. Empty the Bin to free the room.';
+    result.appendChild(note);
+    const list = document.createElement('details');
+    list.innerHTML = `<summary class="muted">The ${sets.length} book${sets.length === 1 ? '' : 's'}</summary>`;
+    const ul = document.createElement('ul');
+    ul.className = 'doubles-list';
+    for (const set of sets.slice(0, 400)) {
+      const li = document.createElement('li');
+      li.textContent = `${displayTitle(set[0])}${set.length > 2 ? ` (×${set.length})` : ''}${set[0].bundleId != null ? ' · bundle' : ''}`;
+      ul.appendChild(li);
+    }
+    list.appendChild(ul);
+    result.appendChild(list);
+    const go = document.createElement('button');
+    go.className = 'btn primary block';
+    go.textContent = `Move ${extra} double${extra === 1 ? '' : 's'} to the Bin`;
+    go.onclick = async () => {
+      go.disabled = true;
+      go.textContent = 'Moving…';
+      try {
+        const moved = await removeDoubles(sets);
+        result.innerHTML = `<p class="muted">${moved} moved to the Bin. Empty the Bin to free the room they took.</p>`;
+        toast(`${moved} book${moved === 1 ? '' : 's'} kept twice moved to the Bin`, 5000, { topic: 'files' });
+        doublesChanged();
+      } catch (error) {
+        go.disabled = false;
+        go.textContent = `Move ${extra} double${extra === 1 ? '' : 's'} to the Bin`;
+        toast(`Not moved: ${error.message || error}`, 6000);
+      }
+    };
+    result.appendChild(go);
+  };
+  box.append(find, result);
+  return box;
 }
 
 async function renderLayoutPane(body) {

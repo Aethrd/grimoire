@@ -1042,6 +1042,75 @@ await t('after a restore, books being read stay Reading: days to On hold counted
   assert.ok(store.DEVICE_SETTINGS.includes('restoredAt'));
 });
 
+await t('books kept twice: one of each kept, bundles kept whole, nothing the copies held lost', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const same = (title, extra = {}) => aBook({ title, words: 5000, chapterCount: 10, ...extra });
+  const put = async (id, fields) => { const b = await store.get('books', id); await store.put('books', { ...b, ...fields }); };
+  // Two bundles of the same editions (English and Korean), one also holding a Japanese edition of its own.
+  const a1 = await same('Knight Twice', { lastReadAt: 900 });
+  const a2 = await aBook({ title: '기사 두 번', words: 7000, chapterCount: 10 });
+  const b1 = await same('Knight Twice');
+  const b2 = await aBook({ title: '기사 두 번', words: 7000, chapterCount: 10 });
+  const b3 = await aBook({ title: '騎士', words: 6000, chapterCount: 10 });
+  await put(a1, { bundleId: a1 }); await put(a2, { bundleId: a1 });
+  await put(b1, { bundleId: b1 }); await put(b2, { bundleId: b1 }); await put(b3, { bundleId: b1 });
+  // A book and its own copy in one bundle, the copy read further, with a bookmark and a session.
+  const c1 = await same('Maze Tale', { lastReadAt: 100, percent: 0.1 });
+  const c2 = await same('Maze Tale', { lastReadAt: 500, percent: 0.5, tags: ['Ongoing'] });
+  const c3 = await aBook({ title: 'Maze Tale (EN)', words: 9000, chapterCount: 10 });
+  await put(c1, { bundleId: c1 }); await put(c2, { bundleId: c1 }); await put(c3, { bundleId: c1 });
+  await store.put('positions', { bookId: c2, chapterIndex: 6, anchor: 0, percent: 0.5, updatedAt: 500 });
+  await store.add('marks', { bookId: c2, kind: 'bookmark', chapterIndex: 6, anchor: 3 });
+  const session = await store.add('events', { bookId: c2, day: '2026-11-20', at: 500, pages: 3, words: 900, activeMs: 60000, chapters: 1 });
+  // Not doubles: a chapter more, or another title.
+  const longer = await aBook({ title: 'Knight Twice', words: 5600, chapterCount: 11 });
+
+  const sets = library.findDoubles(await store.all('books'));
+  const mine = sets.filter((set) => set.some((b) => [a1, a2, c1].includes(b.id)));
+  assert.equal(mine.length, 3);
+  // The bundle read last is kept whole: English and Korean from the same one.
+  assert.deepEqual(mine.map((set) => set[0].id).sort(), [a1, a2, c1].sort());
+  assert.ok(!sets.flat().some((b) => b.id === longer || b.id === b3 || b.id === c3), 'a book that is not a double was taken for one');
+
+  const moved = await library.removeDoubles(mine);
+  assert.equal(moved, 3);
+  for (const id of [b1, b2, c2]) assert.ok((await store.get('books', id)).binnedAt, `${id} not in the Bin`);
+  // The edition only in the bundle going joins the bundle kept, not the Bin.
+  const japanese = await store.get('books', b3);
+  assert.ok(!japanese.binnedAt);
+  assert.equal(japanese.bundleId, a1);
+  assert.equal((await store.get('books', a2)).bundleId, a1);
+  // The copy read further: its reading, place, bookmark, session and tags on the one kept, in its bundle.
+  const maze = await store.get('books', c1);
+  assert.equal(maze.lastReadAt, 500);
+  assert.equal(maze.percent, 0.5);
+  assert.deepEqual(maze.tags, ['Ongoing']);
+  assert.equal(maze.bundleId, c1);
+  assert.equal((await store.get('positions', c1)).chapterIndex, 6);
+  assert.equal((await store.byIndex('marks', 'bookId', c1)).length, 1);
+  assert.equal((await store.get('events', session)).bookId, c1);
+  assert.equal((await store.get('books', c3)).bundleId, c1);
+  // Found again: none left.
+  assert.equal(library.findDoubles(await store.all('books')).filter((set) => set.some((b) => [a1, a2, c1].includes(b.id))).length, 0);
+
+  // A copy leading the bundle, the book kept a member of it: the kept one leads, the others follow it.
+  const d1 = await same('Led Copy', { lastReadAt: 50 });
+  const d2 = await same('Led Copy', { lastReadAt: 10 });
+  const d3 = await aBook({ title: 'Led Copy (KR)', words: 4000, chapterCount: 10 });
+  await put(d2, { bundleId: d2 }); await put(d1, { bundleId: d2 }); await put(d3, { bundleId: d2 });
+  const [set] = library.findDoubles(await store.all('books')).filter((s2) => s2.some((b) => b.id === d1));
+  // Within one bundle the leader is kept, so make the member the one kept by hand, as a set ordered so.
+  await library.removeDoubles([[set.find((b) => b.id === d1), set.find((b) => b.id === d2)]]);
+  assert.equal((await store.get('books', d1)).bundleId, d1, 'the kept book does not lead');
+  assert.equal((await store.get('books', d3)).bundleId, d1, 'an edition left following a binned leader');
+  // A bundle left with its leader alone is unbundled.
+  const e1 = await same('Alone After', { lastReadAt: 9 });
+  const e2 = await same('Alone After');
+  await put(e1, { bundleId: e1 }); await put(e2, { bundleId: e1 });
+  await library.removeDoubles(library.findDoubles(await store.all('books')).filter((s2) => s2.some((b) => b.id === e1)));
+  assert.equal((await store.get('books', e1)).bundleId, undefined);
+});
+
 await t('a book imported from an export is matched by what it came from, recorded in the backup', async () => {
   const src = read('app/src/main/assets/www/js/store.js');
   assert.match(src, /if \(book\.sourceId\) kept\.sourceId = book\.sourceId;/);
