@@ -23,7 +23,7 @@ import {
   coverOf, picturesInFile,
 } from './parse.js';
 import { planBooks } from './group.js';
-import { readPages } from './web.js';
+import { readPages, PAUSED_REASON, chapterKind } from './web.js';
 
 /** The parts waiting to be built, in the order they will be joined. */
 let parts = [];
@@ -245,15 +245,20 @@ export async function add(files, onProgress) {
  * if the result is not what was wanted.
  */
 export function addBook(book) {
-  parts = [...parts, {
+  parts = [...parts, bookPart(book)];
+  return parts;
+}
+
+/** A book from the shelf as a part, not put in the workshop (the queue's own builds). */
+export function bookPart(book) {
+  return {
     id: `book-${book.id}-${Date.now()}`,
     name: book.title || 'Book',
     bookId: book.id,
     chapterCount: book.chapters || 0,
     words: book.words || 0,
     fromShelf: true,
-  }];
-  return parts;
+  };
 }
 
 export const hasBook = (bookId) => parts.some((part) => part.bookId === bookId);
@@ -264,7 +269,8 @@ export const hasBook = (bookId) => parts.some((part) => part.bookId === bookId);
  */
 function leftOf(part, pages, reason = '') {
   if (!part.web) return {};
-  const links = (pages || part.web.links).map(({ url, text }) => ({ url, text }));
+  // Each as kept: its other sources, and whether it is a missing chapter's placeholder (never asked for).
+  const links = (pages || part.web.links).map(({ url, text, alts, placeholder }) => ({ url, text, ...(alts?.length ? { alts } : {}), ...(placeholder != null ? { placeholder } : {}) }));
   if (!links.length) return {};
   return {
     web: {
@@ -284,19 +290,24 @@ function leftOf(part, pages, reason = '') {
  * @param links  [{ url, text }] in reading order
  * @param cover  the site's picture of the book, already fetched, or null
  */
-export function addWeb({
+export function addWeb(options) {
+  parts = [...parts, webPart(options)];
+  return parts;
+}
+
+/** Chapters from a website as a part, not put in the workshop (the queue's own builds). */
+export function webPart({
   name, links, pictures = true, cover = null, author = '', sources = [], leftover = null, gap = 250, jitter = 0,
 }) {
-  parts = [...parts, {
-    id: `web-${Date.now()}`,
+  return {
+    id: `web-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     // Pages left over from an earlier build, being tried again.
     leftover,
     name: name || 'From the web',
-    web: { links: links.map(({ url, text }) => ({ url, text })), pictures, author, sources, gap, jitter },
+    web: { links: links.map(({ url, text, alts, placeholder }) => ({ url, text, ...(alts?.length ? { alts } : {}), ...(placeholder != null ? { placeholder } : {}) })), pictures, author, sources, gap, jitter },
     coverBlob: cover,
     chapterCount: links.length,
-  }];
-  return parts;
+  };
 }
 
 export function move(id, by) {
@@ -333,7 +344,8 @@ export function describe(part) {
     const count = part.web.links.length;
     const spread = part.web.jitter > 0 ? ` ± ${part.web.jitter}` : '';
     const rate = Number.isFinite(part.web.gap) ? ` · ${part.web.gap}${spread} ms apart` : '';
-    return `From the web · ${count} page${count === 1 ? '' : 's'}, downloaded when built${site}${rate}`;
+    const pictures = part.web.pictures === false ? ' · text only, no pictures' : '';
+    return `From the web · ${count} page${count === 1 ? '' : 's'}, downloaded when built${site}${rate}${pictures}`;
   }
   if (part.pictures) {
     const size = part.size ? ` · ${(part.size / 1048576).toFixed(1)}MB` : '';
@@ -360,7 +372,16 @@ export function describe(part) {
  * two volumes of a serial name their pictures identically, and without a
  * prefix the later ones quietly replace the earlier.
  */
-export async function build({ title, author, folder = null, cover: chosenCover = null, onProgress } = {}) {
+export async function build({
+  title, author, folder = null, cover: chosenCover = null, onProgress, shouldPause = null,
+  /* Built from these rather than the workshop's list: a queued website, built
+   * on its own beside whatever is in Build. */
+  parts: given = null,
+  // Kept on the book while it is built: the queue's job it is, for a cut-off
+  // build to go back to that job rather than to Build's leftovers.
+  tag = null,
+} = {}) {
+  const list = given || parts;
   /* One part is a book too.
    *
    * A zip of a volume's saved pages, or a folder of a chapter's images, is a
@@ -368,34 +389,100 @@ export async function build({ title, author, folder = null, cover: chosenCover =
    * case away at the door. Joining several is what the workshop is for, not
    * what it requires.
    */
-  if (!parts.length) throw new Error('Add something to build from.');
+  if (!list.length) throw new Error('Add something to build from.');
 
-  const name = title || suggestedName(parts);
+  const name = title || suggestedName(list);
 
   /* Filed where it was asked for -- the folder the shelf is open at -- or,
    * when it was not, where the book it was built onto is filed. A volume
    * added to a book in "Manhwa" belongs in "Manhwa", not loose on the shelf. */
+  /* The websites the book comes from -- its own parts', and those of any
+   * book it is built onto -- kept on it, as WebToEpub's library keeps a
+   * story's address: "Check for new chapters" lists them again. */
+  const webSources = [];
+  for (const part of list) {
+    const from = part.web ? part.web.sources || [] : part.bookId ? (await store.get('books', part.bookId))?.webSources || [] : [];
+    for (const address of from) if (address && !webSources.includes(address)) webSources.push(address);
+  }
+
   let filed = folder || '';
   if (!filed) {
-    for (const part of parts) {
+    for (const part of list) {
       if (!part.bookId) continue;
       filed = (await store.get('books', part.bookId))?.folder || '';
       break;
     }
   }
 
+  /* Its cover from the start -- the one chosen, else the first part's (a
+   * website's picture, fetched before it began; a book carried on, its own) --
+   * so a book still downloading, or paused, is its cover on the shelf, not a
+   * blank. */
+  const first = list[0];
+  let early = chosenCover || first?.coverBlob || null;
+  if (!early && first?.bookId) early = (await store.get('books', first.bookId).catch(() => null))?.coverBlob || null;
+  if (!early && first?.pictures?.length) early = first.pictures[0];
+  // A book carried on that never had one: the website's own, if it brought one.
+  if (!early) early = list.find((part) => part.coverBlob)?.coverBlob || null;
+
   const bookId = await store.add('books', {
     title: name,
     folder: filed,
+    ...(early ? { coverBlob: early, coverBytes: early.size ?? null } : {}),
     // Set here rather than left to be corrected later: a book named at the
     // moment it is made is named everywhere -- on the shelf, in its own
     // metadata, and in anything written out of it afterwards.
     author: author || null,
-    fingerprint: `built:${Date.now()}`,
+    /* Its own, always. The time alone was shared by books the queue started
+     * side by side in the same moment -- and a book written out carries this
+     * as who it is, so one of them given back was taken for the other. */
+    fingerprint: `built:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
     addedAt: Date.now(),
     words: 0,
     importing: true,
-    builtFrom: parts.map((p) => (p.bookId ? { name: p.name, bookId: p.bookId } : { name: p.name })),
+    ...(tag ? { queueJob: tag } : {}),
+    builtFrom: list.map((p) => (p.bookId ? { name: p.name, bookId: p.bookId } : { name: p.name })),
+    ...(webSources.length ? { webSources } : {}),
+    /* What a website part is downloading, kept on the book until it is
+     * built: should the app be closed or killed meanwhile, the chapters
+     * that had come are a book on the next start, and the rest -- from
+     * `building.at.next` -- is kept to carry it on. */
+    building: {
+      webParts: list.map((p, at) => (p.web ? { at, ...leftOf(p, p.web.links).web, leftover: p.leftover || null } : null))
+        .filter(Boolean),
+      at: null,
+    },
+  });
+  /* A chapter as it is kept: the part's name above its first, when the book
+   * has more than one part. */
+  const recordOf = (part, chapter, n, prefix, volume) => ({
+    bookId,
+    index: index++,
+    /* The part's name above its first chapter marks the seam between one
+       part and the next. With a single part there is no seam, and the label
+       would just repeat the book's own title on its first chapter. */
+    /* Not where a book is carried on from where its download stopped: the
+       parts are one serial, and the seam would be named again at every
+       carry -- "Title — Title — 1화". */
+    title: n === 0 && list.length > 1 && !part.seamless
+      ? `${stripExtension(part.name)} — ${chapter.title}`
+      : chapter.title,
+    volume,
+    fromToc: chapter.fromToc,
+    words: chapter.words || 0,
+    base: prefix + (chapter.base || ''),
+    // The link a web chapter came from: how "Check for new chapters" knows
+    // what the book already has.
+    ...(chapter.from ? { from: chapter.from } : {}),
+    // Read by OCR from the page as it showed, not as its words were sent.
+    ...(chapter.ocr ? { ocr: true } : {}),
+    /* A part whose chapters arrive as finished markup -- a comic, a text
+       file -- has its picture references already resolved, so they need the
+       prefix applying too. One that arrives as source resolves them later,
+       against the prefixed base above. */
+    ...(chapter.source != null
+      ? { source: chapter.source }
+      : { html: reKeyImages(chapter.html || '', prefix) }),
   });
 
   let index = 0;
@@ -407,9 +494,25 @@ export async function build({ title, author, folder = null, cover: chosenCover =
   let cover = null;
   const failed = [];
 
-  for (let at = 0; at < parts.length; at++) {
-    const part = parts[at];
-    onProgress?.(`Reading ${part.name}`, at / parts.length, at, parts.length);
+  /* "Pause & keep": the website being downloaded stops after the chapters
+   * under way, and a website not yet begun is not begun -- both kept whole
+   * as what is left, to carry on with. Files are still read: they take
+   * moments, and a book missing its own volumes is not what was asked for. */
+  const pausing = () => typeof shouldPause === 'function' && !!shouldPause();
+
+  for (let at = 0; at < list.length; at++) {
+    const part = list[at];
+    if (part.web && pausing()) {
+      const count = part.web.links.length;
+      failed.push({
+        name: `${part.name}: all ${count} page${count === 1 ? '' : 's'}`,
+        reason: PAUSED_REASON,
+        paused: true,
+        ...leftOf(part, part.web.links, PAUSED_REASON),
+      });
+      continue;
+    }
+    onProgress?.(`Reading ${part.name}`, at / list.length, at, list.length);
 
     const prefix = `p${at}/`;
     // Where this part's chapters begin in the finished book. Its pictures
@@ -439,10 +542,41 @@ export async function build({ title, author, folder = null, cover: chosenCover =
       if (pending.length >= 12) await flush();
     };
 
+    /* A website's chapters are kept as they come, each with where to resume
+     * from, not all at the end: a build of six hundred is an hour or two,
+     * and the app can be closed, or killed, in the middle of it. */
+    let streamed = 0;
+    /* Where to resume, noted on the book -- not after every chapter. The note
+     * is a rewrite of the whole book record (its every link, its cover), and
+     * with several novels downloading that was a stream of large writes
+     * competing with everything else the library does. Resuming does not
+     * rest on it: rescueCutBuild works out where a cut build stopped from the
+     * chapters actually kept. So it is noted at a part's first chapter, then
+     * every CHECKPOINT_EVERY chapters or CHECKPOINT_MS, whichever comes first. */
+    let notedAt = 0;
+    const onChapter = part.web ? async (chapter, next) => {
+      const record = recordOf(part, chapter, streamed, prefix, volume);
+      streamed += 1;
+      words += record.words;
+      await store.put('chapters', record);
+      const now = Date.now();
+      if (streamed !== 1 && streamed % CHECKPOINT_EVERY !== 0 && now - notedAt < CHECKPOINT_MS) return;
+      notedAt = now;
+      const book = await store.get('books', bookId);
+      if (book?.building) {
+        // `came`: this part's own chapters so far -- apart from any a book carried on already had.
+        book.building.at = { part: at, next, chapters: index, words, came: streamed };
+        await store.put('books', book);
+      }
+    } : null;
+
     let parsed;
+    // How this website's pages are going, for the time-left estimate.
+    const partStats = {};
     try {
       parsed = part.web
         ? await readPages(part.web.links, {
+          stats: partStats,
           title: part.name,
           author: part.web.author,
           cover: part.coverBlob,
@@ -451,9 +585,15 @@ export async function build({ title, author, folder = null, cover: chosenCover =
           gap: part.web.gap,
           jitter: part.web.jitter,
           patience: part.web.patience,
+          shouldStop: pausing,
+          onChapter,
           onImage,
-          onProgress: (fraction, done, total) => onProgress?.(
-            `Downloading ${part.name} · ${done} of ${total}`, (at + fraction) / parts.length, at, parts.length),
+          // How far it has got, on the line with the bar; what it is doing
+          // this moment (waiting out the delay, reading, another try) apart.
+          onProgress: (fraction, done, total, note, now) => onProgress?.(
+            // The chapters are counted beside it (app.js, paintTimes); which part this is, here.
+            `Downloading ${part.name}${list.length > 1 ? ` · part ${at + 1} of ${list.length}` : ''}`,
+            (at + fraction) / list.length, at, list.length, now, { done, total, stats: partStats }),
         })
         : part.bookId
         ? await readShelfBook(part)
@@ -461,12 +601,12 @@ export async function build({ title, author, folder = null, cover: chosenCover =
         ? await readPictures(part)
         : part.pages
         ? await parseChapters(part.pages, (fraction) =>
-          onProgress?.(`Reading ${part.name}`, (at + fraction) / parts.length, at, parts.length),
+          onProgress?.(`Reading ${part.name}`, (at + fraction) / list.length, at, list.length),
           { title: part.name, onImage })
         : await parse(
           part.file || new File([await part.read()], part.name),
           (fraction) =>
-            onProgress?.(`Reading ${part.name}`, (at + fraction) / parts.length, at, parts.length),
+            onProgress?.(`Reading ${part.name}`, (at + fraction) / list.length, at, list.length),
           { prefix: part.prefix ?? null, onImage });
       await flush();
     } catch (error) {
@@ -476,7 +616,11 @@ export async function build({ title, author, folder = null, cover: chosenCover =
       for (const image of await store.byIndex('images', 'bookId', bookId)) {
         if (image.href.startsWith(prefix)) await store.del('images', [bookId, image.href]);
       }
-      failed.push({ name: part.name, reason: error.message, ...leftOf(part, error.rest, error.failed?.[0]?.reason) });
+      const paused = error.failed?.[0]?.reason === PAUSED_REASON;
+      failed.push({
+        name: part.name, reason: paused ? PAUSED_REASON : error.message, paused,
+        ...leftOf(part, error.rest, error.failed?.[0]?.reason),
+      });
       continue;
     }
     if (!cover && parsed.coverBlob) cover = parsed.coverBlob;
@@ -485,38 +629,20 @@ export async function build({ title, author, folder = null, cover: chosenCover =
     if (parsed.rest?.length) {
       const count = parsed.rest.length;
       const at = parsed.failed[0];
+      const paused = at?.reason === PAUSED_REASON;
       failed.push({
         name: `${part.name}: the last ${count} page${count === 1 ? '' : 's'}`,
-        reason: `stopped at ${at?.text || at?.url} — ${at?.reason}`,
+        reason: paused ? PAUSED_REASON : `stopped at ${at?.text || at?.url} — ${at?.reason}`,
+        paused,
         ...leftOf(part, parsed.rest, at?.reason),
       });
     }
 
-    await store.putAll('chapters', parsed.chapters.map((chapter, n) => ({
-      bookId,
-      index: index++,
-      // The part's name above its first chapter, so the seams are findable in
-      // a book that is now thousands of chapters long.
-      /* The part's name above its first chapter marks the seam between one
-         part and the next. With a single part there is no seam, and the label
-         would just repeat the book's own title on its first chapter. */
-      title: n === 0 && parts.length > 1
-        ? `${stripExtension(part.name)} — ${chapter.title}`
-        : chapter.title,
-      volume,
-      fromToc: chapter.fromToc,
-      words: chapter.words || 0,
-      base: prefix + (chapter.base || ''),
-      /* A part whose chapters arrive as finished markup -- a comic, a text
-         file -- has its picture references already resolved, so they need the
-         prefix applying too. One that arrives as source resolves them later,
-         against the prefixed base above. */
-      ...(chapter.source != null
-        ? { source: chapter.source }
-        : { html: reKeyImages(chapter.html || '', prefix) }),
-    })));
-
-    words += parsed.chapters.reduce((n, c) => n + (c.words || 0), 0);
+    // A website's were kept as they came; the rest are kept now.
+    if (!part.web) {
+      await store.putAll('chapters', parsed.chapters.map((chapter, n) => recordOf(part, chapter, n, prefix, volume)));
+      words += parsed.chapters.reduce((n, c) => n + (c.words || 0), 0);
+    }
 
     if (parsed.images?.length) {
       await store.putAll('images', parsed.images.map((image) => ({
@@ -540,10 +666,14 @@ export async function build({ title, author, folder = null, cover: chosenCover =
      * "None of those parts could be read" is true and useless: every part had
      * a reason, and throwing them away left nothing to act on. */
     const why = failed[0]?.reason;
+    // Paused before a single chapter had come: nothing to keep, nothing wrong.
+    const paused = failed.length > 0 && failed.every((each) => each.paused);
     // With what failed, so pages from a website can be tried again.
-    throw Object.assign(new Error(why
+    throw Object.assign(new Error(paused
+      ? 'Paused before any chapter had come, so there is no book yet. The list is still here to build.'
+      : why
       ? `None of those parts could be read — ${failed[0].name}: ${why}`
-      : 'None of those parts could be read.'), { failed });
+      : 'None of those parts could be read.'), { failed, paused });
   }
 
   const finished = await store.get('books', bookId);
@@ -551,13 +681,57 @@ export async function build({ title, author, folder = null, cover: chosenCover =
   finished.chapters = index;
   // A cover chosen in Build wins over the first part's; the app then puts it
   // into the book itself (coverpage.js), as a cover chosen in Details is.
-  finished.coverBlob = chosenCover || cover;
-  finished.coverBytes = (chosenCover || cover)?.size ?? null;
+  finished.coverBlob = chosenCover || cover || early;
+  finished.coverBytes = (chosenCover || cover || early)?.size ?? null;
   if (chosenCover) finished.coverCustom = true;
   delete finished.importing;
+  delete finished.building;
   await store.put('books', finished);
 
   return { book: finished, failed };
+}
+
+/**
+ * A build the app was closed (or killed) in the middle of, made a book of
+ * what had come -- or null when nothing had, or it was not a website.
+ *
+ * Its chapters were kept as they came, in order; this counts them, takes
+ * the book off "importing", and says what is left: the website being read,
+ * from the chapter after the last kept, and any website not begun.
+ *
+ * @returns {{ book, rest: [{ name, links, sources, pictures, author, gap,
+ *   jitter, leftover }] }} or null
+ */
+/** How often a download notes where to resume (see onChapter): every so many chapters, or so long. */
+const CHECKPOINT_EVERY = 20;
+const CHECKPOINT_MS = 30000;
+
+export async function rescueCutBuild(book) {
+  if (!book?.importing || !book.building?.webParts?.length) return null;
+  const chapters = await store.byIndex('chapters', 'bookId', book.id);
+  if (!chapters.length) return null;
+  const { webParts, at } = book.building;
+  // Where to resume, from what was kept: the checkpoint is written just
+  // after each chapter, so a chapter kept with the app killed before its
+  // checkpoint would otherwise be downloaded, and be in the book, twice.
+  const have = new Set(chapters.map((chapter) => chapter.from).filter(Boolean));
+  const rest = [];
+  for (const part of webParts) {
+    if (at && part.at < at.part) continue;                 // read to its end
+    let next = at && part.at === at.part ? at.next : 0;
+    for (let n = part.links.length - 1; n >= next; n -= 1) {
+      if (have.has(part.links[n].url)) { next = n + 1; break; }
+    }
+    const links = part.links.slice(next);
+    if (links.length) rest.push({ ...part, links });
+  }
+  book.chapters = chapters.length;
+  book.words = chapters.reduce((n, c) => n + (c.words || 0), 0);
+  book.cutOff = Date.now();
+  delete book.importing;
+  delete book.building;
+  await store.put('books', book);
+  return { book, rest };
 }
 
 /**
@@ -588,6 +762,9 @@ async function readShelfBook(part) {
       fromToc: !!chapter.fromToc,
       words: chapter.words || 0,
       html: chapterHtml(chapter),
+      ...(chapter.from ? { from: chapter.from } : {}),
+    // Read by OCR from the page as it showed, not as its words were sent.
+    ...(chapter.ocr ? { ocr: true } : {}),
     })),
     images: images.map((image, order) => ({
       href: image.href,
@@ -684,4 +861,69 @@ export function commonName(names) {
     shared.pop();
   }
   return shared.join(' ').trim() || null;
+}
+
+/* ── a chapter put back in its placeholder's place ──────────────────────
+ *
+ * A book built while a chapter was taken for something else -- "Ch. 249 ...
+ * [Please read Author's Note]" read as the afterword -- has a placeholder at
+ * 249 and the real chapter at the end. The real one goes into the
+ * placeholder's place; the chapters after the one it left move up one; where
+ * the reader was, bookmarks and pictures follow their chapters. Only a
+ * placeholder with the real chapter of its number later in the book is
+ * touched (by the chapter's own name: one whose name has no number is left).
+ *
+ * @returns how many chapters were put back
+ */
+const PLACEHOLDER_TITLE = /^Chapter (\d+(?:\.\d+)?) — placeholder \(missing\)$/;
+export async function settleMisplaced(bookId) {
+  const book = await store.get('books', bookId);
+  if (!book) return 0;
+  const chapters = (await store.byIndex('chapters', 'bookId', bookId)).sort((a, b) => a.index - b.index);
+  const holes = new Map();   // number -> place
+  chapters.forEach((chapter, at) => {
+    const m = PLACEHOLDER_TITLE.exec(chapter.title || '');
+    if (m && /class="placeholder-chapter"/.test(chapter.html || '')) holes.set(Number(m[1]), at);
+  });
+  if (!holes.size) return 0;
+  const order = chapters.map((chapter, at) => at);   // new place -> old place
+  const filled = new Map();   // placeholder's old place -> the chapter's that came into it
+  let moved = 0;
+  for (let at = 0; at < chapters.length; at += 1) {
+    if (PLACEHOLDER_TITLE.test(chapters[at].title || '')) continue;
+    const { kind, number } = chapterKind(chapters[at].title || '');
+    const hole = kind === 'main' ? holes.get(number) : undefined;
+    if (hole === undefined || hole >= at) continue;
+    holes.delete(number);
+    filled.set(hole, at);
+    order[order.indexOf(hole)] = at;
+    order.splice(order.lastIndexOf(at), 1);
+    moved += 1;
+  }
+  if (!moved) return 0;
+  // Old place -> new place, for what follows its chapter; a placeholder replaced goes nowhere.
+  const to = new Map(order.map((old, place) => [old, place]));
+  for (const [hole, real] of filled) to.set(hole, to.get(real));
+  const replaced = new Set(filled.keys());
+  const next = order.map((old, place) => ({ ...chapters[old], bookId, index: place }));
+  await store.putAll('chapters', next);
+  for (let i = next.length; i < chapters.length; i += 1) await store.del('chapters', [bookId, i]);
+  for (const mark of await store.byIndex('marks', 'bookId', bookId)) {
+    // A mark in a placeholder's text: that text is gone.
+    if (replaced.has(mark.chapterIndex) || !to.has(mark.chapterIndex)) { await store.del('marks', mark.id); continue; }
+    if (to.get(mark.chapterIndex) !== mark.chapterIndex) await store.put('marks', { ...mark, chapterIndex: to.get(mark.chapterIndex) });
+  }
+  const images = (await store.byIndex('images', 'bookId', bookId))
+    .filter((image) => !replaced.has(image.chapterIndex) && to.has(image.chapterIndex) && to.get(image.chapterIndex) !== image.chapterIndex);
+  if (images.length) await store.putAll('images', images.map((image) => ({ ...image, chapterIndex: to.get(image.chapterIndex) })));
+  const position = await store.get('positions', bookId);
+  if (position) {
+    const at = position.chapterIndex || 0;
+    // In a placeholder now filled: the top of the chapter that came into its place.
+    const place = to.has(at) ? to.get(at) : 0;
+    const same = to.has(at) && !replaced.has(at);
+    await store.put('positions', { ...position, chapterIndex: Math.max(0, Math.min(place, next.length - 1)), ...(same ? {} : { anchor: 0, page: 0 }) });
+  }
+  await store.put('books', { ...book, chapters: next.length, words: next.reduce((n, c) => n + (c.words || 0), 0) });
+  return moved;
 }

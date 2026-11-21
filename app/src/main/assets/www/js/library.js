@@ -10,6 +10,7 @@ import { planBooks } from './group.js';
 import { isRar, rarToZip, zipNameFor } from './rar.js';
 import * as translate from './translate.js';
 import * as mix from './mix.js';
+import { gradientSvg } from './theme.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -163,6 +164,8 @@ export function countWorks(books, among = books) {
 
 /** Whether a book is on the shelf: not in the bin, not half-imported, not only passing through. */
 export const onShelf = (book) => !book.binnedAt && !book.importing && !book.transient;
+/** A novel being downloaded from a website now: on the shelf as it comes, not yet a book to open or change. */
+export const isDownloading = (book) => !!(book?.importing && book.building?.webParts?.length);
 
 /**
  * Reduce a list to one entry per bundle.
@@ -276,7 +279,7 @@ const touchedAt = (book) => Math.max(book.lastReadAt || 0, book.lastOpenedAt || 
  * The books to put on hold: on the shelf, Reading, and not read for `days`
  * days -- except the book read last, and any edition bundled with it.
  */
-export function goneQuiet(books, { days, now = Date.now() } = {}) {
+export function goneQuiet(books, { days, now = Date.now(), since = 0 } = {}) {
   if (!(days > 0)) return [];
   const shelf = books.filter(onShelf);
   const byId = new Map(books.map((b) => [b.id, b]));
@@ -291,7 +294,10 @@ export function goneQuiet(books, { days, now = Date.now() } = {}) {
   }
   return shelf.filter((book) => statusOf(book) === 'reading'
     && touchedAt(book) > 0
-    && now - workTouched.get(workOf(book, byId)) >= days * DAY
+    /* Counted from a restore at the latest: the dates it put back are the
+     * backup's, days old, and the shelf comes back as it was backed up --
+     * not with every book being read put on hold at once. */
+    && now - Math.max(workTouched.get(workOf(book, byId)), since || 0) >= days * DAY
     && workOf(book, byId) !== spared);
 }
 
@@ -299,7 +305,7 @@ export function goneQuiet(books, { days, now = Date.now() } = {}) {
 export async function holdQuietBooks({ now = Date.now() } = {}) {
   const settings = await store.settings();
   const days = settings.autoHoldDays ?? 5;
-  const quiet = goneQuiet(await store.all('books'), { days, now });
+  const quiet = goneQuiet(await store.all('books'), { days, now, since: settings.restoredAt || 0 });
   for (const book of quiet) {
     book.status = 'onHold';
     // Said, so the shelf can tell put-aside from put-on-hold-by-hand.
@@ -404,7 +410,7 @@ export const MAX_NESTING = 3;
 /** And how many inner archives, all told, one import will open. */
 const MAX_INNER_ARCHIVES = 200;
 
-export async function importFiles(files, { onProgress, onDone, transient = false, rescue = null, into = '' } = {}) {
+export async function importFiles(files, { onProgress, onDone, transient = false, rescue = null, into = '', shouldStop = null } = {}) {
   /* Timed, in phases.
    *
    * Judging an import from a benchmark on a desktop was a mistake: jsdom
@@ -456,7 +462,11 @@ export async function importFiles(files, { onProgress, onDone, transient = false
    * somebody's filing; a zip that goes on unpacking forever is an attack. */
   const work = [...files].map((file) => ({ file, depth: 1, folder: '', trail: '', label: file.name }));
   let inner = 0;
+  /* Asked to stop: before the next file, never in the middle of one -- a
+   * book half-written is worse than one not started. Counted, so it is said. */
+  const stopNow = () => !!shouldStop?.();
   for (let w = 0; w < work.length; w++) {
+    if (stopNow()) { results.stopped = work.length - w; break; }
     const job = work[w];
     let picked = job.file;
     if (!picked) {
@@ -682,6 +692,8 @@ export async function importFiles(files, { onProgress, onDone, transient = false
     .map((step) => ({ title: step.title, count: step.items.length }));
 
   for (let i = 0; i < queue.length; i++) {
+    if (results.stopped) break;
+    if (stopNow()) { results.stopped = queue.length - i; break; }
     const entry = queue[i];
     // Filed in the folder the shelf was open at, if it was open at one. Only
     // what is new: a book already on the shelf stays where it is.
@@ -818,7 +830,13 @@ export async function importFiles(files, { onProgress, onDone, transient = false
           ...(await store.byIndex('books', 'fingerprint', parsed.sourceId)),
           ...(await exportedFrom()).get(parsed.sourceId) || [],
         ].filter((book) => book.id !== bookId);
-        const here = same.find((book) => !book.binnedAt && !book.transient && !book.importing);
+        /* The same book by its name or its length too, not by that identity
+         * alone: books built side by side once shared one ("built:<time>"),
+         * and a file written out of one was taken for the other -- said to be
+         * on the shelf as a book it is not. */
+        const like = (book) => sameTitle(book.title, parsed.title)
+          || (book.chapterCount != null && book.chapterCount === parsed.chapters.length);
+        const here = same.find((book) => !book.binnedAt && !book.transient && !book.importing && like(book));
         if (here) {
           await store.deleteBook(bookId);
           if (here.inVault) results.inVault = (results.inVault || 0) + 1;
@@ -827,7 +845,7 @@ export async function importFiles(files, { onProgress, onDone, transient = false
           results.existing.push(here.id);
           continue;
         }
-        const binned = same.filter((book) => book.binnedAt);
+        const binned = same.filter((book) => book.binnedAt && like(book));
         if (binned.length) {
           await destroyBooks(binned.map((book) => book.id));
           results.replaced = (results.replaced || 0) + binned.length;
@@ -980,21 +998,61 @@ const justHeld = () => Date.now() - heldAt < 800;
 let buildOrder = null;   // Map(book id -> { place, already })
 export function setBuildOrder(order) { buildOrder = order || null; }
 
+/* Books whose download was paused or stopped short, with the rest still to
+ * come (a leftover, or a queued book carrying it on): marked on the cover. */
+/* Each with how many chapters are still to come, for its mark to fill by. */
+let unfinished = new Map();   // book id -> chapters still to come
+export function setUnfinished(left) { unfinished = left instanceof Map ? left : new Map((left || []).map((id) => [id, 0])); }
+
+/** How far a book is, by its chapters had and still to come: what its mark's tray fills to. */
+export function unfinishedDone(have, left) {
+  const total = (Number(have) || 0) + (Number(left) || 0);
+  return total > 0 ? Math.min(1, Math.max(0, (Number(have) || 0) / total)) : 0;
+}
+
+/* The download mark, twice over: faint, and over it the same mark in the
+ * theme's own colours, shown from the bottom up as far as the book has come. */
+const MARK = '<path d="M12 3.6v11.2M7.4 10.4l4.6 4.6 4.6-4.6M4.4 14.6v4.9h15.2v-4.9"/>';
+const unfinishedMark = (book) => {
+  // A book being made now: as far as its record says it has got.
+  const making = !unfinished.has(book.id) && book.building;
+  const have = making ? book.building.at?.chapters || 0 : book.chapters || 0;
+  /* Still to come: the website's chapters less those come so far in this
+   * part -- not less every chapter the book has, which (a book carried on
+   * after a pause already had some) left it at nothing to come too early. */
+  const came = book.building?.at?.came;
+  const left = making
+    ? Math.max(0, (book.building.webParts || []).reduce((sum, part) => sum + (part.links?.length || 0), 0) - (Number.isFinite(came) ? came : have))
+    : unfinished.get(book.id);
+  const done = unfinishedDone(have, left);
+  const id = `uf-${String(book.id).replace(/[^\w-]/g, '')}`;
+  return `<span class="tile-unfinished" role="img" aria-label="Not finished downloading: ${Math.round(done * 100)}%" data-have="${have}" style="--done:${done.toFixed(3)}">`
+    + `<svg class="mark-base" viewBox="0 0 24 24">${MARK}</svg>`
+    + `<svg class="mark-fill" viewBox="0 0 24 24"><defs>${gradientSvg(id, 'mark')}</defs>`
+    + `<g stroke="url(#${id})">${MARK}</g></svg></span>`;
+};
+
 function tile(book, onOpen, onLongPress, selection, selecting) {
-  const coverUrl = coverUrlFor(book);
+  const coverUrl = shelfCoverUrl(book);
   const placed = buildOrder?.get(book.id);
   const node = document.createElement('button');
   node.className = selection?.has(book.id) ? 'tile selected' : 'tile';
   if (book.bundle) node.classList.add('bundled');
   node.dataset.book = String(book.id);
+  // Downloading now: its queue job's, so the mark can be filled in place as chapters come (app.js, markUnfinished).
+  if (isDownloading(book)) {
+    node.dataset.downloading = '';
+    if (book.queueJob != null) node.dataset.job = String(book.queueJob);
+  }
   // A cover you would rather not have on screen. Nothing is changed in the
   // file; it is the tile that is blurred.
   if (book.coverBlur) node.dataset.blur = '';
   node.innerHTML = `
     <span class="tile-cover">
       ${coverUrl
-        ? `<img src="${coverUrl}" alt="${escape(book.title)}">`
+        ? `<img src="${coverUrl}" alt="${escape(book.title)}" loading="lazy" decoding="async">`
         : `<span class="tile-title">${escape(displayTitle(book))}</span>`}
+      ${unfinished.has(book.id) || (book.importing && book.building) ? unfinishedMark(book) : ''}
       <span class="tile-badge">${escape(book.format || '?')}</span>
       ${placed ? `<span class="tile-order${placed.already ? ' already' : ''}">${placed.place}</span>` : ''}
       <span class="tile-bar"><span style="width:${Math.round((book.percent || 0) * 100)}%"></span></span>
@@ -1073,6 +1131,74 @@ const covers = urlCache();
 const coverUrlFor = (book) =>
   covers.url(book.id, book.coverBlob, book.coverBytes ?? book.coverBlob?.size);
 
+/* The shelf's covers small. A tile a few hundred pixels wide was given the
+ * whole cover -- often over a thousand across -- and a shelf of six hundred
+ * books held six hundred of them decoded. Each book gets a copy 360 across,
+ * made once in the quiet and kept with it (coverThumb, for the cover it was
+ * made from: coverThumbOf); a cover changed is a copy made again. A cover
+ * already small is its own ('self'). The cover itself is unchanged: the
+ * book's page, the reader and every export use it, never the copy. */
+export const THUMB_WIDTH = 360;
+const THUMB_SMALL_BYTES = 60 * 1024;
+const coverSign = (book) => book.coverBytes ?? book.coverBlob?.size ?? null;
+export const thumbFits = (book) => book.coverThumb != null && coverSign(book) != null && book.coverThumbOf === coverSign(book);
+const thumbs = urlCache();
+export function shelfCoverUrl(book) {
+  if (thumbFits(book) && book.coverThumb !== 'self') return thumbs.url(book.id, book.coverThumb, `t${book.coverThumbOf}`);
+  if (book.coverBlob && !thumbFits(book) && !inMotion(book)) queueThumb(book);
+  return coverUrlFor(book);
+}
+/* A book still being imported or downloaded is written to as it goes: its
+ * copy waits until it has landed (the shelf asks again then). */
+const inMotion = (book) => !!(book.importing || book.transient);
+
+const thumbQueue = new Map();
+let thumbing = false;
+function queueThumb(book) {
+  if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') return;
+  thumbQueue.set(book.id, coverSign(book));
+  if (!thumbing) { thumbing = true; setTimeout(nextThumb, 1500); }
+}
+/** One cover made small, from its blob: a Blob, 'self' (small already), or null. */
+export async function makeThumb(blob) {
+  if (!blob || typeof createImageBitmap !== 'function') return null;
+  if (blob.size <= THUMB_SMALL_BYTES) return 'self';
+  // Decoded straight to the small size: the full cover is never held decoded.
+  const bitmap = await createImageBitmap(blob, { resizeWidth: THUMB_WIDTH, resizeQuality: 'high' });
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    const as = (type) => new Promise((resolve) => canvas.toBlob(resolve, type, 0.85));
+    const small = (await as('image/webp')) || (await as('image/jpeg'));
+    return small && small.size < blob.size ? small : 'self';
+  } finally { bitmap.close?.(); }
+}
+async function nextThumb() {
+  const next = thumbQueue.entries().next();
+  if (next.done || document.hidden) { thumbing = false; return; }
+  const [id, sign] = next.value;
+  thumbQueue.delete(id);
+  try {
+    const book = await store.get('books', id);
+    if (book?.coverBlob && !inMotion(book) && coverSign(book) === sign && !thumbFits(book)) {
+      const thumb = await makeThumb(book.coverBlob);
+      // Written onto the book as it is by then, in one go: whatever else was
+      // written to it while the copy was made stays written.
+      const kept = thumb && await store.update('books', id, (fresh) =>
+        (inMotion(fresh) || coverSign(fresh) !== sign ? null
+          : { ...fresh, coverThumb: thumb, coverThumbOf: sign }));
+      if (kept) {
+        // On the shelf now: shown small at once.
+        const img = document.querySelector(`.tile[data-book="${id}"] .tile-cover img`);
+        if (img && thumb !== 'self') img.src = thumbs.url(id, thumb, `t${sign}`);
+      }
+    }
+  } catch { /* a cover that will not decode keeps showing whole */ }
+  setTimeout(nextThumb, 120);
+}
+
 /* Translated titles, keyed by book id. Held here rather than written into the
    DOM after the fact: the shelf tile has no title element when a book has
    cover art, so patching it silently did nothing. */
@@ -1098,8 +1224,16 @@ export async function renderShelf(handlers) {
   // same filter is applied in search, the reel and the stats totals.
   // A hard kill during import leaves a row with no chapters behind it. It is
   // not a book yet, so it does not belong on the shelf.
+  /* A novel downloading now is on the shelf from its first chapter -- its
+   * cover, in its folder, washed grey with the mark filling as it comes --
+   * not only once it is paused or done. (Queued and not yet begun, it has no
+   * book.) The book it carries on, while it does, is not shown beside it:
+   * the same novel twice. Anything else still being read in is not a book yet. */
+  const carriedOn = new Set(all.filter(isDownloading)
+    .flatMap((b) => (b.builtFrom || []).map((part) => part.bookId).filter((id) => id != null)));
   let visible = all.filter((b) =>
-    !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
+    (!b.importing || isDownloading(b)) && !carriedOn.has(b.id)
+    && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked));
 
   // The main shelf leaves out hidden folders. Opened from Folders, a folder
   // shows what is in it, hidden or not -- that is the way in.
@@ -1432,6 +1566,12 @@ export const naturalOrder = (a, b) => String(a || '').localeCompare(String(b || 
 
 export const isBinned = (book) => !!book?.binnedAt;
 
+/** Two titles the same, give or take case, spacing and width. */
+export const sameTitle = (a, b) => {
+  const plain = (s) => String(s || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  return !!plain(a) && plain(a) === plain(b);
+};
+
 /**
  * Whether a book from a text file was imported by the old reading of text:
  * a chapter or a paragraph far bigger than one is now allowed to be (see
@@ -1444,6 +1584,146 @@ async function outgrownText(book) {
     const html = chapter.html || '';
     return html.length > 80 * 1024 || /<p>[^<]{6000}/.test(html);
   });
+}
+
+/* ── books kept twice ─────────────────────────────────────────────────────
+ *
+ * A library imported over itself held most books twice -- the book and its
+ * copy, alike but for the file each came from: twice the room, a restore
+ * unable to tell which was meant, every count doubled. Two books are the same
+ * book here only if they are word for word: one title, as many words, as many
+ * chapters (and both in the vault, or neither). Two downloads of a novel with
+ * a chapter more in one, or a translation beside its original, are not.
+ *
+ * Of each such set one is kept, and the rest go to the Bin -- after what they
+ * held is carried onto it: read further on, its place and its reading; its
+ * bookmarks, its sessions in the log, its tags, a cover chosen for it.
+ *
+ * Bundles are decided as bundles. A bundle of editions kept twice (an English
+ * book and its Korean raw, and copies of both together in a bundle of their
+ * own) keeps one bundle whole: every set between the two keeps its book from
+ * the same one -- read last, then the larger -- never one edition from each,
+ * which would leave two halves. An edition only in the bundle going is moved
+ * into the bundle kept, not binned with it. A book and its own copy in one
+ * bundle: the copy goes, and if it led the bundle, the book kept leads it. */
+const doubleKey = (book) => {
+  if (!(book.words > 0) || !(book.chapterCount > 0)) return null;
+  const title = String(book.title || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+  return title ? `${title}|${book.words}|${book.chapterCount}|${book.inVault ? 1 : 0}` : null;
+};
+
+/** Sets of books that are the same book, the one to keep first. */
+export function findDoubles(books) {
+  const live = books.filter((b) => onShelf(b) && !isDownloading(b));
+  const byId = new Map(live.map((b) => [b.id, b]));
+  const bundleOf = (book) => {
+    const leader = book.bundleId != null ? byId.get(book.bundleId) : null;
+    return leader && leader.bundleId === leader.id ? leader.id : null;
+  };
+  // A bundle's standing: read last (any edition), then how many editions, then the older.
+  const bundles = new Map();
+  for (const book of live) {
+    const id = bundleOf(book);
+    if (id == null) continue;
+    const at = bundles.get(id) || { read: 0, size: 0 };
+    at.read = Math.max(at.read, book.lastReadAt || 0);
+    at.size += 1;
+    bundles.set(id, at);
+  }
+  const rank = (book) => {
+    const id = bundleOf(book);
+    const bundle = id != null ? bundles.get(id) : null;
+    return [bundle ? 1 : 0, bundle?.read || 0, bundle?.size || 0, -(id ?? 0),
+      bundle && book.id === id ? 1 : 0, book.lastReadAt || 0, book.percent || 0, -book.id];
+  };
+  const before = (a, b) => {
+    const x = rank(a); const y = rank(b);
+    for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return y[i] - x[i];
+    return 0;
+  };
+  const sets = new Map();
+  for (const book of live) {
+    const key = doubleKey(book);
+    if (!key) continue;
+    if (!sets.has(key)) sets.set(key, []);
+    sets.get(key).push(book);
+  }
+  return [...sets.values()].filter((set) => set.length > 1).map((set) => set.slice().sort(before));
+}
+
+const READING = ['status', 'percent', 'lastReadAt', 'lastOpenedAt', 'finishedAt', 'heldAt', 'heldAutomatically'];
+
+/**
+ * Keep one of each set and put the rest in the Bin, carrying onto the one
+ * kept what they held. @returns how many went to the Bin
+ */
+export async function removeDoubles(sets) {
+  const going = new Set(sets.flatMap((set) => set.slice(1).map((b) => b.id)));
+  if (!going.size) return 0;
+  const events = await store.all('events');
+  const fresh = async (id) => store.get('books', id);
+  for (const set of sets) {
+    const kept = await fresh(set[0].id);
+    if (!kept) continue;
+    for (const copy of set.slice(1)) {
+      const gone = await fresh(copy.id);
+      if (!gone) continue;
+      // Read further on in the copy: its reading and its place.
+      if ((gone.lastReadAt || 0) > (kept.lastReadAt || 0)) {
+        for (const field of READING) {
+          if (gone[field] === undefined) delete kept[field];
+          else kept[field] = gone[field];
+        }
+        const place = await store.get('positions', gone.id);
+        if (place) await store.put('positions', { ...place, bookId: kept.id });
+      }
+      kept.tags = [...new Set([...(kept.tags || []), ...(gone.tags || [])])];
+      if (!kept.tags.length) delete kept.tags;
+      if (gone.coverCustom && !kept.coverCustom && gone.coverBlob) {
+        kept.coverBlob = gone.coverBlob;
+        kept.coverBytes = gone.coverBytes;
+        kept.coverCustom = true;
+      }
+      // Bookmarks and highlights, each once.
+      const have = new Set((await store.byIndex('marks', 'bookId', kept.id)).map((m) => `${m.kind}:${m.chapterIndex}:${m.anchor}`));
+      for (const mark of await store.byIndex('marks', 'bookId', gone.id)) {
+        const sign = `${mark.kind}:${mark.chapterIndex}:${mark.anchor}`;
+        if (have.has(sign)) continue;
+        have.add(sign);
+        const { id, ...row } = mark;
+        await store.add('marks', { ...row, bookId: kept.id });
+      }
+      // Its sessions in the log, the kept book's now.
+      for (const event of events) {
+        if (event.bookId !== gone.id) continue;
+        event.bookId = kept.id;
+        await store.put('events', event);
+      }
+      // A bundle it led: led by the book kept, or its editions not going moved into the kept one's.
+      if (gone.bundleId === gone.id) {
+        const editions = (await store.all('books')).filter((b) => b.bundleId === gone.id && b.id !== gone.id && !going.has(b.id));
+        const sameBundle = kept.bundleId === gone.id;
+        const into = sameBundle || kept.bundleId == null ? kept.id : kept.bundleId;
+        if (sameBundle || kept.bundleId == null) kept.bundleId = kept.id;
+        for (const edition of editions) {
+          if (edition.id === kept.id) continue;
+          edition.bundleId = into;
+          await store.put('books', edition);
+        }
+      }
+    }
+    await store.put('books', kept);
+  }
+  const moved = await binBooks([...going]);
+  // A bundle left with its leader alone is no bundle.
+  const after = (await store.all('books')).filter(onShelf);
+  for (const leader of after.filter((b) => b.bundleId === b.id)) {
+    if (!after.some((b) => b.bundleId === leader.id && b.id !== leader.id)) {
+      delete leader.bundleId;
+      await store.put('books', leader);
+    }
+  }
+  return moved;
 }
 
 /** Out of the way, with the time it happened kept so the bin can be ordered. */
@@ -2176,6 +2456,36 @@ function scoreBook(book, words, only) {
   const phrase = words.join(' ');
   if (fields.title.includes(phrase) || fields.shown.includes(phrase)) score += 8;
   return score;
+}
+
+/**
+ * Whether what was typed is most of a book's title, typed right: every word of it in
+ * the title (its own or the one the shelf shows), and those words together making up
+ * at least `share` of the title's letters and numbers -- case, accents, spaces and
+ * stops aside. "a sweet girl wont be" is enough of "A Sweet Girl Won't Be Fooled By The
+ * Villainess" (16 of its 37, over 40%); "sweet girl" is not. How a book in a folder hidden
+ * from the shelf is still found: by someone who knows its name, not by a search anyone
+ * could type.
+ */
+export const TITLE_SHARE = 0.4;
+const bare = (text) => fold(text).replace(/[^\p{L}\p{N}]+/gu, '');
+export function titleTyped(book, query, share = TITLE_SHARE) {
+  const words = fold(query).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (!words.length) return false;
+  return [book.title, displayTitle(book)].some((title) => {
+    const whole = bare(title);
+    if (!whole) return false;
+    const covered = new Uint8Array(whole.length);
+    for (const word of words) {
+      let at = whole.indexOf(word);
+      if (at < 0) return false;
+      // The first place it is not yet counted, so a word typed twice is not counted once.
+      while (at >= 0 && covered[at]) at = whole.indexOf(word, at + 1);
+      if (at < 0) at = whole.indexOf(word);
+      covered.fill(1, at, at + word.length);
+    }
+    return covered.reduce((n, c) => n + c, 0) >= whole.length * share;
+  });
 }
 
 /** Which field a book matched on, so a result can say why it is there. */

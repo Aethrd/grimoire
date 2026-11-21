@@ -327,6 +327,129 @@ export function editFrame(initial, { sample = null, fit = 'screen' } = {}) {
   });
 }
 
+/* ── the text border ──────────────────────────────────────────────────── */
+
+/**
+ * Where the text goes on the page, drawn on the page itself: a border over
+ * the open book, its corners and edges dragged as the picture frame's are,
+ * the page seen through it -- and, each time a finger lets go, the text
+ * laid out again inside it (onTry), so what is kept is what was seen.
+ *
+ * @param initial  { l, r, t, b }: the text's distance from each side, px
+ * @param options.box       the page's place on the screen ({ left, top, width, height })
+ * @param options.onTry     called with { l, r, t, b } as each drag ends
+ * @param options.defaults  { l, r, t, b } for Reset
+ * @returns a promise of the kept { l, r, t, b }, or undefined if cancelled.
+ */
+export function editTextBorder(initial, { box: boxNow, onTry = () => {}, defaults = { l: 24, r: 24, t: 16, b: 16 } } = {}) {
+  return new Promise((resolve) => {
+    let box = boxNow();
+    const W = () => Math.max(1, box.width);
+    const H = () => Math.max(1, box.height);
+    const toFrame = (e) => tidy({ l: e.l / W(), t: e.t / H(), r: 1 - e.r / W(), b: 1 - e.b / H() });
+    const toEdges = (f) => ({
+      l: Math.round(f.l * W()), r: Math.round((1 - f.r) * W()),
+      t: Math.round(f.t * H()), b: Math.round((1 - f.b) * H()),
+    });
+    let frame = toFrame(initial);
+    let drag = null;
+    let barAtTop = false;
+
+    const host = document.createElement('div');
+    host.className = 'frame-edit text-border';
+    host.innerHTML = `
+      <svg class="frame-edit-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="frame-edit-bar">
+        <div class="frame-edit-row">
+          <b class="frame-edit-caption"></b>
+          <button class="icon-btn frame-edit-flip" title="Move this bar"><svg viewBox="0 0 24 24"><path d="M8 4v16M4 8l4-4 4 4M16 20V4M12 16l4 4 4-4"/></svg></button>
+        </div>
+        <p class="frame-edit-hint">Drag a corner or an edge to set where the text goes; drag inside to move it. Let go, and the page is laid out in it. The same for every book.</p>
+        <div class="chip-row wrap">
+          <button class="chip" data-act="even">Even sides</button>
+          <button class="chip" data-act="reset">Reset</button>
+        </div>
+        <div class="frame-edit-actions">
+          <button class="btn ghost" data-act="cancel">Cancel</button>
+          <button class="btn primary" data-act="save">Save</button>
+        </div>
+      </div>`;
+    document.body.appendChild(host);
+    const svg = host.querySelector('.frame-edit-svg');
+    const bar = host.querySelector('.frame-edit-bar');
+
+    function paint() {
+      const sw = window.innerWidth || W(); const sh = window.innerHeight || H();
+      const L = box.left + frame.l * W(); const R = box.left + frame.r * W();
+      const T = box.top + frame.t * H(); const B = box.top + frame.b * H();
+      svg.setAttribute('viewBox', `0 0 ${sw} ${sh}`);
+      const corners = [[L, T], [R, T], [R, B], [L, B]];
+      const edges = [[(L + R) / 2, T], [R, (T + B) / 2], [(L + R) / 2, B], [L, (T + B) / 2]];
+      svg.innerHTML = `<path class="shade" fill-rule="evenodd" d="M0 0H${sw}V${sh}H0Z M${L} ${T}V${B}H${R}V${T}Z"/>`
+        + `<rect class="outline" x="${L}" y="${T}" width="${R - L}" height="${B - T}"/>`
+        + edges.map(([x, y]) => `<circle class="edge" cx="${x}" cy="${y}" r="7"/>`).join('')
+        + corners.map(([x, y]) => `<circle class="corner" cx="${x}" cy="${y}" r="12"/>`).join('');
+      const e = toEdges(frame);
+      host.querySelector('.frame-edit-caption').textContent = `Text border · left ${e.l} · right ${e.r} · top ${e.t} · bottom ${e.b}`;
+      bar.classList.toggle('top', barAtTop);
+    }
+    const tried = () => { try { onTry(toEdges(frame)); } catch { /* the page's own trouble */ } };
+
+    // The screen turned or resized: the same distances from the sides, on the page as it is now.
+    function resized() {
+      const kept = toEdges(frame);
+      box = boxNow();
+      frame = toFrame(kept);
+      paint();
+    }
+    function finish(value) {
+      window.removeEventListener('resize', resized);
+      host.remove();
+      resolve(value);
+    }
+
+    svg.addEventListener('pointerdown', (event) => {
+      if (drag) return;
+      const part = partAt(frame, event.clientX - box.left, event.clientY - box.top, W(), H());
+      if (!part) return;
+      event.preventDefault();
+      try { svg.setPointerCapture?.(event.pointerId); } catch { /* not every target can */ }
+      drag = { pointer: event.pointerId, part, x: event.clientX, y: event.clientY, from: frame };
+      host.classList.add('dragging');
+    });
+    svg.addEventListener('pointermove', (event) => {
+      if (!drag || drag.pointer !== event.pointerId) return;
+      event.preventDefault();
+      frame = dragFrame(drag.from, drag.part, (event.clientX - drag.x) / W(), (event.clientY - drag.y) / H());
+      paint();
+    });
+    const end = (event) => {
+      if (!drag || drag.pointer !== event.pointerId) return;
+      drag = null;
+      host.classList.remove('dragging');
+      tried();
+    };
+    svg.addEventListener('pointerup', end);
+    svg.addEventListener('pointercancel', end);
+
+    host.querySelector('[data-act="even"]').onclick = () => {
+      const e = toEdges(frame);
+      const side = Math.round((e.l + e.r) / 2);
+      const ends = Math.round((e.t + e.b) / 2);
+      frame = toFrame({ l: side, r: side, t: ends, b: ends });
+      paint();
+      tried();
+    };
+    host.querySelector('[data-act="reset"]').onclick = () => { frame = toFrame(defaults); paint(); tried(); };
+    host.querySelector('.frame-edit-flip').onclick = () => { barAtTop = !barAtTop; paint(); };
+    host.querySelector('[data-act="cancel"]').onclick = () => finish(undefined);
+    host.querySelector('[data-act="save"]').onclick = () => finish(toEdges(frame));
+    host.cancel = () => finish(undefined);
+    window.addEventListener('resize', resized);
+    paint();
+  });
+}
+
 /** Whether the editor is open, and closing it: for the back gesture. */
 export function closeFrameEditor() {
   const open = document.querySelector('.frame-edit');

@@ -707,6 +707,12 @@ await t('the bin screen lists what was deleted and puts it back', async () => {
   assert.ok(el('bin-body').querySelector(`[data-book="${id}"]`), 'the bin does not list it');
   assert.equal(el('bin-foot').hidden, false);
 
+  // Nothing picked: it picks everything -- it does not put everything back.
+  assert.equal(el('bin-restore-all').textContent, 'Select all');
+  tap(el('bin-restore-all'));
+  await settle(350);
+  assert.equal(library.isBinned(await store.get('books', id)), true, 'Select all put books back');
+  assert.equal(el('bin-restore-all').textContent, 'Put back');
   tap(el('bin-restore-all'));
   await settle(350);
 

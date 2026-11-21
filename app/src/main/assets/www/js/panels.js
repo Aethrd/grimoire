@@ -9,12 +9,13 @@ import * as theme from './theme.js';
 import * as reader from './reader.js';
 import {
   setVaultUnlocked, vaultUnlocked, countWorks, workOf, onShelf, hiddenBy, hiddenFolderList,
-  collapseBundles, displayTitle, naturalOrder,
+  collapseBundles, displayTitle, naturalOrder, findDoubles, removeDoubles,
 } from './library.js';
-import { toast } from './screens.js';
+import { toast, setNoticeTopicsOff, textBorderField } from './screens.js';
 import * as translate from './translate.js';
 import * as blobs from './blobs.js';
 import * as frames from './frame.js';
+import * as fonts from './fonts.js';
 
 const el = (id) => document.getElementById(id);
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -88,7 +89,9 @@ export async function openAppearance(host) {
   // pair that would put body text under 4.5:1 on the resulting ground.
   const accents = document.createElement('div');
   accents.className = 'field';
-  accents.innerHTML = '<label><span>Accent</span><span class="muted">Builds the whole ramp</span></label>';
+  accents.innerHTML = theme.gradientOf(settings.gradient)
+    ? '<label><span>Accent</span><span class="muted">Led by your gradient\'s main colour for now (below)</span></label>'
+    : '<label><span>Accent</span><span class="muted">Builds the whole ramp</span></label>';
   const swatches = document.createElement('div');
   swatches.className = 'swatches';
   for (const [name, hex] of theme.ACCENT_PRESETS) {
@@ -127,6 +130,7 @@ export async function openAppearance(host) {
   check.textContent = `Body text contrast ${ratio.toFixed(1)}:1 — ${ratio >= 4.5 ? 'passes' : 'blocked, using nearest passing step'}`;
   accents.appendChild(check);
   body.appendChild(accents);
+  body.appendChild(gradientField(settings, () => openAppearance(body)));
 
   // Background image + veil.
   const bg = document.createElement('div');
@@ -179,16 +183,7 @@ export async function openAppearance(host) {
   paletteHost.id = 'auto-palette';
   body.appendChild(paletteHost);
 
-  // Font import needs a bridge the shell does not have yet, so say so rather
-  // than shipping a control that quietly does nothing.
-  const fonts = document.createElement('div');
-  fonts.className = 'card';
-  fonts.innerHTML = `
-    <h2>Font import</h2>
-    <p class="muted" style="font-size:12px;line-height:1.5;margin:0">
-      Archivo and Newsreader come with the app. Adding your own .ttf or .otf
-      fonts is not possible yet.</p>`;
-  body.appendChild(fonts);
+  body.appendChild(fontsField(() => openAppearance(body)));
 
   function renderPalette(palette) {
     paletteHost.innerHTML = '';
@@ -216,6 +211,268 @@ export async function openAppearance(host) {
   }
 }
 
+/* ── the theme's gradient ──────────────────────────────────────────────
+ *
+ * What the download mark fills with, pause and resume are drawn in and every
+ * progress bar runs through: from a light step of the accent to a deep one,
+ * unless colours of your own are chosen -- two to five, each with a share of
+ * the length -- and in one direction everywhere, or each place its own. Kept
+ * with the theme, so a saved or sent theme carries it.
+ */
+function gradientField(settings, redraw) {
+  const steps = theme.ramp(settings.accent);
+  const own = theme.gradientOf(settings.gradient);
+  // The accent's own, as it is drawn (theme.apply: its 300 and 600 steps).
+  let stops = own ? own.stops.map((stop) => ({ ...stop }))
+    : [{ color: steps[2], share: 50 }, { color: steps[5], share: 50 }];
+  // Its angle in degrees, or null for Auto (each place its own).
+  let angle = theme.gradientAngle(settings.gradientDir);
+  const field = document.createElement('div');
+  field.className = 'field gradient-field';
+  field.innerHTML = `<label><span>Gradient</span><span class="muted">${own ? `Your own ${stops.length} colours, colouring the app by share` : 'Follows the accent'}</span></label>`;
+  const preview = document.createElement('div');
+  preview.className = 'gradient-preview';
+  const paint = () => {
+    preview.style.background = theme.gradientCss(theme.placeStops(stops), angle);
+    const total = stops.reduce((sum, stop) => sum + stop.share, 0) || 1;
+    field.querySelectorAll('.gradient-stop output').forEach((out, i) => { out.textContent = `${Math.round((stops[i].share / total) * 100)}%`; });
+  };
+  field.appendChild(preview);
+  const keep = async (patch) => {
+    const next = await store.saveSettings(patch);
+    theme.apply(next);
+    refreshTheme();
+    redraw();
+  };
+  const keepStops = () => keep({ gradient: theme.gradientOf({ stops }) });
+
+  /* Its direction, turned by degree: a dial to drag round (it settles on the
+   * eighths when close to one), a slider for the exact angle, and Auto. Seen
+   * in the preview as it turns; kept when let go. */
+  const ways = document.createElement('div');
+  ways.className = 'gradient-dirs';
+  ways.setAttribute('role', 'group');
+  ways.setAttribute('aria-label', 'Gradient direction');
+  const auto = document.createElement('button');
+  auto.type = 'button';
+  auto.className = 'chip';
+  auto.dataset.dir = 'auto';
+  auto.textContent = 'Auto';
+  auto.setAttribute('aria-label', 'Auto: each place its own direction');
+  auto.setAttribute('aria-pressed', String(angle === null));
+  auto.onclick = () => { if (angle !== null) keep({ gradientDir: 'auto' }); };
+  const dial = document.createElement('div');
+  dial.className = 'gradient-dial';
+  dial.setAttribute('aria-hidden', 'true');
+  dial.innerHTML = '<svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="18"/><g><path d="M20 30V10M14 16l6-6 6 6"/></g></svg>';
+  const turn = document.createElement('input');
+  turn.type = 'range';
+  turn.min = '0';
+  turn.max = '359';
+  turn.step = '1';
+  turn.setAttribute('aria-label', 'Gradient angle, in degrees');
+  const said = document.createElement('output');
+  const show = () => {
+    const at = angle ?? 90;
+    turn.value = String(at);
+    turn.style.setProperty('--filled', `${(at / 359) * 100}%`);
+    dial.querySelector('g').setAttribute('transform', `rotate(${at} 20 20)`);
+    said.textContent = angle === null ? 'Auto' : `${angle}°`;
+    paint();
+  };
+  turn.oninput = () => { angle = Number(turn.value); show(); };
+  turn.onchange = () => { angle = Number(turn.value); keep({ gradientDir: angle }); };
+  const fromPointer = (event) => {
+    const box = dial.getBoundingClientRect();
+    const dx = event.clientX - (box.left + box.width / 2), dy = event.clientY - (box.top + box.height / 2);
+    let at = Math.round((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
+    const eighth = Math.round(at / 45) * 45;
+    if (Math.abs(at - eighth) <= 4) at = eighth % 360;
+    angle = at;
+    show();
+  };
+  let turning = false;
+  dial.onpointerdown = (event) => { turning = true; dial.setPointerCapture?.(event.pointerId); fromPointer(event); };
+  dial.onpointermove = (event) => { if (turning) fromPointer(event); };
+  dial.onpointerup = dial.onpointercancel = () => { if (!turning) return; turning = false; keep({ gradientDir: angle }); };
+  ways.append(auto, dial, turn, said);
+  field.appendChild(ways);
+  queueMicrotask(show);
+
+  // The app's buttons and edges: each solid in its role's colour, or in the gradient itself.
+  const style = theme.COLOUR_STYLES[settings.colourStyle] ? settings.colourStyle : 'solid';
+  const styles = document.createElement('div');
+  styles.className = 'seg gradient-style';
+  styles.setAttribute('role', 'group');
+  styles.setAttribute('aria-label', 'Buttons and edges drawn in');
+  for (const [key, label] of Object.entries(theme.COLOUR_STYLES)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.style = key;
+    button.textContent = label;
+    button.setAttribute('aria-pressed', String(key === style));
+    button.onclick = () => { if (key !== style) keep({ colourStyle: key }); };
+    styles.appendChild(button);
+  }
+  field.appendChild(styles);
+
+  // What each colour colours: ranked by share, the largest leading the app.
+  const roles = document.createElement('ul');
+  roles.className = 'gradient-roles';
+  roles.setAttribute('aria-label', 'What each colour is used for');
+  const ranked = own ? theme.rolesOf(stops) : [steps[3], steps[2], steps[5], steps[1], steps[6]];
+  theme.ROLE_NAMES.forEach((name, i) => {
+    const item = document.createElement('li');
+    const dot = document.createElement('i');
+    dot.style.background = ranked[i];
+    const label = document.createElement('b');
+    label.textContent = name;
+    const part = document.createElement('span');
+    part.textContent = theme.ROLE_PARTS[i];
+    item.append(dot, label, part);
+    roles.appendChild(item);
+  });
+  field.appendChild(roles);
+
+  // Each colour: its own, its share, and taken out (while more than two).
+  const list = document.createElement('div');
+  list.className = 'gradient-stops';
+  stops.forEach((stop, i) => {
+    const row = document.createElement('div');
+    row.className = 'gradient-stop';
+    const colour = document.createElement('input');
+    colour.type = 'color';
+    colour.value = stop.color;
+    colour.setAttribute('aria-label', `Gradient colour ${i + 1}`);
+    // Shown as it moves; kept once chosen.
+    colour.oninput = () => { stops[i].color = colour.value.toLowerCase(); paint(); };
+    colour.onchange = () => { stops[i].color = colour.value.toLowerCase(); keepStops(); };
+    const share = document.createElement('input');
+    share.type = 'range';
+    share.min = '1';
+    share.max = '100';
+    share.step = '1';
+    share.value = String(stop.share);
+    share.setAttribute('aria-label', `Share of colour ${i + 1}`);
+    const fill = () => share.style.setProperty('--filled', `${((Number(share.value) - 1) / 99) * 100}%`);
+    fill();
+    share.oninput = () => { stops[i].share = Number(share.value); fill(); paint(); };
+    share.onchange = () => { stops[i].share = Number(share.value); keepStops(); };
+    const shown = document.createElement('output');
+    row.append(colour, share, shown);
+    if (stops.length > 2) {
+      const drop = document.createElement('button');
+      drop.type = 'button';
+      drop.className = 'icon-btn gradient-drop';
+      drop.title = `Remove colour ${i + 1}`;
+      drop.setAttribute('aria-label', drop.title);
+      drop.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      drop.onclick = () => { stops.splice(i, 1); keepStops(); };
+      row.appendChild(drop);
+    }
+    list.appendChild(row);
+  });
+  field.appendChild(list);
+
+  const row = document.createElement('div');
+  row.className = 'gradient-ends';
+  if (stops.length < theme.GRADIENT_MAX) {
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'chip';
+    add.textContent = '+ Add a colour';
+    // In before the last, as the blend there already was -- so nothing jumps until it is changed.
+    add.onclick = () => {
+      const placed = theme.placeStops(stops);
+      const mid = (placed[placed.length - 3].at + placed[placed.length - 2].at) / 2;
+      stops.splice(stops.length - 1, 0, { color: theme.colourAt(placed, mid), share: 50 });
+      keepStops();
+    };
+    row.appendChild(add);
+  }
+  if (own) {
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'chip';
+    back.textContent = 'Follow the accent';
+    back.onclick = () => keep({ gradient: null });
+    row.appendChild(back);
+  }
+  field.appendChild(row);
+  paint();
+  return field;
+}
+
+/* ── fonts of your own ─────────────────────────────────────────────────
+ *
+ * Picked from the phone, checked to be a font, kept, and from then on a
+ * face to read in -- chosen in Layout beside Newsreader and Archivo. Each
+ * is listed in its own face, with a way to let it go.
+ */
+function fontsField(redraw) {
+  const field = document.createElement('div');
+  field.className = 'field fonts-field';
+  field.innerHTML = '<label><span>Fonts</span><span class="muted">Your own, to read in — .ttf, .otf, .woff</span></label>';
+  const listBox = document.createElement('div');
+  listBox.className = 'font-list';
+  field.appendChild(listBox);
+  fonts.list().then((kept) => {
+    if (!kept.length) {
+      listBox.innerHTML = '<p class="muted" style="font-size:12px;margin:0">Newsreader and Archivo come with the app. '
+        + 'Add a font, then choose it in Layout as you would those.</p>';
+      return;
+    }
+    for (const font of kept) {
+      const row = document.createElement('div');
+      row.className = 'font-row';
+      const name = document.createElement('span');
+      name.className = 'font-name';
+      name.style.fontFamily = fonts.faceFamily(`font:${font.id}`);
+      name.textContent = font.name;
+      const sample = document.createElement('small');
+      sample.className = 'muted';
+      sample.style.fontFamily = fonts.faceFamily(`font:${font.id}`);
+      sample.textContent = 'The quick brown fox · 永遠の物語 · 이야기';
+      const text = document.createElement('span');
+      text.className = 'font-text';
+      text.append(name, sample);
+      const remove = document.createElement('button');
+      remove.className = 'theme-remove';
+      remove.setAttribute('aria-label', `Remove ${font.name}`);
+      remove.textContent = '✕';
+      remove.onclick = async () => {
+        await fonts.remove(font.id);
+        toast(`${font.name} removed — books read in it go back to Newsreader`, 4000);
+        redraw();
+      };
+      row.append(text, remove);
+      listBox.appendChild(row);
+    }
+  }).catch(() => {});
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = fonts.FONT_ACCEPT;
+  input.hidden = true;
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    try {
+      const font = await fonts.add(file);
+      toast(`${font.name} added — choose it in Layout`, 4000);
+      redraw();
+    } catch (error) {
+      toast(error.message || 'That font could not be added.', 6000);
+    }
+  };
+  const add = document.createElement('button');
+  add.className = 'btn ghost block';
+  add.textContent = 'Add a font…';
+  add.onclick = () => input.click();
+  field.append(input, add);
+  return field;
+}
+
 /* ── themes ───────────────────────────────────────────────────────────
  *
  * The look, kept by name: saved from what is set now, switched between with
@@ -229,7 +486,8 @@ export async function openAppearance(host) {
  *  "some file", and a picker asked only for JSON greys those out. */
 const THEME_ACCEPT = `application/json,text/plain,application/octet-stream,.json,${blobs.COVER_ACCEPT}`;
 
-const sameLook = (a, b) => theme.THEME_KEYS.every((key) => (a[key] ?? null) === (b[key] ?? null));
+// A gradient is two colours: the same look when both are.
+const sameLook = (a, b) => theme.THEME_KEYS.every((key) => JSON.stringify(a[key] ?? null) === JSON.stringify(b[key] ?? null));
 
 function themesField(settings, redraw) {
   const field = document.createElement('div');
@@ -317,7 +575,7 @@ function themesField(settings, redraw) {
     const current = saved.find((t) => sameLook(t, settings));
     const look = theme.themeOf(settings, current?.name || 'My theme');
     const text = JSON.stringify(theme.themeFile(look), null, 2);
-    const file = `${look.name.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'theme'}.quire-theme.json`;
+    const file = `${look.name.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'theme'}.mythos-theme.json`;
     if (onWriteOut) {
       await onWriteOut(new Blob([text], { type: 'application/json' }), file, 'application/json', { share: true });
     } else {
@@ -336,7 +594,7 @@ function importTheme(settings, redraw) {
   picker.onchange = async () => {
     const file = picker.files?.[0];
     if (!file) return;
-    const stem = String(file.name || 'Imported theme').replace(/(\.quire-theme)?\.[a-z0-9]+$/i, '').slice(0, 60);
+    const stem = String(file.name || 'Imported theme').replace(/(\.(?:mythos|quire)-theme)?\.[a-z0-9]+$/i, '').slice(0, 60);
     try {
       let found;
       if (/^image\//.test(file.type || '') || /\.(png|jpe?g|webp|gif|avif|bmp|heic|heif)$/i.test(file.name || '')) {
@@ -490,7 +748,7 @@ function openRouterFields(state, pasteInstead, done) {
   const connected = state.llmConfigured && state.llmProvider === 'openrouter';
 
   if (!connected) {
-    box.appendChild(note('Sign in at openrouter.ai — or make a free account there — and approve Quire. '
+    box.appendChild(note('Sign in at openrouter.ai — or make a free account there — and approve Mythos. '
       + 'Your browser opens for it and you come straight back: no key to copy. '
       + 'Free models cost nothing; others use the credits on your OpenRouter account.'));
     const go = button('Sign in with OpenRouter', 'primary');
@@ -532,7 +790,7 @@ function openRouterFields(state, pasteInstead, done) {
   out.onclick = async () => {
     await translate.clearLlm('openrouter');
     toast(state.llmLinked
-      ? 'Signed out. To cancel the key itself, delete “Quire” at openrouter.ai/keys.'
+      ? 'Signed out. To cancel the key itself, delete it at openrouter.ai/keys (named “Mythos”, or “Quire” if made before the app was renamed).'
       : 'Key removed. No further requests will be made.', 6000);
     done();
   };
@@ -638,6 +896,114 @@ function keysBox(placeholder) {
  * the honorifics, leave the sound effects, romanise names this way. The
  * reply's form is not theirs to change, and is added to whatever they write.
  */
+/** Keys a service turned away when set up, each said with why; the rest kept. */
+function sayRejected(result, done) {
+  const rejected = result?.rejected || [];
+  if (!rejected.length) { toast(done, 3000, { kind: 'done' }); return; }
+  toast(`${done} — ${rejected.length} key${rejected.length === 1 ? '' : 's'} not kept: `
+    + rejected.map((r) => `key ${r.n} (${r.hint}): ${r.why}`).join('; '), 12000, { kind: 'failed' });
+}
+
+/**
+ * How the keys are used, and testing them: turned to the next every so many
+ * requests, the service fallen back on when all of one's keys are refused or
+ * spent, and each key tried now -- before a long run finds a bad one for it.
+ */
+function keysCard(state, reopen) {
+  const card = document.createElement('div');
+  card.className = 'card keys-card';
+  const names = Object.fromEntries(translate.LLM_PROVIDERS.map(([code, label]) => [code, label]));
+  const main = state.llmProvider;
+  card.innerHTML = `<h2>Keys</h2>
+    <p class="muted" style="font-size:12px;line-height:1.55;margin:0 0 10px">
+      ${names[main] || main}: ${state.llmKeys || 0} key${state.llmKeys === 1 ? '' : 's'}. A key refused or out of credit is
+      passed over for the next one by itself; these are for spreading a long run over them all, and for when they all run out.</p>`;
+
+  // Turned every so many requests.
+  const rotate = document.createElement('div');
+  rotate.className = 'row';
+  rotate.innerHTML = `<div class="row-text"><b>Turn to the next key every</b><small>requests — 0 only when one runs out</small></div>`;
+  const every = document.createElement('input');
+  every.type = 'number';
+  every.min = '0';
+  every.max = '1000';
+  every.inputMode = 'numeric';
+  every.value = String(state.llmRotateEvery || 0);
+  every.style.width = '72px';
+  every.onchange = async () => {
+    try {
+      await translate.setLlmOptions(Number(every.value) || 0, translate.status().llmFallback || '');
+      toast(Number(every.value) > 0 ? `Keys turned every ${Number(every.value)} request${Number(every.value) === 1 ? '' : 's'}` : 'Keys turned only when one runs out', 2500);
+    } catch (error) { toast(error.message, 6000); }
+  };
+  rotate.appendChild(every);
+  card.appendChild(rotate);
+
+  // The fallback: any other service set up.
+  const others = Object.keys(state.llmReady || {}).filter((code) => code !== main);
+  const fallTitle = document.createElement('p');
+  fallTitle.className = 'eyebrow';
+  fallTitle.style.marginTop = '12px';
+  fallTitle.textContent = 'When every key runs out, fall back to';
+  const chips = document.createElement('div');
+  chips.className = 'chip-row wrap';
+  for (const code of ['', ...others]) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.style.textTransform = 'none';
+    chip.textContent = code ? `${names[code] || code} · ${state.llmReady[code].model}` : 'Nothing';
+    chip.setAttribute('aria-pressed', String((state.llmFallback || '') === code));
+    chip.onclick = async () => {
+      try { await translate.setLlmOptions(Number(every.value) || 0, code); reopen(); } catch (error) { toast(error.message, 6000); }
+    };
+    chips.appendChild(chip);
+  }
+  const fallNote = document.createElement('p');
+  fallNote.className = 'muted';
+  fallNote.style.cssText = 'font-size:12px;line-height:1.5;margin:6px 0 0';
+  fallNote.textContent = others.length
+    ? 'Used only for requests the main service cannot take: its keys all refused or spent, or its servers failing.'
+    : 'To have one, pick another service above, paste its key and tap “Keep as fallback instead”.';
+  card.append(fallTitle, chips, fallNote);
+
+  // Each key tried now.
+  const test = document.createElement('button');
+  test.className = 'btn ghost block';
+  test.style.marginTop = '12px';
+  test.textContent = 'Test all keys';
+  const results = document.createElement('div');
+  results.className = 'key-results';
+  test.onclick = async () => {
+    test.disabled = true;
+    test.textContent = 'Testing…';
+    results.replaceChildren();
+    for (const code of [main, ...(state.llmFallback ? [state.llmFallback] : [])]) {
+      const head = document.createElement('p');
+      head.className = 'eyebrow';
+      head.style.marginTop = '8px';
+      head.textContent = names[code] || code;
+      results.appendChild(head);
+      try {
+        for (const r of await translate.testKeys(code)) {
+          const line = document.createElement('p');
+          line.className = `key-result ${r.ok ? 'ok' : 'bad'}`;
+          line.textContent = `${r.ok ? '✓' : '✗'} Key ${r.n} (${r.hint}) — ${r.ok ? `works, ${(r.ms / 1000).toFixed(1)} s` : r.why}`;
+          results.appendChild(line);
+        }
+      } catch (error) {
+        const line = document.createElement('p');
+        line.className = 'key-result bad';
+        line.textContent = `✗ ${error.message}`;
+        results.appendChild(line);
+      }
+    }
+    test.disabled = false;
+    test.textContent = 'Test all keys';
+  };
+  card.append(test, results);
+  return card;
+}
+
 async function instructionsCard() {
   const settings = await store.settings();
   const card = document.createElement('div');
@@ -909,8 +1275,8 @@ export async function openLanguage(host) {
         connect.disabled = true;
         connect.textContent = 'Checking…';
         try {
-          await translate.setLlm(code, key.value.trim(), modelBox.value.trim(), base.value.trim());
-          toast('Connected', 3000, { kind: 'done' });
+          const result = await translate.setLlm(code, key.value.trim(), modelBox.value.trim(), base.value.trim());
+          sayRejected(result, 'Connected');
           openLanguage(body);
           refreshTheme();
         } catch (error) {
@@ -922,6 +1288,31 @@ export async function openLanguage(host) {
       fields.append(hint);
       if (code === 'custom') fields.append(base);
       fields.append(key, modelBox, connect);
+      /* Another service than the one in use: kept beside it to fall back on
+       * when all its keys are refused or spent, without becoming the translator. */
+      if (state.llmConfigured && state.llmProvider !== code) {
+        const spare = document.createElement('button');
+        spare.className = 'btn ghost block';
+        spare.style.marginTop = '8px';
+        spare.textContent = 'Keep as fallback instead';
+        spare.onclick = async () => {
+          if (code !== 'custom' && !key.value.trim() && !state.llmReady?.[code]) return toast('Paste its key first');
+          spare.disabled = true;
+          spare.textContent = 'Checking…';
+          try {
+            const result = await translate.addLlm(code, key.value.trim(), modelBox.value.trim(), base.value.trim());
+            // As set now, not as when this screen opened.
+            await translate.setLlmOptions(translate.status().llmRotateEvery || 0, code);
+            sayRejected(result, `Kept to fall back on when ${info[1]}’s keys run out`);
+            openLanguage(body);
+          } catch (error) {
+            spare.disabled = false;
+            spare.textContent = 'Keep as fallback instead';
+            toast(error.message, 7000);
+          }
+        };
+        fields.append(spare);
+      }
       if (state.llmConfigured && state.llmProvider === code) {
         const forget = document.createElement('button');
         forget.className = 'btn ghost block';
@@ -948,6 +1339,7 @@ export async function openLanguage(host) {
     card.append(providers, fields);
     paint();
     body.appendChild(card);
+    if (state.llmConfigured) body.appendChild(keysCard(state, () => openLanguage(body)));
     body.appendChild(await instructionsCard());
   }
 
@@ -1326,30 +1718,129 @@ export async function openStats({ onOpen = null } = {}) {
   body.appendChild(averages);
 
   const heatWrap = document.createElement('section');
-  heatWrap.className = 'block';
+  heatWrap.className = 'block heat-block';
   heatWrap.innerHTML = '<h2>26 weeks</h2>'
     + '<p class="muted" style="font-size:11px;margin:0 0 8px">By words read, '
-    + 'including chapters copied out to read elsewhere.</p>';
+    + 'including chapters copied out to read elsewhere. Oldest on the left, this week on the right; '
+    + 'each column a week, Monday at the top. Tap a day for its pages and time.</p>';
+
+  /* A calendar: whole weeks, Monday first, this week last -- so a row is a
+   * weekday and a column a week, as calendars read. It started on whatever
+   * weekday was 181 days ago, which made neither rows nor columns mean
+   * anything. */
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const weekday = (today.getDay() + 6) % 7;          // Monday 0
+  const first = new Date(today);
+  first.setDate(today.getDate() - weekday - 25 * 7);  // the Monday 25 weeks before this one
+  const days = [];
+  for (const d = new Date(first); d <= today; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+
+  /* Coloured by rank among the days read in these weeks, not by words over a
+   * ceiling: words cluster low with a few heavy days far above, so nearly
+   * every day sat at one end of the gradient and its other colours never
+   * came. Ranked, the heaviest day takes the gradient's start (its left), the
+   * lightest its end, and the rest spread between -- every colour in use. */
+  const shown = days.map((d) => byDay.get(store.dayKey(d.getTime()))?.words || 0);
+  const read = [...new Set(shown.filter((n) => n > 0))].sort((x, y) => x - y);
+  const rankOf = (words) => (read.length < 2 ? 1 : read.indexOf(words) / (read.length - 1));
+
+  const scroller = document.createElement('div');
+  scroller.className = 'heat-scroll';
+  const monthsRow = document.createElement('div');
+  monthsRow.className = 'heat-months';
+  const heatGrid = document.createElement('div');
+  heatGrid.className = 'heat-grid';
+  const dayNames = document.createElement('div');
+  dayNames.className = 'heat-days';
+  dayNames.innerHTML = '<span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span><span>Sun</span>';
   const heat = document.createElement('div');
   heat.className = 'heat';
-  const start = Date.now() - 181 * DAY;
-  for (let i = 0; i < 182; i++) {
-    const key = store.dayKey(start + i * DAY);
+  const weeks = Math.ceil(days.length / 7);
+  monthsRow.style.gridTemplateColumns = `repeat(${weeks}, 11px)`;
+  let lastMonth = -1;
+  days.forEach((d, i) => {
+    const key = store.dayKey(d.getTime());
     const day = byDay.get(key);
     const words = day?.words || 0;
     const level = words === 0 ? 0
       : words <= cuts[0] ? 1 : words <= cuts[1] ? 2 : words <= cuts[2] ? 3 : 4;
     const cell = document.createElement('i');
     cell.dataset.l = String(level);
-    // A continuous shade within the level, so a heavy day reads as heavier
-    // than a merely busy one rather than both flattening to the top step.
-    const ceiling = cuts[3] || 1;
-    cell.style.setProperty('--fill', String(Math.min(1, words / (ceiling * 1.5))));
-    cell.title = `${key} · ${words.toLocaleString()} words`;
+    cell.dataset.day = key;
+    if (level) {
+      const fill = rankOf(words);
+      cell.style.setProperty('--fill', String(fill));
+      // The heaviest day the gradient's first (left) colour, the lightest its last.
+      cell.style.setProperty('--heat-c', `var(--grad-s${Math.round((1 - fill) * (theme.GRADIENT_SAMPLES - 1))})`);
+    }
+    if (i === days.length - 1) cell.classList.add('today');
     heat.appendChild(cell);
-  }
-  heatWrap.appendChild(heat);
+    // The month named above the first week it begins in.
+    if (d.getDate() <= 7 && d.getMonth() !== lastMonth && i % 7 === 0) {
+      lastMonth = d.getMonth();
+      const label = document.createElement('span');
+      label.textContent = d.toLocaleDateString(undefined, { month: 'short' });
+      label.style.gridColumn = String(Math.floor(i / 7) + 1);
+      monthsRow.appendChild(label);
+    }
+  });
+  scroller.append(monthsRow, heat);
+  heatGrid.append(dayNames, scroller);
+  heatWrap.appendChild(heatGrid);
+
+  /* A day's pages, time and date, in a small card by its square: closed by a
+   * tap anywhere else, and moved by a tap on another square. */
+  const tip = document.createElement('div');
+  tip.className = 'heat-tip';
+  tip.hidden = true;
+  heatWrap.appendChild(tip);
+  const minutes = (ms) => {
+    const m = Math.round((ms || 0) / 60000);
+    if (!m) return ms > 0 ? 'under a minute' : 'no time';
+    return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
+  };
+  let tipFor = null;
+  const closeTip = () => {
+    tip.hidden = true;
+    tipFor?.classList.remove('picked');
+    tipFor = null;
+    document.removeEventListener('pointerdown', outside, true);
+  };
+  const outside = (event) => {
+    if (tip.contains(event.target)) return;
+    if (event.target?.closest?.('.heat i[data-day]')) return;   // the square's own tap decides
+    closeTip();
+  };
+  heat.addEventListener('click', (event) => {
+    const cell = event.target?.closest?.('i[data-day]') || null;
+    if (!cell) return;
+    if (tipFor === cell) { closeTip(); return; }
+    tipFor?.classList.remove('picked');
+    tipFor = cell;
+    cell.classList.add('picked');
+    const key = cell.dataset.day;
+    const day = byDay.get(key);
+    const [y, mo, da] = key.split('-').map(Number);
+    const date = new Date(y, mo - 1, da).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+    tip.innerHTML = `<b>${escape(date)}</b>`
+      + (day && (day.pages || day.ms || day.words)
+        ? `<span>${(day.pages || 0).toLocaleString()} page${day.pages === 1 ? '' : 's'} · ${escape(minutes(day.ms))}</span>`
+          + (day.words ? `<small>${day.words.toLocaleString()} words</small>` : '')
+        : '<span class="muted">Nothing read</span>');
+    tip.hidden = false;
+    // By the square, kept inside the section.
+    const box = heatWrap.getBoundingClientRect();
+    const at = cell.getBoundingClientRect();
+    const width = tip.offsetWidth || 160;
+    const left = Math.max(0, Math.min(box.width - width, at.left - box.left + at.width / 2 - width / 2));
+    tip.style.left = `${left}px`;
+    tip.style.top = `${at.bottom - box.top + 6}px`;
+    document.addEventListener('pointerdown', outside, true);
+  });
   body.appendChild(heatWrap);
+  // This week in view, the oldest scrolled off to the left.
+  requestAnimationFrame(() => { scroller.scrollLeft = scroller.scrollWidth; });
 
   const months = new Array(12).fill(0);
   const now = new Date();
@@ -1431,7 +1922,7 @@ export async function openStats({ onOpen = null } = {}) {
   exportBtn.textContent = 'Export the reading log as JSON';
   exportBtn.onclick = () => {
     // Everything is computed locally; the log belongs to the reader.
-    offerDownload('quire-reading-log.json', 'application/json',
+    offerDownload('mythos-reading-log.json', 'application/json',
       JSON.stringify(log, null, 2));
   };
   body.appendChild(exportBtn);
@@ -1461,10 +1952,53 @@ function entryOf(item) {
   return { book: item, title: displayTitle(first) || 'Untitled', also: others };
 }
 
+/* The list, as text to paste somewhere: a folder's, or all of them, each
+ * folder under its name and count, its books numbered in the order shown,
+ * a bundle's other titles beside its first. */
+const listLine = (entry, n) => `${n}. ${entry.title}${entry.also.length ? ` (${entry.also.join(' · ')})` : ''}`;
+const folderText = (name, entries) => [`${name} (${entries.length})`, ...entries.map((entry, i) => listLine(entry, i + 1))].join('\n');
+
+async function copyPlain(text) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('no clipboard');
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Older WebViews: the copy command, from a box made for it and taken away.
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    if (!ok) throw new Error('The phone would not take the copy');
+  }
+}
+
+function copyButton(label, text, said) {
+  const button = document.createElement('button');
+  button.className = 'chip folder-copy';
+  button.type = 'button';
+  button.textContent = label;
+  button.onclick = async (event) => {
+    // In a folder's heading: copies, and leaves the folder open or shut as it was.
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await copyPlain(text());
+      toast(said);
+    } catch (error) {
+      toast(`Could not copy — ${error.message}`);
+    }
+  };
+  return button;
+}
+
 function folderLists(shelf, hidden, onOpen) {
   const section = document.createElement('section');
   section.className = 'block folder-lists';
-  section.innerHTML = '<h2>In each folder</h2>';
+  section.innerHTML = '<div class="folder-lists-head"><h2>In each folder</h2></div>';
 
   const listed = shelf.filter((book) => !hiddenBy(book.folder || '', hidden));
   const away = new Set(shelf.filter((book) => hiddenBy(book.folder || '', hidden))
@@ -1484,16 +2018,25 @@ function folderLists(shelf, hidden, onOpen) {
   // Loose books first, then the folders by name, numbers in number order.
   const folders = [...byFolder.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : naturalOrder(a, b)));
   const total = [...byFolder.values()].reduce((n, list) => n + list.length, 0);
+  const nameOf = (folder) => (folder ? folder.split('/').join(' / ') : 'Not in a folder');
+  for (const folder of folders) byFolder.get(folder).sort((a, b) => naturalOrder(a.title, b.title));
+  // The whole list: every folder shown, as it is shown.
+  section.querySelector('.folder-lists-head').appendChild(copyButton('Copy list',
+    () => folders.map((folder) => folderText(nameOf(folder), byFolder.get(folder))).join('\n\n'),
+    `List copied · ${total} book${total === 1 ? '' : 's'} in ${folders.length} folder${folders.length === 1 ? '' : 's'}`));
   for (const folder of folders) {
-    const entries = byFolder.get(folder).sort((a, b) => naturalOrder(a.title, b.title));
+    const entries = byFolder.get(folder);
     const box = document.createElement('details');
     box.className = 'folder-list';
     // Open when the whole library is short enough to read at a glance.
     box.open = total <= 60;
     // The whole path: a folder inside another reads as where it is.
-    const name = folder ? folder.split('/').join(' / ') : 'Not in a folder';
+    const name = nameOf(folder);
     box.innerHTML = `<summary><span>${escape(name)}</span>`
       + `<small class="muted">${entries.length}</small></summary>`;
+    // Just this folder's.
+    box.querySelector('summary').appendChild(copyButton('Copy', () => folderText(name, entries),
+      `“${name}” copied · ${entries.length} book${entries.length === 1 ? '' : 's'}`));
     const list = document.createElement('ol');
     for (const entry of entries) {
       const row = document.createElement('li');
@@ -1660,10 +2203,9 @@ export async function openVault(onVaultChange, host) {
   data.className = 'block';
   data.innerHTML = `<h2>Your data</h2>
     <p class="muted" style="font-size:12px;line-height:1.55">
-      Everything lives in this app on this device. There is no account and the
-      app has no network permission, so nothing is uploaded and nothing can be.
-      Export is here so leaving is easy, not because anything is stored
-      elsewhere.</p>`;
+      Everything lives on this device; nothing is uploaded. Two things to keep
+      safe, and they are separate: the <b>backup</b> (what you did — folders,
+      places, marks, covers chosen, themes) and the <b>books</b> themselves.</p>`;
   /* A backup is everything except the books.
    *
    * The text and pictures are not in it on purpose -- they are gigabytes, and
@@ -1748,6 +2290,19 @@ export async function openVault(onVaultChange, host) {
    * backup is for. Sending hands it to whatever app will take it, which is
    * what you want when the backup is going to another device. Only the second
    * existed, and a backup living in a chat thread is not a backup. */
+  const group = (title, words) => {
+    const head = document.createElement('p');
+    head.className = 'eyebrow data-group';
+    head.textContent = title;
+    const said = document.createElement('p');
+    said.className = 'muted data-group-note';
+    said.textContent = words;
+    data.append(head, said);
+  };
+
+  /* The backup: one file, small, everything but the books. */
+  group('Backup', 'Folders, statuses, places, marks, covers chosen, themes and settings — one small file. '
+    + 'Import the books first, then restore: each gets back what you did with it.');
   const backupRow = document.createElement('div');
   backupRow.style.cssText = 'display:flex;gap:8px';
   for (const [label, share, primary] of [
@@ -1764,7 +2319,7 @@ export async function openVault(onVaultChange, host) {
         const backup = await store.exportBackup();
         await onWriteOut?.(
           new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }),
-          `quire-backup-${store.dayKey()}.json`, 'application/json', { share });
+          `mythos-backup-${store.dayKey()}.json`, 'application/json', { share });
       } catch (error) {
         toast(error.message || 'That backup could not be written', 6000);
       } finally {
@@ -1774,7 +2329,6 @@ export async function openVault(onVaultChange, host) {
     backupRow.appendChild(button);
   }
   data.appendChild(backupRow);
-
   const restoreBtn = document.createElement('button');
   restoreBtn.className = 'btn ghost block';
   restoreBtn.style.marginTop = '8px';
@@ -1784,16 +2338,36 @@ export async function openVault(onVaultChange, host) {
     picker.type = 'file';
     // As wide as a theme's: a .json from a chat app is often typed as text.
     picker.accept = 'application/json,text/plain,application/octet-stream,.json';
+    // Several at once: a backup saved in parts by an earlier version, the first (the settings) restored first.
+    picker.multiple = true;
     picker.onchange = async () => {
-      const file = picker.files?.[0];
-      if (!file) return;
+      const files = [...(picker.files || [])];
+      if (!files.length) return;
       try {
-        const report = await store.importBackup(JSON.parse(await readText(file)));
+        const read = [];
+        for (const file of files) read.push(JSON.parse(await readText(file)));
+        read.sort((a, b) => (a.part?.n || 1) - (b.part?.n || 1));
+        const report = { books: 0, missing: 0, marks: 0, events: 0 };
+        let queueLeft = false;
+        for (const data of read) {
+          const one = await store.importBackup(data);
+          for (const key of Object.keys(report)) report[key] += one[key] || 0;
+          if (one.skipped?.some((key) => ['webQueue', 'webLeftovers', 'webStops'].includes(key))) queueLeft = true;
+        }
+        const of = read[0]?.part?.of;
+        const partly = of && read.length < of
+          ? ` · part${read.length === 1 ? '' : 's'} ${read.map((d) => d.part?.n).join(', ')} of ${of} — restore the others too` : '';
+        // The look comes back at once -- accent, gradient, its direction and roles -- not at the next launch.
+        theme.apply(await store.settings());
+        // And which kinds of notice pop up.
+        setNoticeTopicsOff((await store.settings()).noticesOff);
+        refreshTheme();
         // Said plainly, including what could not be matched: a backup restored
         // before the books are back is half a restore, and should say so.
-        toast(report.missing
+        toast((report.missing
           ? `${report.books} books restored · ${report.missing} not on the shelf yet — they get their covers, blurs, places and marks back as you import them`
-          : `${report.books} books, ${report.marks} marks and ${report.events} sessions restored`, 8000);
+          : `${report.books} books, ${report.marks} marks and ${report.events} sessions restored`) + partly
+          + (queueLeft ? ' · the queue in it left out — downloads stay as they are on this phone' : ''), 8000);
         onVaultChange?.();
         openVault(onVaultChange, body);
       } catch (error) {
@@ -1804,29 +2378,52 @@ export async function openVault(onVaultChange, host) {
   };
   data.appendChild(restoreBtn);
 
-  const note = document.createElement('p');
-  note.className = 'muted';
-  note.style.cssText = 'font-size:12px;line-height:1.55;margin:10px 0 0';
-  note.textContent = 'Books are matched by file name and size, so import the '
-    + 'same files first and then restore: folders, statuses, editions, bookmarks, '
-    + 'your place in each book and the reading log all come back.';
-  data.appendChild(note);
+  if (backupHooks?.available()) data.appendChild(await autoBackupBlock());
+
+  /* The books themselves, which a backup does not hold: every one, hidden
+   * folders included (the shelf's own export takes only what it shows), in
+   * zips no bigger than a size chosen -- big ones do not upload well. */
+  group('Books', 'Every book as an EPUB, in its folder, hidden folders too — in zips no bigger than the size you pick, so they upload to cloud storage.');
+  if (exportEverything) {
+    const everything = document.createElement('button');
+    everything.className = 'btn primary block';
+    everything.textContent = 'Export every book';
+    everything.onclick = () => exportEverything();
+    data.appendChild(everything);
+  }
+  data.appendChild(doublesBlock());
+  data.appendChild(tidyBlock());
+  // Exports pausing for a warm phone: on unless turned off (app.js letCool).
+  data.appendChild(row('Wait for the phone to cool',
+    'Exports pause between books when the phone is warm (40°C), and wait when hot (43°C). Off: they keep going.',
+    toggle(settings.exportCoolDown !== false, (on) => store.saveSettings({ exportCoolDown: on }))));
+
+  /* Settings alone -- to carry a setup to another phone without its books'
+   * places. Rarely wanted, so folded away rather than a third kind of backup. */
+  const settingsOnly = document.createElement('details');
+  settingsOnly.className = 'auto-backup settings-only';
+  settingsOnly.innerHTML = '<summary><span class="eyebrow">Settings only</span>'
+    + '<span class="muted">to copy a setup elsewhere</span></summary>';
+  const settingsRow = document.createElement('div');
+  settingsRow.style.cssText = 'display:flex;gap:8px;margin-top:8px';
+  settingsOnly.appendChild(settingsRow);
+  data.appendChild(settingsOnly);
 
   const exportBtn = document.createElement('button');
-  exportBtn.className = 'btn ghost block';
-  exportBtn.style.marginTop = '14px';
+  exportBtn.className = 'btn ghost';
+  exportBtn.style.flex = '1';
   exportBtn.textContent = 'Export settings only';
   exportBtn.onclick = async () => {
-    offerDownload('quire-settings.json', 'application/json',
+    offerDownload('mythos-settings.json', 'application/json',
       JSON.stringify(await store.settings(), null, 2));
   };
-  data.appendChild(exportBtn);
+  settingsRow.appendChild(exportBtn);
 
   // And back in: only settings the app knows, each as the kind of value it
   // takes. A settings file can carry nothing that reaches outside the app.
   const importBtn = document.createElement('button');
-  importBtn.className = 'btn ghost block';
-  importBtn.style.marginTop = '8px';
+  importBtn.className = 'btn ghost';
+  importBtn.style.flex = '1';
   importBtn.textContent = 'Import settings';
   importBtn.onclick = () => {
     const picker = document.createElement('input');
@@ -1839,6 +2436,7 @@ export async function openVault(onVaultChange, host) {
         const count = await store.importSettings(JSON.parse(await readText(file)));
         const next = await store.settings();
         theme.apply(next);
+        setNoticeTopicsOff(next.noticesOff);
         refreshTheme();
         toast(`${count} setting${count === 1 ? '' : 's'} imported`, 4000);
       } catch (error) {
@@ -1847,7 +2445,7 @@ export async function openVault(onVaultChange, host) {
     };
     picker.click();
   };
-  data.appendChild(importBtn);
+  settingsRow.appendChild(importBtn);
   body.appendChild(data);
 }
 
@@ -1928,11 +2526,13 @@ async function renderTextPane(body) {
   faces.innerHTML = '<p class="eyebrow">Face</p>';
   const faceRow = document.createElement('div');
   faceRow.className = 'chip-row wrap';
-  for (const [face, family] of [['Newsreader', 'var(--font-body)'], ['Archivo', 'var(--font-heading)']]) {
+  for (const [face, family, label] of [['Newsreader', 'var(--font-body)'], ['Archivo', 'var(--font-heading)'],
+    // Fonts of your own (Settings, Appearance): each chip set in its own face.
+    ...(await fonts.list()).map((font) => [`font:${font.id}`, fonts.faceFamily(`font:${font.id}`), font.name])]) {
     const chip = document.createElement('button');
     chip.className = 'chip';
     chip.style.cssText = `font-family:${family};text-transform:none`;
-    chip.textContent = face;
+    chip.textContent = label || face;
     chip.setAttribute('aria-pressed', String(layout.face === face));
     chip.onclick = async () => { await store.saveLayout(0, { face }); renderSettings(); };
     faceRow.appendChild(chip);
@@ -1944,15 +2544,161 @@ async function renderTextPane(body) {
     ['size', 'Font size', 13, 30, 1, 'px'],
     ['leading', 'Line spacing', 1.1, 2.6, 0.05, ''],
     ['para', 'Paragraph spacing', 0, 44, 1, 'px'],
-    ['margin', 'Side margins', 8, 64, 1, 'px'],
-    ['vmargin', 'Top and bottom margins', 0, 80, 1, 'px'],
   ]) {
     body.appendChild(slider(label, layout[key], min, max, step, unit,
       (value) => store.saveLayout(0, { [key]: value })));
   }
+  // Margins: the text border, set on the page of the book that is open.
+  body.appendChild(textBorderField(layout));
 
   body.appendChild(row('Justified', 'Adds a first-line indent, or paragraph breaks vanish',
     toggle(layout.justified, (on) => store.saveLayout(0, { justified: on }))));
+}
+
+/* Storage: how much the app holds on the phone, and what deleted books left
+ * behind cleared (store.tidyStorage -- it also runs by itself weekly). */
+function tidyBlock() {
+  const box = document.createElement('div');
+  box.className = 'doubles';
+  const go = document.createElement('button');
+  go.className = 'btn ghost block';
+  go.textContent = 'Tidy storage';
+  const said = document.createElement('p');
+  said.className = 'muted doubles-result';
+  const size = (bytes) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : bytes >= 1e6 ? `${Math.round(bytes / 1e6)} MB` : `${Math.round(bytes / 1e3)} kB`);
+  const usage = async () => {
+    try { return (await navigator.storage?.estimate?.())?.usage ?? null; } catch { return null; }
+  };
+  go.onclick = async () => {
+    go.disabled = true;
+    go.textContent = 'Tidying…';
+    const before = await usage();
+    try {
+      const removed = await store.tidyStorage();
+      await store.saveSettings({ tidiedAt: Date.now() });
+      const rows = Object.values(removed).reduce((n, v) => n + v, 0);
+      const after = await usage();
+      const left = Object.entries(removed).map(([name, n]) => `${n} ${name}`).join(', ');
+      said.textContent = (rows ? `Cleared what deleted books left behind: ${left}.` : 'Nothing left behind by deleted books.')
+        + (after != null ? ` The library holds ${size(after)}${before != null && before > after ? ` (${size(before - after)} less)` : ''}.` : '')
+        + ' Books in the Bin still take their room until it is emptied; the phone gives back freed room gradually.';
+    } catch (error) {
+      said.textContent = `Not tidied: ${error.message || error}`;
+    }
+    go.disabled = false;
+    go.textContent = 'Tidy storage';
+  };
+  // Where the room goes (store.storageBreakdown): asked for, as it reads every picture's record.
+  const look = document.createElement('button');
+  look.className = 'btn ghost block';
+  look.textContent = 'What takes the room';
+  const shown = document.createElement('div');
+  shown.className = 'doubles-result room-shown';
+  look.onclick = async () => {
+    look.disabled = true;
+    look.textContent = 'Looking…';
+    try {
+      const room = await store.storageBreakdown({ onProgress: (n) => { look.textContent = `Looking… ${n.toLocaleString()} pictures`; } });
+      shown.innerHTML = '';
+      const line = (label, value, note) => {
+        const row = document.createElement('p');
+        row.className = 'room-line';
+        row.innerHTML = `<span>${escape(label)}</span><b>${escape(value)}</b>${note ? `<small class="muted">${escape(note)}</small>` : ''}`;
+        shown.appendChild(row);
+      };
+      if (room.usage != null) line('The library in all', size(room.usage), room.quota ? `of ${size(room.quota)} the phone allows it` : '');
+      line('Pictures in books', size(room.pictures), `${room.pictureCount.toLocaleString()} pictures${room.picturesInBin ? ` · ${size(room.picturesInBin)} of it in books in the Bin` : ''}`);
+      line('Covers', size(room.covers + room.shelfCovers), room.shelfCovers ? `${size(room.shelfCovers)} of it the shelf’s small copies` : '');
+      if (room.rest != null) line('Text, reading log and the rest', size(room.rest), '');
+      if (room.biggest.length) {
+        const head = document.createElement('p');
+        head.className = 'muted room-head';
+        head.textContent = 'Most pictures:';
+        shown.appendChild(head);
+        for (const book of room.biggest) {
+          const row = document.createElement('div');
+          row.className = 'room-book';
+          row.innerHTML = `<span>${escape(book.title)}${book.binned ? ' <small class="muted">(in the Bin)</small>' : ''}</span>`
+            + `<small class="muted">${size(book.bytes)} · ${book.count.toLocaleString()} pictures</small>`;
+          if (!book.binned && !book.gone) {
+            const smaller = document.createElement('button');
+            smaller.className = 'btn ghost';
+            smaller.textContent = 'Smaller';
+            smaller.onclick = () => window.dispatchEvent(new window.CustomEvent('grimoire:keep-smaller', { detail: { ids: [book.id] } }));
+            row.appendChild(smaller);
+          }
+          shown.appendChild(row);
+        }
+      }
+    } catch (error) {
+      shown.textContent = `Could not look: ${error.message || error}`;
+    }
+    look.disabled = false;
+    look.textContent = 'What takes the room';
+  };
+  box.append(go, said, look, shown);
+  return box;
+}
+
+/* Books kept twice (library.findDoubles): found and shown first, put in the
+ * Bin only when asked -- the kept one taking what each copy held. */
+let doublesChanged = () => {};
+export function onDoublesRemoved(fn) { doublesChanged = fn; }
+function doublesBlock() {
+  const box = document.createElement('div');
+  box.className = 'doubles';
+  const find = document.createElement('button');
+  find.className = 'btn ghost block';
+  find.textContent = 'Find books kept twice';
+  const result = document.createElement('div');
+  result.className = 'doubles-result';
+  find.onclick = async () => {
+    find.disabled = true;
+    const books = await store.all('books');
+    const sets = findDoubles(books);
+    find.disabled = false;
+    result.innerHTML = '';
+    if (!sets.length) { result.innerHTML = '<p class="muted">No book is here twice.</p>'; return; }
+    const extra = sets.reduce((n, set) => n + set.length - 1, 0);
+    const bundled = sets.filter((set) => set.some((b) => b.bundleId != null)).length;
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = `${extra} book${extra === 1 ? ' is' : 's are'} here twice — word for word, as many chapters`
+      + `${bundled ? `; ${bundled} in edition bundles, kept whole` : ''}. One of each is kept; the other goes to the Bin, `
+      + 'its reading (if read further), bookmarks, log and tags carried onto the one kept. Empty the Bin to free the room.';
+    result.appendChild(note);
+    const list = document.createElement('details');
+    list.innerHTML = `<summary class="muted">The ${sets.length} book${sets.length === 1 ? '' : 's'}</summary>`;
+    const ul = document.createElement('ul');
+    ul.className = 'doubles-list';
+    for (const set of sets.slice(0, 400)) {
+      const li = document.createElement('li');
+      li.textContent = `${displayTitle(set[0])}${set.length > 2 ? ` (×${set.length})` : ''}${set[0].bundleId != null ? ' · bundle' : ''}`;
+      ul.appendChild(li);
+    }
+    list.appendChild(ul);
+    result.appendChild(list);
+    const go = document.createElement('button');
+    go.className = 'btn primary block';
+    go.textContent = `Move ${extra} double${extra === 1 ? '' : 's'} to the Bin`;
+    go.onclick = async () => {
+      go.disabled = true;
+      go.textContent = 'Moving…';
+      try {
+        const moved = await removeDoubles(sets);
+        result.innerHTML = `<p class="muted">${moved} moved to the Bin. Empty the Bin to free the room they took.</p>`;
+        toast(`${moved} book${moved === 1 ? '' : 's'} kept twice moved to the Bin`, 5000, { topic: 'files' });
+        doublesChanged();
+      } catch (error) {
+        go.disabled = false;
+        go.textContent = `Move ${extra} double${extra === 1 ? '' : 's'} to the Bin`;
+        toast(`Not moved: ${error.message || error}`, 6000);
+      }
+    };
+    result.appendChild(go);
+  };
+  box.append(find, result);
+  return box;
 }
 
 async function renderLayoutPane(body) {
@@ -1991,6 +2737,94 @@ async function renderLayoutPane(body) {
 }
 
 let onWriteOut = null;
+
+/* Automatic backups, set here and run by the app (app.js): { available, state,
+ * set, chooseFolder, now }. */
+let backupHooks = null;
+export function onAutoBackup(hooks) { backupHooks = hooks; }
+let exportEverything = null;
+export function onExportEverything(run) { exportEverything = run; }
+
+/** A folded block's line: its name, and how it stands. */
+function foldHead(title, status) {
+  const head = document.createElement('summary');
+  const name = document.createElement('span');
+  name.className = 'eyebrow';
+  name.textContent = title;
+  const said = document.createElement('span');
+  said.className = 'muted';
+  said.textContent = status;
+  head.append(name, said);
+  return head;
+}
+
+/** How often, how many kept, into which folder, and when the last was made. */
+async function autoBackupBlock() {
+  const box = document.createElement('details');
+  box.className = 'auto-backup';
+  const paint = async () => {
+    const state = await backupHooks.state();
+    box.replaceChildren();
+    const on = state.folder && (state.every || state.afterQueue);
+    box.appendChild(foldHead('Automatic backups', on
+      ? `${state.every ? `Every ${state.every}` : 'When the queue finishes'}${state.lastError ? ' · failed last time' : ''}` : 'Off'));
+    if (state.lastError) box.open = true;
+    const said = document.createElement('p');
+    said.className = 'muted auto-backup-note';
+    const when = state.lastAt ? new Date(state.lastAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+    said.textContent = !state.folder
+      ? 'Saved on their own into a folder you choose: on a schedule, or when the queue finishes. The newest few are kept, older ones removed; one you save by hand is never touched.'
+      : `${state.every || state.afterQueue ? 'On' : 'Off'} · into “${state.folder}” · the newest ${state.keep} kept`
+        + `${when ? ` · last ${when}` : ' · none yet'}${state.lastError ? ` · last try failed: ${state.lastError}` : ''}.`
+        + ' Made while the app is open (Android does not let it wake itself for this).';
+    box.appendChild(said);
+    const chips = (label, options, current, pick) => {
+      const row = document.createElement('div');
+      row.className = 'chip-row wrap';
+      const name = document.createElement('span');
+      name.className = 'muted';
+      name.textContent = label;
+      row.appendChild(name);
+      for (const [text, value] of options) {
+        const chip = document.createElement('button');
+        chip.className = 'chip';
+        chip.textContent = text;
+        chip.setAttribute('aria-pressed', String(value === current));
+        chip.onclick = async () => { await pick(value); paint(); };
+        row.appendChild(chip);
+      }
+      box.appendChild(row);
+    };
+    const needFolder = async () => state.folder || (await backupHooks.chooseFolder());
+    chips('Every', [['Off', null], ['Day', 'day'], ['Week', 'week']], state.every, async (every) => {
+      if (every && !(await needFolder())) return;
+      await backupHooks.set({ every });
+    });
+    chips('Also', [['When the queue finishes', true], ['No', false]], state.afterQueue, async (afterQueue) => {
+      if (afterQueue && !(await needFolder())) return;
+      await backupHooks.set({ afterQueue });
+    });
+    chips('Keep', [['3', 3], ['5', 5], ['10', 10], ['20', 20]], state.keep, (keep) => backupHooks.set({ keep }));
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;margin-top:6px';
+    const folder = document.createElement('button');
+    folder.className = 'btn ghost';
+    folder.style.flex = '1';
+    folder.textContent = state.folder ? 'Change folder' : 'Choose folder';
+    folder.onclick = async () => { await backupHooks.chooseFolder(); paint(); };
+    const now = document.createElement('button');
+    now.className = 'btn ghost';
+    now.style.flex = '1';
+    now.textContent = 'Back up now';
+    now.disabled = !state.folder;
+    now.onclick = async () => { now.disabled = true; await backupHooks.now(); };
+    row.append(folder, now);
+    box.appendChild(row);
+  };
+  backupHooks.repaint = paint;
+  await paint();
+  return box;
+}
 /** How a file leaves the app; supplied by the shell, which owns the bridge. */
 export function onWrite(fn) { onWriteOut = fn; }
 
@@ -2117,9 +2951,11 @@ async function renderBehaviourPane(body) {
     const option = document.createElement('button');
     option.className = 'list-row';
     option.innerHTML = `<span class="body"><b>${escape(label)}</b><small>${escape(note)}</small></span>`;
-    option.setAttribute('aria-pressed', String((settings.imageFit || 'screen') === value));
+    option.setAttribute('aria-pressed', String((document.body.dataset.imagesHeld || settings.imageFit || 'screen') === value));
     option.onclick = async () => {
       await store.saveSettings({ imageFit: value });
+      // Chosen: no longer held at the width for a book of strips.
+      delete document.body.dataset.imagesHeld;
       document.body.dataset.images = value;
       renderSettings();
     };

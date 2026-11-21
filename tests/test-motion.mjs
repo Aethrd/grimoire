@@ -179,6 +179,55 @@ t('dragging the rail does not fight endless loading', () => {
   assert.match(reader, /Math\.min\(1, viewport\.clientHeight \/ viewport\.scrollHeight\)/);
 });
 
+t('both bars come and go over the text: the page is the same page in every state of them', () => {
+  /* In their own room, the top bar moved the page down and up and the reader
+   * moved the text back each time -- a blank band where the bar had been, and
+   * sometimes the text left a bar's height off -- and the bar at the foot put
+   * the page's last lines onto the next. Measured in Chromium with this
+   * stylesheet: the reading area is the same, top and foot, in all three
+   * states of the bars, in scroll and in pages. */
+  assert.match(css, /\.reader-screen \.reader-top \{\s*position: absolute; top: 0; left: var\(--safe-left\); right: var\(--safe-right\); z-index: 25;\s*\}/);
+  assert.match(css, /\.reader-screen \.reader-bottom \{\s*position: absolute; bottom: 0; left: var\(--safe-left\); right: var\(--safe-right\); z-index: 25;\s*\}/);
+  // Above the chapter pad, so a pad left low never sits on the bar's buttons.
+  assert.match(css, /\.chapter-pad \{\s*position: absolute;\s*z-index: 24;/);
+  // What sits at the foot rises above the bar while it shows; the end of a scroll has room to clear it.
+  assert.match(css, /\.reader-screen \.scrub-rail \{ bottom: calc\(12% \+ var\(--reader-foot, 0px\)\); \}/);
+  assert.match(css, /\.reader-screen \.edge-hint \{ bottom: calc\(14px \+ var\(--reader-foot, 0px\)\); \}/);
+  assert.match(css, /\.page-flow\.scrolling \{[^}]*padding-bottom: var\(--reader-foot, 0px\);/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /foot\.parentElement\?\.style\.setProperty\('--reader-foot', `\$\{foot\.offsetHeight \|\| 0\}px`\)/);
+  assert.match(app, /new ResizeObserver\(keepFoot\)\.observe\(foot\);/);
+  // And no scrollbar of the WebView's own flashed on the page's edge as they did.
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /webView\.setVerticalScrollBarEnabled\(false\);/);
+  assert.match(activity, /webView\.setHorizontalScrollBarEnabled\(false\);/);
+});
+
+t("Android's own bar at the foot is put away while a book is open, and comes back by a swipe", () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /window\.GrimoireNative\?\.readingBars\?\.\(name === 'reader'\)/);
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /bars\.setSystemBarsBehavior\(WindowInsetsControllerCompat\.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE\);/);
+  assert.match(activity, /if \(readingBarsHidden\) bars\.hide\(WindowInsetsCompat\.Type\.navigationBars\(\)\);\s+else bars\.show\(WindowInsetsCompat\.Type\.navigationBars\(\)\);/);
+  // Put away again after a dialog, the shade, or coming back to the app.
+  assert.match(activity, /if \(hasFocus && readingBarsHidden\) applyReadingBars\(\);/);
+  assert.match(activity, /webView\.onResume\(\);\s+if \(readingBarsHidden\) applyReadingBars\(\);/);
+  const bridge = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
+  assert.match(bridge, /public void readingBars\(boolean hide\) \{/);
+});
+
+t('a chapter added above or dropped off the top keeps the place once, not twice', () => {
+  /* The reader moves the scroll by the chapter's height itself (extendIfNeeded,
+   * trimWindow). The browser's scroll anchoring, left on, moved it as well: in
+   * Chromium the view was thrown a whole chapter back on a trim and forward on
+   * a prepend -- the flick between chapters in endless scroll. Anchoring is off
+   * for the scrolling view, so only the reader's own correction is made. */
+  assert.match(css, /\.page-viewport\.scrolling \{[^}]*overflow-anchor: none;/);
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /viewport\.scrollTop \+= viewport\.scrollHeight - before;/);
+  assert.match(reader, /section\.remove\(\);\s+releaseSection\(index\);\s+viewport\.scrollTop -= height;/);
+});
+
 t('the overlay never takes a touch, so text can be selected', () => {
   // It sat over the words, so a long press landed on it and Android's Copy,
   // Translate and Web search never appeared.

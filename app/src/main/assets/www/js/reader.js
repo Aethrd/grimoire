@@ -15,10 +15,11 @@
  */
 
 import * as store from './store.js';
-import { countWords, chapterHtml } from './parse.js';
-import { pool } from './blobs.js';
+import { countWords, chapterHtml, spacedByLines } from './parse.js';
+import { pool, pictureSize } from './blobs.js';
 import * as translate from './translate.js';
 import * as frames from './frame.js';
+import { faceFamily } from './fonts.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -42,6 +43,7 @@ export const state = {
   mergeMarks: true,
 
   mode: 'paged',     // 'paged' | 'scroll'
+  held: false,       // switched to scrolling for a book of long strips (releaseStrips)
   endless: true,     // scroll mode only: run on into the next chapter
   loaded: [],        // chapter indices currently in the DOM, ascending
 };
@@ -92,7 +94,15 @@ export function init(handlers) {
 const isScroll = () => state.mode === 'scroll';
 
 export async function setMode(mode) {
-  if (mode === state.mode) return;
+  /* Chosen while the book was switched to scrolling for its strips: the
+     choice is the reader's own, so it is kept, and the book is no longer
+     switched back on leaving it. */
+  const wasHeld = state.held;
+  state.held = false;
+  if (mode === state.mode) {
+    if (wasHeld) await store.saveSettings({ readingMode: mode });
+    return;
+  }
   await store.saveSettings({ readingMode: mode });
   // The stylesheet needs to know before anything is drawn in the new mode.
   document.body.dataset.mode = mode;
@@ -494,7 +504,10 @@ function chapterSection(chapter) {
   const section = document.createElement('section');
   section.className = 'chapter';
   section.dataset.chapter = String(chapter.index);
-  section.innerHTML = chapterHtml(chapter);
+  const html = chapterHtml(chapter);
+  section.innerHTML = html;
+  // Its blank lines its spacing (see spacedByLines): no gap after each line, nor an indent added.
+  if (spacedByLines(html)) section.classList.add('lines');
   flattenLayoutIndents(section);
   hydrateImages(section, chapter.index);
   paintMarks(section, chapter.index);
@@ -786,8 +799,17 @@ export async function open(bookId, opts = {}) {
   const images = (await store.byIndex('images', 'bookId', bookId))
     .filter((image) => !image.removed);
   state.images = new Map(images.filter((i) => i.blob).map((i) => [i.href, i.blob]));
+  // The book and its chapters are in: its index and picture reel can be drawn (app.js, bookReady).
+  opts.onBook?.(book);
+  // Started now, so it runs while the layout and the place are read and the
+  // opening scene plays -- not after them.
+  const pictured = images.filter((i) => i.blob);
+  const tall = mostlyPictures(state.chapters, pictured.length)
+    .then((pictures) => (pictures ? tallStrips(pictured) : false));
   state.layout = await store.layoutFor(bookId);
-  applyLayout(state.layout, await store.settings());
+  const settings = await store.settings();
+  applyLayout(state.layout, settings);
+  holdForStrips(await tall, settings);
 
   const saved = await store.get('positions', bookId);
   const chapterIndex = opts.chapter ?? saved?.chapterIndex ?? 0;
@@ -1198,7 +1220,236 @@ export function percent() {
   return Math.min(1, pageInBook() / state.totalPages);
 }
 
+/* ── long strips ──────────────────────────────────────────────────────── */
+
+/**
+ * A webtoon read as it was drawn: one long strip, scrolled.
+ *
+ * A picture much taller than a phone screen is unreadable as a page -- fitted
+ * to the screen it is a sliver, and in paged mode it is cut up or shrunk.
+ * A book with two or more of them is switched, for as long as it is open, to
+ * scrolling with its pictures as wide as the screen, and put back as it was
+ * when it is left. Nothing is saved: the settings stay what they were.
+ *
+ * "Tall" is more than twice as tall, for its width, as an ordinary phone
+ * screen (20:9), so a page of a comic or a photograph never counts -- and
+ * not more than 40% blank (white, black or see-through), so padding and
+ * spacers do not count either. And the book has to be more pictures than
+ * words, so a novel with a few long illustrations in it is still read as the
+ * reader chose.
+ */
+export const PHONE_SHAPE = 20 / 9;
+export const STRIP_SHAPE = 2 * PHONE_SHAPE;
+const STRIPS_NEEDED = 2;
+// Checked while the book opens, so bounded: a book of thousands of pictures
+// is not read to the end before its first page shows.
+const STRIP_LOOK_MS = 1500;
+
+/* Words, in any language: Chinese and Japanese are not written with spaces
+   and Thai not between words, so splitting on spaces counts a paragraph of
+   them as one word. The browser's own word breaker knows every script; where
+   it is missing, each character of a script written without spaces is
+   counted as a word. */
+const segmenter = (() => {
+  try { return typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'word' }) : null; } catch { return null; }
+})();
+const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/gu;
+
+/** The words of a chapter's text: no headings, no markup, no captions' tags. */
+export function bodyText(html) {
+  return String(html || '')
+    // Titles are not the text: the chapter's heading, the document's title.
+    .replace(/<(h[1-6]|title|header)\b[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<(script|style|svg|rt|rp)\b[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&[#\w]+;/g, ' ');
+}
+
+export function countBodyWords(text, cap = Infinity) {
+  if (!text.trim()) return 0;
+  let n = 0;
+  if (segmenter) {
+    for (const piece of segmenter.segment(text)) {
+      if (piece.isWordLike && ++n >= cap) return n;
+    }
+    return n;
+  }
+  const unspaced = text.match(UNSPACED)?.length || 0;
+  n = unspaced + text.replace(UNSPACED, ' ').split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+  return Math.min(n, cap);
+}
+
+/**
+ * Whether a book is more pictures than words. Counted only as far as it
+ * needs to: a novel stops being a candidate within its first chapter. Gives
+ * way to the page every so often, so the opening scene keeps moving.
+ */
+export async function mostlyPictures(chapters, pictures, { within = STRIP_LOOK_MS } = {}) {
+  if (!pictures) return false;
+  const until = Date.now() + within;
+  let words = 0;
+  let slice = Date.now();
+  for (const chapter of chapters) {
+    words += countBodyWords(bodyText(chapterHtml(chapter)), pictures - words);
+    if (words >= pictures) return false;
+    if (Date.now() - slice > 16) {
+      if (Date.now() > until) return false;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      slice = Date.now();
+    }
+  }
+  return words < pictures;
+}
+
+// Header only: a picture that would have to be decoded to be measured is
+// not waited for while the book opens.
+const headerSize = (blob) => pictureSize(blob, { decode: false });
+
+/* A strip that is mostly nothing -- white, black or see-through for more
+   than BLANK_LIMIT of its length -- is padding between pages, or a spacer,
+   not a page of a webtoon: it does not count. Looked at small (BLANK_WIDTH
+   across), a row at a time: a row is blank when nearly all of it is, and
+   only blank rows in a run as tall as a quarter of the width -- a patch --
+   count. Text or linework in a row averages to grey at that size, so it is
+   never blank, and the space between lines of speech is no patch. */
+export const BLANK_LIMIT = 0.4;
+const BLANK_WIDTH = 48;
+const BLANK_ROWS_MAX = 1200;
+
+/** The share of rows in large blank patches, in RGBA pixels `width` across.
+ *  A patch is large when it is at least a quarter of the picture's width tall:
+ *  the gaps between lines of speech, or round a panel's edge, are not. */
+export function blankRowsShare(data, width, height) {
+  if (!width || !height) return 0;
+  const large = Math.max(1, Math.round(width / 4));
+  let blankRows = 0;
+  let run = 0;
+  const endRun = () => { if (run >= large) blankRows += run; run = 0; };
+  for (let y = 0; y < height; y += 1) {
+    let blank = 0;
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      const r = data[i]; const g = data[i + 1]; const b = data[i + 2]; const a = data[i + 3];
+      // See-through, white or black (each within a little of it).
+      if (a <= 20 || Math.min(r, g, b) >= 235 || Math.max(r, g, b) <= 20) blank += 1;
+    }
+    if (blank >= width * 0.95) run += 1;
+    else endRun();
+  }
+  endRun();
+  return blankRows / height;
+}
+
+/** How much of a picture is blank (0 to 1); 0 where it cannot be looked at. */
+export async function blankShare(blob) {
+  try {
+    if (typeof createImageBitmap !== 'function') return 0;
+    const shape = await pictureSize(blob, { decode: false });
+    if (!shape.width || !shape.height) return 0;
+    const width = BLANK_WIDTH;
+    const height = Math.max(1, Math.min(BLANK_ROWS_MAX, Math.round(width * (shape.height / shape.width))));
+    const bitmap = await createImageBitmap(blob, { resizeWidth: width, resizeHeight: height, resizeQuality: 'low' });
+    const canvas = typeof OffscreenCanvas === 'function'
+      ? new OffscreenCanvas(width, height)
+      : Object.assign(document.createElement('canvas'), { width, height });
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return 0;
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close?.();
+    return blankRowsShare(context.getImageData(0, 0, width, height).data, width, height);
+  } catch {
+    return 0;
+  }
+}
+
+export async function tallStrips(images, { needed = STRIPS_NEEDED, within = STRIP_LOOK_MS, size = headerSize, blank = blankShare } = {}) {
+  const queue = [...images].sort((a, b) => (a.order || 0) - (b.order || 0));
+  const until = Date.now() + within;
+  let found = 0;
+  let at = 0;
+  const one = async () => {
+    while (found < needed && at < queue.length && Date.now() < until) {
+      const image = queue[at++];
+      let shape;
+      try { shape = await size(image.blob); } catch { continue; }
+      // A thin rule drawn as a picture is tall too; a strip is a page wide.
+      if (!(shape.width >= 200 && shape.height / shape.width > STRIP_SHAPE)) continue;
+      // Tall, and mostly something: looked at only once its shape says it may count.
+      let empty = 0;
+      try { empty = await blank(image.blob); } catch { empty = 0; }
+      if (empty > BLANK_LIMIT) continue;
+      found += 1;
+    }
+  };
+  /* Bounded outright, not only between pictures: one that has to be decoded
+     to be measured can take seconds, and the book waits on this. */
+  let timer;
+  const stop = new Promise((resolve) => { timer = setTimeout(resolve, within); });
+  await Promise.race([Promise.all(Array.from({ length: 6 }, one)), stop]);
+  clearTimeout(timer);
+  // Anything still being measured is let go of.
+  at = queue.length;
+  return found >= needed;
+}
+
+/** Switched to scrolling and the width for a book of strips, or put back. */
+function holdForStrips(tall, settings) {
+  const body = document.body;
+  if (!tall) {
+    state.held = false;
+    delete body.dataset.imagesHeld;
+    body.dataset.images = settings.imageFit || 'screen';
+    return;
+  }
+  state.held = true;
+  body.dataset.imagesHeld = 'width';
+  body.dataset.images = 'width';
+  if (state.mode !== 'scroll') {
+    state.mode = 'scroll';
+    viewport.classList.add('scrolling');
+    flow.classList.add('scrolling');
+    body.dataset.mode = 'scroll';
+  }
+}
+
+/** The book is put down: a book switched for its strips goes back as it was. */
+export async function releaseStrips() {
+  const body = document.body;
+  const fitHeld = !!body.dataset.imagesHeld;
+  if (!state.held && !fitHeld) return;
+  const settings = await store.settings();
+  if (fitHeld) {
+    delete body.dataset.imagesHeld;
+    body.dataset.images = settings.imageFit || 'screen';
+  }
+  if (state.held) {
+    state.held = false;
+    const mode = settings.readingMode || 'paged';
+    if (mode !== state.mode) {
+      state.mode = mode;
+      viewport?.classList.toggle('scrolling', isScroll());
+      flow?.classList.toggle('scrolling', isScroll());
+      body.dataset.mode = mode;
+    }
+  }
+}
+
+/** The fit a picture is shown with now: the book's own while it is held. */
+export function shownFit(settings) {
+  return document.body.dataset.imagesHeld || settings.imageFit || 'screen';
+}
+
 /* ── layout override ──────────────────────────────────────────────────── */
+
+/** The text's distance from each side of the page, in px: the border drawn
+ *  on the page if there is one, else the side and top-and-bottom margins. */
+export function textEdges(layout = state.layout || {}) {
+  const side = Number.isFinite(layout.margin) ? layout.margin : 24;
+  const ends = Number.isFinite(layout.vmargin) ? layout.vmargin : 16;
+  const own = layout.edges && typeof layout.edges === 'object' ? layout.edges : {};
+  const px = (value, fallback) => (Number.isFinite(value) ? Math.max(0, Math.min(600, Math.round(value))) : fallback);
+  return { l: px(own.l, side), r: px(own.r, side), t: px(own.t, ends), b: px(own.b, ends) };
+}
 
 export function applyLayout(layout, settings) {
   state.layout = layout;
@@ -1206,13 +1457,20 @@ export function applyLayout(layout, settings) {
   root.setProperty('--read-size', `${layout.size}px`);
   root.setProperty('--read-leading', String(layout.leading));
   root.setProperty('--read-para', `${layout.para}px`);
-  root.setProperty('--read-margin', `${layout.margin}px`);
-  root.setProperty('--read-vmargin', `${Number.isFinite(layout.vmargin) ? layout.vmargin : 16}px`);
+  /* The text border: each side its own (drawn on the page, frame.js
+   * editTextBorder), or the side and top-and-bottom margins of before. */
+  const edges = textEdges(layout);
+  root.setProperty('--read-margin-l', `${edges.l}px`);
+  root.setProperty('--read-margin-r', `${edges.r}px`);
+  root.setProperty('--read-vmargin-t', `${edges.t}px`);
+  root.setProperty('--read-vmargin-b', `${edges.b}px`);
+  root.setProperty('--read-margin', `${(edges.l + edges.r) / 2}px`);
+  root.setProperty('--read-vmargin', `${(edges.t + edges.b) / 2}px`);
   root.setProperty('--read-align', layout.justified ? 'justify' : 'left');
   // Justified text needs a first-line indent or the paragraph breaks vanish.
   root.setProperty('--read-indent', layout.justified ? '1.2em' : '0');
-  root.setProperty('--read-face', layout.face === 'Archivo'
-    ? 'var(--font-heading)' : 'var(--font-body)');
+  // Newsreader, Archivo, or a font of your own (fonts.js).
+  root.setProperty('--read-face', faceFamily(layout.face));
   if (layout.ink) root.setProperty('--read-ink', layout.ink);
   else root.removeProperty('--read-ink');
 
@@ -2083,6 +2341,8 @@ function save() {
 }
 
 const IDLE_MS = 3 * 60 * 1000;
+/** The least time a page can be read in: faster than this is moving, not reading (countPage, store.repairEvents). */
+const PAGE_MS = 1500;
 const FLUSH_EVERY_PAGES = 25;
 
 function startSession() {
@@ -2135,13 +2395,21 @@ function countPage() {
 
   noteReading();
 
+  /* Only what could have been read in the time since the last turn: a page
+   * a second and a half at most, and one for a turn after a long pause. A
+   * jump -- the chapter list, the scrubber, a book opening at its place, its
+   * page count worked out after it opened -- moved the position thousands
+   * of pages in a moment, and all of it was counted as read: 13,502 pages in
+   * two seconds, and the words worked out from them. Now the place moves and
+   * the reading counted is what the time allows. */
   const advanced = reached - session.furthest;
   session.furthest = reached;
-  session.pages += advanced;
+  const credited = Math.min(advanced, gap < IDLE_MS ? Math.max(1, Math.ceil(gap / PAGE_MS)) : 1);
+  session.pages += credited;
 
   const chapter = state.chapters.find((c) => c.index === state.chapterIndex);
   if (chapter && state.pageCount) {
-    session.words += Math.round(((chapter.words || 0) / state.pageCount) * advanced);
+    session.words += Math.round(((chapter.words || 0) / state.pageCount) * credited);
   }
 
   // Long reads should survive being killed by the system, not vanish.

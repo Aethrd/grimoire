@@ -185,13 +185,9 @@ async function renderCover(doc) {
   }
 }
 
-/* ── entry point ──────────────────────────────────────────────────────── */
-
-export async function parsePdf(file, onProgress) {
-  const pdf = await library();
-  const data = new Uint8Array(await readArrayBuffer(file));
-
-  const doc = await pdf.getDocument({
+/** A PDF opened as every reader here opens one. */
+function open(pdf, data) {
+  return pdf.getDocument({
     data,
     // Character maps, for PDFs whose CJK fonts are referenced rather than
     // embedded -- which is most Korean and Japanese ones. Without these their
@@ -206,6 +202,46 @@ export async function parsePdf(file, onProgress) {
     isEvalSupported: false,
     disableAutoFetch: true,
   }).promise;
+}
+
+/**
+ * Every page's text, as positioned runs -- for a reader that works out a
+ * layout of its own (syosetu.js: vertical columns). One array a page, each
+ * run { str, x, y, w, h, size }, y the top of a vertical run or the baseline
+ * of a horizontal one, in PDF units.
+ */
+export async function pdfPages(file, onProgress) {
+  const pdf = await library();
+  const doc = await open(pdf, new Uint8Array(await readArrayBuffer(file)));
+  const pages = [];
+  try {
+    for (let number = 1; number <= doc.numPages; number++) {
+      const page = await doc.getPage(number);
+      const content = await page.getTextContent();
+      pages.push(content.items.filter((item) => typeof item.str === 'string' && item.str).map((item) => ({
+        str: item.str,
+        x: item.transform[4],
+        y: item.transform[5],
+        w: item.width,
+        h: item.height,
+        size: Math.hypot(item.transform[0], item.transform[1]) || Math.abs(item.transform[3]),
+      })));
+      page.cleanup();
+      onProgress?.(number / doc.numPages);
+    }
+  } finally {
+    await doc.destroy().catch(() => {});
+  }
+  return pages;
+}
+
+/* ── entry point ──────────────────────────────────────────────────────── */
+
+export async function parsePdf(file, onProgress) {
+  const pdf = await library();
+  const data = new Uint8Array(await readArrayBuffer(file));
+
+  const doc = await open(pdf, data);
 
   const pageCount = doc.numPages;
   const ranges = chapterRanges(await outlineStarts(doc), pageCount);

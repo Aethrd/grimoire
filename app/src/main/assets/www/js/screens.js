@@ -1,13 +1,14 @@
 /* Screens that hang off a book: sort, layout, reel, find, index. */
 
 import * as store from './store.js';
+import * as fonts from './fonts.js';
 import { chapterPlainText } from './parse.js';
 import * as reader from './reader.js';
 import * as library from './library.js';
-import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, collapseBundles, vaultUnlocked, offShelf, hiddenFolderList } from './library.js';
+import { SORT_KEYS, GROUP_LEVELS, MAX_GROUP_DEPTH, sortSummary, sortBooks, groupBooks, collapseBundles, vaultUnlocked, offShelf, hiddenFolderList, titleTyped } from './library.js';
 import { pool, measure } from './blobs.js';
 import { holdPicture } from './picturesave.js';
-import { tagKey, tagsOf, usedTags, withEveryTag } from './tags.js';
+import { isSerialTag, tagKey, tagsOf, usedTags, withEveryTag } from './tags.js';
 
 const el = (id) => document.getElementById(id);
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -134,8 +135,6 @@ const RANGES = {
   size: [13, 30, 1, 'px'],
   leading: [1.1, 2.6, 0.05, ''],
   para: [0, 44, 1, 'px'],
-  margin: [8, 64, 1, 'px'],
-  vmargin: [0, 80, 1, 'px'],
 };
 
 const LABELS = {
@@ -147,6 +146,22 @@ const LABELS = {
    sheet says so: a margin changed here that turned up in the next book would
    otherwise look like a fault. */
 const EVERY_BOOK = new Set(['margin', 'vmargin']);
+
+/** The text border: what it is now, and a button to set it on the page. */
+export function textBorderField(layout) {
+  const edges = reader.textEdges(layout);
+  const field = document.createElement('div');
+  field.className = 'field text-border-field';
+  field.innerHTML = `<label><span>Text border <small class="muted">· every book</small></span>
+    <span>${edges.l} · ${edges.r} · ${edges.t} · ${edges.b}px</span></label>
+    <p class="muted" style="font-size:11px;margin:0 0 6px">Left, right, top, bottom. Drawn on the page, as the picture frame is.</p>`;
+  const button = document.createElement('button');
+  button.className = 'btn';
+  button.textContent = 'Set on the page';
+  button.onclick = () => window.dispatchEvent(new CustomEvent('grimoire:text-border'));
+  field.appendChild(button);
+  return field;
+}
 
 export async function openLayout(bookId) {
   const layout = await store.layoutFor(bookId);
@@ -165,7 +180,8 @@ export async function openLayout(bookId) {
   for (const [value, label] of [['paged', 'Paged'], ['scroll', 'Scroll']]) {
     const button = document.createElement('button');
     button.textContent = label;
-    button.setAttribute('aria-pressed', String(settings.readingMode === value));
+    // The mode showing, which a book of long strips can differ from the setting in.
+    button.setAttribute('aria-pressed', String((reader.state.book ? reader.state.mode : settings.readingMode) === value));
     button.onclick = async () => {
       // Saved by setMode, and applied everywhere: choosing how to read is a
       // habit, not a property of the book in front of you. Switching rebuilds
@@ -202,9 +218,11 @@ export async function openLayout(bookId) {
     chip.className = 'chip';
     chip.style.textTransform = 'none';
     chip.textContent = label;
-    chip.setAttribute('aria-pressed', String((settings.imageFit || 'screen') === value));
+    chip.setAttribute('aria-pressed', String(reader.shownFit(settings) === value));
     chip.onclick = async () => {
       await store.saveSettings({ imageFit: value });
+      // Chosen: no longer held at the width for a book of strips.
+      delete document.body.dataset.imagesHeld;
       document.body.dataset.images = value;
       openLayout(bookId);
     };
@@ -242,7 +260,7 @@ export async function openLayout(bookId) {
   greyField.appendChild(greyRow);
   body.appendChild(greyField);
 
-  if (settings.readingMode === 'scroll') {
+  if ((reader.state.book ? reader.state.mode : settings.readingMode) === 'scroll') {
     const endless = document.createElement('div');
     endless.className = 'row';
     endless.innerHTML = `<div class="row-text"><b>Endless scroll</b>
@@ -264,12 +282,14 @@ export async function openLayout(bookId) {
   faces.innerHTML = '<p class="eyebrow">Face</p>';
   const faceRow = document.createElement('div');
   faceRow.className = 'chip-row wrap';
-  for (const [face, family] of [['Newsreader', 'var(--font-body)'], ['Archivo', 'var(--font-heading)']]) {
+  for (const [face, family, label] of [['Newsreader', 'var(--font-body)'], ['Archivo', 'var(--font-heading)'],
+    // Fonts of your own (Settings, Appearance): each chip set in its own face.
+    ...(await fonts.list()).map((font) => [`font:${font.id}`, fonts.faceFamily(`font:${font.id}`), font.name])]) {
     const chip = document.createElement('button');
     chip.className = 'chip';
     chip.style.fontFamily = family;      // each chip is set in its own face
     chip.style.textTransform = 'none';
-    chip.textContent = face;
+    chip.textContent = label || face;
     chip.setAttribute('aria-pressed', String(layout.face === face));
     chip.onclick = async () => {
       const next = await store.saveLayout(bookId, { face });
@@ -281,6 +301,8 @@ export async function openLayout(bookId) {
   }
   faces.appendChild(faceRow);
   body.appendChild(faces);
+
+  body.appendChild(textBorderField(layout));
 
   for (const [key, [min, max, step, unit]] of Object.entries(RANGES)) {
     const field = document.createElement('label');
@@ -600,6 +622,27 @@ const foldDiacritics = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 
 /** Whether the search screen is searching a book or the shelf. */
 let findInBook = false;
+/* What the shelf search's books can be written out by: the shelf's own export
+ * (app.js) -- one book as its own file, several in one zip or in parts. */
+let findExport = null;
+
+/** Above a shelf search's books: how many were found, and Export for them all. */
+function exportBar(hits) {
+  const bar = document.createElement('div');
+  bar.className = 'find-actions';
+  const count = document.createElement('span');
+  count.className = 'muted';
+  count.textContent = `${hits.length} book${hits.length === 1 ? '' : 's'} found`;
+  bar.appendChild(count);
+  if (findExport) {
+    const button = document.createElement('button');
+    button.className = 'chip';
+    button.textContent = hits.length === 1 ? 'Export…' : `Export ${hits.length}…`;
+    button.onclick = () => findExport(hits.slice());
+    bar.appendChild(button);
+  }
+  return bar;
+}
 
 /* A long press on a search result.
  *
@@ -625,6 +668,15 @@ async function searchableBooks() {
   return (await store.all('books'))
     .filter((b) => !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked)
       && !offShelf(b, hidden));
+}
+
+/** Books in folders hidden from the shelf whose title has been typed, most of it, right. */
+async function hiddenBooks(query) {
+  const hidden = hiddenFolderList(await store.settings());
+  if (!hidden.length) return [];
+  return (await store.all('books'))
+    .filter((b) => !b.importing && !b.transient && !b.binnedAt && (!b.inVault || vaultUnlocked)
+      && offShelf(b, hidden) && titleTyped(b, query));
 }
 
 /* Shown the way the shelf shows them: cover first, then the name.
@@ -677,9 +729,12 @@ async function runTagFind(query, onGoToMatch) {
   const picked = (tag) => findTags.some((t) => tagKey(t) === tagKey(tag));
   const row = document.createElement('div');
   row.className = 'chip-row find-tags';
+  // Picked first, then where books are in being written (Ongoing, Completed...), then the rest.
+  const unpicked = used.filter(([tag]) => !picked(tag) && (!key || tagKey(tag).includes(key)));
   const offered = [
     ...used.filter(([tag]) => picked(tag)),
-    ...used.filter(([tag]) => !picked(tag) && (!key || tagKey(tag).includes(key))),
+    ...unpicked.filter(([tag]) => isSerialTag(tag)),
+    ...unpicked.filter(([tag]) => !isSerialTag(tag)),
   ];
   for (const [tag, count] of offered) {
     const chip = document.createElement('button');
@@ -723,6 +778,7 @@ async function runTagFind(query, onGoToMatch) {
     results.appendChild(none);
     return;
   }
+  results.appendChild(exportBar(hits));
   results.appendChild(bookGrid(hits, onGoToMatch, (book) => {
     const wanted = new Set(findTags.map(tagKey));
     const shown = tagsOf(book).filter((t) => wanted.has(tagKey(t)) || (key && tagKey(t).includes(key)));
@@ -741,7 +797,8 @@ let onPictureHeld = null;
 
 export function onPicture(fn) { onPictureHeld = fn; }
 
-export function initFind(onGoToMatch, fromReader = false) {
+export function initFind(onGoToMatch, fromReader = false, onExport = null) {
+  findExport = onExport;
   const input = el('find-input');
   // Told, not inferred: the reader keeps its book so reading can be resumed.
   /* Which search this is, decided once when the screen opens.
@@ -857,15 +914,17 @@ async function runFind(query, onGoToMatch) {
     // The same books the shelf shows: nothing from the vault while it is
     // locked, nothing still being imported, and nothing deleted -- a book in
     // the bin is found in the bin, not offered back as if it were on the shelf.
-    // Nor anything in a folder hidden from the shelf: that is found by
-    // opening the folder, not by a search anyone could type.
+    // Nor anything in a folder hidden from the shelf -- found by opening the
+    // folder, or by two in five of its title typed right (titleTyped), but not by a
+    // word anyone might type. Never one in the vault while it is locked.
     const books = await searchableBooks();
+    const hiddenHere = shelfScope === 'author' || shelfScope === 'tags' ? [] : await hiddenBooks(query);
 
     const only = shelfScope === 'title' ? ['title', 'shown']
       : shelfScope === 'author' ? ['author']
       : null;
 
-    const hits = library.findBooks(books, query, only);
+    const hits = [...library.findBooks(books, query, only), ...hiddenHere];
     results.innerHTML = hits.length
       ? '' : '<p class="muted" style="padding:20px 16px">No book found.</p>';
 
@@ -874,7 +933,10 @@ async function runFind(query, onGoToMatch) {
      * A book matched on its folder or its series looks like a mistake beside
      * one matched on its title, unless it says so. */
     const words = foldDiacritics(query).split(/\s+/).filter(Boolean);
+    if (hits.length) results.appendChild(exportBar(hits));
+    const fromHidden = new Set(hiddenHere.map((book) => book.id));
     results.appendChild(bookGrid(hits, onGoToMatch, (book) => {
+      if (fromHidden.has(book.id)) return `in ${book.folder} (hidden)`;
       const where = library.matchedOn(book, query, only);
       if (!where || where === 'author') return '';
       if (where === 'tags') {
@@ -1168,6 +1230,91 @@ let toastTimer = null;
 const lines = [];
 const MOST = 4;
 
+/* ── what the notices said, for a while ─────────────────────────────────
+ *
+ * A notice fades on its own, often before it has been read -- the reason a
+ * book did not come in, which book "already here" meant. So each is kept,
+ * to be read again (the bell on the Library, or a notice held down).
+ *
+ * Kept in memory only, and for a day at most: gone when the app is started
+ * afresh, which an update also does. Nothing written anywhere.
+ */
+/* ── what kind of notice, and which may pop up ────────────────────────────
+ *
+ * Each kind in one of the theme's colours -- its roles, which come from the
+ * gradient when there is one -- the most important in the primary. A kind
+ * turned off no longer pops up; it is still in the list under the bell.
+ * A notice can say its kind (options.topic); otherwise it is read from what
+ * it says.
+ */
+export const NOTICE_TOPICS = [
+  { key: 'problem', label: 'Problems', role: 1 },
+  { key: 'done', label: 'Finished', role: 2 },
+  { key: 'files', label: 'Library & files', role: 3 },
+  { key: 'downloads', label: 'Downloads & queue', role: 4 },
+  { key: 'other', label: 'Everything else', role: 5 },
+];
+const TOPIC_KEYS = new Set(NOTICE_TOPICS.map((t) => t.key));
+const PROBLEM = /could ?n['’]?o?t|failed|not saved|not added|went wrong|error|refused|would not|cannot|can['’]t|nothing came|stopped short|took too long|not let the app|unreadable|is not reachable/i;
+const DOWNLOADS = /queue|download|fetch|website|\bsite\b|paused|resum|scrap|\bOCR\b|carr(?:y|ied|ies) (?:it |the book )?on|chapters? (?:came|to come|left|again)|new chapters?/i;
+const FILES = /\bimport|\badded\b|already (?:on|in|here)|\bbin\b|deleted|written|\bsaved?\b|backup|backed up|restor|export|\bfiles?\b|folder|moved|cover|vault|built|rebuilt|divided|joined|replaced|taken out/i;
+export function topicOf(text, kind = null, topic = null) {
+  if (topic && TOPIC_KEYS.has(topic)) return topic;
+  if (kind === 'failed' || PROBLEM.test(text)) return 'problem';
+  if (kind === 'done') return 'done';
+  if (DOWNLOADS.test(text)) return 'downloads';
+  if (FILES.test(text)) return 'files';
+  return 'other';
+}
+let topicsOff = new Set();
+/** The kinds that do not pop up (settings.noticesOff). */
+export function setNoticeTopicsOff(list) {
+  topicsOff = new Set((list || []).filter((key) => TOPIC_KEYS.has(key)));
+  // The bell's dot, again: a kind just turned off no longer counts as new.
+  for (const fn of listeners) { try { fn(); } catch { /* */ } }
+}
+export const noticeTopicsOff = () => [...topicsOff];
+
+const HISTORY_FOR = 24 * 60 * 60 * 1000;
+const HISTORY_MOST = 200;
+const history = [];
+let seenUpTo = 0;   // the count of notices kept, when they were last read
+let keptCount = 0;
+const listeners = new Set();
+
+function prune(now = Date.now()) {
+  while (history.length && now - history[0].at > HISTORY_FOR) history.shift();
+  while (history.length > HISTORY_MOST) history.shift();
+}
+
+function remember(text, kind, now, topic) {
+  if (!text) return;
+  const last = history[history.length - 1];
+  // The same thing said again is one entry, said that many times, at the latest time.
+  keptCount += 1;
+  if (last && last.text === text) { last.repeat += 1; last.at = now; last.n = keptCount; } else history.push({ text, kind, topic, at: now, repeat: 1, n: keptCount });
+  prune(now);
+  for (const fn of listeners) { try { fn(); } catch { /* a listener's trouble is its own */ } }
+}
+
+/** What the notices of the last day said, newest first. */
+export function notices() {
+  prune();
+  return history.slice().reverse();
+}
+/** Read: the newest of them no longer counts as unseen. */
+export function noticesSeen() { seenUpTo = keptCount; for (const fn of listeners) { try { fn(); } catch { /* */ } } }
+// A kind turned off never lights the bell: it did not pop up, so there is nothing new to see.
+export const unseenNotices = () => { prune(); return history.filter((entry) => entry.n > seenUpTo && !topicsOff.has(entry.topic)).length; };
+/** The notice on screen put away now (the list of them opened over it). */
+export function dismissToast() { lines.length = 0; clearTimeout(toastTimer); const node = el('toast'); if (node) node.hidden = true; }
+export function clearNotices() { history.length = 0; noticesSeen(); }
+/** Told whenever a notice is kept, read or cleared. */
+export function onNotices(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+/** What holding a notice down does (set by the app: the list of them). */
+let onHold = null;
+export function onToastHold(fn) { onHold = fn; }
+
 /**
  * @param message  what to say
  * @param ms       how long this line stays
@@ -1180,6 +1327,10 @@ export function toast(message, ms = 2200, options = {}) {
   if (!node) return;
   const now = Date.now();
   const text = String(message ?? '');
+  const topic = topicOf(text, options.kind || null, options.topic || null);
+  remember(text, options.kind || null, now, topic);
+  // A kind turned off: kept under the bell, not popped up.
+  if (topicsOff.has(topic)) return;
 
   // Whatever is on screen is still on screen; a hidden banner starts afresh.
   if (node.hidden) lines.length = 0;
@@ -1191,7 +1342,7 @@ export function toast(message, ms = 2200, options = {}) {
     last.repeat += 1;
     last.until = Math.max(last.until, now + ms);
   } else {
-    lines.push({ text, kind: options.kind || null, repeat: 1, until: now + ms });
+    lines.push({ text, kind: options.kind || null, topic, repeat: 1, until: now + ms });
   }
   while (lines.length > MOST) lines.shift();
 
@@ -1199,6 +1350,18 @@ export function toast(message, ms = 2200, options = {}) {
     // Tapping it puts it away: four lines of notices over the page are worth
     // dismissing without waiting for them.
     node.onclick = () => { lines.length = 0; clearTimeout(toastTimer); node.hidden = true; };
+    // Held down: every notice of the last day, this one with them.
+    let hold = null;
+    const cancel = () => { clearTimeout(hold); hold = null; };
+    node.addEventListener('pointerdown', () => {
+      cancel();
+      hold = setTimeout(() => {
+        hold = null;
+        lines.length = 0; clearTimeout(toastTimer); node.hidden = true;
+        onHold?.();
+      }, 500);
+    });
+    for (const type of ['pointerup', 'pointercancel', 'pointerleave']) node.addEventListener(type, cancel);
   }
 
   paintToast(node);
@@ -1212,6 +1375,8 @@ function paintToast(node) {
 
   const one = lines.length === 1 && !lines[0].kind;
   node.classList.toggle('stack', !one);
+  // Its colour: the kind of the one notice, or of the newest of several.
+  node.dataset.topic = lines[lines.length - 1].topic || 'other';
   if (one) {
     // A single plain notice looks exactly as it always did.
     node.textContent = lines[0].repeat > 1 ? `${lines[0].text} (×${lines[0].repeat})` : lines[0].text;
@@ -1220,6 +1385,7 @@ function paintToast(node) {
     for (const line of lines) {
       const row = document.createElement('div');
       row.className = `toast-line${line.kind ? ` ${line.kind}` : ''}`;
+      row.dataset.topic = line.topic || 'other';
       if (line.kind) {
         const mark = document.createElement('span');
         mark.className = 'toast-mark';
