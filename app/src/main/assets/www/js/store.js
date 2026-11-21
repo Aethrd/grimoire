@@ -281,10 +281,13 @@ export async function del(store, key) {
 
 /** Delete a book and everything hanging off it, in one pass. */
 export async function deleteBook(bookId) {
-  const t = await transaction(['books', 'chapters', 'images', 'marks', 'positions'], 'readwrite');
+  /* Its translations and its own layout too: left, a book's translated
+   * chapters stayed in storage after it, for nothing ever to read again. */
+  const t = await transaction(['books', 'chapters', 'images', 'marks', 'positions', 'translations', 'layout'], 'readwrite');
   t.objectStore('books').delete(bookId);
   t.objectStore('positions').delete(bookId);
-  for (const store of ['chapters', 'images', 'marks']) {
+  if (bookId > 0) t.objectStore('layout').delete(bookId);
+  for (const store of ['chapters', 'images', 'marks', 'translations']) {
     const idx = t.objectStore(store).index('bookId');
     idx.openCursor(IDBKeyRange.only(bookId)).onsuccess = (e) => {
       const cur = e.target.result;
@@ -292,6 +295,47 @@ export async function deleteBook(bookId) {
     };
   }
   return new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
+}
+
+/**
+ * What books no longer here left behind: chapters, pictures, marks, places,
+ * translations and layouts whose book is gone -- a delete from before they
+ * went with it, or one cut off. Found by their keys alone (nothing read in
+ * whole), and removed. A glossary kept for no one book (-1) and the default
+ * layout (0) are not a book's, and stay.
+ * @returns { [store]: rows removed }
+ */
+export async function tidyStorage() {
+  const live = new Set(await keysOf('books'));
+  const gone = (id) => typeof id === 'number' && id > 0 && !live.has(id);
+  const removed = {};
+  for (const name of ['chapters', 'images', 'marks', 'translations']) {
+    const t = await transaction(name, 'readwrite');
+    const store = t.objectStore(name);
+    let count = 0;
+    store.index('bookId').openKeyCursor().onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (!cursor) return;
+      if (gone(cursor.key)) { store.delete(cursor.primaryKey); count += 1; }
+      cursor.continue();
+    };
+    await new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
+    if (count) removed[name] = count;
+  }
+  for (const name of ['positions', 'layout']) {
+    const ids = (await keysOf(name)).filter(gone);
+    if (!ids.length) continue;
+    const t = await transaction(name, 'readwrite');
+    for (const id of ids) t.objectStore(name).delete(id);
+    await new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
+    removed[name] = ids.length;
+  }
+  return removed;
+}
+
+async function keysOf(name) {
+  const t = await transaction(name);
+  return wrap(t.objectStore(name).getAllKeys());
 }
 
 /* ── settings ──────────────────────────────────────────────────────────
@@ -758,7 +802,7 @@ function dataUrlToBlob(url) {
  * are passed over and this phone's own kept.
  */
 // exportRun too: the books an export cut off had saved, by this phone's numbers for them.
-export const DEVICE_SETTINGS = ['webQueue', 'queueRunning', 'webLeftovers', 'webStops', 'autoExport', 'autoBackup', 'exportRun', 'translateJobs', 'restoredAt'];
+export const DEVICE_SETTINGS = ['webQueue', 'queueRunning', 'webLeftovers', 'webStops', 'autoExport', 'autoBackup', 'exportRun', 'translateJobs', 'restoredAt', 'tidiedAt'];
 const withoutDevice = (value) => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !DEVICE_SETTINGS.includes(key)));
 
 export async function exportBackup() {

@@ -1033,7 +1033,7 @@ const unfinishedMark = (book) => {
 };
 
 function tile(book, onOpen, onLongPress, selection, selecting) {
-  const coverUrl = coverUrlFor(book);
+  const coverUrl = shelfCoverUrl(book);
   const placed = buildOrder?.get(book.id);
   const node = document.createElement('button');
   node.className = selection?.has(book.id) ? 'tile selected' : 'tile';
@@ -1050,7 +1050,7 @@ function tile(book, onOpen, onLongPress, selection, selecting) {
   node.innerHTML = `
     <span class="tile-cover">
       ${coverUrl
-        ? `<img src="${coverUrl}" alt="${escape(book.title)}">`
+        ? `<img src="${coverUrl}" alt="${escape(book.title)}" loading="lazy" decoding="async">`
         : `<span class="tile-title">${escape(displayTitle(book))}</span>`}
       ${unfinished.has(book.id) || (book.importing && book.building) ? unfinishedMark(book) : ''}
       <span class="tile-badge">${escape(book.format || '?')}</span>
@@ -1130,6 +1130,70 @@ let lastHandlers = {};
 const covers = urlCache();
 const coverUrlFor = (book) =>
   covers.url(book.id, book.coverBlob, book.coverBytes ?? book.coverBlob?.size);
+
+/* The shelf's covers small. A tile a few hundred pixels wide was given the
+ * whole cover -- often over a thousand across -- and a shelf of six hundred
+ * books held six hundred of them decoded. Each book gets a copy 360 across,
+ * made once in the quiet and kept with it (coverThumb, for the cover it was
+ * made from: coverThumbOf); a cover changed is a copy made again. A cover
+ * already small is its own ('self'). The cover itself is unchanged: the
+ * book's page, the reader and every export use it, never the copy. */
+export const THUMB_WIDTH = 360;
+const THUMB_SMALL_BYTES = 60 * 1024;
+const coverSign = (book) => book.coverBytes ?? book.coverBlob?.size ?? null;
+export const thumbFits = (book) => book.coverThumb != null && coverSign(book) != null && book.coverThumbOf === coverSign(book);
+const thumbs = urlCache();
+export function shelfCoverUrl(book) {
+  if (thumbFits(book) && book.coverThumb !== 'self') return thumbs.url(book.id, book.coverThumb, `t${book.coverThumbOf}`);
+  if (book.coverBlob && !thumbFits(book)) queueThumb(book);
+  return coverUrlFor(book);
+}
+
+const thumbQueue = new Map();
+let thumbing = false;
+function queueThumb(book) {
+  if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') return;
+  thumbQueue.set(book.id, coverSign(book));
+  if (!thumbing) { thumbing = true; setTimeout(nextThumb, 1500); }
+}
+/** One cover made small, from its blob: a Blob, 'self' (small already), or null. */
+export async function makeThumb(blob) {
+  if (!blob || typeof createImageBitmap !== 'function') return null;
+  if (blob.size <= THUMB_SMALL_BYTES) return 'self';
+  // Decoded straight to the small size: the full cover is never held decoded.
+  const bitmap = await createImageBitmap(blob, { resizeWidth: THUMB_WIDTH, resizeQuality: 'high' });
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    const as = (type) => new Promise((resolve) => canvas.toBlob(resolve, type, 0.85));
+    const small = (await as('image/webp')) || (await as('image/jpeg'));
+    return small && small.size < blob.size ? small : 'self';
+  } finally { bitmap.close?.(); }
+}
+async function nextThumb() {
+  const next = thumbQueue.entries().next();
+  if (next.done || document.hidden) { thumbing = false; return; }
+  const [id, sign] = next.value;
+  thumbQueue.delete(id);
+  try {
+    const book = await store.get('books', id);
+    if (book?.coverBlob && coverSign(book) === sign && !thumbFits(book)) {
+      const thumb = await makeThumb(book.coverBlob);
+      const fresh = await store.get('books', id);
+      if (thumb && fresh && coverSign(fresh) === sign) {
+        fresh.coverThumb = thumb;
+        fresh.coverThumbOf = sign;
+        await store.put('books', fresh);
+        // On the shelf now: shown small at once.
+        const img = document.querySelector(`.tile[data-book="${id}"] .tile-cover img`);
+        if (img && thumb !== 'self') img.src = thumbs.url(id, thumb, `t${sign}`);
+      }
+    }
+  } catch { /* a cover that will not decode keeps showing whole */ }
+  setTimeout(nextThumb, 120);
+}
 
 /* Translated titles, keyed by book id. Held here rather than written into the
    DOM after the fact: the shelf tile has no title element when a book has

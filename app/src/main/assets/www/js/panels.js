@@ -2392,6 +2392,7 @@ export async function openVault(onVaultChange, host) {
     data.appendChild(everything);
   }
   data.appendChild(doublesBlock());
+  data.appendChild(tidyBlock());
   // Exports pausing for a warm phone: on unless turned off (app.js letCool).
   data.appendChild(row('Wait for the phone to cool',
     'Exports pause between books when the phone is warm (40°C), and wait when hot (43°C). Off: they keep going.',
@@ -2552,6 +2553,43 @@ async function renderTextPane(body) {
 
   body.appendChild(row('Justified', 'Adds a first-line indent, or paragraph breaks vanish',
     toggle(layout.justified, (on) => store.saveLayout(0, { justified: on }))));
+}
+
+/* Storage: how much the app holds on the phone, and what deleted books left
+ * behind cleared (store.tidyStorage -- it also runs by itself weekly). */
+function tidyBlock() {
+  const box = document.createElement('div');
+  box.className = 'doubles';
+  const go = document.createElement('button');
+  go.className = 'btn ghost block';
+  go.textContent = 'Tidy storage';
+  const said = document.createElement('p');
+  said.className = 'muted doubles-result';
+  const size = (bytes) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : `${Math.round(bytes / 1e6)} MB`);
+  const usage = async () => {
+    try { return (await navigator.storage?.estimate?.())?.usage ?? null; } catch { return null; }
+  };
+  go.onclick = async () => {
+    go.disabled = true;
+    go.textContent = 'Tidying…';
+    const before = await usage();
+    try {
+      const removed = await store.tidyStorage();
+      await store.saveSettings({ tidiedAt: Date.now() });
+      const rows = Object.values(removed).reduce((n, v) => n + v, 0);
+      const after = await usage();
+      const left = Object.entries(removed).map(([name, n]) => `${n} ${name}`).join(', ');
+      said.textContent = (rows ? `Cleared what deleted books left behind: ${left}.` : 'Nothing left behind by deleted books.')
+        + (after != null ? ` The library holds ${size(after)}${before != null && before > after ? ` (${size(before - after)} less)` : ''}.` : '')
+        + ' Books in the Bin still take their room until it is emptied; the phone gives back freed room gradually.';
+    } catch (error) {
+      said.textContent = `Not tidied: ${error.message || error}`;
+    }
+    go.disabled = false;
+    go.textContent = 'Tidy storage';
+  };
+  box.append(go, said);
+  return box;
 }
 
 /* Books kept twice (library.findDoubles): found and shown first, put in the

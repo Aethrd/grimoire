@@ -13719,6 +13719,16 @@ async function boot() {
   panels.onGuides(refreshGuides);
   panels.onWrite((blob, name, type, opts) => writeOut(blob, name, type, opts));
   autoBackups.start();
+  /* What deleted books left behind, cleared once a week, a minute after
+   * starting -- out of the way of opening the shelf (store.tidyStorage). */
+  setTimeout(async () => {
+    try {
+      const now = await store.settings();
+      if (Date.now() - (now.tidiedAt || 0) < 7 * 24 * 60 * 60 * 1000 || libraryHeld) return;
+      await store.tidyStorage();
+      await store.saveSettings({ tidiedAt: Date.now() });
+    } catch { /* tried again next start */ }
+  }, 60 * 1000);
   store.settings().then((kept) => { if (kept.autoExport) store.saveSettings({ autoExport: null }); }).catch(() => {});
   panels.onExportEverything(exportEverything);
   panels.onFolderMenu(openFolderActions);

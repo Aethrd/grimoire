@@ -1140,6 +1140,53 @@ await t('a book and its copy both found by what they came from: put back as one,
   assert.equal((await store.byIndex('marks', 'bookId', kept)).length, 1);
 });
 
+await t('storage: a book deleted takes its translations; what deleted books left behind is cleared, nothing else', async () => {
+  const keep = await aBook({ title: 'Kept Here' });
+  const doomed = await aBook({ title: 'Deleted Now' });
+  for (const id of [keep, doomed]) {
+    await store.put('chapters', { bookId: id, index: 0, title: 'One', html: '<p>x</p>' });
+    await store.put('translations', { key: `t:${id}:0`, bookId: id, field: 'chapter', lang: 'en', value: 'x', at: 1 });
+    await store.put('layout', { bookId: id, size: 18 });
+  }
+  await store.deleteBook(doomed);
+  assert.equal(await store.get('translations', `t:${doomed}:0`), undefined, 'its translations left behind');
+  assert.equal(await store.get('layout', doomed), undefined);
+  assert.ok(await store.get('translations', `t:${keep}:0`));
+  // Left behind by a delete from before: rows of a book that is no longer here.
+  const ghost = 987654;
+  await store.put('chapters', { bookId: ghost, index: 0, title: 'Gone', html: '<p>g</p>' });
+  await store.put('images', { bookId: ghost, href: 'a.png', blob: new Blob(['a']) });
+  await store.add('marks', { bookId: ghost, kind: 'bookmark', chapterIndex: 0, anchor: 0 });
+  await store.put('positions', { bookId: ghost, chapterIndex: 0, anchor: 0 });
+  await store.put('translations', { key: `t:${ghost}:0`, bookId: ghost, field: 'chapter', lang: 'en', value: 'g', at: 1 });
+  await store.put('translations', { key: 'glossary:any', bookId: -1, field: 'glossary', lang: 'glossary', value: 'kept', at: 1 });
+  const removed = await store.tidyStorage();
+  assert.deepEqual(removed, { chapters: 1, images: 1, marks: 1, translations: 1, positions: 1 });
+  assert.ok(await store.get('chapters', [keep, 0]), 'a live book tidied away');
+  assert.ok(await store.get('translations', 'glossary:any'), 'a glossary for no one book tidied away');
+  assert.ok(store.DEVICE_SETTINGS.includes('tidiedAt'));
+});
+
+await t('the shelf’s covers: small copies, kept with the book and remade when the cover changes; loaded as they come near', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const big = new Blob([new Uint8Array(300 * 1024)], { type: 'image/jpeg' });
+  const thumb = new Blob([new Uint8Array(20 * 1024)], { type: 'image/webp' });
+  const fits = { coverBlob: big, coverBytes: big.size, coverThumb: thumb, coverThumbOf: big.size };
+  assert.ok(library.thumbFits(fits));
+  // The cover changed: the copy is not its any more.
+  assert.ok(!library.thumbFits({ ...fits, coverBytes: 123 }));
+  // A small cover is its own copy; without a way to decode, none is made.
+  assert.equal(await library.makeThumb(new Blob([new Uint8Array(1000)], { type: 'image/png' })), typeof createImageBitmap === 'function' ? 'self' : null);
+  const src = read('app/src/main/assets/www/js/library.js');
+  assert.match(src, /const coverUrl = shelfCoverUrl\(book\);/);
+  assert.match(src, /<img src="\$\{coverUrl\}" alt="\$\{escape\(book\.title\)\}" loading="lazy" decoding="async">/);
+  assert.match(src, /createImageBitmap\(blob, \{ resizeWidth: THUMB_WIDTH, resizeQuality: 'high' \}\)/);
+  // Never in a backup or an export: only the cover is.
+  const store_ = read('app/src/main/assets/www/js/store.js');
+  assert.ok(!/'coverThumb'/.test(store_.slice(store_.indexOf('const BOOK_FIELDS'), store_.indexOf('const READING_FIELDS'))));
+  assert.ok(!/coverThumb/.test(read('app/src/main/assets/www/js/epub.js')));
+});
+
 await t('a book imported from an export is matched by what it came from, recorded in the backup', async () => {
   const src = read('app/src/main/assets/www/js/store.js');
   assert.match(src, /if \(book\.sourceId\) kept\.sourceId = book\.sourceId;/);
