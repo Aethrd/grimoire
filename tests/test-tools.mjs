@@ -1111,6 +1111,35 @@ await t('books kept twice: one of each kept, bundles kept whole, nothing the cop
   assert.equal((await store.get('books', e1)).bundleId, undefined);
 });
 
+await t('a book and its copy both found by what they came from: put back as one, the copy read on, moved and bundled winning', async () => {
+  // As the restore was run: the library imported from the app's exports, each book carrying its original.
+  const kept = await aBook({ title: 'Sweet Copy', fingerprint: 'Books/1.epub:9', sourceId: 'built:100' });
+  const edition = await aBook({ title: 'Sweet Copy (KR)', fingerprint: 'Books/2.epub:8', sourceId: 'raw.epub:7' });
+  await store.importBackup({
+    format: 'grimoire-backup', version: 1,
+    books: [
+      // The original: read to Nov 13, in the old folder, not bundled.
+      { fingerprint: 'built:100', title: 'Sweet Copy', addedAt: 1000, folder: 'not slop', lastReadAt: 13, percent: 0.385 },
+      // Its copy: read on to Nov 20, moved deeper, bundled with the Korean raw.
+      { fingerprint: 'Sweet Copy.epub:55', title: 'Sweet Copy', addedAt: 1000, folder: 'not slop/favourites', lastReadAt: 20, percent: 0.598, bundleLeader: 'Sweet Copy.epub:55' },
+      { fingerprint: 'raw.epub:7', title: 'Sweet Copy (KR)', addedAt: 1001, folder: 'not slop/favourites', bundleLeader: 'Sweet Copy.epub:55' },
+    ],
+    positions: [
+      { fingerprint: 'built:100', bookId: 1, chapterIndex: 153, anchor: 0, percent: 0.385, updatedAt: 13 },
+      { fingerprint: 'Sweet Copy.epub:55', bookId: 2, chapterIndex: 245, anchor: 0, percent: 0.598, updatedAt: 20 },
+    ],
+    covers: [], marks: [{ fingerprint: 'built:100', kind: 'bookmark', chapterIndex: 2, anchor: 1 }],
+  });
+  const book = await store.get('books', kept);
+  assert.equal(book.percent, 0.598, 'put back as the original was, before the copy was read on');
+  assert.equal(book.folder, 'not slop/favourites', 'the folder it was moved to lost');
+  assert.equal((await store.get('positions', kept)).chapterIndex, 245);
+  assert.equal(book.bundleId, kept, 'not leading its bundle');
+  assert.equal((await store.get('books', edition)).bundleId, kept, 'the edition bundled through the copy lost');
+  // The original's bookmark is kept too.
+  assert.equal((await store.byIndex('marks', 'bookId', kept)).length, 1);
+});
+
 await t('a book imported from an export is matched by what it came from, recorded in the backup', async () => {
   const src = read('app/src/main/assets/www/js/store.js');
   assert.match(src, /if \(book\.sourceId\) kept\.sourceId = book\.sourceId;/);

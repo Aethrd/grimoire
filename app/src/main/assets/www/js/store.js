@@ -1038,6 +1038,18 @@ function bookMatcher(books) {
  * book and its copy, the same in all but name), and every such title was
  * left unmatched rather than guessed at: a restore into the books imported
  * afresh put back a third of them, and the books being read none at all. */
+/** Records that are copies of one book: added at the same moment -- or,
+ *  where when is not known, kept in the same folder. */
+function sameBook(list) {
+  return new Set(list.map(([, r]) => (Number.isFinite(r.saved?.addedAt) ? `a:${r.saved.addedAt}` : `f:${r.saved?.folder ?? ''}`))).size === 1;
+}
+
+/** How far a record's book was filed: in a bundle, then how deep its folder. */
+function filing(record) {
+  const saved = record.saved || {};
+  return (saved.bundleLeader ? 100 : 0) + String(saved.folder || '').split('/').filter(Boolean).length;
+}
+
 function furthestRecord(records) {
   const score = (r) => [r.saved?.lastReadAt || 0, r.saved?.percent || 0, r.saved?.status ? 1 : 0, r.positions.length, r.saved?.addedAt || 0];
   return records.slice().sort((a, b) => {
@@ -1162,26 +1174,38 @@ export async function importBackup(data) {
   const records = recordsOf(data);
   // Each of the backup's books to the book here that is it (see bookMatcher).
   const match = bookMatcher(books);
-  const matched = new Map();
-  const used = new Set();
-  // Exactly first -- by fingerprint, by what it was imported from, by file -- then by title.
+  /* Every record that is a book here, gathered before any is put back.
+   *
+   * A book imported again from one of this app's exports is found by what it
+   * came from -- and a book and its copy (the library imported over itself)
+   * came from the same thing, so both their records are this one book. The
+   * first found used to win, and it was mostly the original: the copy, the
+   * one read on and moved and bundled, was set aside -- a book back at Nov
+   * 13's 38% where it had been read to 60% on Nov 20, folders and editions as
+   * they were before. Now all of a book's records are put together: its
+   * reading from the one read last, its folder and its bundle from the one
+   * filed furthest (bundled, then the deeper folder), its marks from them all.
+   * The others are copies of it, and stand for it. */
+  const claims = new Map();   // book id -> [fingerprint, record][]
+  const claimed = new Set();
+  const claim = (book, fingerprint, record) => {
+    if (!claims.has(book.id)) claims.set(book.id, []);
+    claims.get(book.id).push([fingerprint, record]);
+    claimed.add(fingerprint);
+  };
+  // Exactly -- by fingerprint, by what it was imported from, by file.
   for (const [fingerprint, record] of records) {
     const book = match(fingerprint, null, false, record.saved?.sourceId || null);
-    if (book && !used.has(book.id)) { matched.set(fingerprint, book); used.add(book.id); }
+    if (book) claim(book, fingerprint, record);
   }
-  /* By title: one book here of that title takes the furthest-along of the
-   * backup's records of it -- when they are copies of one book, added at the
-   * same moment into the same folder (a library imported over itself). Two
-   * books of one title that are not (added apart, or kept apart) are still
-   * not guessed between. The copies are put back on nothing, not held for an
-   * import to come, and stand for the book they were a copy of: a bundle led
-   * by one, a session logged under one, find it. */
-  const copies = new Set();
-  const copyOf = new Map();
-  const sameBook = (group) => new Set(group.map(([, r]) => `${r.saved?.addedAt ?? ''}|${r.saved?.folder ?? ''}`)).size === 1;
+  /* Then by title: the one book here of that title takes the records of it
+   * that are copies of one book (added at the same moment, or kept in one
+   * folder when that is not known) -- and of the book's own, when it has
+   * records already. Two books of one title that are not are still not
+   * guessed between. */
   const byTitle = new Map();
   for (const [fingerprint, record] of records) {
-    if (matched.has(fingerprint)) continue;
+    if (claimed.has(fingerprint)) continue;
     const key = titleKey(record.saved?.title);
     if (!key) continue;
     if (!byTitle.has(key)) byTitle.set(key, []);
@@ -1189,13 +1213,37 @@ export async function importBackup(data) {
   }
   for (const [key, group] of byTitle) {
     const book = match.byTitle(key);
-    if (!book || used.has(book.id)) continue;
-    if (group.length > 1 && !sameBook(group)) continue;
-    const best = furthestRecord(group.map(([, record]) => record));
-    const [fingerprint] = group.find(([, record]) => record === best);
+    if (!book) continue;
+    const all = [...group, ...(claims.get(book.id) || [])];
+    if (all.length > 1 && !sameBook(all)) continue;
+    for (const [fingerprint, record] of group) claim(book, fingerprint, record);
+  }
+  const matched = new Map();
+  const copies = new Set();
+  const copyOf = new Map();
+  const merged = new Map();   // fingerprint -> the record put back, made of all the book's
+  const booksById = new Map(books.map((b) => [b.id, b]));
+  for (const [bookId, list] of claims) {
+    const book = booksById.get(bookId);
+    const recs = list.map(([, record]) => record);
+    const reading = furthestRecord(recs);
+    const filed = recs.slice().sort((a, b) => filing(b) - filing(a))[0] || reading;
+    const [fingerprint] = list.find(([, record]) => record === reading);
+    const saved = reading.saved || filed.saved ? {
+      ...(filed.saved || {}), ...(reading.saved || {}),
+      folder: filed.saved?.folder ?? reading.saved?.folder,
+      bundleLeader: filed.saved?.bundleLeader ?? reading.saved?.bundleLeader,
+    } : null;
+    if (saved && saved.folder === undefined) delete saved.folder;
+    if (saved && saved.bundleLeader === undefined) delete saved.bundleLeader;
+    merged.set(fingerprint, {
+      saved,
+      cover: reading.cover || recs.find((r) => r.cover)?.cover || null,
+      positions: reading.positions.length ? reading.positions : (recs.find((r) => r.positions.length)?.positions || []),
+      marks: recs.flatMap((r) => r.marks),
+    });
     matched.set(fingerprint, book);
-    used.add(book.id);
-    for (const [other] of group) if (other !== fingerprint) { copies.add(other); copyOf.set(other, book); }
+    for (const [other] of list) if (other !== fingerprint) { copies.add(other); copyOf.set(other, book); }
   }
   const byFingerprint = { get: (fingerprint) => matched.get(fingerprint) || copyOf.get(fingerprint) };
 
@@ -1207,9 +1255,10 @@ export async function importBackup(data) {
    * second -- the natural order after a reinstall -- lost all of it, blurred
    * covers included. What cannot be matched now is held, and handed over as
    * each book is imported. */
-  for (const [fingerprint, record] of records) {
+  for (const [fingerprint, held] of records) {
     if (copies.has(fingerprint)) { report.copies = (report.copies || 0) + 1; continue; }
     const book = matched.get(fingerprint);
+    const record = (book && merged.get(fingerprint)) || held;
     if (!book) {
       pending.books[fingerprint] = record;
       if (record.saved) report.missing += 1;
@@ -1221,7 +1270,8 @@ export async function importBackup(data) {
 
   // Bundles last: a bundle's leader may not have existed on the first pass,
   // and may not exist until it is imported.
-  for (const [fingerprint, record] of records) {
+  for (const [fingerprint, original] of records) {
+    const record = merged.get(fingerprint) || original;
     const leaderPrint = record.saved?.bundleLeader;
     const book = matched.get(fingerprint);
     if (!leaderPrint || !book) continue;
