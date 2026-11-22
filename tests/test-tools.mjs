@@ -1413,6 +1413,58 @@ await t('with small copies kept: an export and its import, and a backup restores
   await store.deleteBook(imported.id);
 });
 
+await t('editions on the shelf: a set held and a book tapped, then Editions: the book joins the set, the set not taken apart', async () => {
+  const lead = await aBook({ title: 'Set Lead', fingerprint: 'ed:1' });
+  await store.update('books', lead, (b) => ({ ...b, bundleId: lead }));
+  const raw = await aBook({ title: 'Set Raw', fingerprint: 'ed:2', bundleId: lead });
+  // Still marked as an edition of a set whose leader is gone (deleted, binned, removed as a double).
+  const stale = await aBook({ title: 'Stale Mark', fingerprint: 'ed:3', bundleId: 987001 });
+  const otherLead = await aBook({ title: 'Other Set', fingerprint: 'ed:4' });
+  await store.update('books', otherLead, (b) => ({ ...b, bundleId: otherLead }));
+  const otherRaw = await aBook({ title: 'Other Raw', fingerprint: 'ed:5', bundleId: otherLead });
+  const shelfTile = (id) => el('shelf').querySelector(`[data-book="${id}"]`);
+  const open = async () => {
+    tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+    await settle();
+    tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+    await settle(400);
+  };
+  const hold = async (id) => {
+    shelfTile(id).dispatchEvent(new window.Event('touchstart', { bubbles: true }));
+    await settle(650);
+    shelfTile(id)?.dispatchEvent(new window.Event('touchend', { bubbles: true }));
+    // The tap that ends a press is not a tap: the next one comes after.
+    await settle(900);
+  };
+  const editions = async () => {
+    tap(el('select-actions').querySelector('[data-act="bundle"]'));
+    await settle(500);
+  };
+  const of = async (...ids) => Promise.all(ids.map(async (id) => (await store.get('books', id)).bundleId));
+  await open();
+  assert.ok(shelfTile(lead), 'the set is not on the shelf');
+  assert.ok(!shelfTile(raw), 'the set is not one tile');
+  await hold(lead);
+  tap(shelfTile(stale));
+  await settle(300);
+  await editions();
+  assert.deepEqual(await of(lead, raw, stale), [lead, lead, lead], 'taken apart, not joined');
+  assert.ok(!shelfTile(stale), 'the book added still has its own tile');
+  // Another set added to it: that set comes whole.
+  await open();
+  await hold(lead);
+  tap(shelfTile(otherLead));
+  await settle(300);
+  await editions();
+  assert.deepEqual(await of(lead, raw, stale, otherLead, otherRaw), [lead, lead, lead, lead, lead]);
+  // And the set alone, Editions: taken apart, every edition.
+  await open();
+  await hold(lead);
+  await editions();
+  assert.deepEqual(await of(lead, raw, stale, otherLead, otherRaw), [undefined, undefined, undefined, undefined, undefined]);
+  for (const id of [lead, raw, stale, otherLead, otherRaw]) await store.deleteBook(id);
+});
+
 await t('a book imported from an export is matched by what it came from, recorded in the backup', async () => {
   const src = read('app/src/main/assets/www/js/store.js');
   assert.match(src, /if \(book\.sourceId\) kept\.sourceId = book\.sourceId;/);

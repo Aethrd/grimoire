@@ -1167,7 +1167,9 @@ function wireSelection() {
       if (!books.length) return;
 
       const bundled = books.filter((b) => b.bundleId);
-      if (bundled.length === books.length && books.length) {
+      // One set of editions selected, and nothing else: taken apart. (Any
+      // more than that -- another book, another set -- is joined, below.)
+      if (library.oneBundleOnly(books)) {
         /* Every member comes apart, not only the ones selected. A bundle
            shows as a single tile, so selecting it selects the leader alone --
            and releasing just the leader would leave the others pointing at a
@@ -1181,13 +1183,18 @@ function wireSelection() {
 
       if (books.length < 2) return toast('Select two or more books to join as editions of one book');
 
-      /* A bundle already among them keeps leading, so books added to it join
-       * it -- rather than its leader being made a member of something else,
-       * which left its old editions pointing at a bundle that had moved. */
-      const leader = books.find((b) => b.bundleId === b.id) || books[0];
-      for (const book of books) { book.bundleId = leader.id; await store.put('books', book); }
+      /* A set already among them keeps leading, and comes whole: every one of
+       * its editions, and of any other set among them, joins -- not only the
+       * books selected (library.editionsJoined). Written in one go, so a set
+       * is never left half joined. */
+      const { leader, books: joining } = library.editionsJoined(books, await store.all('books'));
+      const was = joining.filter((b) => b.bundleId === leader.id && leader.bundleId === leader.id).length;
+      const changed = joining.filter((b) => b.bundleId !== leader.id).map((b) => ({ ...b, bundleId: leader.id }));
+      if (changed.length) await store.putAll('books', changed);
       clearSelection();
-      toast(`${books.length} books joined as editions of “${leader.title}”`);
+      toast(was
+        ? `${changed.length} added to the editions of “${leader.title}” · ${joining.length} editions now`
+        : `${joining.length} books joined as editions of “${leader.title}”`);
     },
 
     vault: async () => {

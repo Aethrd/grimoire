@@ -578,4 +578,87 @@ t('a leader released on its own does not appear twice', () => {
     ['Was the leader', 'Still points at it']);
 });
 
+/* Editions joined: what is selected, every edition of any set among it, under a
+ * set that was already there. The result applied, then read the way the shelf
+ * reads it (collapseBundles): one tile, every edition in it. */
+{
+  const apply = (selected, books) => {
+    const { leader, books: joining } = lib.editionsJoined(selected, books);
+    const ids = new Set(joining.map((b) => b.id));
+    return { leader, after: books.map((b) => (ids.has(b.id) ? { ...b, bundleId: leader.id } : b)) };
+  };
+  const tiles = (books) => lib.collapseBundles(books).map((b) => (b.bundle ? `${b.title}[${b.bundle.map((e) => e.title).join(',')}]` : b.title)).sort();
+  const shelf = () => [
+    { id: 1, title: 'Lead', bundleId: 1 }, { id: 2, title: 'Raw', bundleId: 1 }, { id: 3, title: 'MTL', bundleId: 1 },
+    { id: 4, title: 'New A' }, { id: 5, title: 'New B' },
+    { id: 6, title: 'Other Lead', bundleId: 6 }, { id: 7, title: 'Other Raw', bundleId: 6 },
+  ];
+  const by = (books, ...ids) => ids.map((id) => books.find((b) => b.id === id));
+
+  t('editions: books added to a set join it, the set whole and still led as it was', () => {
+    const books = shelf();
+    // The set's tile selects its leader alone.
+    const { leader, after } = apply(by(books, 1, 4, 5), books);
+    assert.equal(leader.id, 1);
+    assert.deepEqual(tiles(after), ['Lead[Lead,MTL,New A,New B,Raw]', 'Other Lead[Other Lead,Other Raw]']);
+    // Selected in another order: the set still leads.
+    assert.equal(apply(by(books, 4, 1), books).leader.id, 1);
+  });
+
+  t('editions: an edition of another set added: that set comes whole, none of it left pointing at a book that no longer leads', () => {
+    const books = shelf();
+    const { leader, after } = apply(by(books, 1, 6), books);
+    assert.equal(leader.id, 1, 'the set with more editions leads');
+    assert.deepEqual(tiles(after), ['Lead[Lead,MTL,Other Lead,Other Raw,Raw]', 'New A', 'New B']);
+    // As many editions each: the first selected leads.
+    const even = [...shelf().filter((b) => b.id !== 3), { id: 8, title: 'Other MTL', bundleId: 6 }];
+    assert.equal(apply(by(even, 6, 1), even).leader.id, 6);
+    // Before: the selected books alone were joined -- Other Raw left pointing at Other Lead, now an edition of Lead.
+    const old = books.map((b) => ([1, 6].includes(b.id) ? { ...b, bundleId: 1 } : b));
+    assert.ok(tiles(old).includes('Other Raw'), 'the old way did not break it (the test is wrong)');
+  });
+
+  t('editions: an edition shown on its own (grouping parts a set) added to: its whole set joins', () => {
+    const books = shelf();
+    const { leader, after } = apply(by(books, 2, 4), books);
+    assert.equal(leader.id, 1);
+    assert.deepEqual(tiles(after), ['Lead[Lead,MTL,New A,Raw]', 'New B', 'Other Lead[Other Lead,Other Raw]']);
+  });
+
+  t('editions: no set among them: the first selected leads, as before', () => {
+    const books = shelf();
+    const { leader, after } = apply(by(books, 5, 4), books);
+    assert.equal(leader.id, 5);
+    assert.ok(tiles(after).includes('New B[New B,New A]'));
+  });
+
+  t('editions: a set broken before is mended by joining it again', () => {
+    // Joined the old way: Other Lead made an edition of Lead, Other Raw left pointing at it.
+    const broken = shelf().map((b) => (b.id === 6 ? { ...b, bundleId: 1 } : b));
+    assert.ok(tiles(broken).includes('Other Raw'));
+    const { after } = apply(by(broken, 1, 7), broken);
+    assert.deepEqual(tiles(after), ['Lead[Lead,MTL,Other Lead,Other Raw,Raw]', 'New A', 'New B']);
+  });
+
+  t('editions: a book still marked as of a set whose leader is gone joins as itself, not that old set', () => {
+    // Its leader deleted (or binned, or removed as a double): both left marked as of book 99.
+    const books = [...shelf(), { id: 8, title: 'Left A', bundleId: 99 }, { id: 9, title: 'Left B', bundleId: 99 }];
+    const { leader, after } = apply(by(books, 1, 2, 3, 8), books);
+    assert.equal(leader.id, 1);
+    assert.deepEqual(tiles(after), ['Left B', 'Lead[Lead,Left A,MTL,Raw]', 'New A', 'New B', 'Other Lead[Other Lead,Other Raw]'].sort());
+    // And that is a join, not a set taken apart: before, every book selected being marked meant apart.
+    assert.ok(!lib.oneBundleOnly(by(books, 1, 2, 3, 8)));
+  });
+
+  t('editions: one set selected and nothing else is taken apart; anything more is joined', () => {
+    const books = shelf();
+    assert.ok(lib.oneBundleOnly(by(books, 1)));
+    assert.ok(lib.oneBundleOnly(by(books, 2, 3)), 'two editions of one set');
+    assert.ok(!lib.oneBundleOnly(by(books, 1, 4)), 'a set and a book');
+    assert.ok(!lib.oneBundleOnly(by(books, 1, 6)), 'two sets');
+    assert.ok(!lib.oneBundleOnly(by(books, 4)));
+    assert.ok(!lib.oneBundleOnly([]));
+  });
+}
+
 console.log(`\n${pass} assertions passed`);

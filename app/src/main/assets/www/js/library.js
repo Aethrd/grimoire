@@ -174,6 +174,59 @@ export const isDownloading = (book) => !!(book?.importing && book.building?.webP
  * leader is missing -- deleted on its own, say -- stands for itself rather
  * than vanishing.
  */
+/**
+ * Whether what is selected is one set of editions and nothing else -- so the
+ * Editions button takes it apart rather than joining it to anything.
+ *
+ * It was "every book selected is in a set": so a set with a book added that
+ * was itself an edition of another -- or still marked as one of a set whose
+ * leader had gone (deleted, binned, removed as a double) -- was taken apart,
+ * every edition, when it was meant to grow.
+ */
+export function oneBundleOnly(selected) {
+  const keys = new Set(selected.map((b) => b.bundleId ?? null));
+  return selected.length > 0 && keys.size === 1 && !keys.has(null);
+}
+
+/**
+ * Books joined as editions of one: what is selected, and every edition of any
+ * set among it -- not only those selected. A set already there goes on
+ * leading (with more than one, the one with most editions; the first
+ * selected if as many), so books added to it join it.
+ *
+ * Only the books selected were joined before. A set's tile selects its leader
+ * alone, so that held while nothing else was in a set; but add a book that was
+ * itself an edition of another, or an edition shown on its own (grouping by
+ * language parts a set), and the editions not selected were left pointing at
+ * a book that no longer led -- the set broken. Any so broken already are
+ * mended the same way: what still points at a book among those joined comes
+ * along.
+ * @returns {{ leader, books }} the leader, and every book that joins
+ */
+export function editionsJoined(selected, books) {
+  const byId = new Map(books.map((b) => [b.id, b]));
+  const leads = (id) => byId.get(id)?.bundleId === id;
+  const joining = new Map(selected.map((b) => [b.id, b]));
+  // Every set touched, whole; and whatever points at a book joining (a set it
+  // once led). Not a set whose leader is gone: its editions stand on their
+  // own on the shelf, and only those selected come.
+  const keys = new Set([
+    ...selected.map((b) => b.bundleId).filter((id) => id != null && leads(id)),
+    ...selected.map((b) => b.id),
+  ]);
+  for (const book of books) if (keys.has(book.bundleId)) joining.set(book.id, book);
+  let leader = null;
+  let most = -1;
+  let first = Infinity;
+  for (const key of new Set(selected.map((b) => b.bundleId).filter((id) => id != null))) {
+    if (!leads(key)) continue;
+    const size = books.filter((b) => b.bundleId === key).length;
+    const at = selected.findIndex((b) => b.bundleId === key);
+    if (size > most || (size === most && at < first)) { leader = byId.get(key); most = size; first = at; }
+  }
+  return { leader: leader || selected[0], books: [...joining.values()] };
+}
+
 export function collapseBundles(books, levels = []) {
   const byId = new Map(books.map((b) => [b.id, b]));
   const members = new Map();

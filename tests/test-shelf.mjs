@@ -100,7 +100,7 @@ t('whatever is done to a bundle is done to every edition in it', () => {
     assert.match(acts, new RegExp(`${name}: \\(\\) => oneSelected\\(`), `${name} picks an edition for you`);
   }
   // Adding books to a bundle keeps its leader.
-  assert.match(acts, /const leader = books\.find\(\(b\) => b\.bundleId === b\.id\) \|\| books\[0\]/);
+  assert.match(acts, /const \{ leader, books: joining \} = library\.editionsJoined\(books, await store\.all\('books'\)\);/);
   assert.match(app, /\$\{count\} selected · \$\{books\} books/);
 });
 
@@ -638,6 +638,9 @@ t('bundling is one action that reads both ways', () => {
   // shows as one tile, so selecting it selects the leader alone.
   assert.match(app, /ids\.has\(b\.bundleId\)/);
   assert.ok(html.includes('data-act="bundle"'));
+  // Apart only when one set and nothing else is selected; joined whole, in one write, otherwise.
+  assert.match(app, /if \(library\.oneBundleOnly\(books\)\) \{/);
+  assert.match(app, /library\.editionsJoined\(books, await store\.all\('books'\)\);[\s\S]{0,300}await store\.putAll\('books', changed\);/);
 });
 
 t('building is a tool, not a shelf action', () => {
