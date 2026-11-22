@@ -244,6 +244,8 @@ t('a chapter added above or dropped off the top keeps the place once, not twice'
   const high = new WeakMap();
   const sectionHeight = (section) => [...section.children].reduce((sum, p) => sum + (high.get(p) ?? 0), 0);
   const gapAbove = (section) => (section.previousElementSibling ? GAP : 0);
+  Object.defineProperty(viewport, 'scrollHeight', { configurable: true,
+    get: () => [...flow.children].reduce((sum, section) => sum + gapAbove(section) + sectionHeight(section), 0) });
   const top = (el) => {
     if (el.parentElement === flow) {
       let y = 0;
@@ -399,6 +401,29 @@ t('a chapter added above or dropped off the top keeps the place once, not twice'
     // Long strips are picture books too: switched to scrolling for them first, then edged.
     assert.match(src, /holdForStrips\(await tall, settings\);\s*state\.pictureBook = await pictures;\s*paintEdges\(\);/);
     assert.equal((src.match(/classList\.toggle\('scrolling', isScroll\(\)\);\s*paintEdges\(\);/g) || []).length, 3);
+  });
+
+  await t('the window only taller or shorter (bars, keyboard, insets sent again): a page being scrolled is not pulled back', async () => {
+    lay(3, 10, 100);
+    reader.state.mode = 'scroll';
+    const book = reader.state.book;
+    reader.state.book = { id: 'resized', title: 'Words' };
+    reader.state.chapterIndex = 1;
+    reader.placeForTest.relayout();          // laid out at this width
+    scroll = 1500;
+    reader.state.anchor = 0;                 // noted when scrolling last settled: the chapter's top
+    reader.repaginate({ resized: true });
+    scroll = 1564;                           // and the finger still moving, before the frame
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(scroll, 1564, 'pulled back to the place last noted');
+    reader.state.book = book;
+    // Sent from the app as resized, and only when the window or its insets really changed.
+    const app = read('app/src/main/assets/www/js/app.js');
+    assert.match(app, /if \(now === shape\) return;\s*shape = now;\s*if \(reader\.state\.book\) reader\.repaginate\(\{ resized: true \}\);/);
+    // A change of width re-wraps the text: put back by the place, as before.
+    const src = read('app/src/main/assets/www/js/reader.js');
+    assert.match(src, /if \(isScroll\(\) && opts\.resized && flow\.clientWidth === wrapWidth\) \{/);
+    assert.match(src, /flow\.style\.columnGap = '';\s*wrapWidth = flow\.clientWidth;/);
   });
 
   window.HTMLElement.prototype.getBoundingClientRect = realRect;

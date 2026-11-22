@@ -13825,10 +13825,27 @@ async function boot() {
   // Re-flow when the window changes shape: rotation, keyboard, the insets
   // MainActivity pushes in. The anchor is preserved, so nobody loses a page.
   let resizeTimer = null;
+  /* Android sends the insets again on many things that change nothing (the
+   * focus coming back, the shade, a bar shown for a moment): the same window
+   * and the same insets are not a change, and are let be. A real one is
+   * re-flowed as resized -- the reader leaves the text where it is when only
+   * the height changed. */
+  let shape = '';
+  const shapeNow = () => {
+    const root = getComputedStyle(document.documentElement);
+    return [window.innerWidth, window.innerHeight,
+      ...['--safe-top', '--safe-right', '--safe-bottom', '--safe-left'].map((name) => root.getPropertyValue(name).trim())].join('|');
+  };
   const reflow = () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { if (reader.state.book) reader.repaginate(); }, 120);
+    resizeTimer = setTimeout(() => {
+      const now = shapeNow();
+      if (now === shape) return;
+      shape = now;
+      if (reader.state.book) reader.repaginate({ resized: true });
+    }, 120);
   };
+  shape = shapeNow();
   window.addEventListener('resize', reflow);
   window.addEventListener('grimoire:insets', reflow);
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', async () => {

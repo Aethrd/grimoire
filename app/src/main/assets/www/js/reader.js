@@ -173,7 +173,7 @@ function keepPlace() {
   return shift;
 }
 /** For the tests: the keeping of the place, and the dropping of chapters, to drive. */
-export const placeForTest = { holdPlace, keepPlace, trimWindow: (from) => trimWindow(from) };
+export const placeForTest = { holdPlace, keepPlace, trimWindow: (from) => trimWindow(from), relayout: () => relayout() };
 
 /* ── mode ─────────────────────────────────────────────────────────────── */
 
@@ -384,11 +384,16 @@ function opens(node, child) {
   return true;
 }
 
+/* The width the text was last laid out to, in scroll mode: a resize that
+ * leaves it the same has not re-wrapped a line (repaginate). */
+let wrapWidth = -1;
+
 function relayout() {
   measurePage();
   if (isScroll()) {
     flow.style.columnWidth = '';
     flow.style.columnGap = '';
+    wrapWidth = flow.clientWidth;
     // "Pages" stay meaningful in scroll mode so the counters and the scrub
     // rail keep working: one page is one screenful.
     state.pageCount = Math.max(1, Math.ceil(viewport.scrollHeight / viewportHeight()));
@@ -1614,6 +1619,29 @@ export function repaginate(opts = {}) {
   if (!state.book) return;
   const anchor = state.anchor;
   const chapter = state.chapterIndex;
+
+  if (isScroll() && opts.resized && flow.clientWidth === wrapWidth) {
+    /* Only taller or shorter: the bars, the keyboard, the same insets sent
+     * again (Android sends them on a change of focus, the shade, a bar shown
+     * for a moment). The text has not re-wrapped, so nothing under the reader
+     * has moved -- and putting it back by the place last noted (the anchor,
+     * taken when scrolling last settled, and the offset taken before the
+     * frame) pulled a page still being scrolled back to where it had been: a
+     * skip, in a book of text, with nothing else moving to hide it. Only how
+     * far the top of the view moved is made good, and the end kept the end. */
+    const atEnd = scrolledToEnd();
+    const viewTop = viewport.getBoundingClientRect().top;
+    requestAnimationFrame(() => {
+      relayout();
+      estimateTotals();
+      const shift = viewport.getBoundingClientRect().top - viewTop;
+      if (atEnd) viewport.scrollTop = viewport.scrollHeight;
+      else if (Math.abs(shift) >= 0.5) viewport.scrollTop += shift;
+      holdPlace();
+      onChange(state);
+    });
+    return;
+  }
 
   if (isScroll()) {
     /* Keep the anchor exactly where it sits on screen.
