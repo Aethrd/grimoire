@@ -85,9 +85,86 @@ export function init(handlers) {
     // event would walk every text node sixty times a second.
     clearTimeout(scrollTimer);
     scrollTimer = setTimeout(onScrolled, 90);
+    holdSoon();
     extendIfNeeded();
   }, { passive: true });
+  // Anything in the flow changing size -- a picture arriving, a chapter added
+  // or dropped, the fitting of a picture once its shape is known -- and the
+  // line at the top of the screen is put back where it was (keepPlace).
+  if (typeof ResizeObserver === 'function') new ResizeObserver(() => keepPlace()).observe(flow);
 }
+
+/* ── the place kept, in scroll mode ───────────────────────────────────────
+ *
+ * The browser's own keeping of the place is off here (app.css, overflow-anchor:
+ * with it on as well, the two corrections together threw the view a chapter).
+ * So the reader keeps it, the one way, for everything: the block at the top of
+ * the screen is held -- which, and how far down the screen it sits -- and
+ * whenever what is above it changes height it is put back.
+ *
+ * Done instead by sums, case by case, it slipped: a chapter dropped off the
+ * top took the gap above the next one with it (2.5em, not in the sum), and a
+ * picture above the screen arriving late, or a chapter's pictures arriving
+ * after the chapter was added above, moved the page with nothing to put it
+ * back. Each was a skip along the page while reading on.
+ *
+ * Only a change in size is undone: the reader scrolling, or the reader being
+ * sent somewhere (a chapter, a mark, the rail), moves the view itself, and
+ * what is held is taken again from there -- never pulled back to. */
+let held = null;     // { block, top, at }: the block, its top on screen, the scroll offset then
+let holdFrame = 0;
+
+/** The innermost block at the top of the screen, worth holding. */
+function blockAtTop() {
+  const y = viewport.getBoundingClientRect().top + 1;
+  let level = flow.children;
+  let found = null;
+  for (let depth = 0; depth < 8 && level.length; depth += 1) {
+    // Blocks run down the page in order: halved, not walked, in a long chapter.
+    let low = 0;
+    let high = level.length - 1;
+    let pick = null;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      if (level[middle].getBoundingClientRect().bottom > y) { pick = level[middle]; high = middle - 1; }
+      else low = middle + 1;
+    }
+    if (!pick) break;
+    found = pick;
+    const box = pick.getBoundingClientRect();
+    // Its top on screen, or small enough to hold as it is: held. Else a block inside it.
+    if (box.top >= y - 1 || box.height <= viewport.clientHeight / 2 || !pick.children.length) break;
+    level = pick.children;
+  }
+  return found;
+}
+
+function holdPlace() {
+  holdFrame = 0;
+  if (!viewport || !isScroll() || !measurable()) { held = null; return; }
+  const block = blockAtTop();
+  held = block ? { block, top: block.getBoundingClientRect().top, at: viewport.scrollTop } : null;
+}
+
+function holdSoon() {
+  if (!holdFrame) holdFrame = requestAnimationFrame(holdPlace);
+}
+
+/** The block held put back where it was, if what is above it changed size. */
+function keepPlace() {
+  if (!viewport || !isScroll() || scrubbing) { held = null; return 0; }
+  let shift = 0;
+  // Still where it was held from (not scrolled, not sent anywhere since), and still there.
+  if (held && held.block.isConnected && Math.abs(viewport.scrollTop - held.at) <= 1) {
+    shift = held.block.getBoundingClientRect().top - held.top;
+    if (Math.abs(shift) >= 0.5) viewport.scrollTop += shift;
+    else shift = 0;
+  }
+  holdPlace();
+  return shift;
+}
+/** For the tests: the keeping of the place, and the dropping of chapters, to drive. */
+export const placeForTest = { holdPlace, keepPlace, trimWindow: (from) => trimWindow(from) };
 
 /* ── mode ─────────────────────────────────────────────────────────────── */
 
@@ -1015,12 +1092,14 @@ async function extendIfNeeded() {
     extending = true;
     try {
       const previous = state.chapters[first - 1];
-      const before = viewport.scrollHeight;
+      holdPlace();
       flow.insertBefore(chapterSection(previous), flow.firstChild);
       state.loaded.unshift(previous.index);
+      // At once, not after its pictures: the text does not move while they come.
+      keepPlace();
       await imagesSettled();
-      // Correct for the content that appeared above.
-      viewport.scrollTop += viewport.scrollHeight - before;
+      // And again for what they added (each as it arrives, too: the observer in init).
+      keepPlace();
       trimWindow('end');
       relayout();
       onChange(state);
@@ -1033,22 +1112,26 @@ async function extendIfNeeded() {
  * becomes unusable three hours in.
  */
 function trimWindow(from) {
+  if (from === 'start') holdPlace();
   while (state.loaded.length > WINDOW) {
     if (from === 'start') {
-      const index = state.loaded.shift();
+      const index = state.loaded[0];
       const section = sectionFor(index);
+      // Never one still on the screen (chapters a few lines long): kept until read past.
+      if (section && section.getBoundingClientRect().bottom > viewport.getBoundingClientRect().top) break;
+      state.loaded.shift();
       if (!section) continue;
-      // Removing from above moves everything up, so compensate.
-      const height = section.getBoundingClientRect().height;
+      // Removing from above moves everything up -- the gap above the next
+      // chapter with it: the place is put back by what is on screen, not a sum.
       section.remove();
       releaseSection(index);
-      viewport.scrollTop -= height;
     } else {
       const index = state.loaded.pop();
       sectionFor(index)?.remove();
       releaseSection(index);
     }
   }
+  if (from === 'start') keepPlace();
 }
 
 /** How many of the chapter's pictures have not arrived yet. */

@@ -140,7 +140,7 @@ await t('every rendered chapter releases its URLs when dropped', () => {
   assert.match(src, /releaseSection/);
   assert.match(src, /sectionPools/);
   const trim = src.slice(src.indexOf('function trimWindow'));
-  assert.equal((trim.slice(0, 700).match(/releaseSection/g) || []).length, 2,
+  assert.equal((trim.slice(0, trim.indexOf('\n}\n')).match(/releaseSection/g) || []).length, 2,
     'both trim directions must release');
 });
 

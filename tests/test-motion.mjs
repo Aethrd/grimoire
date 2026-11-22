@@ -217,16 +217,167 @@ t("Android's own bar at the foot is put away while a book is open, and comes bac
 });
 
 t('a chapter added above or dropped off the top keeps the place once, not twice', () => {
-  /* The reader moves the scroll by the chapter's height itself (extendIfNeeded,
-   * trimWindow). The browser's scroll anchoring, left on, moved it as well: in
-   * Chromium the view was thrown a whole chapter back on a trim and forward on
-   * a prepend -- the flick between chapters in endless scroll. Anchoring is off
-   * for the scrolling view, so only the reader's own correction is made. */
+  /* The browser's scroll anchoring, left on, moved the view as well as the
+   * reader: in Chromium it was thrown a whole chapter back on a trim and
+   * forward on a prepend. Anchoring stays off; the reader keeps the place
+   * itself, one way (keepPlace), with the observer for anything else. */
   assert.match(css, /\.page-viewport\.scrolling \{[^}]*overflow-anchor: none;/);
-  const reader = read('app/src/main/assets/www/js/reader.js');
-  assert.match(reader, /viewport\.scrollTop \+= viewport\.scrollHeight - before;/);
-  assert.match(reader, /section\.remove\(\);\s+releaseSection\(index\);\s+viewport\.scrollTop -= height;/);
+  const src = read('app/src/main/assets/www/js/reader.js');
+  assert.match(src, /new ResizeObserver\(\(\) => keepPlace\(\)\)\.observe\(flow\)/);
+  assert.ok(!/scrollHeight - before/.test(src), 'a sum still made for a chapter added above');
+  assert.ok(!/viewport\.scrollTop -= height/.test(src), 'a sum still made for a chapter dropped');
 });
+
+/* The place kept, against a layout: jsdom lays nothing out, so a small one is
+ * stood in for -- chapters of paragraphs, each so high, and the gap above
+ * every chapter but the first (.chapter + .chapter, 2.5em) -- and the reader's
+ * own keeping is driven against it. */
+{
+  const document = globalThis.document;
+  const viewport = document.getElementById('page-viewport');
+  const flow = document.getElementById('page-flow');
+  reader.init({ onChange: () => {} });
+  let scroll = 0;
+  Object.defineProperty(viewport, 'scrollTop', { configurable: true, get: () => scroll, set: (v) => { scroll = Math.max(0, v); } });
+  Object.defineProperty(viewport, 'clientHeight', { configurable: true, get: () => 800 });
+  const GAP = 40;
+  const high = new WeakMap();
+  const sectionHeight = (section) => [...section.children].reduce((sum, p) => sum + (high.get(p) ?? 0), 0);
+  const gapAbove = (section) => (section.previousElementSibling ? GAP : 0);
+  const top = (el) => {
+    if (el.parentElement === flow) {
+      let y = 0;
+      for (const s of flow.children) {
+        y += gapAbove(s);
+        if (s === el) return y;
+        y += sectionHeight(s);
+      }
+    }
+    if (el.parentElement?.parentElement === flow) {
+      let y = top(el.parentElement);
+      for (const p of el.parentElement.children) { if (p === el) return y; y += high.get(p) ?? 0; }
+    }
+    return null;
+  };
+  const proto = Object.getPrototypeOf(Object.getPrototypeOf(viewport));
+  const realRect = window.HTMLElement.prototype.getBoundingClientRect;
+  window.HTMLElement.prototype.getBoundingClientRect = function () {
+    const box = (y, h) => ({ top: y, bottom: y + h, height: h, left: 0, right: 400, width: 400, x: 0, y });
+    if (this === viewport) return box(0, 800);
+    const y = top(this);
+    if (y == null) return realRect.call(this);
+    const h = this.parentElement === flow ? sectionHeight(this) : (high.get(this) ?? 0);
+    return box(y - scroll, h);
+  };
+  void proto;
+  const chapter = (index, paragraphs = 10, each = 100) => {
+    const section = document.createElement('section');
+    section.className = 'chapter';
+    section.dataset.chapter = String(index);
+    for (let i = 0; i < paragraphs; i += 1) {
+      const p = document.createElement('p');
+      p.textContent = `c${index} p${i}`;
+      high.set(p, each);
+      section.appendChild(p);
+    }
+    return section;
+  };
+  const lay = (count, paragraphs, each) => {
+    flow.innerHTML = '';
+    for (let i = 0; i < count; i += 1) flow.appendChild(chapter(i, paragraphs, each));
+    reader.state.mode = 'scroll';
+    reader.state.loaded = [...Array(count).keys()];
+  };
+  const atTop = () => [...flow.querySelectorAll('p')].find((p) => p.getBoundingClientRect().bottom > 1);
+  const { holdPlace, keepPlace, trimWindow } = reader.placeForTest;
+
+  t('a chapter dropped off the top: the line read stays put, the gap above the next chapter and all', () => {
+    lay(6, 10, 100);
+    scroll = 5 * 1040 + 330;          // a third of a paragraph into the last chapter's fourth
+    const line = atTop();
+    const was = line.getBoundingClientRect().top;
+    trimWindow('start');
+    assert.equal(reader.state.loaded.length, 5);
+    assert.ok(!flow.querySelector('[data-chapter="0"]'));
+    assert.equal(line.getBoundingClientRect().top, was, 'the page skipped');
+    // 1000 of chapter and the 40 of gap that went with it -- by the sum it was 1000, and a 40px skip.
+    assert.equal(scroll, 4 * 1040 + 330);
+  });
+
+  t('a picture above the screen arriving late: the page does not move', () => {
+    lay(3, 10, 100);
+    scroll = 2 * 1040 + 500;
+    holdPlace();
+    const line = atTop();
+    const was = line.getBoundingClientRect().top;
+    high.set(flow.children[1].children[2], 700);   // a picture in the chapter above, come in at its height
+    keepPlace();
+    assert.equal(line.getBoundingClientRect().top, was);
+    // Growing below the line read: nothing to undo.
+    const at = scroll;
+    holdPlace();
+    high.set(flow.children[2].children[9], 900);
+    assert.equal(keepPlace(), 0);
+    assert.equal(scroll, at);
+  });
+
+  t('a chapter added above: the line read stays put, at once and as its pictures come', () => {
+    lay(2, 10, 100);
+    scroll = 700;
+    holdPlace();
+    const line = atTop();
+    const was = line.getBoundingClientRect().top;
+    flow.insertBefore(chapter(9, 4, 250), flow.firstChild);
+    keepPlace();
+    assert.equal(line.getBoundingClientRect().top, was, 'moved by the chapter added');
+    high.set(flow.firstChild.children[0], 1200);   // and one of its pictures arriving
+    keepPlace();
+    assert.equal(line.getBoundingClientRect().top, was, 'moved by its picture');
+  });
+
+  t('scrolled, or sent somewhere, since: never pulled back', () => {
+    lay(3, 10, 100);
+    scroll = 1500;
+    holdPlace();
+    scroll = 1900;                       // the reader scrolls on (or a mark is jumped to)
+    high.set(flow.children[0].children[0], 600);
+    assert.equal(keepPlace(), 0);
+    assert.equal(scroll, 1900);
+    // And from there it is held anew.
+    const line = atTop();
+    const was = line.getBoundingClientRect().top;
+    high.set(flow.children[0].children[1], 300);
+    keepPlace();
+    assert.equal(line.getBoundingClientRect().top, was);
+  });
+
+  t('a chapter still on the screen is never dropped (chapters a few lines long)', () => {
+    lay(7, 1, 100);
+    scroll = 0;
+    trimWindow('start');
+    assert.equal(reader.state.loaded.length, 7);
+    assert.ok(flow.querySelector('[data-chapter="0"]'));
+    // Read past them, they go.
+    scroll = 6 * 140 - 40 + 10;
+    trimWindow('start');
+    assert.equal(reader.state.loaded.length, 5);
+  });
+
+  t('paged: nothing kept, nothing moved', () => {
+    lay(2, 10, 100);
+    reader.state.mode = 'paged';
+    scroll = 300;
+    holdPlace();
+    high.set(flow.children[0].children[0], 900);
+    assert.equal(keepPlace(), 0);
+    assert.equal(scroll, 300);
+  });
+
+  window.HTMLElement.prototype.getBoundingClientRect = realRect;
+  flow.innerHTML = '';
+  reader.state.mode = 'paged';
+  reader.state.loaded = [];
+}
 
 t('the overlay never takes a touch, so text can be selected', () => {
   // It sat over the words, so a long press landed on it and Android's Copy,
