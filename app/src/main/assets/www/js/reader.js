@@ -45,6 +45,7 @@ export const state = {
   mode: 'paged',     // 'paged' | 'scroll'
   held: false,       // switched to scrolling for a book of long strips (releaseStrips)
   endless: true,     // scroll mode only: run on into the next chapter
+  pictureBook: false, // more pictures than words (mostlyPictures): endless scroll runs edge to edge
   loaded: [],        // chapter indices currently in the DOM, ascending
 };
 
@@ -92,6 +93,14 @@ export function init(handlers) {
   // or dropped, the fitting of a picture once its shape is known -- and the
   // line at the top of the screen is put back where it was (keepPlace).
   if (typeof ResizeObserver === 'function') new ResizeObserver(() => keepPlace()).observe(flow);
+}
+
+/* A book of pictures read in endless scroll runs to the top and bottom of the
+ * screen, one page straight on into the next: the margins above and below are
+ * for a page of text, and on a strip they were bands it scrolled behind. The
+ * margins at the sides are kept. Not for text, nor for pictures read paged. */
+function paintEdges() {
+  viewport?.classList.toggle('edge-to-edge', isScroll() && state.endless && state.pictureBook);
 }
 
 /* ── the place kept, in scroll mode ───────────────────────────────────────
@@ -188,6 +197,7 @@ export async function setMode(mode) {
   state.mode = mode;
   viewport.classList.toggle('scrolling', isScroll());
   flow.classList.toggle('scrolling', isScroll());
+  paintEdges();
   // Reload rather than re-measure: the two modes hold different numbers of
   // chapters in the DOM, and the anchor is what carries the place across.
   await loadChapter(chapter, anchor);
@@ -195,6 +205,7 @@ export async function setMode(mode) {
 
 export function setEndless(on) {
   state.endless = on;
+  paintEdges();
   store.saveSettings({ endlessScroll: on });
   if (isScroll() && on) extendIfNeeded();
 }
@@ -870,6 +881,9 @@ export async function open(bookId, opts = {}) {
   if (!book) throw new Error('That book is no longer in the library');
 
   state.book = book;
+  // Not the last book's, until this one is known.
+  state.pictureBook = false;
+  paintEdges();
   state.chapters = await store.byIndex('chapters', 'bookId', bookId);
   state.chapters.sort((a, b) => a.index - b.index);
 
@@ -881,12 +895,14 @@ export async function open(bookId, opts = {}) {
   // Started now, so it runs while the layout and the place are read and the
   // opening scene plays -- not after them.
   const pictured = images.filter((i) => i.blob);
-  const tall = mostlyPictures(state.chapters, pictured.length)
-    .then((pictures) => (pictures ? tallStrips(pictured) : false));
+  const pictures = mostlyPictures(state.chapters, pictured.length);
+  const tall = pictures.then((yes) => (yes ? tallStrips(pictured) : false));
   state.layout = await store.layoutFor(bookId);
   const settings = await store.settings();
   applyLayout(state.layout, settings);
   holdForStrips(await tall, settings);
+  state.pictureBook = await pictures;
+  paintEdges();
 
   const saved = await store.get('positions', bookId);
   const chapterIndex = opts.chapter ?? saved?.chapterIndex ?? 0;
@@ -1512,6 +1528,7 @@ export async function releaseStrips() {
       state.mode = mode;
       viewport?.classList.toggle('scrolling', isScroll());
       flow?.classList.toggle('scrolling', isScroll());
+      paintEdges();
       body.dataset.mode = mode;
     }
   }
@@ -1579,6 +1596,7 @@ export function applyLayout(layout, settings) {
     state.mode = mode;
     viewport.classList.toggle('scrolling', isScroll());
     flow.classList.toggle('scrolling', isScroll());
+    paintEdges();
   }
 
   /* Set here, not only when the reader repaints.

@@ -1633,9 +1633,9 @@ await t('a book of two or more long strips opens scrolling at the width, and goe
 
   const src = read('app/src/main/assets/www/js/reader.js');
   // Pictures are only measured for a book that is mostly pictures.
-  assert.match(src, /mostlyPictures\(state\.chapters, pictured\.length\)\s+\.then\(\(pictures\) => \(pictures \? tallStrips\(pictured\) : false\)\)/);
+  assert.match(src, /const pictures = mostlyPictures\(state\.chapters, pictured\.length\);\s+const tall = pictures\.then\(\(yes\) => \(yes \? tallStrips\(pictured\) : false\)\);/);
   // Checked while the book opens -- started before the layout is read, waited for before it is applied.
-  assert.match(src, /const tall = mostlyPictures\([\s\S]{0,200}store\.layoutFor\(bookId\)[\s\S]{0,200}applyLayout\(state\.layout, settings\);\s+holdForStrips\(await tall, settings\);/);
+  assert.match(src, /const pictures = mostlyPictures\([\s\S]{0,200}store\.layoutFor\(bookId\)[\s\S]{0,200}applyLayout\(state\.layout, settings\);\s+holdForStrips\(await tall, settings\);/);
   // Never saved: the settings stay what they were.
   const hold = src.slice(src.indexOf('function holdForStrips'), src.indexOf('export async function releaseStrips'));
   assert.doesNotMatch(hold, /saveSettings/);

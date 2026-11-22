@@ -415,6 +415,9 @@ section.block > h2 { margin-top: 18px; }
                            -webkit-overflow-scrolling: touch;
                            top: var(--read-vmargin-t); bottom: var(--read-vmargin-b);
                            padding-top: 0; padding-bottom: 0; }
+/* A book of pictures in endless scroll: edge to edge, top and bottom (reader.js
+   paintEdges). The side margins stay. */
+.page-viewport.scrolling.edge-to-edge { top: 0; bottom: 0; }
 
 /* Pagination is CSS columns: one column exactly the viewport's width, and the
    flow is translated sideways one page at a time. */

@@ -373,6 +373,34 @@ t('a chapter added above or dropped off the top keeps the place once, not twice'
     assert.equal(scroll, 300);
   });
 
+  t('a picture book in endless scroll runs edge to edge, top and bottom; its sides keep their margins', () => {
+    const rule = css.match(/\.page-viewport\.scrolling\.edge-to-edge \{([^}]*)\}/);
+    assert.ok(rule, 'no edge-to-edge rule');
+    assert.match(rule[1], /^\s*top: 0; bottom: 0;\s*$/, 'more than the top and bottom changed');
+    const edges = () => viewport.classList.contains('edge-to-edge');
+    reader.state.mode = 'scroll';
+    reader.state.pictureBook = true;
+    reader.setEndless(true);
+    assert.ok(edges(), 'a picture book in endless scroll kept its top and bottom bands');
+    reader.setEndless(false);
+    assert.ok(!edges(), 'scroll without endless: margins as set');
+    reader.state.pictureBook = false;
+    reader.setEndless(true);
+    assert.ok(!edges(), 'a book of text lost its margins');
+    reader.state.pictureBook = true;
+    reader.state.mode = 'paged';
+    reader.setEndless(true);
+    assert.ok(!edges(), 'paged pictures lost their margins');
+    reader.state.pictureBook = false;
+    // Known when the book opens, the last book's never carried into the next.
+    const src = read('app/src/main/assets/www/js/reader.js');
+    assert.match(src, /state\.book = book;\s*\/\/[^\n]*\n\s*state\.pictureBook = false;\s*paintEdges\(\);/);
+    assert.match(src, /state\.pictureBook = await pictures;\s*paintEdges\(\);/);
+    // Long strips are picture books too: switched to scrolling for them first, then edged.
+    assert.match(src, /holdForStrips\(await tall, settings\);\s*state\.pictureBook = await pictures;\s*paintEdges\(\);/);
+    assert.equal((src.match(/classList\.toggle\('scrolling', isScroll\(\)\);\s*paintEdges\(\);/g) || []).length, 3);
+  });
+
   window.HTMLElement.prototype.getBoundingClientRect = realRect;
   flow.innerHTML = '';
   reader.state.mode = 'paged';
