@@ -41,7 +41,7 @@ await t('the shelf renders with an empty library', async () => {
 });
 
 await t('every settings pane renders without throwing', async () => {
-  for (const pane of ['text', 'layout', 'theme', 'behaviour', 'translation', 'data']) {
+  for (const pane of ['text', 'layout', 'theme', 'behaviour', 'translation', 'data', 'backup']) {
     await panels.openSettings(() => {});
     const button = [...document.getElementById('settings-strip').children]
       .find((b) => b.dataset.pane === pane);

@@ -1225,7 +1225,21 @@ t('the settings strip is labelled', () => {
   // first was behind an ambiguous grid icon.
   const strip = html.slice(html.indexOf('id="settings-strip"'), html.indexOf('id="settings-body"'));
   const labels = [...strip.matchAll(/<span>(\w+)<\/span>/g)].map((m) => m[1]);
-  assert.deepEqual(labels, ['Text', 'Layout', 'Theme', 'Behaviour', 'Translate', 'Vault']);
+  assert.deepEqual(labels, ['Text', 'Layout', 'Theme', 'Behaviour', 'Translate', 'Vault', 'Backup']);
+});
+
+t('the Vault holds the vault alone; backup, books and settings carried elsewhere are their own tab after it', () => {
+  const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url), 'utf8');
+  const vault = src.slice(src.indexOf('export async function openVault('), src.indexOf('export async function openData('));
+  const data = src.slice(src.indexOf('export async function openData('), src.indexOf('function strength('));
+  for (const moved of ['Save a backup', 'Restore from a backup', 'Export every book', 'doublesBlock()', 'tidyBlock()', 'Wait for the phone to cool', 'Export settings only', 'autoBackupBlock()', 'Last import', 'Last crash']) {
+    assert.ok(data.includes(moved), `${moved} not in the Backup tab`);
+    assert.ok(!vault.includes(moved), `${moved} still in the Vault`);
+  }
+  assert.ok(vault.includes('Private vault') && vault.includes('Move books in or out'));
+  // A restore redraws the pane it was made from.
+  assert.match(data, /openData\(onVaultChange, body\);/);
+  assert.match(src, /backup: \{ title: 'Backup & books', render: renderBackupPane \}/);
 });
 
 t('the strip offers no share and no text-to-speech', () => {
@@ -1233,7 +1247,7 @@ t('the strip offers no share and no text-to-speech', () => {
   // button that leads nowhere is worse than a shorter strip.
   const strip = html.slice(html.indexOf('id="settings-strip"'), html.indexOf('id="settings-body"'));
   const panes = [...strip.matchAll(/data-pane="(\w+)"/g)].map((m) => m[1]);
-  assert.deepEqual(panes, ['text', 'layout', 'theme', 'behaviour', 'translation', 'data']);
+  assert.deepEqual(panes, ['text', 'layout', 'theme', 'behaviour', 'translation', 'data', 'backup']);
   assert.ok(!/share|speak|sound|volume|tts/i.test(strip));
 });
 

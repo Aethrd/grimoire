@@ -478,7 +478,7 @@ await t('automatic backups: a folder chosen once, written on schedule and after 
     },
   };
   const host = document.createElement('div');
-  await panels.openVault(() => {}, host);
+  await panels.openData(() => {}, host);
   const block = host.querySelector('.auto-backup');
   assert.ok(block, 'no automatic backups in Settings');
   assert.match(block.textContent, /into a folder you choose/);

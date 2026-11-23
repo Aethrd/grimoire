@@ -95,7 +95,7 @@ if (phase === 'empty') {
   await t('Export every book takes the hidden folders too, which the shelf does not show', async () => {
     const panels = await import(www('panels.js'));
     const host = window.document.createElement('div');
-    await panels.openVault(() => {}, host);
+    await panels.openData(() => {}, host);
     const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Export every book');
     assert.ok(button, 'no Export every book in Settings');
     button.click();
@@ -128,7 +128,7 @@ if (phase === 'empty') {
       order: all.map((b) => b.id), done: all.slice(0, 2).map((b) => b.id), zips: 1 } });
     const panels = await import(www('panels.js'));
     const host = window.document.createElement('div');
-    await panels.openVault(() => {}, host);
+    await panels.openData(() => {}, host);
     [...host.querySelectorAll('button')].find((b) => b.textContent === 'Export every book').click();
     for (let i = 0; i < 30 && window.document.getElementById('export-many-resume').hidden; i += 1) await new Promise((r) => setTimeout(r, 50));
     const note = window.document.getElementById('export-many-resume-note').textContent;
@@ -152,7 +152,7 @@ if (phase === 'empty') {
   await t('Your data in two halves: the backup (one file), then the books; settings alone folded away', async () => {
     const panels = await import(www('panels.js'));
     const host = window.document.createElement('div');
-    await panels.openVault(() => {}, host);
+    await panels.openData(() => {}, host);
     const text = host.textContent;
     const at = (words) => { const i = text.indexOf(words); assert.ok(i >= 0, `no ${words}`); return i; };
     assert.ok(at('Save a backup') < at('Restore from a backup'));

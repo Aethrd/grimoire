@@ -2198,6 +2198,15 @@ export async function openVault(onVaultChange, host) {
     vault.appendChild(list);
   }
   body.appendChild(vault);
+}
+
+/* Backup & books: the backup, every book exported, what takes the room, and
+ * settings carried elsewhere -- with the last import's timings and the last
+ * crash. Its own pane after the Vault's, which it shared before. */
+export async function openData(onVaultChange, host) {
+  const body = host || el('settings-body');
+  const settings = await store.settings();
+  body.innerHTML = '';
 
   const data = document.createElement('section');
   data.className = 'block';
@@ -2369,7 +2378,7 @@ export async function openVault(onVaultChange, host) {
           : `${report.books} books, ${report.marks} marks and ${report.events} sessions restored`) + partly
           + (queueLeft ? ' · the queue in it left out — downloads stay as they are on this phone' : ''), 8000);
         onVaultChange?.();
-        openVault(onVaultChange, body);
+        openData(onVaultChange, body);
       } catch (error) {
         toast(error.message || 'That backup could not be read', 6000);
       }
@@ -2472,7 +2481,8 @@ const PANES = {
   theme: { title: 'Theme', render: openAppearanceInto },
   behaviour: { title: 'Behaviour', render: renderBehaviourPane },
   translation: { title: 'Translation', render: openLanguageInto },
-  data: { title: 'Data & vault', render: renderDataPane },
+  data: { title: 'Vault', render: renderDataPane },
+  backup: { title: 'Backup & books', render: renderBackupPane },
 };
 
 let pane = 'text';
@@ -2513,6 +2523,7 @@ export async function openSettings(onVaultChange) {
 function openAppearanceInto(body) { return openAppearance(body); }
 function openLanguageInto(body) { return openLanguage(body); }
 function renderDataPane(body, onVaultChange) { return openVault(onVaultChange, body); }
+function renderBackupPane(body, onVaultChange) { return openData(onVaultChange, body); }
 
 /** App-wide reading defaults. The per-book override still wins over these. */
 async function renderTextPane(body) {

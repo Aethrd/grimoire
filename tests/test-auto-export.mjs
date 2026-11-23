@@ -38,7 +38,7 @@ await t('its leftover settings are dropped: nothing waits on the queue to export
 
 await t('Settings no longer offers it; the app and the native side have no part of it left', async () => {
   const host = window.document.createElement('div');
-  await panels.openVault(() => {}, host);
+  await panels.openData(() => {}, host);
   assert.ok(!host.querySelector('.auto-export'), 'Automatic export still in Settings');
   assert.ok(!/Automatic export/.test(host.textContent));
   const app = read('app/src/main/assets/www/js/app.js');
