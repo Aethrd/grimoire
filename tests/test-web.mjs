@@ -1459,14 +1459,20 @@ await t('the wait before reading: each site its own, a chapter page only, on top
     web.setReadWait(() => 0);
     delete window.GrimoireWeb;
   }
-  // Natively: parsed, held before the first look, every limit counted from after it.
+  /* Natively: parsed; watched from the first, as with no wait, and never taken
+   * before the wait is out -- every limit counted from after it. Left unlooked at
+   * for the wait, a page that changes in its first second (readhive) was first
+   * seen changed, its story never found, and given up at the forty-second limit. */
   const java = read('app/src/main/java/com/grimoire/ereader/WebBridge.java');
   assert.match(java, /int waitAt = asked\.indexOf\('@'\);/);
   assert.match(java, /final long readWait = scroll \? 0 : waitAsked;/);
-  assert.match(java, /startedAt \+= readWait;\s+main\.postDelayed\(this::poll, RENDER_POLL_MS \+ readWait\);/);
+  assert.match(java, /notBefore = System\.currentTimeMillis\(\) \+ readWait;\s+startedAt \+= readWait;\s+main\.postDelayed\(this::poll, RENDER_POLL_MS\);/);
+  assert.ok(!/RENDER_POLL_MS \+ readWait/.test(java), 'the first look still put off by the wait');
+  // Not taken before the wait is out, settled or not -- watched on meanwhile.
+  assert.match(java, /if \(now < notBefore\) \{\s+main\.postDelayed\(this::poll, RENDER_POLL_MS\);\s+return;\s+\}\s+if \(settled \|\| now - startedAt >= limit\) \{\s+take\(\);/);
   assert.match(java, /if \(!loaded && view != null\) begin\(\);/);
   // The time stayed on to confirm (taken off the next delay) is counted from the story, never the wait.
-  assert.match(java, /settled = now - confirmAt >= confirmFor \|\| now - confirmBegan >= CONFIRM_MAX_MS;\s+if \(settled\) dwell = now - confirmBegan;/);
+  assert.match(java, /settled = now - confirmAt >= confirmFor \|\| now - confirmBegan >= CONFIRM_MAX_MS;\s+\/\/[^\n]*\n\s+if \(settled\) dwell = Math\.max\(0, now - Math\.max\(confirmBegan, notBefore\)\);/);
 });
 
 await t('a site behind a bot check is rendered instead', async () => {
@@ -3688,7 +3694,7 @@ await t('a chapter is scrolled to its end while it is confirmed; one that came o
   assert.match(java, /if \(lastStory < 0 \|\| storyLength > lastStory \+ storySlack\(lastStory\)\) \{\s+lastStory = storyLength;\s+storySince = now;/);
   assert.match(java, /return Math\.max\(STORY_SLACK, Math\.max\(0, story\) \/ 100\);/);
   assert.match(java, /confirmAt = now;\s+\/\/ More came[^\n]*\n\s+if \(endScrolls < 2 && !pictureBook\) \{/);
-  assert.match(java, /if \(settled\) dwell = now - confirmBegan;/);
+  assert.match(java, /if \(settled\) dwell = Math\.max\(0, now - Math\.max\(confirmBegan, notBefore\)\);/);
   // Short: under 40% of the book's typical chapter, only website chapters, only with enough to say what is typical.
   const chapters = Array.from({ length: 12 }, (_, i) => ({ index: i, title: `${i + 1}화`, words: 2000 + i * 10, from: `https://s.example/${i + 1}` }));
   chapters[4].words = 300;

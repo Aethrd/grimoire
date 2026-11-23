@@ -1286,6 +1286,8 @@ public class WebBridge {
         private long startedAt;
         /** The reader's wait before reading this page, in ms (0: none). */
         long readWait;
+        /** Not taken before this (the reader's wait run out); watched all the while. */
+        private long notBefore;
 
         Rendering(String address, long quietMs, long maxMs, boolean scroll, boolean ownSiteOnly, boolean lean,
                   boolean textOnly) {
@@ -1329,12 +1331,17 @@ public class WebBridge {
         void begin() {
             if (!loaded && view != null) {
                 loaded = true;
-                /* The reader's wait before reading: the page left alone that long, then
-                 * looked at as ever -- every limit counted from then, so the wait takes
-                 * nothing off the time the page is given. Not counted in the time stayed
-                 * on it to confirm (dwell), so not taken off the delay after it. */
+                /* The reader's wait before reading: the page never taken before it is
+                 * out -- but watched all the while, from the first, as with no wait.
+                 * Left unlooked at for the wait, a page that shows its chapter at once
+                 * and changes in its first second (readhive) was first seen changed,
+                 * its story never found, and given up at the forty-second limit. Every
+                 * limit counted from the wait's end, so it takes nothing off the time
+                 * the page is given. Not counted in the time stayed on it to confirm
+                 * (dwell), so not taken off the delay after it. */
+                notBefore = System.currentTimeMillis() + readWait;
                 startedAt += readWait;
-                main.postDelayed(this::poll, RENDER_POLL_MS + readWait);
+                main.postDelayed(this::poll, RENDER_POLL_MS);
             }
         }
 
@@ -1529,7 +1536,8 @@ public class WebBridge {
                      * never stops changing (adverts swapped in the story's box), once the
                      * stay has gone on CONFIRM_MAX_MS: not held to the long fallback. */
                     settled = now - confirmAt >= confirmFor || now - confirmBegan >= CONFIRM_MAX_MS;
-                    if (settled) dwell = now - confirmBegan;
+                    // Stayed to confirm, from the story -- and never any of the wait.
+                    if (settled) dwell = Math.max(0, now - Math.max(confirmBegan, notBefore));
                 } else {
                     settled = (finished || visible) && !blank && !holding
                             && ((!busy && still >= settle) || still >= quietMs * RENDER_STUCK_SPELLS);
@@ -1569,6 +1577,11 @@ public class WebBridge {
                             take();
                         }
                     });
+                    return;
+                }
+                // The reader's wait not yet out: watched on, not taken.
+                if (now < notBefore) {
+                    main.postDelayed(this::poll, RENDER_POLL_MS);
                     return;
                 }
                 if (settled || now - startedAt >= limit) {
