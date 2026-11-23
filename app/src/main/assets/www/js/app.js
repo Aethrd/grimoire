@@ -2474,7 +2474,8 @@ async function askExportParts(books, { kind = 'chosen' } = {}) {
    * Full size is the default, as there: a smaller copy is chosen, never
    * quietly made. Kept as last chosen here. */
   const savedSize = (await store.settings()).exportManySize;
-  let size = shrink.SIZES[savedSize] ? savedSize : 'full';
+  // Large or Screen, chosen before Smart replaced them: shown, and made, as Smart.
+  let size = shrink.offeredSize(savedSize);
   const sizes = el('export-many-size');
   const paintSize = () => {
     sizes.replaceChildren(...Object.entries(shrink.SIZES).map(([key, each]) => {
@@ -2589,7 +2590,8 @@ async function runLeft(run, everything = null) {
 async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null, size = 'full' } = {}) {
   // Carried on: at the size it began with.
   if (run?.size) size = run.size;
-  const smaller = size && size !== 'full' && shrink.SIZES[size] ? size : null;
+  // Carried on at the size it began with, an earlier one (Large, Screen) included.
+  const smaller = size && size !== 'full' && shrink.sizeFor(size) ? size : null;
   let savedBytes = 0;
   /* The room an export leaves free: enough that the phone is never filled --
    * the zip under way (built in the app's storage, then copied into the

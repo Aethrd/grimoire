@@ -14,7 +14,7 @@
 import * as store from './store.js';
 import { zipWriter, canDeflate, crcUpdate, crcCombine } from './zipwriter.js';
 import { chapterHtml, spacedByLines } from './parse.js';
-import { SIZES, shrinkPicture, describeSaving } from './shrink.js';
+import { sizeFor, shrinkPicture, describeSaving } from './shrink.js';
 
 const escapeXml = (text) => String(text ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -145,7 +145,8 @@ export async function buildEpub(bookId, { onProgress, title, author, size, parts
   /* Null for a full-size copy, which is also the only case that touches no
    * picture at all: an export nobody asked to shrink must be byte-identical
    * to the one before this existed. */
-  const wanted = size && size !== 'full' && SIZES[size] ? SIZES[size] : null;
+  // An earlier size (Large, Screen) still known: an export begun at one carries on at it.
+  const wanted = size && size !== 'full' && sizeFor(size) ? sizeFor(size) : null;
   let saved = 0;
   let at = 0;
   for (const image of images) {

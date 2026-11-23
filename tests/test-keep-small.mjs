@@ -88,18 +88,18 @@ await t('sized for the phone held either way; a strip by its width alone, never 
 await t('a smaller export: a strip limited by its width, not squeezed to a sliver', async () => {
   drawn.length = 0;
   const strip = png(1600, 12000);
-  const out = await shrink.shrinkPicture(strip, shrink.SIZES.screen);
+  const out = await shrink.shrinkPicture(strip, shrink.sizeFor('screen'));
   assert.notEqual(out, strip);
   // As wide as a phone-shaped page 1400 tall: 630. (By its long edge it was 187 across.)
   assert.equal(last().width, 630);
   assert.equal(last().height, 4725);
   // A page as before: its long edge to 1400.
-  await shrink.shrinkPicture(png(2000, 2900), shrink.SIZES.screen);
+  await shrink.shrinkPicture(png(2000, 2900), shrink.sizeFor('screen'));
   assert.deepEqual([last().width, last().height], [966, 1400]);
   // A strip already that narrow: untouched.
   const narrow = png(600, 12000);
   const count = drawn.length;
-  assert.equal(await shrink.shrinkPicture(narrow, shrink.SIZES.screen), narrow);
+  assert.equal(await shrink.shrinkPicture(narrow, shrink.sizeFor('screen')), narrow);
   assert.equal(drawn.length, count);
 });
 
@@ -107,24 +107,97 @@ await t('a smaller export: a picture already within the size is not decoded at a
   const page = jpeg(900, 1300);
   const strip = png(600, 20000);
   const before = decodes;
-  assert.equal(await shrink.shrinkPicture(page, shrink.SIZES.screen), page);
-  assert.equal(await shrink.shrinkPicture(strip, shrink.SIZES.screen), strip);
+  assert.equal(await shrink.shrinkPicture(page, shrink.sizeFor('screen')), page);
+  assert.equal(await shrink.shrinkPicture(strip, shrink.sizeFor('screen')), strip);
   assert.equal(decodes, before, 'decoded only to learn it was small enough');
   // One whose header cannot be read is decoded as before, to know.
   const odd = new window.Blob([new Uint8Array(3000)], { type: 'image/jpeg' });
-  await shrink.shrinkPicture(odd, shrink.SIZES.screen);
+  await shrink.shrinkPicture(odd, shrink.sizeFor('screen'));
   assert.equal(decodes, before + 1);
+});
+
+await t('too big to make smaller safely on a phone: kept as it is, found from its header -- never decoded to find out', async () => {
+  // By the numbers: too many pixels, or too long for a canvas once made smaller.
+  assert.equal(shrink.tooBigToShrink(2000, 24000, 2000), true, '48 million pixels');
+  assert.equal(shrink.tooBigToShrink(800, 30000, 1400), false, '630 wide would make it 23,625 long: brought to 16,384 instead');
+  const longStrip = shrink.scaleFor(800, 30000, { edge: 1000 });
+  assert.deepEqual([Math.round(800 * longStrip), Math.round(30000 * longStrip)], [437, 16384], 'Small: a strip too long for 450 wide is made narrower still, its shape kept');
+  assert.equal(shrink.tooBigToShrink(3000, 60000, shrink.SIZES.small), true, '180 million pixels: never decoded');
+  assert.equal(shrink.tooBigToShrink(1200, 16000, 1400), false, '630 by 8,400: fine');
+  assert.equal(shrink.tooBigToShrink(3000, 4300, 1000), false, 'a big page');
+  assert.equal(shrink.tooBigToShrink(0, 0, 1400), false, 'no size known');
+  // Exported smaller: left byte for byte, and not decoded at all.
+  for (const [w, h, size] of [[2000, 24000, 'large'], [2000, 24000, 'small'], [3000, 60000, 'smart']]) {
+    const strip = jpeg(w, h);
+    const before = decodes;
+    assert.equal(await shrink.shrinkPicture(strip, shrink.sizeFor(size)), strip, `${w}x${h} at ${size}`);
+    assert.equal(decodes, before, `${w}x${h} decoded to find it too big`);
+  }
+  // One within reach is made smaller as ever.
+  const mid = jpeg(1200, 16000);
+  assert.notEqual(await shrink.shrinkPicture(mid, shrink.sizeFor('screen')), mid);
+  // And one too long for its width limit, at Small: within the longest canvas.
+  const long = jpeg(800, 30000);
+  assert.notEqual(await shrink.shrinkPicture(long, shrink.SIZES.small), long);
+  assert.deepEqual([last().width, last().height], [437, 16384]);
+  // Kept smaller in the book: the same, left alone and undecoded.
+  const before = decodes;
+  assert.equal(await shrink.keptSmaller({ blob: jpeg(2400, 20000) }, { screen: S23 }), null);
+  assert.equal(decodes, before);
+});
+
+await t('Smart: every picture as large as the phone or the Boox shows it, held either way -- and no larger', async () => {
+  // A page: the Boox upright shows it 1872 tall -- the most either screen does.
+  assert.equal(shrink.smartScale(2000, 2900).toFixed(4), (1872 / 2900).toFixed(4));
+  // A spread: the Boox on its side, 1872 wide.
+  assert.equal(shrink.smartScale(2900, 2000).toFixed(4), (1872 / 2900).toFixed(4));
+  // A strip, read across: the phone on its side shows it 2340 wide. 800 across is left.
+  assert.equal(shrink.smartScale(800, 30000), 1);
+  assert.equal(shrink.smartScale(3000, 30000).toFixed(3), (2340 / 3000).toFixed(3));
+  // Under a tenth too big: not worth a generation, left.
+  assert.equal(shrink.smartScale(1400, 2000), 1);
+  assert.equal(shrink.smartScale(0, 0), 1);
+  // Made so: the page 1291 by 1872, as JPEG at 88%; the strip not decoded at all.
+  drawn.length = 0;
+  const page = await shrink.shrinkPicture(jpeg(2000, 2900), shrink.SIZES.smart);
+  assert.deepEqual([last().width, last().height, last().quality], [1291, 1872, 0.88]);
+  assert.equal(page.type, 'image/jpeg');
+  const strip = jpeg(800, 30000);
+  const before = decodes;
+  assert.equal(await shrink.shrinkPicture(strip, shrink.SIZES.smart), strip);
+  assert.equal(decodes, before);
+  // Shape kept, whatever comes out.
+  await shrink.shrinkPicture(jpeg(3000, 9000), shrink.SIZES.smart);
+  assert.ok(Math.abs(last().width / last().height - 3000 / 9000) < 0.002, 'its shape changed');
+  // Small: anything over its limit brought within it, shape kept.
+  await shrink.shrinkPicture(jpeg(3000, 4300), shrink.SIZES.small);
+  assert.deepEqual([last().width, last().height], [698, 1000]);
+  await shrink.shrinkPicture(png(1600, 12000), shrink.SIZES.small);
+  assert.deepEqual([last().width, last().height], [450, 3375]);
+});
+
+await t('the sizes offered: Full, Smart, Small -- and an export begun at Large or Screen carries on at it', () => {
+  assert.deepEqual(Object.keys(shrink.SIZES), ['full', 'smart', 'small']);
+  assert.equal(shrink.offeredSize('screen'), 'smart');
+  assert.equal(shrink.offeredSize('large'), 'smart');
+  assert.equal(shrink.offeredSize('small'), 'small');
+  assert.equal(shrink.offeredSize('nonsense'), 'full');
+  assert.equal(shrink.sizeFor('screen').edge, 1400);
+  assert.equal(shrink.sizeFor('large').edge, 2000);
+  assert.equal(shrink.sizeFor('nonsense'), null);
+  assert.equal(shrink.describeSize('smart'), 'smart size');
+  assert.match(shrink.describeSize('screen'), /1400/);
 });
 
 await t('a smaller export: a see-through picture is left as it is, not turned black where it was clear', async () => {
   const count = drawn.length;
   const clear = png(3000, 4000, { colour: 6 });
-  assert.equal(await shrink.shrinkPicture(clear, shrink.SIZES.screen), clear);
+  assert.equal(await shrink.shrinkPicture(clear, shrink.sizeFor('screen')), clear);
   const byTrns = png(3000, 4000, { trns: true });
-  assert.equal(await shrink.shrinkPicture(byTrns, shrink.SIZES.screen), byTrns);
+  assert.equal(await shrink.shrinkPicture(byTrns, shrink.sizeFor('screen')), byTrns);
   assert.equal(drawn.length, count, 'drawn into a JPEG');
   // An opaque one of the same size: made smaller, as ever.
-  assert.notEqual(await shrink.shrinkPicture(png(3000, 4000), shrink.SIZES.screen), null);
+  assert.notEqual(await shrink.shrinkPicture(png(3000, 4000), shrink.sizeFor('screen')), null);
   assert.equal(drawn.length, count + 1);
 });
 
@@ -134,7 +207,7 @@ await t('a smaller export: each canvas let go of at once; a decode given up on l
   const create = window.document.createElement.bind(window.document);
   window.document.createElement = (name, ...rest) => { const node = create(name, ...rest); if (name === 'canvas') made.push(node); return node; };
   try {
-    await shrink.shrinkPicture(png(2000, 2900), shrink.SIZES.screen);
+    await shrink.shrinkPicture(png(2000, 2900), shrink.sizeFor('screen'));
   } finally { window.document.createElement = create; }
   assert.ok(made.length >= 1);
   assert.ok(made.every((canvas) => canvas.width === 0 && canvas.height === 0), 'a canvas left holding its pixels');
@@ -143,7 +216,7 @@ await t('a smaller export: each canvas let go of at once; a decode given up on l
   slow = () => new Promise((resolve) => setTimeout(() => resolve({ width: 2000, height: 2900, close() { closed = true; } }), 8600));
   const big = png(2000, 2900);
   try {
-    assert.equal(await shrink.shrinkPicture(big, shrink.SIZES.screen), big);
+    assert.equal(await shrink.shrinkPicture(big, shrink.sizeFor('screen')), big);
     assert.ok(!closed);
     await new Promise((resolve) => setTimeout(resolve, 900));
     assert.ok(closed, 'the late picture held');

@@ -239,9 +239,10 @@ await t('reaching the end of a chapter no longer raises a toast', async () => {
 console.log('\nsmaller copies');
 
 await t('the sizes are named for what they are for', async () => {
-  assert.deepEqual(Object.keys(shrink.SIZES), ['full', 'large', 'screen', 'small']);
+  assert.deepEqual(Object.keys(shrink.SIZES), ['full', 'smart', 'small']);
   assert.equal(shrink.SIZES.full.edge, 0, 'full size must touch nothing');
-  assert.ok(shrink.SIZES.small.edge < shrink.SIZES.screen.edge);
+  assert.ok(shrink.SIZES.small.edge < shrink.sizeFor('screen').edge);
+  assert.ok(shrink.SIZES.smart.smart);
   assert.match(shrink.describeSize('screen'), /1400/);
   assert.equal(shrink.describeSize('full'), 'full size');
 });
@@ -267,7 +268,8 @@ await t('sizes read as bytes somebody can judge', async () => {
 
 await t('the export writes a copy and never edits the book', async () => {
   const epub = read('app/src/main/assets/www/js/epub.js');
-  assert.match(epub, /const wanted = size && size !== 'full' && SIZES\[size\]/);
+  // Full size touches nothing; an earlier size (Large, Screen) is still known, to carry an export on at it.
+  assert.match(epub, /const wanted = size && size !== 'full' && sizeFor\(size\) \? sizeFor\(size\) : null;/);
   assert.match(epub, /await shrinkPicture\(image\.blob, wanted\)/);
   // Nothing is written back to the images store on the way out.
   const writing = epub.slice(epub.indexOf('const renamed = new Map()'));

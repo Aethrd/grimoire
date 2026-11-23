@@ -22,21 +22,90 @@ import { pictureSize, readArrayBuffer } from './blobs.js';
  */
 export const SIZES = {
   full: { edge: 0, quality: 1, label: 'Full size', note: 'Exactly as imported' },
-  large: { edge: 2000, quality: 0.86, label: 'Large', note: 'For a tablet' },
-  screen: { edge: 1400, quality: 0.82, label: 'Screen', note: 'For a phone' },
-  small: { edge: 1000, quality: 0.76, label: 'Small', note: 'For sending' },
+  smart: { smart: true, quality: 0.88, label: 'Smart', note: 'As sharp as the phone or the Boox shows it, upright or on its side' },
+  small: { edge: 1000, quality: 0.76, label: 'Small', note: 'For sending: longest side 1000 px, strips 450 wide' },
 };
 
+/* What was offered before Smart: Large and Screen. Kept only so an export
+ * begun at one carries on at it, the same all through; a choice saved as
+ * either is shown, and made, as Smart. */
+const EARLIER_SIZES = {
+  large: { edge: 2000, quality: 0.86, label: 'Large', note: 'For a tablet' },
+  screen: { edge: 1400, quality: 0.82, label: 'Screen', note: 'For a phone' },
+};
+/** The size a key names, the earlier ones included; null for none. */
+export const sizeFor = (key) => SIZES[key] || EARLIER_SIZES[key] || null;
+/** As offered now: an earlier choice shown as Smart, an unknown one as full size. */
+export const offeredSize = (key) => (SIZES[key] ? key : EARLIER_SIZES[key] ? 'smart' : 'full');
+
 export const describeSize = (key) => {
-  const size = SIZES[key] || SIZES.full;
+  const size = sizeFor(key) || SIZES.full;
+  if (size.smart) return 'smart size';
   return size.edge ? `${size.label.toLowerCase()}, ${size.edge}px` : 'full size';
 };
+
+/* The screens read on, in their own pixels: the phone and the e-reader --
+ * a Galaxy S23 (1080 by 2340) and a Boox Note X5 Mini (1404 by 1872, 300
+ * pixels an inch). Smart keeps every picture as large as either shows it,
+ * upright or on its side, and no larger. */
+export const READ_ON = [
+  { name: 'Galaxy S23', short: 1080, long: 2340 },
+  { name: 'Boox Note X5 Mini', short: 1404, long: 1872 },
+];
+
+/**
+ * How much smaller Smart makes a picture, 1 to leave it.
+ *
+ * A page, a spread, any picture no taller than a phone: as large as it is
+ * ever shown fitted whole -- on either screen, held either way. Taller (a
+ * strip, a long page): read across, scrolled, so as wide as it is ever shown
+ * -- the phone on its side, 2340. And made smaller only when that is worth a
+ * generation: by a tenth or more, else left as it is.
+ */
+export function smartScale(width, height) {
+  if (!(width > 0 && height > 0)) return 1;
+  let shown = 0;
+  for (const { short, long } of READ_ON) {
+    shown = height / width > PHONE_SHAPE
+      ? Math.max(shown, long / width)
+      : Math.max(shown, Math.min(short / width, long / height), Math.min(long / width, short / height));
+  }
+  return shown >= WORTH_SCALING ? 1 : shown;
+}
+
+/** How much smaller a size makes a picture, 1 to leave it. */
+export function scaleFor(width, height, size) {
+  if (!(width > 0 && height > 0) || !size) return 1;
+  if (size.smart) return smartScale(width, height);
+  const edge = size.edge;
+  if (!edge) return 1;
+  const tall = height / width > PHONE_SHAPE;
+  const scale = Math.min(1, (tall ? edge / PHONE_SHAPE : edge) / (tall ? width : Math.max(width, height)));
+  // A strip so long that its width limit would leave it longer than a canvas
+  // takes: brought down further, to the longest canvas, its shape kept --
+  // still within the limit, where before it was left out of it. One already
+  // within the limit is left alone, however long.
+  return scale >= 1 ? 1 : Math.min(scale, MOST_CANVAS / Math.max(width, height));
+}
 
 /* A phone screen's shape, tall over wide (reader.js PHONE_SHAPE, kept here
  * rather than imported so writing a file does not load the reader). */
 const PHONE_SHAPE = 20 / 9;
 /* The longest side a canvas is trusted with on a phone. */
 const MOST_CANVAS = 16384;
+/* The most pixels a picture may have to be made smaller here: decoded whole
+ * first, at four bytes a pixel -- 40 million is 160 MB, beside the copy
+ * drawn and the export or the shelf going on around it. A bigger one (a
+ * webtoon episode as one picture, 2,000 by 30,000) is kept as it is. */
+const MOST_PIXELS = 40_000_000;
+
+/** Too big to be made smaller safely, by its header: kept as it is, never decoded to find out. */
+export function tooBigToShrink(width, height, sizeOrEdge) {
+  if (!(width > 0 && height > 0)) return false;
+  if (width * height > MOST_PIXELS) return true;
+  const scale = scaleFor(width, height, typeof sizeOrEdge === 'number' ? { edge: sizeOrEdge } : sizeOrEdge);
+  return Math.round(width * scale) > MOST_CANVAS || Math.round(height * scale) > MOST_CANVAS;
+}
 
 /** A GIF may be animated, and re-encoding one gives back a single frame. */
 const ANIMATED = /gif/i;
@@ -61,8 +130,9 @@ const PATIENCE = 8000;
  *     line art and flat colour: PNG's own compression beats JPEG there
  *   - anything that would not decode in reasonable time
  */
-export async function shrinkPicture(blob, { edge = 1400, quality = 0.82 } = {}) {
-  if (!blob || !edge) return blob;
+export async function shrinkPicture(blob, size = EARLIER_SIZES.screen) {
+  const { edge = 0, quality = 0.82, smart = false } = size || {};
+  if (!blob || (!edge && !smart)) return blob;
   if (ANIMATED.test(blob.type || '')) return blob;
 
   /* Already within the size, by what its header says: left as it is without
@@ -72,7 +142,12 @@ export async function shrinkPicture(blob, { edge = 1400, quality = 0.82 } = {}) 
    * photo marked to be turned can have its sides the other way round in its
    * header, and is then at most kept at full size, never drawn wrong. */
   const head = await pictureSize(blob, { decode: false }).catch(() => null);
-  if (head?.width && head?.height && within(head.width, head.height, edge)) return blob;
+  if (head?.width && head?.height && within(head.width, head.height, size)) return blob;
+  /* Too big to draw smaller on a phone: kept as it is -- found out from its
+   * header, before it is decoded. It was decoded whole first, and only then
+   * found too long for a canvas: a webtoon episode as one picture, a hundred
+   * and more megabytes of pixels for nothing, in the middle of an export. */
+  if (head?.width && head?.height && tooBigToShrink(head.width, head.height, size)) return blob;
   /* See-through: a JPEG cannot hold it, and its clear parts came out black.
    * Left as it is, as keeping pictures smaller leaves it (keptSmaller). */
   if (await seeThroughPng(blob)) return blob;
@@ -96,20 +171,16 @@ export async function shrinkPicture(blob, { edge = 1400, quality = 0.82 } = {}) 
   const { width, height } = bitmap;
   if (!width || !height) return blob;
 
-  /* A picture taller than a phone screen is read by its width -- a strip
-   * scrolled, a long page fitted across -- so its width is what is limited:
-   * to as wide as a phone-shaped page of this size would be. Limited by its
-   * long edge, a strip 800 across and 12,000 down came out a sliver. */
-  const tall = height / width > PHONE_SHAPE;
-  const limit = tall ? edge / PHONE_SHAPE : edge;
-  const measured = tall ? width : Math.max(width, height);
-  if (within(width, height, edge)) {
+  /* How much smaller, by the size's own rule (scaleFor): a picture taller
+   * than a phone screen by its width, as it is read -- by its long edge, a
+   * strip 800 across and 12,000 down came out a sliver -- and Smart by the
+   * screens it is read on. */
+  const scale = scaleFor(width, height, size);
+  if (scale >= 1) {
     bitmap.close?.();
     return blob;
   }
-
-  const scale = limit / measured;
-  const to = { width: Math.round(width * scale), height: Math.round(height * scale) };
+  const to = { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
   // Past what a canvas holds on a phone: kept as it is rather than lost.
   if (to.width > MOST_CANVAS || to.height > MOST_CANVAS) {
     bitmap.close?.();
@@ -153,11 +224,9 @@ export async function shrinkPicture(blob, { edge = 1400, quality = 0.82 } = {}) 
   }
 }
 
-/* Within the size: a picture taller than a phone screen by its width, any
- * other by its longest side (shrinkPicture). */
-function within(width, height, edge) {
-  const tall = height / width > PHONE_SHAPE;
-  return (tall ? width : Math.max(width, height)) <= (tall ? edge / PHONE_SHAPE : edge);
+/* Within the size: nothing to make smaller (shrinkPicture). */
+function within(width, height, size) {
+  return scaleFor(width, height, size) >= 1;
 }
 
 /* A PNG that can be see-through, from its first bytes (pngSeeThrough). */
@@ -200,7 +269,7 @@ function decode(blob) {
  * waits: in turn, a three-hundred-page volume is minutes of nothing happening
  * on a phone that could have been doing eight of them.
  */
-export async function shrinkAll(images, { edge, quality, onProgress } = {}) {
+export async function shrinkAll(images, { edge, quality, smart, onProgress } = {}) {
   const AT_ONCE = 4;
   const out = new Map();
   let done = 0;
@@ -209,7 +278,7 @@ export async function shrinkAll(images, { edge, quality, onProgress } = {}) {
   for (let at = 0; at < images.length; at += AT_ONCE) {
     await Promise.all(images.slice(at, at + AT_ONCE).map(async (image) => {
       if (!image.blob) return;
-      const small = await shrinkPicture(image.blob, { edge, quality });
+      const small = await shrinkPicture(image.blob, { edge, quality, smart });
       out.set(image.href, small);
       saved += Math.max(0, image.blob.size - small.size);
       done += 1;
@@ -321,6 +390,8 @@ export async function keptSmaller(image, { size = 'zoom', screen = readingScreen
   if (scale > WORTH_SCALING) return null;
   const to = { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
   if (to.width > MOST_CANVAS || to.height > MOST_CANVAS || typeof createImageBitmap !== 'function') return null;
+  // Too many pixels to decode safely, whatever it comes out as: kept as it is.
+  if (width * height > MOST_PIXELS) return null;
   let bitmap = null;
   try {
     // Decoded straight to the smaller size, smoothed: screentone stays tone, not moire.
