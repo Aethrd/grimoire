@@ -1529,6 +1529,7 @@ await t('many books written out in zips under a size: whole books, folder order,
   const ref = {};
   const folderSrc = app.slice(app.indexOf('const exportFolder = (() => {'), app.indexOf('async function exportMany('));
   const saved = {};
+  const pictureSizes = [];
   const fakeStore = { settings: async () => saved, saveSettings: async (patch) => { Object.assign(saved, JSON.parse(JSON.stringify(patch))); }, all: async () => [] };
   const run = async (books, limitMB, { stopAfter = Infinity, ...options } = {}) => {
     const sinks = [];
@@ -1549,16 +1550,18 @@ await t('many books written out in zips under a size: whole books, folder order,
       async finish() { await write(new Uint8Array(40)); },
     });
     const sizes = new Map(books.map((b) => [b.id, b.mb * MB]));
-    const epub = { buildEpub: async (id) => {
+    const epub = { buildEpub: async (id, opts = {}) => {
       if (++built > stopAfter) stop?.();
-      return { blob: { size: sizes.get(id) }, name: `${books.find((b) => b.id === id).title}.epub` };
+      // The picture size each book is asked at; a smaller copy saves something.
+      pictureSizes.push(opts.size);
+      return { blob: { size: sizes.get(id) }, name: `${books.find((b) => b.id === id).title}.epub`, saved: opts.size ? MB : 0 };
     }, safeName: (x) => x };
     const progress = {
       start: () => Object.assign(() => {}, { say() {}, fail() {}, activity(now) { if (now) waits.push(now.why); }, controls({ cancel }) { stop = cancel; } }) };
-    const exportMany = new Function('ref', 'window', 'store', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook',
+    const exportMany = new Function('ref', 'window', 'store', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook', 'shrink',
       `${label}\n${heatSrc}\n${folderSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('working')}\n${fn('exportMany')}\nref.exportFolder = exportFolder;\nref.runLeft = runLeft;\nreturn exportMany;`)(ref, fakeWindow, fakeStore,
       { displayTitle: (b) => b.title }, epub, progress, exportSink, zipWriter,
-      async (staged) => { together = staged; }, (text) => toasts.push(text), () => 'Library', () => {}, async () => {}, false);
+      async (staged) => { together = staged; }, (text) => toasts.push(text), () => 'Library', () => {}, async () => {}, false, shrink);
     await exportMany(books, limitMB, options);
     return { sinks, together, toasts, progress };
   };
@@ -1649,7 +1652,10 @@ await t('many books written out in zips under a size: whole books, folder order,
   let n = 0;
   fakeWindow.GrimoireNative.chooseExportSetFolder = () => setTimeout(() => ref.exportFolder.chosen('Books backup'), 0);
   fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => { n += 1; setTimeout(() => ref.exportFolder.saved(reply, n < 3, n < 3 ? '' : 'the phone is full'), 0); };
-  const full = await run(books, 100, { kind: 'everything' });
+  pictureSizes.length = 0;
+  const full = await run(books, 100, { kind: 'everything', size: 'small' });
+  // Pictures made smaller, as asked, in every book it wrote.
+  assert.ok(pictureSizes.length && pictureSizes.every((size) => size === 'small'), `asked at ${[...new Set(pictureSizes)]}`);
   assert.match(full.toasts.at(-1), /Zip 3 could not be saved: the phone is full — the 2 before it are in “Books backup”\. Export again to carry on from there\./);
   // Written down: the two zips saved, and exactly the books in them.
   const cut = saved.exportRun;
@@ -1663,7 +1669,12 @@ await t('many books written out in zips under a size: whole books, folder order,
   fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => { carriedParts.push(handle); setTimeout(() => ref.exportFolder.saved(reply, true, ''), 0); };
   const left = await ref.runLeft(cut, books);
   assert.equal(left.length, 30 - cut.done.length);
-  const carried = await run(left, 100, { run: cut, kind: 'everything' });
+  // Carried on at the size it began with -- written down with the run -- whatever else is passed.
+  assert.equal(cut.size, 'small');
+  pictureSizes.length = 0;
+  const carried = await run(left, 100, { run: cut, kind: 'everything', size: 'full' });
+  assert.ok(pictureSizes.every((size) => size === 'small'), 'carried on at another size');
+  assert.match(carried.toasts.at(-1), /pictures at .+, .+ smaller/);
   assert.match(carriedParts[0], /\(part 3\)\.zip$/);
   const everyEntry = [...full.sinks.slice(0, 2), ...carried.sinks].flatMap((sink) => sink.entries);
   assert.equal(everyEntry.length, 30, 'a book missed or written twice');
@@ -1689,14 +1700,25 @@ await t('many books written out in zips under a size: whole books, folder order,
   delete fakeWindow.GrimoireNative.exportSetFolderName;
   delete fakeWindow.GrimoireNative.chooseExportSetFolder;
   delete fakeWindow.GrimoireNative.saveExportPart;
-  // No limit: one zip, saved as ever.
+  // No limit: one zip, saved as ever -- at full size unless asked, nothing said of pictures.
+  pictureSizes.length = 0;
   const one = await run(books, 0);
+  assert.ok(pictureSizes.every((size) => size === undefined), 'made smaller unasked');
+  assert.ok(!/pictures at/.test(one.toasts.at(-1)));
+  const smallOne = await run(books.slice(0, 3), 0, { size: 'screen' });
+  assert.match(smallOne.toasts.at(-1), /^3 books written out · pictures at .+, 3(\.0)? MB smaller — choose where to save them$/);
+  // An older run written down without a size carries on at full size.
+  pictureSizes.length = 0;
+  const { size: _gone, ...older } = cut;
+  void _gone;
+  await run(await ref.runLeft(older, books), 100, { run: older, kind: 'everything' });
+  assert.ok(pictureSizes.every((size) => size === undefined));
   assert.equal(one.sinks.length, 1);
   assert.equal(one.sinks[0].name, 'Library.zip');
   assert.equal(one.sinks[0].entries.length, 30);
   // The size asked once and remembered; the choices; a book named twice kept twice.
   assert.match(app, /const EXPORT_LIMITS = \[0, 2048, 1024, 500, 250, 100\];/);
-  assert.match(app, /store\.saveSettings\(\{ exportZipMB: limit \}\)/);
+  assert.match(app, /store\.saveSettings\(\{ exportZipMB: limit, exportManySize: size \}\)/);
   assert.match(app, /return askExportParts\(books\);/);
   assert.match(app, /while \(open\.used\.has\(entry\)\) entry = first\.replace/);
   assert.match(app, /bridge\.finishExportSet\(JSON\.stringify\(closed\.map\(\(each\) => each\.made\)\), mimeType\);/);

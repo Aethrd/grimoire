@@ -108,6 +108,16 @@ if (phase === 'empty') {
     assert.equal(chips.find((c) => c.getAttribute('aria-pressed') === 'true').textContent, '1 GB');
     chips.find((c) => c.textContent === '250 MB').click();
     assert.match(window.document.getElementById('export-many-note').textContent, /each under 250 MB/);
+    // The pictures' size, as for one book: full unless chosen, each picture made smaller whole.
+    const sizes = () => [...window.document.querySelectorAll('#export-many-size .chip')];
+    const shrinkMod = await import(www('shrink.js'));
+    assert.deepEqual(sizes().map((c) => c.textContent), Object.values(shrinkMod.SIZES).map((s) => s.label));
+    assert.equal(sizes().find((c) => c.getAttribute('aria-pressed') === 'true').textContent, shrinkMod.SIZES.full.label);
+    assert.match(window.document.getElementById('export-many-size-note').textContent, /as it is in the book/);
+    sizes().find((c) => c.textContent === shrinkMod.SIZES.small.label).click();
+    assert.equal(sizes().find((c) => c.getAttribute('aria-pressed') === 'true').textContent, shrinkMod.SIZES.small.label);
+    assert.match(window.document.getElementById('export-many-size-note').textContent, /its shape kept/);
+    assert.match(window.document.getElementById('export-many-size-note').textContent, /The books on your shelf keep theirs/);
     window.document.getElementById('export-many-cancel').click();
     assert.equal(window.document.getElementById('export-many-resume').hidden, true, 'carry on offered with nothing to carry on');
   });

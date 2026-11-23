@@ -2431,14 +2431,15 @@ async function askExportParts(books, { kind = 'chosen' } = {}) {
       const twice = was && (run.crashes?.[was.id] || 0) >= 1;
       el('export-many-resume-note').textContent = `${run.zips} zip${run.zips === 1 ? '' : 's'} saved in “${folderNow || run.folder}”, `
         + `${run.done.length} books in them; ${left.length} left. Carrying on writes zip ${run.zips + 1} onward`
-        + `${folderNow ? ' into the same folder' : ' (the folder is asked for again)'}, ${limitLabel(run.limitMB)} each.`
+        + `${folderNow ? ' into the same folder' : ' (the folder is asked for again)'}, ${limitLabel(run.limitMB)} each`
+        + `${run.size && run.size !== 'full' ? `, pictures at ${shrink.describeSize(run.size)}` : ''}.`
         + (was ? ` It was cut off while writing “${library.displayTitle(was)}”: ${twice
           ? 'that has happened twice, so it is left out this time and named at the end.'
           : 'that book is tried once more, and left out if it happens again.'}` : '');
       el('export-many-resume-go').onclick = () => {
         sheet.hidden = true;
         if (!left.length) { endExportRun(); toast('Nothing was left to export — that export is finished', 5000); return; }
-        exportMany(left, run.limitMB, { kind: run.kind, run });
+        exportMany(left, run.limitMB, { kind: run.kind, run, size: run.size || 'full' });
       };
       el('export-many-restart').onclick = async () => {
         await endExportRun();
@@ -2468,6 +2469,29 @@ async function askExportParts(books, { kind = 'chosen' } = {}) {
       : `All ${books.length} in one zip, however large it gets.`;
   };
   paint();
+  /* How big the pictures come out, for every book: the same sizes as one
+   * book's export, each picture scaled down whole -- width and height alike,
+   * its shape kept; a long strip by its width, its length in proportion.
+   * Full size is the default, as there: a smaller copy is chosen, never
+   * quietly made. Kept as last chosen here. */
+  const savedSize = (await store.settings()).exportManySize;
+  let size = shrink.SIZES[savedSize] ? savedSize : 'full';
+  const sizes = el('export-many-size');
+  const paintSize = () => {
+    sizes.replaceChildren(...Object.entries(shrink.SIZES).map(([key, each]) => {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.innerHTML = `<b>${escapeText(each.label)}</b>`;
+      chip.title = each.note;
+      chip.setAttribute('aria-pressed', String(key === size));
+      chip.onclick = () => { size = key; paintSize(); };
+      return chip;
+    }));
+    el('export-many-size-note').textContent = size === 'full'
+      ? 'Every picture as it is in the book.'
+      : `${shrink.SIZES[size].note}. Each picture made smaller whole, its shape kept; one already smaller is left as it is. The books on your shelf keep theirs.`;
+  };
+  paintSize();
   // Waiting for a warm phone to cool: said, and turned off here as in Settings.
   const cool = el('export-many-cool');
   if (cool) {
@@ -2482,8 +2506,8 @@ async function askExportParts(books, { kind = 'chosen' } = {}) {
   sheet.onclick = (event) => { if (event.target === sheet) sheet.hidden = true; };
   el('export-many-go').onclick = () => {
     sheet.hidden = true;
-    store.saveSettings({ exportZipMB: limit }).catch(() => {});
-    exportMany(books, limit, { kind });
+    store.saveSettings({ exportZipMB: limit, exportManySize: size }).catch(() => {});
+    exportMany(books, limit, { kind, size });
   };
   sheet.hidden = false;
 }
@@ -2563,7 +2587,11 @@ async function runLeft(run, everything = null) {
   return left.sort((a, b) => (at.get(a.id) ?? Infinity) - (at.get(b.id) ?? Infinity));
 }
 
-async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null } = {}) {
+async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null, size = 'full' } = {}) {
+  // Carried on: at the size it began with.
+  if (run?.size) size = run.size;
+  const smaller = size && size !== 'full' && shrink.SIZES[size] ? size : null;
+  let savedBytes = 0;
   // Carried on: in the order it began with (runLeft), not sorted afresh.
   let ordered = run ? [...books] : exportOrder(books);
   /* Carried on after the app was closed part-way through a book (run.trying):
@@ -2593,11 +2621,11 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null } = 
     run = run ? { ...run, folder } : {
       v: EXPORT_RUN_VERSION, kind, limitMB, folder, at: Date.now(),
       base: epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books'),
-      order: ordered.map((book) => book.id), done: [], zips: 0,
+      order: ordered.map((book) => book.id), done: [], zips: 0, size: smaller || 'full',
     };
     await store.saveSettings({ exportRun: run });
   }
-  const finish = progress.start(`Writing ${books.length} books${limit ? ` in zips under ${limitLabel(limitMB)}` : ''}${folder ? ` into “${folder}”` : ''}`);
+  const finish = progress.start(`Writing ${books.length} books${smaller ? `, pictures at ${shrink.describeSize(smaller)}` : ''}${limit ? ` in zips under ${limitLabel(limitMB)}` : ''}${folder ? ` into “${folder}”` : ''}`);
   const failed = [];
   const base = run?.base || epub.safeName(commonTitle(books.map((b) => b.title)) || 'Books');
   const staged = [];   // each zip, written and waiting to be saved (not early)
@@ -2661,8 +2689,9 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null } = 
       if (early) { run = { ...run, trying: book.id }; await store.saveSettings({ exportRun: run }); }
       try {
         // In parts, not one Blob (exportSink): bytes the engine can see and free.
-        let { blob, name: entry } = await epub.buildEpub(book.id, {
+        let { blob, name: entry, saved } = await epub.buildEpub(book.id, {
           parts: true,
+          size: smaller || undefined,
           onProgress: (fraction) => {
             finish.say(null, ((at + fraction * 0.8) / books.length));
           },
@@ -2677,6 +2706,7 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null } = 
         await open.writer.add(entry, blob, (fraction) => {
           finish.say(null, ((at + 0.8 + fraction * 0.2) / books.length));
         });
+        savedBytes += saved || 0;
         open.inZip += 1;
         open.ids.push(book.id);
         open.central += 100 + entry.length * 3;
@@ -2713,15 +2743,17 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null } = 
 
     clearSelection();
     await refreshShelf();
-    const skipped = (failed.length ? ` · ${failed.length} skipped — ${failed[0].title}: ${failed[0].reason}` : '')
+    // Smaller pictures asked for: said, with what they saved -- the reason they were asked for.
+    const pictures = smaller ? ` · pictures at ${shrink.describeSize(smaller)}${savedBytes ? `, ${shrink.describeSaving(savedBytes)} smaller` : ''}` : '';
+    const skipped = pictures + (failed.length ? ` · ${failed.length} skipped — ${failed[0].title}: ${failed[0].reason}` : '')
       + (leftOut.length ? ` · left out, having closed the app twice: ${leftOut.map((b) => `“${library.displayTitle(b)}”`).join(', ')} — export ${leftOut.length === 1 ? 'it' : 'them'} on ${leftOut.length === 1 ? 'its' : 'their'} own` : '');
     toast(early
       ? `${written} book${written === 1 ? '' : 's'} in ${savedZips} zip${savedZips === 1 ? '' : 's'}, each under ${limitLabel(limitMB)}, saved in “${folder}”${skipped}`
       : failed.length
         ? `${written} written${skipped}`
         : staged.length > 1
-          ? `${written} books in ${staged.length} zips, each under ${limitLabel(limitMB)} — choose a folder for them`
-          : `${written} books written out — choose where to save them`, leftOut.length ? 15000 : 8000, { kind: failed.length || leftOut.length ? 'failed' : 'done' });
+          ? `${written} books in ${staged.length} zips, each under ${limitLabel(limitMB)}${pictures} — choose a folder for them`
+          : `${written} books written out${pictures} — choose where to save them`, leftOut.length ? 15000 : 8000, { kind: failed.length || leftOut.length ? 'failed' : 'done' });
   } catch (error) {
     finish.fail();
     open?.sink.discard();
