@@ -1336,6 +1336,18 @@ await t('every book held once: read again only after a write, each caller its ow
   await store.deleteBook(id);
 });
 
+await t('covers made small wait while many books are written out, and start again after', async () => {
+  const src = read('app/src/main/assets/www/js/library.js');
+  // Held: the next cover is not begun; let go: begun again if any are waiting.
+  assert.match(src, /if \(next\.done \|\| document\.hidden \|\| thumbsHeld\) \{ thumbing = false; return; \}/);
+  assert.match(src, /export function holdThumbs\(on\) \{\s*thumbsHeld = !!on;\s*if \(!thumbsHeld && thumbQueue\.size && !thumbing\) \{ thumbing = true; setTimeout\(nextThumb, 1500\); \}/);
+  // The canvas a cover is made small on is emptied, made or not.
+  assert.match(src, /finally \{\s*bitmap\.close\?\.\(\);\s*canvas\.width = 0;\s*canvas\.height = 0;\s*\}/);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  library.holdThumbs(true);
+  library.holdThumbs(false);
+});
+
 await t('a cover’s small copy is written onto the book as it is by then, and never onto one still landing', async () => {
   // Read and written in one go: two changes made at once both stay. (Read,
   // wait, write -- as the copy was first written -- lost whichever came first:
@@ -1621,6 +1633,7 @@ await t('many books written out in zips under a size: whole books, folder order,
   const folderSrc = app.slice(app.indexOf('const exportFolder = (() => {'), app.indexOf('async function exportMany('));
   const saved = {};
   const pictureSizes = [];
+  const thumbHolds = [];
   const fakeStore = { settings: async () => saved, saveSettings: async (patch) => { Object.assign(saved, JSON.parse(JSON.stringify(patch))); }, all: async () => [] };
   const run = async (books, limitMB, { stopAfter = Infinity, ...options } = {}) => {
     const sinks = [];
@@ -1653,7 +1666,7 @@ await t('many books written out in zips under a size: whole books, folder order,
       start: () => Object.assign(() => {}, { say() {}, fail() {}, activity(now) { if (now) waits.push(now.why); }, controls({ cancel }) { stop = cancel; } }) };
     const exportMany = new Function('ref', 'window', 'store', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook', 'shrink',
       `${label}\n${heatSrc}\n${folderSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('working')}\n${app.match(/const EXPORT_KEEP_FREE = .*;/)[0]}\n${fn('freeSpace')}\n${fn('exportMany')}\nref.exportFolder = exportFolder;\nref.runLeft = runLeft;\nreturn exportMany;`)(ref, fakeWindow, fakeStore,
-      { displayTitle: (b) => b.title }, epub, progress, exportSink, zipWriter,
+      { displayTitle: (b) => b.title, holdThumbs: (on) => thumbHolds.push(on) }, epub, progress, exportSink, zipWriter,
       async (staged) => { together = staged; }, (text) => toasts.push(text), () => 'Library', () => {}, async () => {}, false, shrink);
     await exportMany(books, limitMB, options);
     return { sinks, together, toasts, progress };
@@ -1762,6 +1775,10 @@ await t('many books written out in zips under a size: whole books, folder order,
   fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => { carriedParts.push(handle); setTimeout(() => ref.exportFolder.saved(reply, true, ''), 0); };
   const left = await ref.runLeft(cut, books);
   assert.equal(left.length, 30 - cut.done.length);
+  // Covers made small waited while it wrote, and were taken up again after -- stopped short or not.
+  assert.equal(thumbHolds[0], true);
+  assert.equal(thumbHolds.at(-1), false);
+  assert.equal(thumbHolds.filter((on) => on).length, thumbHolds.filter((on) => !on).length);
   // Carried on at the size it began with -- written down with the run -- whatever else is passed.
   assert.equal(cut.size, 'small');
   pictureSizes.length = 0;

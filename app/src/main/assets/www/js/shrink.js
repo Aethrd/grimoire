@@ -65,16 +65,33 @@ export async function shrinkPicture(blob, { edge = 1400, quality = 0.82 } = {}) 
   if (!blob || !edge) return blob;
   if (ANIMATED.test(blob.type || '')) return blob;
 
+  /* Already within the size, by what its header says: left as it is without
+   * being decoded at all. Every picture was decoded whole just to learn its
+   * size -- a webtoon strip tens of megabytes of pixels -- including the many
+   * that are then left as they were. Only ever used to leave one alone: a
+   * photo marked to be turned can have its sides the other way round in its
+   * header, and is then at most kept at full size, never drawn wrong. */
+  const head = await pictureSize(blob, { decode: false }).catch(() => null);
+  if (head?.width && head?.height && within(head.width, head.height, edge)) return blob;
+  /* See-through: a JPEG cannot hold it, and its clear parts came out black.
+   * Left as it is, as keeping pictures smaller leaves it (keptSmaller). */
+  if (await seeThroughPng(blob)) return blob;
+
   let bitmap = null;
+  const decoding = decode(blob);
   try {
     bitmap = await Promise.race([
-      decode(blob),
+      decoding,
       new Promise((resolve) => setTimeout(() => resolve(null), PATIENCE)),
     ]);
   } catch {
     return blob;
   }
-  if (!bitmap) return blob;
+  if (!bitmap) {
+    // Given up on, it still comes in time: let go of then, not held.
+    decoding.then((late) => late?.close?.(), () => {});
+    return blob;
+  }
 
   const { width, height } = bitmap;
   if (!width || !height) return blob;
@@ -86,7 +103,7 @@ export async function shrinkPicture(blob, { edge = 1400, quality = 0.82 } = {}) 
   const tall = height / width > PHONE_SHAPE;
   const limit = tall ? edge / PHONE_SHAPE : edge;
   const measured = tall ? width : Math.max(width, height);
-  if (measured <= limit) {
+  if (within(width, height, edge)) {
     bitmap.close?.();
     return blob;
   }
@@ -99,8 +116,9 @@ export async function shrinkPicture(blob, { edge = 1400, quality = 0.82 } = {}) 
     return blob;
   }
 
+  let canvas = null;
   try {
-    const canvas = document.createElement('canvas');
+    canvas = document.createElement('canvas');
     canvas.width = to.width;
     canvas.height = to.height;
     const context = canvas.getContext('2d');
@@ -130,6 +148,25 @@ export async function shrinkPicture(blob, { edge = 1400, quality = 0.82 } = {}) 
     return blob;
   } finally {
     bitmap.close?.();
+    // Its pixels let go of now, not whenever the engine next tidies: a book is hundreds of these.
+    if (canvas) { canvas.width = 0; canvas.height = 0; }
+  }
+}
+
+/* Within the size: a picture taller than a phone screen by its width, any
+ * other by its longest side (shrinkPicture). */
+function within(width, height, edge) {
+  const tall = height / width > PHONE_SHAPE;
+  return (tall ? width : Math.max(width, height)) <= (tall ? edge / PHONE_SHAPE : edge);
+}
+
+/* A PNG that can be see-through, from its first bytes (pngSeeThrough). */
+async function seeThroughPng(blob) {
+  try {
+    const head = new Uint8Array(await readArrayBuffer(blob.slice(0, Math.min(blob.size, 65536))));
+    return head[0] === 0x89 && head[1] === 0x50 && pngSeeThrough(head);
+  } catch {
+    return false;
   }
 }
 
@@ -287,11 +324,12 @@ export async function keptSmaller(image, { size = 'zoom', screen = readingScreen
   let bitmap = null;
   try {
     // Decoded straight to the smaller size, smoothed: screentone stays tone, not moire.
+    const decoding = createImageBitmap(blob, { resizeWidth: to.width, resizeHeight: to.height, resizeQuality: 'high' });
     bitmap = await Promise.race([
-      createImageBitmap(blob, { resizeWidth: to.width, resizeHeight: to.height, resizeQuality: 'high' }),
+      decoding,
       new Promise((resolve) => setTimeout(() => resolve(null), PATIENCE)),
     ]);
-    if (!bitmap) return null;
+    if (!bitmap) { decoding.then((late) => late?.close?.(), () => {}); return null; }
     const canvas = document.createElement('canvas');
     canvas.width = to.width;
     canvas.height = to.height;

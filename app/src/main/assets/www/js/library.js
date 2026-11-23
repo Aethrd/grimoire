@@ -1223,19 +1223,32 @@ export async function makeThumb(blob) {
   if (blob.size <= THUMB_SMALL_BYTES) return 'self';
   // Decoded straight to the small size: the full cover is never held decoded.
   const bitmap = await createImageBitmap(blob, { resizeWidth: THUMB_WIDTH, resizeQuality: 'high' });
+  const canvas = document.createElement('canvas');
   try {
-    const canvas = document.createElement('canvas');
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;
     canvas.getContext('2d').drawImage(bitmap, 0, 0);
     const as = (type) => new Promise((resolve) => canvas.toBlob(resolve, type, 0.85));
     const small = (await as('image/webp')) || (await as('image/jpeg'));
     return small && small.size < blob.size ? small : 'self';
-  } finally { bitmap.close?.(); }
+  } finally {
+    bitmap.close?.();
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
+/* Covers made small wait while many books are written out (app.js
+ * exportMany): an export is the app's largest use of memory, and the two
+ * together are where it runs short. Taken up again after. */
+let thumbsHeld = false;
+export function holdThumbs(on) {
+  thumbsHeld = !!on;
+  if (!thumbsHeld && thumbQueue.size && !thumbing) { thumbing = true; setTimeout(nextThumb, 1500); }
 }
 async function nextThumb() {
   const next = thumbQueue.entries().next();
-  if (next.done || document.hidden) { thumbing = false; return; }
+  if (next.done || document.hidden || thumbsHeld) { thumbing = false; return; }
   const [id, sign] = next.value;
   thumbQueue.delete(id);
   try {

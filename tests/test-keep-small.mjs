@@ -42,7 +42,11 @@ let written = (canvas) => Math.round((canvas.width * canvas.height) / 20);
 let blank = false;
 // A picture written out: a JPEG of the size drawn, unless told otherwise.
 let header = (canvas) => [canvas.width, canvas.height];
+let decodes = 0;
+let slow = null;   // a decode that takes longer than the export waits
 globalThis.createImageBitmap = window.createImageBitmap = async (blob, options) => {
+  decodes += 1;
+  if (slow) return slow();
   if (options?.resizeWidth) return { width: options.resizeWidth, height: options.resizeHeight, close() {} };
   const { width, height } = await blobs.pictureSize(blob, { decode: false });
   return { width, height, close() {} };
@@ -97,6 +101,53 @@ await t('a smaller export: a strip limited by its width, not squeezed to a slive
   const count = drawn.length;
   assert.equal(await shrink.shrinkPicture(narrow, shrink.SIZES.screen), narrow);
   assert.equal(drawn.length, count);
+});
+
+await t('a smaller export: a picture already within the size is not decoded at all, and is left byte for byte', async () => {
+  const page = jpeg(900, 1300);
+  const strip = png(600, 20000);
+  const before = decodes;
+  assert.equal(await shrink.shrinkPicture(page, shrink.SIZES.screen), page);
+  assert.equal(await shrink.shrinkPicture(strip, shrink.SIZES.screen), strip);
+  assert.equal(decodes, before, 'decoded only to learn it was small enough');
+  // One whose header cannot be read is decoded as before, to know.
+  const odd = new window.Blob([new Uint8Array(3000)], { type: 'image/jpeg' });
+  await shrink.shrinkPicture(odd, shrink.SIZES.screen);
+  assert.equal(decodes, before + 1);
+});
+
+await t('a smaller export: a see-through picture is left as it is, not turned black where it was clear', async () => {
+  const count = drawn.length;
+  const clear = png(3000, 4000, { colour: 6 });
+  assert.equal(await shrink.shrinkPicture(clear, shrink.SIZES.screen), clear);
+  const byTrns = png(3000, 4000, { trns: true });
+  assert.equal(await shrink.shrinkPicture(byTrns, shrink.SIZES.screen), byTrns);
+  assert.equal(drawn.length, count, 'drawn into a JPEG');
+  // An opaque one of the same size: made smaller, as ever.
+  assert.notEqual(await shrink.shrinkPicture(png(3000, 4000), shrink.SIZES.screen), null);
+  assert.equal(drawn.length, count + 1);
+});
+
+await t('a smaller export: each canvas let go of at once; a decode given up on let go of when it comes', async () => {
+  // The canvas: emptied once its picture is written.
+  const made = [];
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = (name, ...rest) => { const node = create(name, ...rest); if (name === 'canvas') made.push(node); return node; };
+  try {
+    await shrink.shrinkPicture(png(2000, 2900), shrink.SIZES.screen);
+  } finally { window.document.createElement = create; }
+  assert.ok(made.length >= 1);
+  assert.ok(made.every((canvas) => canvas.width === 0 && canvas.height === 0), 'a canvas left holding its pixels');
+  // A decode slower than the export waits (8 s): the original kept, and the late picture closed when it comes.
+  let closed = false;
+  slow = () => new Promise((resolve) => setTimeout(() => resolve({ width: 2000, height: 2900, close() { closed = true; } }), 8600));
+  const big = png(2000, 2900);
+  try {
+    assert.equal(await shrink.shrinkPicture(big, shrink.SIZES.screen), big);
+    assert.ok(!closed);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    assert.ok(closed, 'the late picture held');
+  } finally { slow = null; }
 });
 
 await t('kept smaller: pages and wide strips made smaller, as JPEG, to the screen and room to zoom', async () => {

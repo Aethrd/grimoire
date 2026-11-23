@@ -2681,6 +2681,8 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null, siz
     open = null;
   };
 
+  // Covers made small wait until it is done (library.holdThumbs): memory kept for the export.
+  library.holdThumbs(true);
   /* One book at a time, straight into the archive.
    *
    * Every book used to be built and kept, then packed into a zip built whole
@@ -2782,6 +2784,8 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null, siz
     if (early && run) { run = { ...run, trying: null }; await store.saveSettings({ exportRun: run }).catch(() => {}); }
     toast(error.message || 'Those books could not be written out', 8000, { kind: 'failed' });
   } finally {
+    // Covers made small again, however it ended.
+    library.holdThumbs(false);
     // The folder kept only while there is an export to carry on (exportRun): let go of when none is.
     if (early && !savedZips && run && !run.done.length) await endExportRun();
     working(null);
