@@ -3284,20 +3284,20 @@ function askKeepSmaller(books, label) {
   el('folder-actions-name').textContent = `Keep pictures smaller · ${label}`;
   const list = el('folder-actions-list');
   list.innerHTML = '';
-  const screen = shrink.readingScreen();
   const note = document.createElement('p');
   note.className = 'muted keep-small-note';
-  note.textContent = `Sized for this phone's screen (${screen.short} × ${screen.long}), upright or on its side. `
-    + 'Pictures bigger than that are made smaller for good: the originals are not kept, and exports carry the smaller ones. '
+  note.textContent = 'Sized as a Smart export is: as sharp as the S23 or the Boox Note X5 Mini shows it, upright or on its side. '
+    + 'Pictures bigger than that are made smaller for good: the originals are not kept, and exports carry the smaller ones '
+    + '(a Smart export then copies them as they are, never made worse twice). '
     + 'Long strips keep their full length — only their width is limited. Left as they are: pictures already small enough, '
-    + 'animations, see-through pictures and blacked-out ones.';
+    + 'animations, see-through pictures, blacked-out ones and photos marked to be turned.';
   list.appendChild(note);
   for (const [key, size] of Object.entries(shrink.KEEP_SIZES)) {
     const button = document.createElement('button');
     const paint = (armed) => {
       button.innerHTML = armed
         ? `<span>Sure? ${escapeText(size.label)}, for good</span><span>Tap again</span>`
-        : `<span>${escapeText(size.label)}${key === 'zoom' ? ' (suggested)' : ''}</span><span>${escapeText(size.note)}</span>`;
+        : `<span>${escapeText(size.label)}</span><span>${escapeText(size.note)}</span>`;
     };
     paint(false);
     let armed = 0;

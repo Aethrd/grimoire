@@ -34,6 +34,21 @@ const jpeg = (width, height, bytes = 2_000_000) => {
   return new window.Blob([body], { type: 'image/jpeg' });
 };
 
+/** A JPEG carrying EXIF orientation `turn`, before its frame header (as a phone's photo does). */
+const exif = (turn, le = false) => {
+  const s16 = (n) => (le ? [n & 255, n >> 8] : [n >> 8, n & 255]);
+  const s32 = (n) => (le ? [n & 255, (n >> 8) & 255, (n >> 16) & 255, n >>> 24] : [n >>> 24, (n >> 16) & 255, (n >> 8) & 255, n & 255]);
+  const tiff = [...(le ? [0x49, 0x49] : [0x4d, 0x4d]), ...s16(42), ...s32(8), ...s16(1), ...s16(0x0112), ...s16(3), ...s32(1), ...s16(turn), 0, 0, ...s32(0)];
+  const body = [0x45, 0x78, 0x69, 0x66, 0, 0, ...tiff];
+  return [0xff, 0xe1, ((body.length + 2) >> 8) & 255, (body.length + 2) & 255, ...body];
+};
+const turnedJpeg = (width, height, turn, bytes = 2_000_000, le = false) => {
+  const head = [0xff, 0xd8, ...exif(turn, le), 0xff, 0xc0, 0x00, 0x11, 0x08, (height >> 8) & 255, height & 255, (width >> 8) & 255, width & 255, 3];
+  const body = new Uint8Array(bytes);
+  body.set(head);
+  return new window.Blob([body], { type: 'image/jpeg' });
+};
+
 /* ── the decoder and canvas, stood in for ───────────────────────────── */
 
 const drawn = [];
@@ -43,9 +58,11 @@ let blank = false;
 // A picture written out: a JPEG of the size drawn, unless told otherwise.
 let header = (canvas) => [canvas.width, canvas.height];
 let decodes = 0;
+const decodedAs = [];   // each decode: the size asked for, or 'whole'
 let slow = null;   // a decode that takes longer than the export waits
 globalThis.createImageBitmap = window.createImageBitmap = async (blob, options) => {
   decodes += 1;
+  decodedAs.push(options?.resizeWidth ? [options.resizeWidth, options.resizeHeight] : 'whole');
   if (slow) return slow();
   if (options?.resizeWidth) return { width: options.resizeWidth, height: options.resizeHeight, close() {} };
   const { width, height } = await blobs.pictureSize(blob, { decode: false });
@@ -66,23 +83,25 @@ const last = () => drawn.at(-1);
 
 const S23 = { short: 1080, long: 2340 };
 
-await t('sized for the phone held either way; a strip by its width alone, never its length', () => {
-  // A page, upright: as wide as the screen, and half again for zooming.
-  assert.equal(shrink.keptScale(2000, 2900, S23).toFixed(2), '0.81');
-  assert.equal(shrink.keptScale(2000, 2900, S23, 1).toFixed(2), '0.54');
-  // A spread is seen biggest with the phone on its side.
-  assert.equal(shrink.keptScale(3000, 2000, S23).toFixed(2), '0.81');
-  // A strip 800 across is already within the width: left whatever its length.
-  assert.equal(shrink.keptScale(800, 12000, S23), 1);
-  assert.equal(shrink.keptScale(800, 60000, S23), 1);
-  // A strip wider than that: its width limited, its length in the same measure.
-  assert.equal(shrink.keptScale(2000, 30000, S23).toFixed(2), '0.81');
-  // Already within what the screen shows.
-  assert.equal(shrink.keptScale(1000, 1400, S23), 1);
+await t('kept smaller by the same rule as a Smart export: either screen, held either way; a strip by its width alone', () => {
+  // A page: as tall as the Boox shows it whole (1872), which is as large as either screen ever does.
+  assert.equal(shrink.keptScale(2000, 2900).toFixed(3), (1872 / 2900).toFixed(3));
+  assert.equal(shrink.keptScale(2000, 2900), shrink.smartScale(2000, 2900));
+  // A spread: 1872 across.
+  assert.equal(shrink.keptScale(3000, 2000).toFixed(3), (1872 / 3000).toFixed(3));
+  // A strip within the phone held on its side (2340 across): left whatever its length.
+  assert.equal(shrink.keptScale(800, 12000), 1);
+  assert.equal(shrink.keptScale(2000, 60000), 1);
+  // Wider than that: its width limited, its length in the same measure.
+  assert.equal(shrink.keptScale(3000, 30000).toFixed(2), '0.78');
+  // Already within what either screen shows; or less than a tenth to gain.
+  assert.equal(shrink.keptScale(1000, 1400), 1);
+  assert.equal(shrink.keptScale(1400, 2000), 1);
   // Unknown size: left.
-  assert.equal(shrink.keptScale(0, 0, S23), 1);
-  // This phone's own screen, or an S23's when it cannot be told.
-  assert.deepEqual(shrink.readingScreen(), S23);
+  assert.equal(shrink.keptScale(0, 0), 1);
+  // One size offered, Smart; a choice made before (room to zoom, fits the screen) is taken as Smart.
+  assert.deepEqual(Object.keys(shrink.KEEP_SIZES), ['smart']);
+  assert.equal(shrink.KEEP_SIZES.smart.quality, shrink.SIZES.smart.quality);
 });
 
 await t('a smaller export: a strip limited by its width, not squeezed to a sliver', async () => {
@@ -142,7 +161,7 @@ await t('too big to make smaller safely on a phone: kept as it is, found from it
   assert.deepEqual([last().width, last().height], [437, 16384]);
   // Kept smaller in the book: the same, left alone and undecoded.
   const before = decodes;
-  assert.equal(await shrink.keptSmaller({ blob: jpeg(2400, 20000) }, { screen: S23 }), null);
+  assert.equal(await shrink.keptSmaller({ blob: jpeg(2400, 20000) }), null);
   assert.equal(decodes, before);
 });
 
@@ -223,30 +242,38 @@ await t('a smaller export: each canvas let go of at once; a decode given up on l
   } finally { slow = null; }
 });
 
-await t('kept smaller: pages and wide strips made smaller, as JPEG, to the screen and room to zoom', async () => {
+await t('kept smaller: pages and wide strips made smaller, as JPEG, to Smart', async () => {
   drawn.length = 0;
-  const page = await shrink.keptSmaller({ blob: jpeg(2000, 2900) }, { screen: S23 });
+  const page = await shrink.keptSmaller({ blob: jpeg(2000, 2900) });
   assert.ok(page);
-  assert.deepEqual([page.width, page.height], [1620, 2349]);
+  // Smart's size and quality: so a Smart export of it copies it as it is.
+  assert.deepEqual([page.width, page.height], [1291, 1872]);
   assert.equal(last().type, 'image/jpeg');
-  assert.equal(last().quality, 0.9);
+  assert.equal(last().quality, 0.88);
+  assert.equal(shrink.smartScale(page.width, page.height), 1, 'a picture kept smaller would be made smaller again by a Smart export');
   assert.equal(page.blob.type, 'image/jpeg');
-  const fits = await shrink.keptSmaller({ blob: png(2000, 2900) }, { size: 'screen', screen: S23 });
-  assert.deepEqual([fits.width, fits.height], [1080, 1566]);
+  // An older choice (room to zoom, fits the screen) is taken as Smart.
+  for (const size of ['screen', 'zoom']) {
+    const before = await shrink.keptSmaller({ blob: png(2000, 2900) }, { size });
+    assert.deepEqual([before.width, before.height], [1291, 1872], size);
+  }
   // A strip wider than the screen allows: narrower, its length in the same measure.
-  const wide = await shrink.keptSmaller({ blob: png(2000, 18000) }, { screen: S23 });
-  assert.deepEqual([wide.width, wide.height], [1620, 14580]);
+  const wide = await shrink.keptSmaller({ blob: png(3000, 13000) });
+  assert.deepEqual([wide.width, wide.height], [2340, 10140]);
+  // As wide as the phone held on its side already: left whatever its length.
+  assert.equal(await shrink.keptSmaller({ blob: png(2000, 18000) }), null);
 });
 
 await t('kept smaller: left alone wherever smaller would be worse', async () => {
   const left = async (image, why) => {
     const count = drawn.length;
-    assert.equal(await shrink.keptSmaller(image, { screen: S23 }), null, why);
+    assert.equal(await shrink.keptSmaller(image), null, why);
     return drawn.length === count;
   };
   assert.ok(await left({ blob: png(800, 12000) }, 'a strip within the width'));
   assert.ok(await left({ blob: png(1000, 1400) }, 'a page already within the screen'));
-  assert.ok(await left({ blob: png(1700, 2400) }, 'barely smaller: not worth a generation'));
+  assert.ok(await left({ blob: png(1450, 2050) }, 'barely smaller: not worth a generation'));
+  assert.ok(await left({ blob: turnedJpeg(2000, 2900, 6) }, 'a photo marked to be shown turned'));
   assert.ok(await left({ blob: png(2000, 2900, { colour: 6 }) }, 'see-through'));
   assert.ok(await left({ blob: png(2000, 2900, { trns: true }) }, 'see-through by tRNS'));
   assert.ok(await left({ blob: png(2000, 2900), original: png(2000, 2900) }, 'blacked out: its original kept to undo'));
@@ -258,16 +285,16 @@ await t('kept smaller: left alone wherever smaller would be worse', async () => 
   assert.ok(await left({ blob: png(2000, 60000) }, 'too long to draw'));
   // The phone's canvas, short of memory, gave back a blank picture: the original kept.
   blank = true;
-  assert.equal(await shrink.keptSmaller({ blob: jpeg(2000, 2900) }, { screen: S23 }), null, 'a blank picture written over a page');
+  assert.equal(await shrink.keptSmaller({ blob: jpeg(2000, 2900) }), null, 'a blank picture written over a page');
   blank = false;
   // Or a picture not the size asked for.
   header = () => [10, 10];
-  assert.equal(await shrink.keptSmaller({ blob: jpeg(2000, 2900) }, { screen: S23 }), null, 'a picture of the wrong size kept');
+  assert.equal(await shrink.keptSmaller({ blob: jpeg(2000, 2900) }), null, 'a picture of the wrong size kept');
   header = (canvas) => [canvas.width, canvas.height];
-  assert.ok(await shrink.keptSmaller({ blob: jpeg(2000, 2900) }, { screen: S23 }), 'a good one refused');
+  assert.ok(await shrink.keptSmaller({ blob: jpeg(2000, 2900) }), 'a good one refused');
   // Came out less than a tenth smaller: the original kept.
   written = () => 1_900_000;
-  assert.equal(await shrink.keptSmaller({ blob: jpeg(2000, 2900) }, { screen: S23 }), null);
+  assert.equal(await shrink.keptSmaller({ blob: jpeg(2000, 2900) }), null);
   written = (canvas) => Math.round((canvas.width * canvas.height) / 20);
 });
 
@@ -326,6 +353,75 @@ await t('asked for from the selection and from a folder, saying what it does fir
   assert.match(ask, /Long strips keep their full length/);
   assert.match(ask, /Sure\? \$\{escapeText\(size\.label\)\}, for good/);
   assert.match(app, /finish\.controls\(\{ cancel: \(\) => \{ stopped = true; \} \}\);\s*try \{\s*const done = await shrink\.keepSmaller/);
+});
+
+await t('a photo marked to be shown turned, told from its bytes; anything that cannot be read is taken as turned', () => {
+  const bytesOf = async (blob) => new Uint8Array(await blobs.readArrayBuffer(blob));
+  return (async () => {
+    for (const [turn, turned] of [[1, false], [3, true], [6, true], [8, true]]) {
+      assert.equal(shrink.mayBeTurned(await bytesOf(turnedJpeg(100, 50, turn, 4000))), turned, `orientation ${turn}`);
+      assert.equal(shrink.mayBeTurned(await bytesOf(turnedJpeg(100, 50, turn, 4000, true))), turned, `orientation ${turn}, little-endian`);
+    }
+    assert.equal(shrink.mayBeTurned(await bytesOf(jpeg(100, 50, 4000))), false, 'a JPEG with no EXIF');
+    assert.equal(shrink.mayBeTurned(await bytesOf(png(100, 50, { bytes: 4000 }))), false, 'a PNG');
+    // A PNG with an eXIf chunk before its pixels; a WebP saying it carries EXIF.
+    const pngExif = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...chunk('IHDR', new Array(13).fill(0)), ...chunk('eXIf', [1, 2]), ...chunk('IDAT', [1])]);
+    assert.equal(shrink.mayBeTurned(pngExif), true);
+    const webp = (flags) => new Uint8Array([...'RIFF'].map((c) => c.charCodeAt(0)).concat([0, 0, 0, 0], [...'WEBPVP8X'].map((c) => c.charCodeAt(0)), [10, 0, 0, 0, flags, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+    assert.equal(shrink.mayBeTurned(webp(0x08)), true);
+    assert.equal(shrink.mayBeTurned(webp(0)), false);
+    // Cut short, or not a picture: cannot say, so as if it were.
+    assert.equal(shrink.mayBeTurned(new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0, 40, 0x45, 0x78])), true);
+    assert.equal(shrink.mayBeTurned(new Uint8Array(10)), true);
+    assert.equal(shrink.mayBeTurned(null), true);
+  })();
+});
+
+await t('an export made smaller decodes each picture straight to its size -- a turned photo whole, as before', async () => {
+  decodedAs.length = 0;
+  drawn.length = 0;
+  const page = jpeg(2000, 2900);
+  const out = await shrink.shrinkPicture(page, shrink.SIZES.smart);
+  assert.notEqual(out, page);
+  // Asked for at the size it is going to be; then looked at (a tiny decode) before it is trusted.
+  assert.deepEqual(decodedAs[0], [1291, 1872]);
+  assert.deepEqual([last().width, last().height], [1291, 1872]);
+  assert.ok(decodedAs.slice(1).every((d) => Array.isArray(d) && d[0] <= 24), 'only the look at it after');
+  // A photo marked turned: decoded whole, its size as it is shown -- never squashed to its header's.
+  decodedAs.length = 0;
+  const photo = turnedJpeg(2900, 2000, 6);
+  await shrink.shrinkPicture(photo, shrink.SIZES.smart);
+  assert.equal(decodedAs[0], 'whole');
+  // A picture kept smaller in the book: within Smart, so copied byte for byte, never decoded.
+  const before = decodes;
+  const kept = jpeg(1291, 1872);
+  assert.equal(await shrink.shrinkPicture(kept, shrink.SIZES.smart), kept);
+  assert.equal(decodes, before);
+});
+
+await t('an export made smaller: Smart takes a tenth smaller or nothing; Small any saving; a blank result never goes in the file', async () => {
+  const page = () => jpeg(3000, 4300, 2_000_000);
+  // Came out only 5% smaller: Smart keeps the original; Small takes it (Small is a limit).
+  written = () => 1_900_000;
+  const smart = page();
+  assert.equal(await shrink.shrinkPicture(smart, shrink.SIZES.smart), smart);
+  const small = page();
+  assert.notEqual(await shrink.shrinkPicture(small, shrink.SIZES.small), small);
+  // Bigger: neither.
+  written = () => 2_100_000;
+  const bigger = page();
+  assert.equal(await shrink.shrinkPicture(bigger, shrink.SIZES.small), bigger);
+  written = (canvas) => Math.round((canvas.width * canvas.height) / 20);
+  // The canvas gave back a blank picture, or one of the wrong size: the original goes in the file.
+  blank = true;
+  const one = page();
+  assert.equal(await shrink.shrinkPicture(one, shrink.SIZES.smart), one, 'a blank page exported');
+  assert.equal(await shrink.shrinkPicture(one, shrink.SIZES.small), one, 'a blank page exported');
+  blank = false;
+  header = () => [10, 10];
+  assert.equal(await shrink.shrinkPicture(one, shrink.SIZES.small), one, 'a page of the wrong size exported');
+  header = (canvas) => [canvas.width, canvas.height];
+  assert.notEqual(await shrink.shrinkPicture(one, shrink.SIZES.small), one, 'a good one refused');
 });
 
 console.log(`\n${pass} checks passed`);

@@ -107,6 +107,63 @@ export function tooBigToShrink(width, height, sizeOrEdge) {
   return Math.round(width * scale) > MOST_CANVAS || Math.round(height * scale) > MOST_CANVAS;
 }
 
+/**
+ * Marked to be shown turned, from its first bytes: a JPEG whose EXIF says
+ * other than "as stored" (or cannot be read to say), a PNG with an eXIf
+ * chunk, a WebP saying it carries EXIF. Its header's width and height are
+ * then the stored ones, not the ones it is shown at -- and a decoder asked
+ * for a size turns it first and then stretches it to that size, squashing
+ * it. So such a picture is never decoded straight to a size worked out from
+ * its header. Photos from a phone carry this; scans and comic pages rarely.
+ */
+export function mayBeTurned(b) {
+  if (!b || b.length < 4) return true;
+  const u16 = (i, le) => (le ? b[i] | (b[i + 1] << 8) : (b[i] << 8) | b[i + 1]);
+  const u32 = (i, le) => (le ? (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16)) + b[i + 3] * 16777216 : b[i] * 16777216 + ((b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]));
+  const ascii = (i, n) => String.fromCharCode(...b.subarray(i, i + n));
+  if (b[0] === 0xff && b[1] === 0xd8) {
+    let i = 2;
+    while (i + 4 <= b.length) {
+      if (b[i] !== 0xff) return true;            // lost the thread: cannot say
+      const marker = b[i + 1];
+      if (marker === 0xff) { i += 1; continue; } // padding
+      // The frame or the pixels begin: EXIF comes before both, so nothing was said.
+      if (marker === 0xda || marker === 0xd9) return false;
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return false;
+      const length = u16(i + 2, false);
+      if (length < 2) return true;
+      if (marker === 0xe1 && i + 10 <= b.length && ascii(i + 4, 6) === 'Exif\0\0') {
+        const tiff = i + 10;
+        if (tiff + 8 > b.length) return true;
+        const le = b[tiff] === 0x49;
+        if (!le && b[tiff] !== 0x4d) return true;
+        const ifd = tiff + u32(tiff + 4, le);
+        if (ifd + 2 > b.length) return true;
+        const count = u16(ifd, le);
+        for (let k = 0; k < count; k += 1) {
+          const entry = ifd + 2 + k * 12;
+          if (entry + 12 > b.length) return true;
+          if (u16(entry, le) === 0x0112) return u16(entry + 8, le) !== 1;
+        }
+      }
+      i += 2 + length;
+    }
+    return true;   // the pixels not reached in what was read: cannot say
+  }
+  if (b[0] === 0x89 && b[1] === 0x50) {
+    let i = 8;
+    while (i + 8 <= b.length) {
+      const type = ascii(i + 4, 4);
+      if (type === 'eXIf') return true;
+      if (type === 'IDAT' || type === 'IEND') return false;
+      i += 12 + u32(i, false);
+    }
+    return true;
+  }
+  if (b.length >= 21 && ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') return ascii(12, 4) === 'VP8X' && (b[20] & 0x08) !== 0;
+  return true;
+}
+
 /** A GIF may be animated, and re-encoding one gives back a single frame. */
 const ANIMATED = /gif/i;
 
@@ -152,9 +209,32 @@ export async function shrinkPicture(blob, size = EARLIER_SIZES.screen) {
    * Left as it is, as keeping pictures smaller leaves it (keptSmaller). */
   if (await seeThroughPng(blob)) return blob;
 
+  /* How much smaller, by the size's own rule (scaleFor): a picture taller
+   * than a phone screen by its width, as it is read -- by its long edge, a
+   * strip 800 across and 12,000 down came out a sliver -- and Smart by the
+   * screens it is read on. */
+  const sized = (width, height) => {
+    const scale = scaleFor(width, height, size);
+    return scale >= 1 ? null : { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+  };
+
+  /* Decoded straight to the size it is going to be, where its header says
+   * what that is: the full-size pixels never held at once -- a page is a
+   * quarter of the memory, and quicker -- as keeping pictures smaller does.
+   * Otherwise (no header read, no such decoder, or a picture marked to be
+   * shown turned) decoded whole and drawn smaller, as before. */
+  let to = null;
+  if (head?.width && head?.height && typeof createImageBitmap === 'function' && !(await turnedByItsBytes(blob))) {
+    to = sized(head.width, head.height);
+    if (!to) return blob;
+  }
+
   let bitmap = null;
-  const decoding = decode(blob);
+  let decoding;
   try {
+    decoding = to
+      ? createImageBitmap(blob, { resizeWidth: to.width, resizeHeight: to.height, resizeQuality: 'high' })
+      : decode(blob);
     bitmap = await Promise.race([
       decoding,
       new Promise((resolve) => setTimeout(() => resolve(null), PATIENCE)),
@@ -169,18 +249,17 @@ export async function shrinkPicture(blob, size = EARLIER_SIZES.screen) {
   }
 
   const { width, height } = bitmap;
-  if (!width || !height) return blob;
-
-  /* How much smaller, by the size's own rule (scaleFor): a picture taller
-   * than a phone screen by its width, as it is read -- by its long edge, a
-   * strip 800 across and 12,000 down came out a sliver -- and Smart by the
-   * screens it is read on. */
-  const scale = scaleFor(width, height, size);
-  if (scale >= 1) {
+  if (!width || !height) {
     bitmap.close?.();
     return blob;
   }
-  const to = { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+  if (!to) {
+    to = sized(width, height);
+    if (!to) {
+      bitmap.close?.();
+      return blob;
+    }
+  }
   // Past what a canvas holds on a phone: kept as it is rather than lost.
   if (to.width > MOST_CANVAS || to.height > MOST_CANVAS) {
     bitmap.close?.();
@@ -188,6 +267,7 @@ export async function shrinkPicture(blob, size = EARLIER_SIZES.screen) {
   }
 
   let canvas = null;
+  let out = null;
   try {
     canvas = document.createElement('canvas');
     canvas.width = to.width;
@@ -205,22 +285,39 @@ export async function shrinkPicture(blob, size = EARLIER_SIZES.screen) {
     // An ImageBitmap draws directly; the <img> fallback hands over its element.
     context.drawImage(bitmap.source || bitmap, 0, 0, to.width, to.height);
 
-    const out = await new Promise((resolve) => {
+    out = await new Promise((resolve) => {
       if (canvas.toBlob) canvas.toBlob(resolve, 'image/jpeg', quality);
       else resolve(null);
     });
-
-    // Bigger is not smaller. Flat colour and line art deflate better as PNG
-    // than they encode as JPEG, and re-encoding them costs size and quality
-    // at once.
-    if (!out || out.size >= blob.size) return blob;
-    return out;
   } catch {
     return blob;
   } finally {
     bitmap.close?.();
     // Its pixels let go of now, not whenever the engine next tidies: a book is hundreds of these.
     if (canvas) { canvas.width = 0; canvas.height = 0; }
+  }
+
+  // Bigger is not smaller. Flat colour and line art deflate better as PNG
+  // than they encode as JPEG, and re-encoding them costs size and quality
+  // at once. Smart, which is for keeping quality, takes a tenth smaller or
+  // nothing, as keeping pictures smaller does: less is not worth a
+  // generation. Small, which is for a limit, takes any saving at all.
+  if (!out || !(out.size > 0)) return blob;
+  if (smart ? out.size > blob.size * WORTH_SAVING : out.size >= blob.size) return blob;
+  /* Looked at before it goes in the file: the size asked for, and something
+   * drawn in it. Short of memory, a phone's canvas can give back a blank
+   * picture rather than fail -- and a backup is what the originals are
+   * deleted after. */
+  if (!(await looksDrawn(out, to))) return blob;
+  return out;
+}
+
+/* Marked to be shown turned (mayBeTurned), from its first bytes; unreadable, as if it were. */
+async function turnedByItsBytes(blob) {
+  try {
+    return mayBeTurned(new Uint8Array(await readArrayBuffer(blob.slice(0, Math.min(blob.size, 65536)))));
+  } catch {
+    return true;
   }
 }
 
@@ -304,49 +401,34 @@ export function describeSaving(bytes) {
  * is asked for, book by book or folder by folder, and says so. So it is
  * careful where smaller would be worse:
  *
- *   - sized for the screen it is read on -- this phone's, in its own pixels
- *     (an S23 is 1080 by 2340) -- whichever way it is held: a page, or a
- *     spread, as large as it fills the screen upright or on its side
+ *   - sized as Smart sizes an export (smartScale): as large as the S23 or
+ *     the Boox Note X5 Mini shows it, whichever way either is held -- a page
+ *     or a spread fitted whole
  *   - a picture taller than the screen (a strip, a long page) is read across
  *     its width, scrolled: only its width is limited, never its length
- *   - room left to zoom: half as big again as the screen, by default, so
- *     small lettering on a page stays sharp held closer
  *   - only made smaller, never only re-encoded: a picture already within that
  *     is left exactly as it is, never written again a generation worse
  *   - left alone: animations, see-through pictures (a JPEG cannot be),
+ *     photos marked to be shown turned (mayBeTurned),
  *     pictures blacked out (their original is kept to undo it), anything that
  *     will not decode, and any that came out less than a tenth smaller
  *
  * The picture keeps its name in the book; what it is now (a JPEG) is read off
  * the picture itself wherever that matters -- an export names it for that.
  */
+/* One rule, the export's Smart: a picture kept smaller in the book is then
+ * already within Smart, so exporting it at Smart copies it byte for byte --
+ * it is written smaller once, never a second generation worse on the way out.
+ * (Two sizes were offered here before -- half as big again as this phone's
+ * screen, or the screen -- and neither agreed with Smart.) An older choice
+ * of either is taken as Smart. */
 export const KEEP_SIZES = {
-  zoom: { room: 1.5, quality: 0.9, label: 'Room to zoom', note: 'Half as big again as the screen: lettering stays sharp zoomed in' },
-  screen: { room: 1, quality: 0.88, label: 'Fits the screen', note: 'As big as the screen shows it, and no bigger' },
+  smart: { quality: SIZES.smart.quality, label: 'Smart', note: 'As sharp as the S23 or the Boox Note X5 Mini shows it, upright or on its side. Strips keep their full length.' },
 };
+const keepingAt = (size) => KEEP_SIZES[size] || KEEP_SIZES.smart;
 
-/* The screen read on, in its own pixels: this phone's, or an S23's when it
- * cannot be told. */
-const S23 = { short: 1080, long: 2340 };
-export function readingScreen() {
-  const ratio = globalThis.devicePixelRatio || 1;
-  const w = Math.round((globalThis.screen?.width || 0) * ratio);
-  const h = Math.round((globalThis.screen?.height || 0) * ratio);
-  const short = Math.min(w, h);
-  const long = Math.max(w, h);
-  return short >= 600 && long >= 900 ? { short, long } : { ...S23 };
-}
-
-/** How much smaller a picture is kept, 1 to leave it as it is. */
-export function keptScale(width, height, screen = S23, room = KEEP_SIZES.zoom.room) {
-  if (!(width > 0 && height > 0)) return 1;
-  const { short, long } = screen;
-  // Taller than the screen: read across, scrolled. Its length is not limited.
-  const shown = height / width > long / short
-    ? short / width
-    : Math.max(Math.min(short / width, long / height), Math.min(long / width, short / height));
-  return Math.min(1, shown * room);
-}
+/** How much smaller a picture is kept, 1 to leave it as it is: Smart's rule (smartScale). */
+export const keptScale = (width, height) => smartScale(width, height);
 
 /* Made smaller by less than this, a picture is left: not worth a generation. */
 const WORTH_SCALING = 0.9;
@@ -374,8 +456,8 @@ const KEEPABLE = /^image\/(jpeg|jpg|png)$/i;
  * One kept picture made smaller, or null to leave it: { blob, width, height }.
  * `image` is its record in the book (images store).
  */
-export async function keptSmaller(image, { size = 'zoom', screen = readingScreen() } = {}) {
-  const keep = KEEP_SIZES[size] || KEEP_SIZES.zoom;
+export async function keptSmaller(image, { size = 'smart' } = {}) {
+  const keep = keepingAt(size);
   const blob = image?.blob;
   if (!blob || !(blob.size > 0) || image.original || image.animated) return null;
   if (!KEEPABLE.test(blob.type || '')) return null;
@@ -385,8 +467,10 @@ export async function keptSmaller(image, { size = 'zoom', screen = readingScreen
   const jpeg = head[0] === 0xff && head[1] === 0xd8;
   if (!png && !jpeg) return null;
   if (png && pngSeeThrough(head)) return null;
+  // Marked to be shown turned: its header's sides are the wrong way round to decode it to (mayBeTurned). Left.
+  if (mayBeTurned(head)) return null;
   const { width, height } = await pictureSize(blob, { decode: false });
-  const scale = keptScale(width, height, screen, keep.room);
+  const scale = keptScale(width, height);
   if (scale > WORTH_SCALING) return null;
   const to = { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
   if (to.width > MOST_CANVAS || to.height > MOST_CANVAS || typeof createImageBitmap !== 'function') return null;
@@ -433,8 +517,9 @@ export async function looksDrawn(blob, { width, height }) {
     const size = await pictureSize(blob, { decode: false });
     if (size.width !== width || size.height !== height) return false;
     const bitmap = await createImageBitmap(blob, { resizeWidth: SAMPLE, resizeHeight: SAMPLE, resizeQuality: 'low' });
+    let canvas = null;
     try {
-      const canvas = document.createElement('canvas');
+      canvas = document.createElement('canvas');
       canvas.width = SAMPLE;
       canvas.height = SAMPLE;
       const context = canvas.getContext('2d');
@@ -449,7 +534,10 @@ export async function looksDrawn(blob, { width, height }) {
         if (light > high) high = light;
       }
       return high - low >= 8;
-    } finally { bitmap.close?.(); }
+    } finally {
+      bitmap.close?.();
+      if (canvas) { canvas.width = 0; canvas.height = 0; }
+    }
   } catch {
     return false;
   }
@@ -467,7 +555,7 @@ const unchanged = (now, then) => !!now?.blob && now.blob.size === then.blob.size
  * `make` is keptSmaller, in the tests something standing in for it.
  * @returns {{ books:number, pictures:number, saved:number, looked:number, stopped:boolean }}
  */
-export async function keepSmaller(bookIds, { size = 'zoom', screen = readingScreen(), onProgress, shouldStop, make = keptSmaller } = {}) {
+export async function keepSmaller(bookIds, { size = 'smart', onProgress, shouldStop, make = keptSmaller } = {}) {
   const done = { books: 0, pictures: 0, saved: 0, looked: 0, stopped: false };
   for (let at = 0; at < bookIds.length; at += 1) {
     const book = await store.get('books', bookIds[at]);
@@ -479,7 +567,7 @@ export async function keepSmaller(bookIds, { size = 'zoom', screen = readingScre
       const image = images[n];
       images[n] = null;
       done.looked += 1;
-      const small = await make(image, { size, screen });
+      const small = await make(image, { size });
       if (small) {
         const written = await store.update('images', [book.id, image.href], (now) => (unchanged(now, image)
           ? { ...now, blob: small.blob, width: small.width, height: small.height, keptFrom: now.keptFrom ?? now.blob.size }
