@@ -1191,7 +1191,7 @@ await t('storage: a book deleted takes its translations; what deleted books left
   assert.ok(store.DEVICE_SETTINGS.includes('tidiedAt'));
 });
 
-await t('what takes the room: pictures by book, the Bin’s apart, covers, and the rest; a book named there made smaller from there', async () => {
+await t('what takes the room: books ranked by all they hold -- pictures, text, cover -- the Bin’s apart; a book named there made smaller from there', async () => {
   // Sizes as the records give them (the harness's storage keeps a size, not a Blob).
   const big = await aBook({ title: 'Mostly Pictures', coverBytes: 400 });
   const binned = await aBook({ title: 'Binned Pictures', binnedAt: 5, coverThumb: { size: 50 } });
@@ -1200,18 +1200,49 @@ await t('what takes the room: pictures by book, the Bin’s apart, covers, and t
     { bookId: big, href: 'b.png', blob: { size: 3000 } },
     { bookId: binned, href: 'c.png', blob: { size: 1000 }, original: { size: 500 } },
   ]);
+  // A long novel of text, no pictures: more room than the book of pictures, so ranked above it.
+  const novel = await aBook({ title: 'Long Novel' });
+  const prose = 'word '.repeat(1000);                // 5,000 characters, a byte each
+  await store.putAll('chapters', [0, 1].map((index) => ({ bookId: novel, index, title: '', html: prose })));
+  // Its saved translation, in Japanese: two bytes a character.
+  await store.put('translations', { key: `t:${novel}:0`, bookId: novel, html: 'あ'.repeat(500) });
+  // Text in Chinese counts double.
+  const wide = await aBook({ title: 'Wide Text' });
+  await store.put('chapters', { bookId: wide, index: 0, title: '', html: '字'.repeat(1000) });
   const realStorage = Object.getOwnPropertyDescriptor(globalThis.navigator, 'storage');
   Object.defineProperty(globalThis.navigator, 'storage', { configurable: true, value: { estimate: async () => ({ usage: 1e9, quota: 5e9 }) } });
   try {
-    const room = await store.storageBreakdown({ top: 50 });
-    const mine = room.biggest.filter((b) => b.id === big || b.id === binned);
-    assert.deepEqual(mine.map((b) => [b.title, b.bytes, b.count, b.binned]),
-      [['Mostly Pictures', 8000, 2, false], ['Binned Pictures', 1500, 1, true]]);
+    const told = [];
+    const room = await store.storageBreakdown({ top: 500, onProgress: (n, what) => told.push(what) });
+    const mine = room.biggest.filter((b) => [big, binned, novel, wide].includes(b.id));
+    // Each title as written in aBook, its text counted with it.
+    const textOf = (id) => room.biggest.find((b) => b.id === id).text;
+    const titleBytes = (id) => textOf(id) - (id === novel ? 10000 + 1000 : id === wide ? 2000 : 0);
+    assert.deepEqual(mine.map((b) => [b.title, b.pictures, b.count, b.cover, b.binned]), [
+      ['Long Novel', 0, 0, 0, false],
+      ['Mostly Pictures', 8000, 2, 400, false],
+      ['Wide Text', 0, 0, 0, false],
+      ['Binned Pictures', 1500, 1, 50, true],
+    ]);
+    assert.equal(textOf(novel) - titleBytes(novel), 11000, 'the chapters and their translation not counted as kept');
+    assert.equal(textOf(wide) - titleBytes(wide), 2000, 'Chinese not counted two bytes a character');
+    for (const book of mine) assert.equal(book.bytes, book.pictures + book.text + book.cover);
+    // Ranked by the whole: the novel above the pictures, though it has none.
+    const order = mine.map((b) => b.title);
+    assert.ok(order.indexOf('Long Novel') < order.indexOf('Mostly Pictures'));
     assert.ok(room.pictures >= 9500 && room.pictureCount >= 3);
     assert.ok(room.picturesInBin >= 1500);
+    assert.ok(room.inBin >= 1550, 'the Bin’s share of the room not counted whole');
+    assert.ok(room.text >= 13000 && room.chapterCount >= 3);
     assert.ok(room.covers >= 400 && room.shelfCovers >= 50);
-    assert.equal(room.rest, 1e9 - room.pictures - room.covers - room.shelfCovers);
+    assert.equal(room.rest, 1e9 - room.pictures - room.covers - room.shelfCovers - room.text);
     assert.equal(room.usage, 1e9);
+    // Read a stretch at a time: every record, a picture's and a chapter's alike.
+    const again = [];
+    const src = read('app/src/main/assets/www/js/store.js');
+    assert.match(src, /async function everyRecord\(name, visit, stretch = 2000\)/);
+    void again;
+    void told;
     // Shown in Settings, beside Tidy storage.
     const panelsMod = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
     await panelsMod.openSettings(() => {});
@@ -1229,9 +1260,21 @@ await t('what takes the room: pictures by book, the Bin’s apart, covers, and t
     const shown = document.querySelector('.room-shown').textContent;
     assert.match(shown, /Pictures in books/);
     assert.match(shown, /in books in the Bin/);
-    assert.match(shown, /Text, reading log and the rest/);
-    const row = [...document.querySelectorAll('.room-book')].find((r) => r.textContent.includes('Mostly Pictures'));
+    assert.match(shown, /Text.*about .*chapters, and their saved translations/);
+    assert.match(shown, /Reading log and the rest/);
+    assert.match(shown, /In books in the Bin[\d.]+ [kMG]BGiven back when the Bin is emptied/);
+    assert.match(shown, /Taking the most room:/);
+    assert.ok(!/Most pictures:/.test(shown));
+    const rows = [...document.querySelectorAll('.room-book')];
+    const row = rows.find((r) => r.textContent.includes('Mostly Pictures'));
+    // No text in it: only what it has is said.
+    assert.match(row.textContent, /^Mostly Pictures8 kB — 2 pictures 8 kBSmaller$/);
     assert.ok(row.querySelector('button'), 'no Smaller beside a book on the shelf');
+    // A book of text alone: its room told, and no Smaller (nothing to make smaller).
+    const novelRow = rows.find((r) => r.textContent.includes('Long Novel'));
+    assert.match(novelRow.textContent, /— text 11 kB$/);
+    assert.ok(!novelRow.querySelector('button'), 'Smaller offered for a book with no pictures');
+    assert.ok(rows.indexOf(novelRow) < rows.indexOf(row), 'shown by pictures, not by room');
     const binnedRow = [...document.querySelectorAll('.room-book')].find((r) => r.textContent.includes('Binned Pictures'));
     assert.ok(!binnedRow.querySelector('button'), 'Smaller offered for a book in the Bin');
     let asked = null;
@@ -1246,6 +1289,8 @@ await t('what takes the room: pictures by book, the Bin’s apart, covers, and t
     else delete globalThis.navigator.storage;
     await store.deleteBook(big);
     await store.deleteBook(binned);
+    await store.deleteBook(novel);
+    await store.deleteBook(wide);
   }
 });
 

@@ -380,53 +380,76 @@ export async function deleteBook(bookId) {
 }
 
 /**
- * Where the room goes, read without reading the books through: the pictures
- * by their sizes (each record's picture is a handle to it, not its bytes),
- * covers and their small copies off the book records, and the rest -- the
- * chapters' text, the reading log, settings -- as what the phone says is
- * used, less those. Pictures are told apart for books in the Bin, and the
- * books holding most are named, for choosing what to keep smaller.
- * @returns {{ usage, quota, pictures, pictureCount, picturesInBin, covers,
- *   shelfCovers, rest, biggest: [{ id, title, bytes, count, binned }] }}
+ * Where the room goes, and which books take most of it -- all that each
+ * holds: its pictures by their sizes (each record's picture is a handle to
+ * it, not its bytes), its cover and the shelf's small copy, and its text --
+ * the chapters and their saved translations, counted as storage keeps them
+ * (a character a byte where it can, two where it cannot: Chinese, Japanese,
+ * Korean...). Ranked by that whole, not by pictures alone: a long novel of
+ * text outweighs a slim book of pictures. The rest -- the reading log,
+ * settings -- is what the phone says is used, less all that. What books in
+ * the Bin hold is told apart: it goes when the Bin is emptied.
+ *
+ * Read a record at a time, in stretches of their own transactions, so a
+ * download writing its chapters meanwhile waits a moment, not the whole look.
+ * @returns {{ usage, quota, pictures, pictureCount, picturesInBin, text,
+ *   chapterCount, covers, shelfCovers, inBin, rest,
+ *   biggest: [{ id, title, bytes, pictures, count, text, cover, binned, gone }] }}
  */
 export async function storageBreakdown({ onProgress, top = 8 } = {}) {
   const books = new Map((await all('books')).map((b) => [b.id, b]));
   const size = (blob) => (typeof blob?.size === 'number' ? blob.size : 0);
+  const perBook = new Map();
+  const mine = (id) => {
+    let held = perBook.get(id);
+    if (!held) { held = { pictures: 0, count: 0, text: 0, cover: 0 }; perBook.set(id, held); }
+    return held;
+  };
   let covers = 0;
   let shelfCovers = 0;
   for (const book of books.values()) {
-    covers += book.coverBytes ?? size(book.coverBlob);
-    shelfCovers += size(book.coverThumb);
+    const cover = book.coverBytes ?? size(book.coverBlob);
+    const small = size(book.coverThumb);
+    covers += cover;
+    shelfCovers += small;
+    if (cover + small) mine(book.id).cover = cover + small;
   }
-  const perBook = new Map();
+  let looked = 0;
+  const told = (what) => { looked += 1; if (looked % 500 === 0) onProgress?.(looked, what); };
   let pictures = 0;
   let pictureCount = 0;
-  await new Promise((resolve, reject) => {
-    transaction('images').then((t) => {
-      const request = t.objectStore('images').openCursor();
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) { resolve(); return; }
-        const image = cursor.value;
-        const bytes = size(image.blob) + size(image.original);
-        pictures += bytes;
-        pictureCount += 1;
-        const mine = perBook.get(image.bookId) || { bytes: 0, count: 0 };
-        mine.bytes += bytes;
-        mine.count += 1;
-        perBook.set(image.bookId, mine);
-        if (pictureCount % 500 === 0) onProgress?.(pictureCount);
-        cursor.continue();
-      };
-    }, reject);
+  await everyRecord('images', (image) => {
+    const bytes = size(image.blob) + size(image.original);
+    pictures += bytes;
+    pictureCount += 1;
+    const held = mine(image.bookId);
+    held.pictures += bytes;
+    held.count += 1;
+    told('pictures');
+  });
+  let text = 0;
+  let chapterCount = 0;
+  await everyRecord('chapters', (chapter) => {
+    const bytes = textBytes(chapter);
+    text += bytes;
+    chapterCount += 1;
+    mine(chapter.bookId).text += bytes;
+    told('chapters');
+  });
+  await everyRecord('translations', (row) => {
+    const bytes = textBytes(row);
+    text += bytes;
+    if (row.bookId != null) mine(row.bookId).text += bytes;
+    told('translations');
   });
   let picturesInBin = 0;
+  let inBin = 0;
   const biggest = [];
-  for (const [id, { bytes, count }] of perBook) {
+  for (const [id, held] of perBook) {
     const book = books.get(id);
-    if (book?.binnedAt) picturesInBin += bytes;
-    biggest.push({ id, title: book?.title || 'A deleted book', bytes, count, binned: !!book?.binnedAt, gone: !book });
+    const bytes = held.pictures + held.text + held.cover;
+    if (book?.binnedAt) { picturesInBin += held.pictures; inBin += bytes; }
+    biggest.push({ id, title: book?.title || 'A deleted book', bytes, ...held, binned: !!book?.binnedAt, gone: !book });
   }
   biggest.sort((a, b) => b.bytes - a.bytes);
   let usage = null;
@@ -436,8 +459,45 @@ export async function storageBreakdown({ onProgress, top = 8 } = {}) {
     usage = estimate?.usage ?? null;
     quota = estimate?.quota ?? null;
   } catch { /* not told */ }
-  const rest = usage == null ? null : Math.max(0, usage - pictures - covers - shelfCovers);
-  return { usage, quota, pictures, pictureCount, picturesInBin, covers, shelfCovers, rest, biggest: biggest.slice(0, top) };
+  const rest = usage == null ? null : Math.max(0, usage - pictures - covers - shelfCovers - text);
+  return { usage, quota, pictures, pictureCount, picturesInBin, text, chapterCount, covers, shelfCovers, inBin, rest, biggest: biggest.slice(0, top) };
+}
+
+/* The text a record holds, as storage keeps it: its strings, a byte a
+ * character where every character fits one, two where any does not. */
+function textBytes(record) {
+  let bytes = 0;
+  for (const value of Object.values(record || {})) {
+    if (typeof value !== 'string') continue;
+    bytes += /[^\u0000-\u00ff]/.test(value) ? value.length * 2 : value.length;
+  }
+  return bytes;
+}
+
+/* Every record of a store, a stretch at a time: each stretch its own
+ * transaction, taken up after the last key seen -- so the store is free to
+ * be written between them. Nothing is changed. */
+async function everyRecord(name, visit, stretch = 2000) {
+  let after;
+  for (;;) {
+    const t = await transaction(name);
+    const last = await new Promise((resolve, reject) => {
+      const range = after === undefined ? null : IDBKeyRange.lowerBound(after, true);
+      const request = t.objectStore(name).openCursor(range);
+      let seen = 0;
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(undefined); return; }
+        visit(cursor.value);
+        seen += 1;
+        if (seen >= stretch) { resolve(cursor.primaryKey); return; }
+        cursor.continue();
+      };
+    });
+    if (last === undefined) return;
+    after = last;
+  }
 }
 
 /**

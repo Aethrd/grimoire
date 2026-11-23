@@ -2598,7 +2598,7 @@ function tidyBlock() {
     look.disabled = true;
     look.textContent = 'Looking…';
     try {
-      const room = await store.storageBreakdown({ onProgress: (n) => { look.textContent = `Looking… ${n.toLocaleString()} pictures`; } });
+      const room = await store.storageBreakdown({ onProgress: (n, what) => { look.textContent = `Looking… ${n.toLocaleString()} ${what} read`; } });
       shown.innerHTML = '';
       const line = (label, value, note) => {
         const row = document.createElement('p');
@@ -2608,19 +2608,27 @@ function tidyBlock() {
       };
       if (room.usage != null) line('The library in all', size(room.usage), room.quota ? `of ${size(room.quota)} the phone allows it` : '');
       line('Pictures in books', size(room.pictures), `${room.pictureCount.toLocaleString()} pictures${room.picturesInBin ? ` · ${size(room.picturesInBin)} of it in books in the Bin` : ''}`);
+      line('Text', `about ${size(room.text)}`, `${room.chapterCount.toLocaleString()} chapters, and their saved translations`);
       line('Covers', size(room.covers + room.shelfCovers), room.shelfCovers ? `${size(room.shelfCovers)} of it the shelf’s small copies` : '');
-      if (room.rest != null) line('Text, reading log and the rest', size(room.rest), '');
+      if (room.rest != null) line('Reading log and the rest', size(room.rest), '');
+      if (room.inBin) line('In books in the Bin', size(room.inBin), 'Given back when the Bin is emptied');
       if (room.biggest.length) {
         const head = document.createElement('p');
         head.className = 'muted room-head';
-        head.textContent = 'Most pictures:';
+        // Ranked by all a book holds -- pictures, text, cover -- not by its pictures alone.
+        head.textContent = 'Taking the most room:';
         shown.appendChild(head);
         for (const book of room.biggest) {
           const row = document.createElement('div');
           row.className = 'room-book';
+          const parts = [
+            book.count ? `${book.count.toLocaleString()} picture${book.count === 1 ? '' : 's'} ${size(book.pictures)}` : '',
+            book.text ? `text ${size(book.text)}` : '',
+          ].filter(Boolean).join(' · ');
           row.innerHTML = `<span>${escape(book.title)}${book.binned ? ' <small class="muted">(in the Bin)</small>' : ''}</span>`
-            + `<small class="muted">${size(book.bytes)} · ${book.count.toLocaleString()} pictures</small>`;
-          if (!book.binned && !book.gone) {
+            + `<small class="muted">${size(book.bytes)}${parts ? ` — ${parts}` : ''}</small>`;
+          // Smaller only where there are pictures to make smaller.
+          if (!book.binned && !book.gone && book.count) {
             const smaller = document.createElement('button');
             smaller.className = 'btn ghost';
             smaller.textContent = 'Smaller';
