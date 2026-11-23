@@ -367,6 +367,13 @@ await t('why the app last ended: said only for the app itself, and only when som
   // Low memory, crashes, not responding, too much use -- not an ordinary ending.
   for (const reason of ['REASON_LOW_MEMORY', 'REASON_CRASH', 'REASON_CRASH_NATIVE', 'REASON_ANR', 'REASON_EXCESSIVE_RESOURCE_USAGE']) assert.ok(exit.includes(reason), reason);
   for (const ordinary of ['REASON_OTHER', 'REASON_SIGNALED', 'REASON_FREEZER', 'REASON_USER_REQUESTED']) assert.ok(!exit.includes(ordinary), ordinary);
+  // Closed for memory while idle in the background: Android making room, said every time and nothing lost -- not said.
+  assert.match(exit, /if \(exit\.getReason\(\) == android\.app\.ApplicationExitInfo\.REASON_LOW_MEMORY\s+&& exit\.getImportance\(\) > android\.app\.ActivityManager\.RunningAppProcessInfo\.IMPORTANCE_PERCEPTIBLE\) continue;/);
+  // Ahead of the reasons, and the exit still marked as seen after the loop (never said later instead).
+  assert.ok(exit.indexOf('IMPORTANCE_PERCEPTIBLE') < exit.indexOf('String why;'));
+  assert.match(exit, /if \(!exits\.isEmpty\(\)\) prefs\.edit\(\)\.putLong\("exitSeen", exits\.get\(0\)\.getTimestamp\(\)\)\.apply\(\);/);
+  // What it was using only when Android measured it: never "using 0 MB".
+  assert.match(exit, /\+ \(usedMb > 0 \? " · it was using " \+ usedMb \+ " MB" : ""\)/);
 });
 
 await t('the reading log: jumps not counted as reading, sessions not doubled by restoring, and each kept with its own book', async () => {

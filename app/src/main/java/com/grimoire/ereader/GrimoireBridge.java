@@ -730,6 +730,14 @@ public class GrimoireBridge {
                  * renderer, "isolated not needed"), which are not the app
                  * being closed, and were said as if they were. */
                 if (!activity.getPackageName().equals(exit.getProcessName())) continue;
+                /* Closed for memory while it sat idle in the background is how
+                 * Android makes room for whatever is in use: ordinary, nothing
+                 * lost, and said every time the phone was busy -- with "0 MB",
+                 * as Android does not measure an idle app it closes. Said only
+                 * when it was in use: on screen, or visibly at work. Work cut
+                 * off in the background is said by itself (cutOff). */
+                if (exit.getReason() == android.app.ApplicationExitInfo.REASON_LOW_MEMORY
+                        && exit.getImportance() > android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE) continue;
                 String why;
                 switch (exit.getReason()) {
                     case android.app.ApplicationExitInfo.REASON_LOW_MEMORY: why = "Android closed it to free memory (the phone ran low)"; break;
@@ -743,9 +751,11 @@ public class GrimoireBridge {
                 }
                 prefs.edit().putLong("exitSeen", exits.get(0).getTimestamp()).apply();
                 String said = exit.getDescription();
+                long usedMb = exit.getPss() >> 10;
                 return why + " at " + new java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
                         .format(new java.util.Date(exit.getTimestamp()))
-                        + " · it was using " + (exit.getPss() >> 10) + " MB"
+                        // What it was using, when Android measured it (it does not always).
+                        + (usedMb > 0 ? " · it was using " + usedMb + " MB" : "")
                         + (said == null || said.isEmpty() ? "" : " · " + said);
             }
             if (!exits.isEmpty()) prefs.edit().putLong("exitSeen", exits.get(0).getTimestamp()).apply();
