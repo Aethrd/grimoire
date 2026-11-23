@@ -3347,7 +3347,16 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.equal(typeof scene.stop, 'function');
   scene.stop();
   assert.doesNotThrow(() => opening.playScene(null).stop());
+  // Letters to come that never do, or fail: nothing thrown, the scene stops as ever.
+  assert.doesNotThrow(() => opening.playScene(document.createElement('canvas'), { letters: Promise.reject(new Error('gone')) }).stop());
   const src = read('app/src/main/assets/www/js/opening.js');
+  // The quill held as a right hand holds it: nib at the foot on the left, plume to the top right (mirrored, turned the other way).
+  assert.match(src, /ctx\.rotate\(0\.95 - lean\);\s+ctx\.scale\(-S, S\);/);
+  // Dipped, then tapped twice on the rim, a drop shaken loose each time and falling back into the ink.
+  assert.match(src, /for \(const at of \[1\.45, 1\.85\]\)/);
+  assert.match(src, /state\.drops\.push\(/);
+  assert.match(src, /if \(d\.z <= INK_Z\) \{ d\.done = true; state\.ripples\.push/);
+  assert.match(src, /if \(k > 2\.75\) \{ state\.phase = 'wait';/);
   // Four times in ten the circle lies dark; otherwise one effect of six, at random.
   assert.match(src, /Math\.random\(\) < 0\.4 \? 'dark' : EFFECTS\[Math\.floor\(Math\.random\(\) \* EFFECTS\.length\)\]/);
   assert.match(src, /const EFFECTS = \['shine', 'fluctuate', 'decay', 'erode', 'burn', 'freeze'\];/);
@@ -3395,6 +3404,53 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.equal(row.hidden, true);
   // A book that opens at once never shows it.
   assert.equal(el('opening').hidden, true);
+});
+
+await t('the scene\'s letters in the library\'s own writing, however each book gives its language', async () => {
+  const opening = await import(new URL('../app/src/main/assets/www/js/opening.js', import.meta.url).href);
+  // Korean however it is said; nothing told from "und", nor from "uk" (Ukrainian or British?).
+  for (const said of ['ko', 'kr', 'KOR', 'Korean', '한국어', 'ko-KR', 'ko_KR', 'Korean (South Korea)']) assert.equal(opening.spokenWriting(said), 'hangul', said);
+  for (const said of ['ja', 'JP', 'jpn', 'Japanese', '日本語']) assert.equal(opening.spokenWriting(said), 'japanese', said);
+  for (const said of ['zh', 'zh-TW', 'cn', 'Chinese', '中文']) assert.equal(opening.spokenWriting(said), 'han', said);
+  for (const said of ['en', 'eng', 'English', 'en-US']) assert.equal(opening.spokenWriting(said), 'latin', said);
+  for (const said of ['fr', 'French', 'Français', 'de', 'pt-BR', 'Español']) assert.equal(opening.spokenWriting(said), 'accented', said);
+  for (const said of ['', null, undefined, 'und', 'uk', 'xx']) assert.equal(opening.spokenWriting(said), null, String(said));
+  // From a tag only a whole name, or a code no word shares: "Cat" and "It" are not languages.
+  assert.equal(opening.spokenWriting('Korean', { strict: true }), 'hangul');
+  assert.equal(opening.spokenWriting('KR', { strict: true }), 'hangul');
+  assert.equal(opening.spokenWriting('Cat', { strict: true }), null);
+  assert.equal(opening.spokenWriting('It', { strict: true }), null);
+  assert.equal(opening.spokenWriting('Korean Drama', { strict: true }), null);
+  // A book's writing: its characters over a wrong "en"; a Latin title on a Korean book, half each; kanji with "ja", Japanese.
+  assert.deepEqual(opening.writingOfBook({ title: '전지적 독자 시점', lang: 'en' }), { hangul: 1 });
+  assert.deepEqual(opening.writingOfBook({ title: 'Solo Leveling', lang: 'kr' }), { latin: 0.5, hangul: 0.5 });
+  assert.deepEqual(opening.writingOfBook({ title: 'Solo Leveling', tags: ['Action', 'Korean'] }), { latin: 0.5, hangul: 0.5 });
+  assert.deepEqual(opening.writingOfBook({ title: '三体', lang: 'ja' }), { kana: 0.55, han: 0.45 });
+  assert.deepEqual(opening.writingOfBook({ title: 'Les Misérables' }), { latin: 0.75, accented: 0.25 });
+  assert.deepEqual(opening.writingOfBook({ title: 'Dune' }), { latin: 1 });
+  assert.equal(opening.writingOfBook({ title: '', lang: '' }), null);
+  const tally = (pool) => {
+    const n = { hangul: 0, latin: 0, accented: 0, other: 0 };
+    for (const ch of pool) n[/[가-힯]/.test(ch) ? 'hangul' : /[A-Za-z]/.test(ch) ? 'latin' : /[À-ɏ]/.test(ch) ? 'accented' : 'other'] += 1;
+    return n;
+  };
+  const korean = Array.from({ length: 30 }, (_, i) => ({ title: `나 혼자만 레벨업 ${i}`, lang: 'ko' }));
+  const french = Array.from({ length: 20 }, () => ({ title: 'Le Rouge et le Noir', lang: 'fr' }));
+  // A Korean library: Hangul nearly all of it, a little of the rest now and then.
+  const allKorean = tally(opening.letterMix(korean));
+  assert.ok(allKorean.hangul > 100 && allKorean.latin > 0 && allKorean.latin < 8, JSON.stringify(allKorean));
+  // With French in it as well: Latin letters again, some with their accents.
+  const withFrench = tally(opening.letterMix([...korean, ...french]));
+  assert.ok(withFrench.latin > 30 && withFrench.accented > 5 && withFrench.hangul > withFrench.latin, JSON.stringify(withFrench));
+  // The Bin, and books still coming in, do not count.
+  const binned = tally(opening.letterMix([...korean.map((b) => ({ ...b, binnedAt: 1 })), { title: 'Dune', lang: 'en' }]));
+  assert.ok(binned.latin > 100, JSON.stringify(binned));
+  // An empty library: the mix as it always was. The library's own characters drift too, and the open book's title, whole letters.
+  const empty = tally(opening.letterMix([]));
+  assert.ok(empty.latin > 30 && empty.hangul > 20, JSON.stringify(empty));
+  assert.ok(opening.letterMix(korean).includes('혼'));
+  assert.deepEqual(opening.letterMix([], { title: 'Ab 🌞' }).slice(-3), ['A', 'b', '🌞']);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /const libraryLetters = \(title\) => store\.all\('books'\)\.then\(\(books\) => letterMix\(books, \{ title \}\)\)\.catch\(\(\) => null\);/);
 });
 
 await t('a second notice joins the first instead of replacing it', async () => {

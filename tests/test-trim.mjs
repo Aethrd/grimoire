@@ -853,4 +853,99 @@ await t('chapters and pages are picked by holding and dragging across them', () 
   assert.match(drag, /\}, \{ passive: false \}\);/);
 });
 
+/** An illustrated novel: a cover page first, plates on their own, one picture inside a paragraph. */
+async function illustrated(title) {
+  const id = await store.add('books', { title, fingerprint: `illustrated:${++seed}`, addedAt: 1, chapters: 3, lang: 'en', words: 60, coverBlob: new Blob(['shelf']) });
+  const chapters = [
+    '<figure><img data-img="cover.jpg" alt=""/></figure><p>One begins at the mill, with the river high.</p><p><img data-img="plate1.jpg" alt=""/></p><p>The miller had a daughter who kept the books.</p>',
+    '<div class="plate"><img data-img="plate2.jpg" alt=""/><img data-img="plate3.jpg" alt=""/></div><p>Two goes on along the road to the town.</p><p>A sign by the bridge <img data-img="inline.png" alt=""/> said nothing useful.</p>',
+    '<p><img data-img="plate4.jpg" alt=""/></p>',
+  ];
+  let order = 0;
+  for (const [index, html] of chapters.entries()) {
+    await store.put('chapters', { bookId: id, index, title: `Chapter ${index + 1}`, words: 20, html });
+    for (const href of [...html.matchAll(/data-img="([^"]+)"/g)].map((m) => m[1])) {
+      await store.put('images', { bookId: id, href, order: order++, chapterIndex: index, blob: new Blob([href]) });
+    }
+  }
+  return id;
+}
+
+await t('every picture but the cover: picked as pages, the words and the cover kept, and all of it put back', async () => {
+  const id = await illustrated('Plates');
+  const look = await trim.inspect(id);
+  const { picked, inText } = trim.picturesButCover(look.pages, look.book);
+  // The cover page (first, a picture alone) stays; the plates go -- two in one block go together; the one in a sentence stays.
+  const hrefs = picked.map((at) => look.pages[at].picture);
+  assert.deepEqual(hrefs, ['plate1.jpg', 'plate2.jpg', 'plate4.jpg']);
+  assert.equal(inText, 1);
+  assert.ok(!picked.includes(0));
+  // A cover chosen and put in is kept wherever it sits.
+  assert.deepEqual(trim.picturesButCover([{ at: 0, text: 'Words', picture: null }, { at: 1, text: '', picture: 'grimoire-cover/1.jpg' }, { at: 2, text: '', picture: 'x.jpg' }], { coverPage: { href: 'grimoire-cover/1.jpg' } }).picked, [2]);
+  // Nothing at all to take: no pictures, or only the cover.
+  assert.deepEqual(trim.picturesButCover([{ at: 0, text: '', picture: 'c.jpg' }, { at: 1, text: 'Words', picture: null }]).picked, []);
+  assert.deepEqual(trim.picturesButCover([]).picked, []);
+
+  const wordsBefore = (await chaptersOf(id)).map((c) => c.html.replace(/<[^>]+>/g, ' ')).join(' ').replace(/\s+/g, ' ').trim();
+  const out = await trim.removePages(id, picked);
+  assert.equal(out.removed, 3);
+  const after = await chaptersOf(id);
+  const html = after.map((c) => c.html).join('');
+  // Every word still there, the cover and the picture in the sentence too; the emptied last chapter gone.
+  assert.equal(after.map((c) => c.html.replace(/<[^>]+>/g, ' ')).join(' ').replace(/\s+/g, ' ').trim(), wordsBefore);
+  assert.match(html, /data-img="cover\.jpg"/);
+  assert.match(html, /data-img="inline\.png"/);
+  assert.doesNotMatch(html, /plate[1-4]\.jpg/);
+  assert.equal(after.length, 2);
+  // The pictures flagged, not deleted -- the room is given back when the removal is discarded; the shelf's cover untouched.
+  assert.deepEqual((await hrefsOf(id, { removed: true })).sort(), ['plate1.jpg', 'plate2.jpg', 'plate3.jpg', 'plate4.jpg']);
+  const book = await store.get('books', id);
+  assert.ok(book.coverBlob, 'the cover on the shelf went');
+  assert.equal(book.title, 'Plates');
+  assert.equal(book.chapters, 2);
+
+  // Put back: exactly as it was.
+  await trim.putBack(id);
+  const back = await chaptersOf(id);
+  assert.equal(back.length, 3);
+  assert.match(back.map((c) => c.html).join(''), /plate1\.jpg[\s\S]*plate2\.jpg[\s\S]*plate3\.jpg[\s\S]*plate4\.jpg/);
+  assert.deepEqual(await hrefsOf(id, { removed: true }), []);
+});
+
+await t('"All pictures but the cover" beside Pages and Chapters: picks them and asks first -- nothing goes at the tap', async () => {
+  const el = (id) => document.getElementById(id);
+  const tap = (node) => node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const settle = (ms = 140) => new Promise((r) => setTimeout(r, ms));
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  const id = await illustrated('Plates Shown');
+  await settle();
+  screensMod.initFind(() => {}, false);
+  el('find-input').value = 'Plates Shown';
+  el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle(400);
+  const tile = el('find-results').querySelector(`[data-book="${id}"]`);
+  tile.dispatchEvent(new window.Event('touchstart', { bubbles: true }));
+  await settle(620);
+  tap([...el('folder-actions-list').children].find((b) => b.textContent.includes('Take pages out')));
+  await settle(400);
+  const chips = [...el('remove-mode').children].map((c) => c.textContent);
+  assert.deepEqual(chips, ['Pages', 'Chapters', 'All pictures but the cover']);
+  const before = (await chaptersOf(id)).map((c) => c.html).join('');
+  tap(el('remove-pictures'));
+  await settle(300);
+  // Asked, with what is going; the book untouched until it is said yes to.
+  assert.equal(el('remove-confirm').hidden, false);
+  assert.match(el('remove-confirm-what').textContent, /Taking out 3 pages/);
+  assert.equal((await chaptersOf(id)).map((c) => c.html).join(''), before);
+  assert.equal([...el('remove-mode').children].find((c) => c.textContent === 'Pages').getAttribute('aria-pressed'), 'true');
+  tap(el('remove-confirm-go'));
+  await settle(600);
+  const html = (await chaptersOf(id)).map((c) => c.html).join('');
+  assert.doesNotMatch(html, /plate\d\.jpg/);
+  assert.match(html, /cover\.jpg/);
+  // Done, nothing more to take: the chip is gone, and Pages and Chapters still there.
+  assert.deepEqual([...el('remove-mode').children].map((c) => c.textContent), ['Pages', 'Chapters']);
+  el('remove-confirm').hidden = true;
+});
+
 console.log(`\n${pass} assertions passed`);

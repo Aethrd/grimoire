@@ -2,8 +2,10 @@
  *
  * Seen from above at an angle: a thick book open on a desk, a quill writing
  * its right page with letters drifting in to become the ink, gliding from
- * line to line, travelling to the inkwell to dip as the page turns over with
- * its writing on it; on the left a magic circle, dark four times in ten,
+ * line to line (held as a right hand holds it, its plume to the top right),
+ * travelling to the inkwell to dip into the ink and tap twice on the rim, a
+ * loose drop falling back in each time, as the page turns over with its
+ * writing on it; on the left a magic circle, dark four times in ten,
  * otherwise woken one way or another (shine, fluctuate, decay, erode, burn,
  * freeze) for a while. In the theme's gradient, on the app's own dark ground.
  *
@@ -12,10 +14,152 @@
  * With the phone's reduced motion on, nothing travels or turns: the quill
  * rests in the well, lines appear one at a time, and the circle only glows.
  *
- * playScene(canvas, { faint, glyphs }) starts it on a canvas; the returned
- * stop() ends it. Faint: drawn at half the frame rate, for behind the queue.
+ * playScene(canvas, { faint, glyphs, letters }) starts it on a canvas; the
+ * returned stop() ends it. Faint: drawn at half the frame rate, for behind the
+ * queue. Letters: the drifting letters to draw from (letterMix below), or a
+ * promise of them -- until it comes, the mix as it always was.
  */
-export function playScene(canvas, { faint = false, glyphs = '' } = {}) {
+
+/* ── the letters' mix: the library's own writing ─────────────────────────
+ * A library mostly in Hangul drifts mostly Hangul; one with little English
+ * little Latin -- unless French, German or the like are there, which are
+ * Latin letters too (with their accents). Each book counts once, and its
+ * writing is told from its title (with its author and series) and from the
+ * language it says it is in, however it says it: "ko", "kr", "kor",
+ * "Korean", "한국어", "ko-KR"... or not at all. */
+const WRITINGS = {
+  hangul: { test: /[가-힯ᄀ-ᇿ㄰-㆏]/u, sample: '이야기책장글월말빛꿈별길마음' },
+  kana: { test: /[぀-ヿㇰ-ㇿｦ-ﾟ]/u, sample: 'あかさたなはまやらわのをアカサタナ' },
+  han: { test: /[一-鿿㐀-䶿豈-﫿]/u, sample: '文書章話物語字筆墨紙卷' },
+  cyrillic: { test: /[Ѐ-ӿ]/u, sample: 'абвгдежзиклмнопрстуфя' },
+  greek: { test: /[Ͱ-Ͽ]/u, sample: 'αβγδεζηθλμξπσφψω' },
+  arabic: { test: /[؀-ۿ]/u, sample: 'ابتثجحدرسصطعفقكلمنهوي' },
+  hebrew: { test: /[֐-׿]/u, sample: 'אבגדהוזחטיכלמנסעפצקרשת' },
+  thai: { test: /[฀-๿]/u, sample: 'กขคงจฉชซญดตถทนบปผพฟมยรลวสหอฮ' },
+  devanagari: { test: /[ऀ-ॿ]/u, sample: 'अआइउएकखगचजटडतदनपबमयरलवसह' },
+  latin: { test: /[A-Za-z]/, sample: 'Abcdefghijkmnoprstuvwy' },
+  accented: { test: /[À-ɏ]/u, sample: 'éèàçùâêîôûëïüœæßñöäåøíóú' },
+};
+// A language as a book may give it -- code, English name or its own -- to the writing it is in.
+const SPOKEN = [
+  ['hangul', 'ko kr kor korean 한국어 한국말 한글 조선어 조선말'],
+  ['japanese', 'ja jp jpn japanese nihongo 日本語 にほんご'],
+  ['han', 'zh cn chi zho chinese mandarin cantonese tw hk 中文 汉语 漢語 华语 華語 国语 國語 普通话 简体中文 繁體中文 繁体中文'],
+  ['cyrillic', 'ru rus russian русский ukr ukrainian українська bg bul bulgarian български sr srp serbian српски mk mkd macedonian be bel belarusian kk kaz kazakh mn mon mongolian'],
+  ['greek', 'el ell gre gr greek ελληνικά'],
+  ['arabic', 'ar ara arabic العربية fa fas per persian farsi فارسی ur urd urdu'],
+  ['hebrew', 'he heb iw hebrew עברית'],
+  ['thai', 'th tha thai ไทย'],
+  ['devanagari', 'hi hin hindi हिन्दी हिंदी mr marathi ne nepali'],
+  ['latin', 'en eng english us gb'],
+  ['accented', 'fr fre fra french français francais de ger deu german deutsch es spa spanish español espanol castellano it ita italian italiano pt por portuguese português portugues br nl dut nld dutch nederlands id ind indonesian bahasa ms msa malay vi vie vietnamese tr tur turkish türkçe pl pol polish polski sv swe swedish svenska no nor nb nob nn norwegian norsk da dan danish dansk fi fin finnish suomi cs ces cze czech čeština ro ron rum romanian română hu hun hungarian magyar ca cat catalan català tl fil filipino tagalog la lat latin is isl icelandic hr hrv croatian hrvatski sk slk slovak sl slv slovenian et est estonian lv lav latvian lt lit lithuanian'],
+];
+const SPOKEN_AS = new Map(SPOKEN.flatMap(([writing, names]) => names.split(' ').map((name) => [name, writing])));
+SPOKEN_AS.set('tiếng việt', 'accented').set('tieng viet', 'accented');
+// Read as a writing: a Japanese book is kana among kanji; French, Latin letters with an accent here and there.
+const READ_AS = { japanese: { kana: 0.55, han: 0.45 }, accented: { latin: 0.75, accented: 0.25 } };
+const asBuckets = (writing) => READ_AS[writing] || { [writing]: 1 };
+const LATINISH = new Set(['latin', 'accented']);
+const CJK = new Set(['hangul', 'japanese', 'han']);
+// A short code is only taken from a tag when it is one of these: "id", "it", "cat", "fin" are words too.
+const TAG_CODES = new Set(['ko', 'kr', 'ja', 'jp', 'zh', 'cn']);
+
+/** The writing a language is in, from however it is given; null when it cannot be told ("und", "uk" -- Ukrainian or British?). */
+export function spokenWriting(lang, { strict = false } = {}) {
+  const said = String(lang ?? '').normalize('NFC').trim().toLowerCase();
+  if (!said || said === 'und' || said === 'mul' || said === 'zxx') return null;
+  if (SPOKEN_AS.has(said)) {
+    if (strict && /^[a-z]{1,3}$/.test(said) && !TAG_CODES.has(said)) return null;
+    return SPOKEN_AS.get(said);
+  }
+  if (strict) return null;
+  // "ko-KR", "zh_TW", "pt-BR", "Korean (South Korea)", "English; Korean": the first part that says.
+  for (const part of said.split(/[\s\-_/,;:().|]+/)) if (SPOKEN_AS.has(part)) return SPOKEN_AS.get(part);
+  return null;
+}
+
+/** What a book is written in, as shares of the writings ({ hangul: 1 }, { latin: .5, hangul: .5 }), or null when nothing tells. */
+export function writingOfBook(book) {
+  if (!book) return null;
+  const text = [book.title, book.author, book.series].filter((part) => typeof part === 'string').join(' ');
+  const count = (writing) => (text.match(new RegExp(WRITINGS[writing].test.source, 'gu')) || []).length;
+  const latin = count('latin') + count('accented');
+  let seen = null;
+  const kana = count('kana');
+  if (kana && kana >= count('hangul')) seen = 'japanese';
+  else {
+    let most = 0;
+    for (const writing of Object.keys(WRITINGS)) {
+      if (LATINISH.has(writing) || writing === 'kana') continue;
+      const n = count(writing);
+      if (n > most) { most = n; seen = writing; }
+    }
+    // Mostly Latin, a word of something else in it: Latin.
+    if (seen && latin > most * 2) seen = null;
+  }
+  if (!seen && latin) seen = count('accented') ? 'accented' : 'latin';
+  let said = spokenWriting(book.lang);
+  if (!said && Array.isArray(book.tags)) for (const tag of book.tags) { said = spokenWriting(tag, { strict: true }); if (said) break; }
+  if (!said || said === seen) return seen ? asBuckets(seen) : null;
+  if (!seen) return asBuckets(said);
+  // Han characters in a book that says Japanese or Korean: that language. Kana or Hangul seen: what is seen.
+  if (CJK.has(seen) && CJK.has(said)) return asBuckets(seen === 'han' ? said : seen);
+  // Latin both: the accents, if either has them.
+  if (LATINISH.has(seen) && LATINISH.has(said)) return asBuckets('accented');
+  // A Latin title on a book that says Korean (or the like): its words may be either -- half each.
+  if (LATINISH.has(seen)) {
+    const half = {};
+    for (const [bucket, n] of Object.entries(asBuckets(seen))) half[bucket] = (half[bucket] || 0) + n / 2;
+    for (const [bucket, n] of Object.entries(asBuckets(said))) half[bucket] = (half[bucket] || 0) + n / 2;
+    return half;
+  }
+  // Characters that are not Latin, whatever the book says (a scraped EPUB's "en" on a Korean title): the characters.
+  return asBuckets(seen);
+}
+
+// The mix as it always was, and a little of it kept in any library so every writing still turns up now and then.
+const BEFORE = { hangul: 0.3, han: 0.2, kana: 0.13, latin: 0.37 };
+const KEEP_BEFORE = 0.08;
+const SLOTS = 120;
+const FROM_TITLES = 80;
+
+/** The letters to drift, in the library's proportions: an array of characters, the open book's title among them. */
+export function letterMix(books = [], { title = '' } = {}) {
+  const share = {};
+  const seenChars = {};
+  let counted = 0;
+  for (const book of Array.isArray(books) ? books : []) {
+    if (!book || book.binnedAt || book.importing || book.transient) continue;
+    const writing = writingOfBook(book);
+    if (!writing) continue;
+    counted += 1;
+    for (const [bucket, n] of Object.entries(writing)) share[bucket] = (share[bucket] || 0) + n;
+    // Its own characters, to drift as well as the usual few.
+    for (const ch of Array.from(String(book.title || ''))) {
+      for (const bucket of Object.keys(writing)) {
+        if (!WRITINGS[bucket].test.test(ch)) continue;
+        const set = (seenChars[bucket] ||= new Set());
+        if (set.size < FROM_TITLES) set.add(ch);
+      }
+    }
+  }
+  const pool = [];
+  for (const bucket of Object.keys(WRITINGS)) {
+    const part = counted ? (1 - KEEP_BEFORE) * ((share[bucket] || 0) / counted) + KEEP_BEFORE * (BEFORE[bucket] || 0) : (BEFORE[bucket] || 0);
+    const slots = Math.round(part * SLOTS);
+    if (!slots) continue;
+    const chars = [...new Set([...Array.from(WRITINGS[bucket].sample), ...(seenChars[bucket] || [])])];
+    // Spread across all of them, the library's own as well as the usual few.
+    for (let i = 0; i < slots; i += 1) pool.push(chars[Math.floor((i * chars.length) / slots) % chars.length]);
+  }
+  // The open book's title, each of its letters once, as it always was.
+  for (const ch of Array.from(String(title || '').replace(/\s+/g, '')).slice(0, 40)) pool.push(ch);
+  return pool.length ? pool : Array.from(WRITINGS.latin.sample);
+}
+
+export function playScene(canvas, { faint = false, glyphs = '', letters: lettersFrom = null } = {}) {
+  // Caught at once, so letters that fail never go unanswered -- even where nothing is drawn.
+  const lettersReady = Promise.resolve(lettersFrom).catch(() => null);
   const root = document.documentElement;
   const css = (name) => getComputedStyle(root).getPropertyValue(name).trim();
   const reduceQuery = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
@@ -517,6 +661,10 @@ export function playScene(canvas, { faint = false, glyphs = '' } = {}) {
   // In front of the book, to the right: within reach of the page, and on screen on a phone.
   const WELL = { x: PW * 0.74, y: -PH / 2 - 36, r: 16, h: 22, neck: 8, nh: 7 };
   const wellTop = () => WELL.h + WELL.nh;
+  // Where the nib is tapped after dipping: over the opening, by its right-hand rim -- lifted, and touching.
+  const RIM = { x: WELL.x + WELL.neck * 0.8, y: WELL.y + 1, lift: 11, touch: 3 };
+  const INK_Z = WELL.h + WELL.nh - 1.5;
+  const GRAVITY = 160;
   function ellipsePts(cx, cy, z, r, n = 28, from = 0, to = Math.PI * 2) {
     const pts = [];
     for (let i = 0; i <= n; i += 1) { const a = lerp(from, to, i / n); pts.push(P(cx + Math.cos(a) * r, cy + Math.sin(a) * r, z)); }
@@ -564,12 +712,55 @@ export function playScene(canvas, { faint = false, glyphs = '' } = {}) {
     path(ellipsePts(x, y, h + nh, neck, 20, Math.PI, Math.PI * 2), false); ctx.stroke();
   }
 
-  /* ── the quill: drawn at its nib, leaning back over the page ─────────── */
+  /* ── ink: a bead at the nib, drops shaken loose, rings on the ink ─────── */
+  // A drop of ink: near black, caught by the theme's light on its top.
+  function inkDot(at, r, to, alpha = 1) {
+    ctx.fillStyle = `rgba(10,9,13,${(0.95 * alpha).toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(at.x, at.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = rgba(to, 0.4 * alpha); ctx.lineWidth = 0.6 * S;
+    ctx.stroke();
+    ctx.fillStyle = rgba(to, 0.75 * alpha);
+    ctx.beginPath(); ctx.arc(at.x - r * 0.3, at.y - r * 0.35, r * 0.32, 0, Math.PI * 2); ctx.fill();
+  }
+  function drawBead(nib, size, to) {
+    const r = (0.8 + 1.6 * size) * S;
+    inkDot({ x: nib.x, y: nib.y + r * 0.7 }, r, to);
+  }
+  function drawDrops(dt, to) {
+    if (calm) { state.drops.length = 0; state.ripples.length = 0; return; }
+    for (const d of state.drops) {
+      d.vz -= GRAVITY * dt; d.z += d.vz * dt;
+      if (d.z <= INK_Z) { d.done = true; state.ripples.push({ x: d.x, y: d.y, life: 0, size: d.size }); continue; }
+      // Falling: drawn a little drawn-out along its fall.
+      const p = P(d.x, d.y, d.z), r = d.size * S;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.scale(1, 1 + Math.min(0.8, -d.vz / 60)); ctx.translate(-p.x, -p.y);
+      inkDot(p, r, to);
+      ctx.restore();
+    }
+    state.drops = state.drops.filter((d) => !d.done);
+    if (!state.ripples.length) return;
+    // The rings, on the ink only: clipped to the well's opening.
+    ctx.save();
+    path(ellipsePts(WELL.x, WELL.y, INK_Z, WELL.neck - 1.3)); ctx.clip();
+    for (const r of state.ripples) {
+      r.life += dt;
+      const k = clamp(r.life / 0.8);
+      ctx.strokeStyle = rgba(to, 0.5 * (1 - k));
+      ctx.lineWidth = 0.7 * S;
+      path(ellipsePts(r.x, r.y, INK_Z, 0.6 + k * 3.4 * r.size, 20)); ctx.stroke();
+    }
+    ctx.restore();
+    state.ripples = state.ripples.filter((r) => r.life < 0.8);
+  }
+
+  /* ── the quill: drawn at its nib, its plume up to the right ──────────────
+   * Held as a right hand holds it: the nib at the foot on the left, the
+   * feather leaning away to the top right. (Drawn as before, mirrored.) */
   function drawQuill(at, lean, from, to) {
     ctx.save();
     ctx.translate(at.x, at.y);
-    ctx.rotate(-0.95 + lean);
-    ctx.scale(S, S);
+    ctx.rotate(0.95 - lean);
+    ctx.scale(-S, S);
     const g = ctx.createLinearGradient(0, 0, 0, -82);
     g.addColorStop(0, rgba(to, 0.94)); g.addColorStop(1, rgba(from, 0.85));
     ctx.fillStyle = g;
@@ -594,6 +785,11 @@ export function playScene(canvas, { faint = false, glyphs = '' } = {}) {
     nib: { x: WELL.x, y: WELL.y, z: wellTop() + 10 },   // in the desk's terms
     from: null,             // where a move began
     handover: 1,            // calm: the left page's fade
+    tapped: 0,              // the last tap on the rim that shook a drop loose
+    shake: 0,               // the feather's shake after a tap, dying away
+    bead: 0,                // ink gathered at the nib, 0 to 1
+    drops: [],              // loose drops falling back into the well
+    ripples: [],            // and the rings they leave on the ink
   };
   const nibAtWell = (depth) => ({ x: WELL.x, y: WELL.y, z: wellTop() + depth });
   // A move from where the nib is to `to`, over `secs`, lifted `arc` on the way.
@@ -612,9 +808,16 @@ export function playScene(canvas, { faint = false, glyphs = '' } = {}) {
   const lineStart = (row) => world.right(0.13, 0.14 + row * 0.11, 0);
 
   /* ── the letters: drifting, and drawn into the nib as it writes ─────── */
-  // The book's own title among them, as its letters.
-  const POOL = `${String(glyphs || '').replace(/\s+/g, '')}이야기책장文書章話物語あかさたなAbcdefghijkmnoprstuvwy`;
+  // The book's own title among them, as its letters; the rest in the library's own writing, once known.
+  let POOL = letterMix([], { title: glyphs });
+  const startedAt = performance.now();
   const letters = [];
+  lettersReady.then((pool) => {
+    if (stopped || !Array.isArray(pool) || !pool.length) return;
+    POOL = pool;
+    // Known while the scene is still coming in: its letters taken from the new mix at once.
+    if (performance.now() - startedAt < 700) for (const l of letters) if (!l.feed) l.ch = POOL[Math.floor(Math.random() * POOL.length)];
+  });
   function spawn(l, anywhere) {
     l.ch = POOL[Math.floor(Math.random() * POOL.length)];
     l.x = anywhere ? Math.random() * W : (Math.random() < 0.5 ? -10 : W + 10);
@@ -679,18 +882,43 @@ export function playScene(canvas, { faint = false, glyphs = '' } = {}) {
     } else if (state.phase === 'glide') {
       if (stepMove(dt)) state.phase = 'write';
     } else if (state.phase === 'toWell') {
-      if (stepMove(dt)) { state.phase = 'dip'; state.t = 0; }
+      if (stepMove(dt)) { state.phase = 'dip'; state.t = 0; state.tapped = 0; }
     } else if (state.phase === 'dip') {
-      // Down through the neck into the ink, a moment, and up: the page turns meanwhile.
+      /* Down through the neck into the ink and a moment there; up, a bead of
+       * ink gathering at the nib, across to the rim; tapped on it twice, the
+       * feather shaking and a loose drop falling back in each time; then up
+       * over the well again. The page turns meanwhile. */
       const k = state.t;
-      const depth = k < 0.6 ? lerp(14, -7, ease(k / 0.6)) : k < 0.95 ? -7 : lerp(-7, 12, ease(clamp((k - 0.95) / 0.6)));
-      state.nib = nibAtWell(depth);
+      const tap = (at) => { const s = (k - at) / 0.4; return s < 0.32 ? ease(s / 0.32) : 1 - ease((s - 0.32) / 0.68); };
+      if (k < 0.6) state.nib = nibAtWell(lerp(14, -7, ease(k / 0.6)));
+      else if (k < 0.95) state.nib = nibAtWell(-7);
+      else if (k < 1.45) {
+        // Up out of the neck first, then across: never through the glass.
+        const s = (k - 0.95) / 0.5, up = ease(clamp(s / 0.6)), across = ease(clamp((s - 0.3) / 0.7));
+        state.nib = { x: lerp(WELL.x, RIM.x, across), y: lerp(WELL.y, RIM.y, across), z: wellTop() + lerp(-7, RIM.lift, up) };
+      } else if (k < 2.25) {
+        // Two taps, 0.4 s each: down onto the rim quickly, up slower.
+        const down = tap(k < 1.85 ? 1.45 : 1.85);
+        state.nib = { x: RIM.x, y: RIM.y, z: wellTop() + lerp(RIM.lift, RIM.touch, down) };
+        for (const at of [1.45, 1.85]) {
+          if (state.tapped < at && k >= at + 0.128) {
+            state.tapped = at;
+            state.shake = 1;
+            state.drops.push({ x: RIM.x - 1.2, y: RIM.y, z: wellTop() + RIM.touch - 1, vz: 0, size: at === 1.45 ? 2 : 1.5 });
+          }
+        }
+      } else {
+        const e = ease(clamp((k - 2.25) / 0.5));
+        state.nib = { x: lerp(RIM.x, WELL.x, e), y: lerp(RIM.y, WELL.y, e), z: wellTop() + lerp(RIM.lift, 12, e) };
+      }
+      // The bead at the nib: gathering once out of the ink, gone with the taps.
+      state.bead = k < 0.95 ? 0 : k < 1.45 + 0.128 ? clamp((k - 0.95) / 0.4) : k < 1.85 + 0.128 ? 0.45 : 0;
       if (!state.leaf && k > 0.3) {
         state.nextCircle = newCircle();
         state.leaf = { lines: state.right, theta: 0 };
         state.right = [];
       }
-      if (k > 1.55) { state.phase = 'wait'; state.t = 0; }
+      if (k > 2.75) { state.phase = 'wait'; state.t = 0; state.tapped = 0; state.bead = 0; }
     } else if (state.phase === 'wait') {
       state.nib = nibAtWell(12 + Math.sin(state.t * 2) * 1.5);
       if (!state.leaf) { state.phase = 'return'; state.t = 0; state.from = null; }
@@ -802,9 +1030,14 @@ export function playScene(canvas, { faint = false, glyphs = '' } = {}) {
         ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
       }
     }
+    drawDrops(dt, to);
     for (const l of letters) if (l.feed) drawLetter(l);
-    const lean = state.phase === 'write' ? Math.sin(now / 150) * 0.05 : 0.18;
+    // After a tap on the rim the feather shakes, quick and dying away.
+    state.shake = Math.max(0, state.shake - dt * 2.4);
+    const shake = state.shake * state.shake * Math.sin(now / 26) * 0.1;
+    const lean = (state.phase === 'write' ? Math.sin(now / 150) * 0.05 : 0.18) + shake;
     drawQuill(nibScreen, lean, from, to);
+    if (state.bead > 0.02 && !calm) drawBead(nibScreen, state.bead, to);
     if (inNeck) drawWellFront(to);
   }
 

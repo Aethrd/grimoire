@@ -7,7 +7,7 @@ import * as library from './library.js';
 import * as screens from './screens.js';
 import * as panels from './panels.js';
 import * as fonts from './fonts.js';
-import { playScene } from './opening.js';
+import { playScene, letterMix } from './opening.js';
 import * as syosetu from './syosetu.js';
 import * as check from './check.js';
 import { nameWithFormat, chapterHtml, plainTextOf } from './parse.js';
@@ -526,6 +526,11 @@ function settleGreyMix(book) {
 let opening = null;
 const bookReady = () => opening || Promise.resolve();
 
+/* The scene's drifting letters in the library's own writing (opening.js
+ * letterMix): read from the books held in memory, never waited for -- until
+ * it comes, and if it fails, the mix as it always was. */
+const libraryLetters = (title) => store.all('books').then((books) => letterMix(books, { title })).catch(() => null);
+
 /* The opening scene (opening.js), over the page while a book opens -- only
  * if it takes longer than SOON_MS: a short book opens straight to its page,
  * with no loader flashed at it. Shown, it fades in, stays at least STAY_MS,
@@ -546,7 +551,7 @@ const openingScreen = (() => {
     el('opening-meta').textContent = chapters ? `Opening · ${chapters.toLocaleString()} chapter${chapters === 1 ? '' : 's'}` : 'Opening';
     node.classList.remove('leaving');
     node.hidden = false;
-    if (!scene) scene = playScene(el('opening-scene'), { glyphs: library.displayTitle(book) });
+    if (!scene) scene = playScene(el('opening-scene'), { glyphs: library.displayTitle(book), letters: libraryLetters(library.displayTitle(book)) });
     requestAnimationFrame(() => node.classList.add('shown'));
     shownAt = Date.now();
   }
@@ -3629,7 +3634,7 @@ export const progress = (() => {
     const showing = !!host && !host.hidden && host.classList.contains('open') && sceneOpacity > 0;
     const faint = sceneOpacity < 40;
     if (scene && (!showing || faint !== sceneFaint)) { scene.stop(); scene = null; }
-    if (showing && !scene) { sceneFaint = faint; scene = playScene(el('jobs-scene'), { faint }); }
+    if (showing && !scene) { sceneFaint = faint; scene = playScene(el('jobs-scene'), { faint, letters: libraryLetters('') }); }
   }
   function showSceneOpacity(n) {
     sceneOpacity = Math.max(0, Math.min(100, Math.round(n)));
@@ -5596,14 +5601,17 @@ async function openRemove(book, mode, { from = null, focus = null, pick = null }
   }
 }
 
-/** Which of the two things can be taken out, offered only where both can. */
+/** Which of the two things can be taken out, offered only where both can --
+ *  and, beside them, every picture but the cover, where there are any. */
 function renderRemoveModes() {
   const row = el('remove-mode');
   row.innerHTML = '';
-  if (!removing.canChapters || !removing.canPages) { row.hidden = true; return; }
+  const both = removing.canChapters && removing.canPages;
+  const pictures = removing.canPages ? trim.picturesButCover(removing.pages, removing.book) : { picked: [], inText: 0 };
+  if (!both && !pictures.picked.length) { row.hidden = true; return; }
   row.hidden = false;
 
-  for (const [mode, text] of [['pages', 'Pages'], ['chapters', 'Chapters']]) {
+  for (const [mode, text] of both ? [['pages', 'Pages'], ['chapters', 'Chapters']] : []) {
     const chip = document.createElement('button');
     chip.className = 'chip';
     chip.textContent = text;
@@ -5615,6 +5623,27 @@ function renderRemoveModes() {
       removePicked = new Set();
       removeShown = null;
       renderRemove();
+    };
+    row.appendChild(chip);
+  }
+
+  /* Every picture but the cover: picked as pages, then asked about exactly
+   * as any other picking is -- the same preview, the same Take out, the same
+   * put back. Nothing goes at this tap. */
+  if (pictures.picked.length) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.id = 'remove-pictures';
+    chip.textContent = 'All pictures but the cover';
+    chip.onclick = () => {
+      removeMode = 'pages';
+      removePicked = new Set(pictures.picked);
+      removeShown = null;
+      renderRemove();
+      if (pictures.inText) {
+        toast(`${pictures.inText} picture${pictures.inText === 1 ? ' sits' : 's sit'} in among words and stay${pictures.inText === 1 ? 's' : ''} — taking ${pictures.inText === 1 ? 'its page' : 'their pages'} would take the words`, 6000);
+      }
+      askAboutRemoval();
     };
     row.appendChild(chip);
   }
