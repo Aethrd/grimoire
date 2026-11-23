@@ -359,14 +359,19 @@ export async function holdQuietBooks({ now = Date.now() } = {}) {
   const settings = await store.settings();
   const days = settings.autoHoldDays ?? 5;
   const quiet = goneQuiet(await store.all('books'), { days, now, since: settings.restoredAt || 0 });
+  let held = 0;
   for (const book of quiet) {
-    book.status = 'onHold';
-    // Said, so the shelf can tell put-aside from put-on-hold-by-hand.
-    book.heldAt = now;
-    book.heldAutomatically = true;
-    await store.put('books', book);
+    /* On hold set on the book as it is now, in one transaction -- and only
+     * if it is still as it was found: not read since, not landing. Written
+     * whole from the list read first, a page read meanwhile was put back. */
+    const done = await store.update('books', book.id, (fresh) => (
+      statusOf(fresh) === 'reading' && touchedAt(fresh) === touchedAt(book) && !fresh.importing && !fresh.transient
+        // Said, so the shelf can tell put-aside from put-on-hold-by-hand.
+        ? { ...fresh, status: 'onHold', heldAt: now, heldAutomatically: true }
+        : null));
+    if (done) held += 1;
   }
-  return quiet.length;
+  return held;
 }
 
 /** Whether the state was set by hand rather than inferred -- which it stays
@@ -1574,9 +1579,31 @@ export function setVaultUnlocked(value) { vaultUnlocked = value; }
  */
 export async function sweepUnfinishedImports() {
   const stale = (await store.all('books')).filter((b) => b.importing || b.transient);
-  for (const book of stale) await store.deleteBook(book.id).catch(() => {});
-  return stale.length;
+  let gone = 0;
+  for (const book of stale) {
+    /* Still marked as landing, yet plainly landed -- or read: not half
+     * written, but a finished book a stale copy put the mark back on (read,
+     * then written whole over the book as it finished). Kept, and the mark
+     * taken off; never deleted for it. A half-written one has none of this:
+     * no count of its chapters (an import's or a download's, written as it
+     * finishes; a build's or a join's), never opened, never read. */
+    if (!book.transient && landed(book)) {
+      await store.update('books', book.id, (fresh) => {
+        if (!fresh.importing || fresh.transient) return null;
+        delete fresh.importing;
+        return fresh;
+      });
+      continue;
+    }
+    await store.deleteBook(book.id).catch(() => {});
+    gone += 1;
+  }
+  return gone;
 }
+
+/** A book with what only a finished, or read, book has: never cleared as half written. */
+export const landed = (book) => book.chapterCount != null || (book.chapters ?? 0) > 0
+  || !!book.lastReadAt || !!book.lastOpenedAt || (book.percent ?? 0) > 0 || !!book.finishedAt;
 
 export async function initVaultGate() {
   const settings = await store.settings();

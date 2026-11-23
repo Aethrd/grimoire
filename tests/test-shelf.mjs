@@ -270,7 +270,7 @@ t('the continue card follows the last book opened', () => {
   assert.match(library, /openedAt\(b\) && !\['finished', 'dropped', 'onHold'\]\.includes\(statusOf\(b\)\)/);
   // And opening a book records that it was opened -- on the book as stored,
   // not on the copy the shelf handed over, which may be older.
-  assert.match(app, /current\.lastOpenedAt = Date\.now\(\)/);
+  assert.match(app, /await store\.update\('books', book\.id, \(current\) => \(\{ \.\.\.current, lastOpenedAt: Date\.now\(\) \}\)\);/);
 });
 
 t('translated titles reach the tile and the continue card', () => {

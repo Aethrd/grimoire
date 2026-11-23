@@ -798,17 +798,20 @@ export async function flushPosition() {
 }
 
 async function positionOnBook(row) {
-  const book = await get('books', row.bookId);
-  if (book) {
-    /* Opened, not read. Saving a position happens the moment a book is
-       displayed, so setting lastReadAt here marked everything you glanced at
-       as Reading. Progress is recorded by markRead, which the reader calls
-       only when a page has actually been turned. */
+  /* Opened, not read. Saving a position happens the moment a book is
+     displayed, so setting lastReadAt here marked everything you glanced at
+     as Reading. Progress is recorded by markRead, which the reader calls
+     only when a page has actually been turned.
+     Read and written in one transaction, these fields alone changed: read,
+     then written apart, a page turned as a download or an import finished
+     put the book back as it was -- still importing, so cleared as half
+     written on the next start. */
+  await update('books', row.bookId, (book) => {
     book.lastOpenedAt = Date.now();
     book.percent = row.percent;
     if (row.percent >= 0.999) book.finishedAt = book.finishedAt || Date.now();
-    await put('books', book);
-  }
+    return book;
+  });
 }
 
 /* ── reading events ────────────────────────────────────────────────────
@@ -827,21 +830,23 @@ export function markRead(bookId) {
 }
 
 async function noteRead(bookId) {
-  const book = await get('books', bookId);
+  /* In one transaction, only what reading changes (see positionOnBook). */
+  const book = await update('books', bookId, (fresh) => {
+    fresh.lastReadAt = Date.now();
+    fresh.lastOpenedAt = fresh.lastReadAt;
+    /* A status set by hand is set once, not pinned for good.
+     *
+     * Marking a book "On hold" says where it stands now. Picking it up again
+     * says otherwise, and having to go back and set it to Automatic before the
+     * shelf would believe it was being read was a chore nobody remembered. So
+     * the status stands until the book is next read, and the reading takes
+     * over from there. */
+    delete fresh.status;
+    delete fresh.heldAt;
+    delete fresh.heldAutomatically;
+    return fresh;
+  });
   if (!book) return;
-  book.lastReadAt = Date.now();
-  book.lastOpenedAt = book.lastReadAt;
-  /* A status set by hand is set once, not pinned for good.
-   *
-   * Marking a book "On hold" says where it stands now. Picking it up again
-   * says otherwise, and having to go back and set it to Automatic before the
-   * shelf would believe it was being read was a chore nobody remembered. So
-   * the status stands until the book is next read, and the reading takes
-   * over from there. */
-  delete book.status;
-  delete book.heldAt;
-  delete book.heldAutomatically;
-  await put('books', book);
   /* Its other editions too: a bundle is one book, so a status set on it --
    * by hand on the bundle, or On hold when it was left -- is over for all of
    * them once any is read, not left on the editions not opened. */
@@ -849,10 +854,12 @@ async function noteRead(bookId) {
     for (const other of await all('books')) {
       if (other.id === book.id || other.bundleId !== book.bundleId) continue;
       if (other.status === undefined && !other.heldAt) continue;
-      delete other.status;
-      delete other.heldAt;
-      delete other.heldAutomatically;
-      await put('books', other);
+      await update('books', other.id, (fresh) => {
+        delete fresh.status;
+        delete fresh.heldAt;
+        delete fresh.heldAutomatically;
+        return fresh;
+      });
     }
   }
 }

@@ -125,6 +125,20 @@ public class GrimoireBridge {
     }
 
     /**
+     * Bytes free on the storage the app keeps its library in (its own
+     * files, beside the WebView's), as a string; "" if it cannot be told.
+     * An export stops before the phone runs short (app.js freeSpace).
+     */
+    @JavascriptInterface
+    public String freeSpace() {
+        try {
+            return Long.toString(activity.getFilesDir().getUsableSpace());
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
+    /**
      * How much the library's own files hold on the phone, in bytes: the web
      * storage's folder, read from outside it. A library that opens empty with
      * gigabytes still here has not been lost; it has not opened. -1 if the

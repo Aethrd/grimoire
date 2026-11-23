@@ -926,7 +926,8 @@ await t('Save in the details puts the cover into the book, and opening a book do
   // ...and the book is never overwritten by an older copy of itself: the
   // shelf's tile record, written back on opening, brought the old cover back.
   const open = app.slice(app.indexOf('async function openBook'), app.indexOf('/* ── selection'));
-  assert.match(open, /const current = \(await store\.get\('books', book\.id\)\) \|\| book;/);
+  // On the book as stored, in one transaction -- and a book gone not written back from the tapped copy.
+  assert.match(open, /await store\.update\('books', book\.id, \(current\) => \(\{ \.\.\.current, lastOpenedAt: Date\.now\(\) \}\)\);/);
   assert.ok(!/await store\.put\('books', book\);/.test(open), 'opening writes the tapped copy back');
   assert.match(app, /async function openDetails\(tapped, \{ editions = \[\] \} = \{\}\) \{[\s\S]{0,300}await store\.get\('books', tapped\.id\)/);
 });
@@ -1465,6 +1466,96 @@ await t('editions on the shelf: a set held and a book tapped, then Editions: the
   for (const id of [lead, raw, stale, otherLead, otherRaw]) await store.deleteBook(id);
 });
 
+await t('on starting: a half-written book is cleared, but a finished or read one marked as landing is kept, the mark taken off', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  // Half written, as each kind is begun: an import, a download, a join -- nothing finished, never opened.
+  const half = [
+    await aBook({ title: 'Half Import', importing: true, percent: 0, lastReadAt: null, chapterCount: undefined }),
+    await aBook({ title: 'Half Download', importing: true, format: 'WEB', words: 0, chapterCount: undefined }),
+    await aBook({ title: 'Half Join', importing: true, words: 0, chapterCount: undefined }),
+  ];
+  for (const id of half) await store.put('chapters', { bookId: id, index: 0, title: 'Came', html: '<p>so far</p>' });
+  // Passing through, opened from a file: cleared, read or not, as ever.
+  const passing = await aBook({ title: 'Passing Through', transient: true, lastOpenedAt: 5, chapterCount: 3 });
+  // Finished, or read, with the mark put back by a stale copy: kept.
+  const kept = [
+    await aBook({ title: 'Imported, Marked', importing: true, chapterCount: 12 }),
+    await aBook({ title: 'Built, Marked', importing: true, chapters: 30 }),
+    await aBook({ title: 'Read, Marked', importing: true, lastReadAt: 9, percent: 0.4 }),
+    await aBook({ title: 'Opened, Marked', importing: true, lastOpenedAt: 9 }),
+  ];
+  for (const id of kept) await store.put('chapters', { bookId: id, index: 0, title: 'One', html: '<p>whole</p>' });
+  const plain = await aBook({ title: 'Plain Book', chapterCount: 2, lastReadAt: 3 });
+  const gone = await library.sweepUnfinishedImports();
+  assert.equal(gone, 4);
+  for (const id of [...half, passing]) {
+    assert.equal(await store.get('books', id), undefined, 'a half-written book left');
+    assert.equal((await store.byIndex('chapters', 'bookId', id)).length, 0);
+  }
+  for (const id of kept) {
+    const book = await store.get('books', id);
+    assert.ok(book, 'a finished or read book cleared as half written');
+    assert.equal(book.importing, undefined, 'its mark left on');
+    assert.equal((await store.byIndex('chapters', 'bookId', id)).length, 1, 'its chapters lost');
+  }
+  assert.ok(await store.get('books', plain));
+  // Run again: nothing more.
+  assert.equal(await library.sweepUnfinishedImports(), 0);
+  for (const id of [...kept, plain]) await store.deleteBook(id);
+});
+
+await t('a page turned, a page read, a book opened as it finishes landing: the finishing is never undone', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  // The reading's write begun first, the finishing a moment after -- landing
+  // between the reading's look at the book and its write, when they were two.
+  const tick = () => Promise.resolve();
+  for (let round = 0; round < 6; round += 1) {
+    const id = await aBook({ title: `Landing ${round}`, importing: true, chapterCount: undefined });
+    const kind = round % 3;
+    const reading = kind === 2 ? store.markRead(id)
+      : (store.queuePosition({ bookId: id, chapterIndex: 0, offset: 0, percent: 0.25, at: Date.now() }), store.flushPosition());
+    const also = kind === 1 ? store.markRead(id) : null;
+    for (let i = 0; i < round - (round > 2 ? 3 : 0); i += 1) await tick();
+    const finishing = store.update('books', id, (b) => { delete b.importing; return { ...b, chapterCount: 9, words: 900 }; });
+    await Promise.all([finishing, reading, also]);
+    const kind0 = kind;
+    const book = await store.get('books', id);
+    assert.equal(book.importing, undefined, 'put back to still importing');
+    assert.equal(book.chapterCount, 9);
+    if (kind0 !== 2) assert.equal(book.percent, 0.25);
+    if (kind0 !== 0) assert.ok(book.lastReadAt);
+    await store.deleteBook(id);
+  }
+  // Read and written in one transaction each, these fields alone.
+  const src = read('app/src/main/assets/www/js/store.js');
+  assert.match(src, /async function positionOnBook\(row\) \{[\s\S]{0,700}await update\('books', row\.bookId, \(book\) => \{/);
+  assert.match(src, /async function noteRead\(bookId\) \{[\s\S]{0,200}const book = await update\('books', bookId, \(fresh\) => \{/);
+  const lib = read('app/src/main/assets/www/js/library.js');
+  assert.match(lib, /const done = await store\.update\('books', book\.id, \(fresh\) => \(\s*statusOf\(fresh\) === 'reading' && touchedAt\(fresh\) === touchedAt\(book\) && !fresh\.importing && !fresh\.transient/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /const written = await store\.update\('books', job\.bookId, \(book\) => \(\{ \.\.\.book, \.\.\.pending\.changes \}\)\);/);
+  assert.match(app, /const written = await store\.update\('books', job\.bookId, \(fresh\) => \(jobOwns\(job, fresh\)/);
+  void library;
+});
+
+await t('put on hold when left: as the book is then, never over a page read meanwhile', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  await store.saveSettings({ autoHoldDays: 5, restoredAt: 0 });
+  const now = Date.now();
+  const day = 24 * 3600e3;
+  const recent = await aBook({ title: 'Read Lately', lastReadAt: now - day, percent: 0.3, chapterCount: 5 });
+  const quiet = await aBook({ title: 'Left a While', lastReadAt: now - 20 * day, percent: 0.5, chapterCount: 5 });
+  const held = await library.holdQuietBooks({ now });
+  assert.ok(held >= 1);
+  const book = await store.get('books', quiet);
+  assert.equal(book.status, 'onHold');
+  assert.equal(book.heldAutomatically, true);
+  assert.equal(book.percent, 0.5);
+  assert.equal((await store.get('books', recent)).status, undefined);
+  await store.deleteBook(recent);
+  await store.deleteBook(quiet);
+});
+
 await t('a book imported from an export is matched by what it came from, recorded in the backup', async () => {
   const src = read('app/src/main/assets/www/js/store.js');
   assert.match(src, /if \(book\.sourceId\) kept\.sourceId = book\.sourceId;/);
@@ -1539,6 +1630,8 @@ await t('many books written out in zips under a size: whole books, folder order,
     let together = null;
     const exportSink = (name) => {
       const sink = { name, bytes: 0, entries: [], async write(b) { sink.bytes += b.length; }, async done() { together = [sink]; }, discard() { sink.discarded = true; },
+        // Room taken while it is written, given back when let go (the phone's free space, below).
+        get taken() { return this.discarded ? 0 : this.bytes; },
         async close() { events.push(`close ${name}`); return name; } };
       sinks.push(sink);
       events.push(`open ${name}`);
@@ -1559,7 +1652,7 @@ await t('many books written out in zips under a size: whole books, folder order,
     const progress = {
       start: () => Object.assign(() => {}, { say() {}, fail() {}, activity(now) { if (now) waits.push(now.why); }, controls({ cancel }) { stop = cancel; } }) };
     const exportMany = new Function('ref', 'window', 'store', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook', 'shrink',
-      `${label}\n${heatSrc}\n${folderSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('working')}\n${fn('exportMany')}\nref.exportFolder = exportFolder;\nref.runLeft = runLeft;\nreturn exportMany;`)(ref, fakeWindow, fakeStore,
+      `${label}\n${heatSrc}\n${folderSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('working')}\n${app.match(/const EXPORT_KEEP_FREE = .*;/)[0]}\n${fn('freeSpace')}\n${fn('exportMany')}\nref.exportFolder = exportFolder;\nref.runLeft = runLeft;\nreturn exportMany;`)(ref, fakeWindow, fakeStore,
       { displayTitle: (b) => b.title }, epub, progress, exportSink, zipWriter,
       async (staged) => { together = staged; }, (text) => toasts.push(text), () => 'Library', () => {}, async () => {}, false, shrink);
     await exportMany(books, limitMB, options);
@@ -1700,6 +1793,39 @@ await t('many books written out in zips under a size: whole books, folder order,
   delete fakeWindow.GrimoireNative.exportSetFolderName;
   delete fakeWindow.GrimoireNative.chooseExportSetFolder;
   delete fakeWindow.GrimoireNative.saveExportPart;
+  /* Room on the phone: an export stops before it runs short -- what is saved
+   * kept to carry on, what waits in the app's storage let go -- and never
+   * starts with too little. The phone's free space told by Android. */
+  const GB = 1073741824;
+  let free = 50 * GB;
+  fakeWindow.GrimoireNative.freeSpace = () => String(free);
+  // Into a folder, zips under 100 MB: the first zip saved, then the phone short of room.
+  const roomFor = 2 * GB + 100 * MB;
+  fakeWindow.GrimoireNative.chooseExportSetFolder = () => setTimeout(() => ref.exportFolder.chosen('Roomy'), 0);
+  fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => setTimeout(() => { free = roomFor - 1; ref.exportFolder.saved(reply, true, ''); }, 0);
+  const short = await run(books, 100, { kind: 'everything' });
+  assert.match(short.toasts.at(-1), /^Stopped to keep room on your phone: 2\.1 GB free, and an export keeps 2\.1 GB free while it writes — the 1 zip before is in “Roomy”\./);
+  assert.match(short.toasts.at(-1), /Your library is untouched\. Free some space, then export again to carry on from there\.$/);
+  // What was saved stays written down to carry on; the zip under way let go.
+  assert.ok(saved.exportRun, 'nothing kept to carry on');
+  assert.equal(saved.exportRun.zips, 1);
+  assert.deepEqual(saved.exportRun.done, short.sinks[0].entries.map((name) => +name.match(/\d+/)[0]));
+  assert.equal(saved.exportRun.trying, null, 'a book blamed for a full phone');
+  assert.ok(short.sinks.at(-1).discarded, 'the zip under way kept, taking room');
+  // Never begun with too little.
+  free = GB;
+  const roomless = await run(books.slice(0, 3), 0);
+  assert.match(roomless.toasts.at(-1), /^Stopped to keep room on your phone: 1\.0 GB free, and an export keeps 3\.0 GB free/);
+  assert.ok(roomless.sinks.every((sink) => sink.discarded), 'a zip left in the app’s storage');
+  assert.ok(!/to carry on from there/.test(roomless.toasts.at(-1)));
+  // Android not saying (an older app): not stopped for it.
+  fakeWindow.GrimoireNative.freeSpace = () => '';
+  const unsaid = await run(books.slice(0, 3), 0);
+  assert.ok(!/Stopped to keep room/.test(unsaid.toasts.at(-1)));
+  delete fakeWindow.GrimoireNative.freeSpace;
+  delete fakeWindow.GrimoireNative.chooseExportSetFolder;
+  delete fakeWindow.GrimoireNative.saveExportPart;
+  saved.exportRun = null;
   // No limit: one zip, saved as ever -- at full size unless asked, nothing said of pictures.
   pictureSizes.length = 0;
   const one = await run(books, 0);

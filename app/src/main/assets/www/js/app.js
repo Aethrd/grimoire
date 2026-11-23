@@ -607,9 +607,8 @@ async function readIn(book, opts) {
      * can be older than the book: writing that back undid whatever had been
      * saved since -- a cover just replaced came back as the old one, and the
      * new one's place in the book was forgotten, so it could not be removed. */
-    const current = (await store.get('books', book.id)) || book;
-    current.lastOpenedAt = Date.now();
-    await store.put('books', current);
+    // In one transaction, that field alone; a book no longer there not written back.
+    await store.update('books', book.id, (current) => ({ ...current, lastOpenedAt: Date.now() }));
     await reader.open(book.id, opts);
     paintReader();
     if ((await store.settings()).keepScreenOn) window.GrimoireNative?.keepScreenOn?.(true);
@@ -2592,6 +2591,18 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null, siz
   if (run?.size) size = run.size;
   const smaller = size && size !== 'full' && shrink.SIZES[size] ? size : null;
   let savedBytes = 0;
+  /* The room an export leaves free: enough that the phone is never filled --
+   * the zip under way (built in the app's storage, then copied into the
+   * folder) on top of a floor kept for everything else. */
+  const roomNeeded = EXPORT_KEEP_FREE + (limitMB > 0 ? limitMB * 1048576 : 1073741824);
+  const gb = (bytes) => `${(bytes / 1073741824).toFixed(1)} GB`;
+  const outOfRoom = (free) => {
+    const error = new Error(`Stopped to keep room on your phone: ${gb(free)} free, and an export keeps ${gb(roomNeeded)} free while it writes`
+      + `${savedZips ? ` — the ${savedZips} zip${savedZips === 1 ? '' : 's'} before ${savedZips === 1 ? 'is' : 'are'} in “${folder}”` : ''}.`
+      + ` Your library is untouched. Free some space, then export again${early ? ' to carry on from there' : ''}.`);
+    error.room = true;
+    return error;
+  };
   // Carried on: in the order it began with (runLeft), not sorted afresh.
   let ordered = run ? [...books] : exportOrder(books);
   /* Carried on after the app was closed part-way through a book (run.trying):
@@ -2682,6 +2693,12 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null, siz
       if (stopped) break;
       if (at) await letCool(finish, { stopped: () => stopped });
       if (stopped) break;
+      /* Room kept on the phone. Run out, and more than the export fails:
+       * the library is kept in the same storage, and a phone with no room
+       * left is where the system starts clearing what it may. So it stops
+       * first -- with what is saved kept, to carry on once there is room. */
+      const free = freeSpace();
+      if (free != null && free < roomNeeded) throw outOfRoom(free);
       const zipNo = () => (limit ? ` · zip ${open ? zips : zips + 1}` : '');
       finish.say(`Writing ${library.displayTitle(book)}${zipNo()}`, null, `${at + 1} of ${books.length}`);
       working(`writing out “${library.displayTitle(book)}” (book ${at + 1} of ${books.length}${book.pictureBook ? ', pictures' : ''})`);
@@ -2757,6 +2774,10 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null, siz
   } catch (error) {
     finish.fail();
     open?.sink.discard();
+    /* Stopped for room: the zips still waiting in the app's own storage
+     * (no folder chosen yet) let go too -- they are the room. Only then:
+     * after another failure they may already be handed over to be saved. */
+    if (error.room) for (const sink of staged) sink.discard();
     // Failed, not closed: no book to blame.
     if (early && run) { run = { ...run, trying: null }; await store.saveSettings({ exportRun: run }).catch(() => {}); }
     toast(error.message || 'Those books could not be written out', 8000, { kind: 'failed' });
@@ -2765,6 +2786,21 @@ async function exportMany(books, limitMB = 0, { kind = 'chosen', run = null, siz
     if (early && !savedZips && run && !run.done.length) await endExportRun();
     working(null);
     finish();
+  }
+}
+
+/* Kept free on the phone while exporting, beside the zip being written. */
+const EXPORT_KEEP_FREE = 2 * 1073741824;
+
+/** What is free where the app keeps its library, from Android; null where it cannot say. */
+function freeSpace() {
+  try {
+    const said = window.GrimoireNative?.freeSpace?.();
+    if (said == null || said === '') return null;
+    const bytes = Number(said);
+    return Number.isFinite(bytes) && bytes >= 0 ? bytes : null;
+  } catch {
+    return null;
   }
 }
 
@@ -8096,9 +8132,9 @@ function onJobBook(job, changes) {
   pending.timer = setTimeout(async () => {
     jobBookChanges.delete(job.bookId);
     try {
-      const book = await store.get('books', job.bookId);
-      if (!book) return;
-      await store.put('books', { ...book, ...pending.changes });
+      // On the book as it is then, in one transaction: a download's own writes to it kept.
+      const written = await store.update('books', job.bookId, (book) => ({ ...book, ...pending.changes }));
+      if (!written) return;
       shelfChanged();
     } catch (error) {
       console.warn('queued book', error);
@@ -9689,8 +9725,10 @@ async function coverOnJobBook(job) {
   if (!book) return false;
   const blob = await fetch(job.coverData).then((response) => response.blob());
   if (book.coverCustom && book.coverBytes === blob.size) return false;
-  await store.put('books', { ...book, coverBlob: blob, coverBytes: blob.size, coverCustom: true });
-  return true;
+  // On the book as it is by then (the picture took a moment to read), in one transaction.
+  const written = await store.update('books', job.bookId, (fresh) => (jobOwns(job, fresh)
+    ? { ...fresh, coverBlob: blob, coverBytes: blob.size, coverCustom: true } : null));
+  return !!written;
 }
 
 async function coversOnQueuedBooks() {
