@@ -1656,19 +1656,23 @@ export async function openStats({ onOpen = null } = {}) {
       Two missed days a month are forgiven rather than resetting to zero.</p>`;
   body.appendChild(card);
 
-  /* Words, not pages.
+  /* Words, not pages -- and time, for the pictures.
    *
    * A page is a function of type size and screen; the same chapter is thirty
    * pages at one setting and twelve at another, and a chapter copied out to
    * be read elsewhere is no pages at all. Words are what was actually read,
-   * whichever way it happened.
+   * whichever way it happened. A comic has next to no words, so the time spent
+   * on it in the app counts as well: whichever of the two says more.
    *
-   * The levels are quintiles of this reader's own distribution rather than
-   * fixed counts, so the grid stays legible for light and heavy readers
-   * alike. */
-  const counts = [...byDay.values()].map((d) => d.words).filter((n) => n > 0).sort((a, b) => a - b);
-  const quintile = (q) => counts.length ? counts[Math.min(counts.length - 1, Math.floor(counts.length * q))] : 1;
-  const cuts = [quintile(0.2), quintile(0.4), quintile(0.6), quintile(0.8)];
+   * Against a real day's reading, not ranked against the other days: the
+   * gradient's far end is four hours or more, or the words an average reader
+   * gets through in four hours -- 260 a minute, the figure for fiction in
+   * Brysbaert's 2019 review of reading-speed studies (238 for non-fiction),
+   * so 62,400 -- and every day below it in proportion, down to none. Ranked,
+   * the heaviest day took the far end however little it was. */
+  const FULL_DAY_MS = 4 * 60 * 60000;
+  const FULL_DAY_WORDS = 260 * 4 * 60;
+  const fillOf = (day) => Math.min(1, Math.max((day?.words || 0) / FULL_DAY_WORDS, (day?.ms || 0) / FULL_DAY_MS));
 
   /* Averages that hold up when most of the reading happens somewhere else.
    *
@@ -1720,8 +1724,9 @@ export async function openStats({ onOpen = null } = {}) {
   const heatWrap = document.createElement('section');
   heatWrap.className = 'block heat-block';
   heatWrap.innerHTML = '<h2>26 weeks</h2>'
-    + '<p class="muted" style="font-size:11px;margin:0 0 8px">By words read, '
-    + 'including chapters copied out to read elsewhere. Oldest on the left, this week on the right; '
+    + '<p class="muted" style="font-size:11px;margin:0 0 8px">How much was read each day: the far end of the gradient is '
+    + 'four hours or more — or the words an average reader reads in four hours, about 62,000 — and the rest in proportion. '
+    + 'Words include chapters copied out to read elsewhere; time is time in the app. Oldest on the left, this week on the right; '
     + 'each column a week, Monday at the top. Tap a day for its pages and time.</p>';
 
   /* A calendar: whole weeks, Monday first, this week last -- so a row is a
@@ -1735,15 +1740,6 @@ export async function openStats({ onOpen = null } = {}) {
   first.setDate(today.getDate() - weekday - 25 * 7);  // the Monday 25 weeks before this one
   const days = [];
   for (const d = new Date(first); d <= today; d.setDate(d.getDate() + 1)) days.push(new Date(d));
-
-  /* Coloured by rank among the days read in these weeks, not by words over a
-   * ceiling: words cluster low with a few heavy days far above, so nearly
-   * every day sat at one end of the gradient and its other colours never
-   * came. Ranked, the heaviest day takes the gradient's start (its left), the
-   * lightest its end, and the rest spread between -- every colour in use. */
-  const shown = days.map((d) => byDay.get(store.dayKey(d.getTime()))?.words || 0);
-  const read = [...new Set(shown.filter((n) => n > 0))].sort((x, y) => x - y);
-  const rankOf = (words) => (read.length < 2 ? 1 : read.indexOf(words) / (read.length - 1));
 
   const scroller = document.createElement('div');
   scroller.className = 'heat-scroll';
@@ -1762,16 +1758,15 @@ export async function openStats({ onOpen = null } = {}) {
   days.forEach((d, i) => {
     const key = store.dayKey(d.getTime());
     const day = byDay.get(key);
-    const words = day?.words || 0;
-    const level = words === 0 ? 0
-      : words <= cuts[0] ? 1 : words <= cuts[1] ? 2 : words <= cuts[2] ? 3 : 4;
+    const fill = fillOf(day);
+    // A quarter of the way to a full day a level: 1 to 4, 0 for none read.
+    const level = fill > 0 ? Math.max(1, Math.ceil(fill * 4)) : 0;
     const cell = document.createElement('i');
     cell.dataset.l = String(level);
     cell.dataset.day = key;
     if (level) {
-      const fill = rankOf(words);
       cell.style.setProperty('--fill', String(fill));
-      // The heaviest day the gradient's first (left) colour, the lightest its last.
+      // Four hours or more the gradient's first (left) colour; a little, its last.
       cell.style.setProperty('--heat-c', `var(--grad-s${Math.round((1 - fill) * (theme.GRADIENT_SAMPLES - 1))})`);
     }
     if (i === days.length - 1) cell.classList.add('today');

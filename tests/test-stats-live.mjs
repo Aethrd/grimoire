@@ -57,6 +57,30 @@ await t('open, it is drawn again every minute', async () => {
   window.document.body.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
 });
 
+await t('each day shaded against four hours of reading (or 62,400 words), not against the other days', async () => {
+  const day = (n) => store.dayKey(realNow() - n * 86400000);
+  const at = (n) => realNow() - n * 86400000;
+  // Five hours on a comic, hardly a word: the far end. 31,200 words: half. Two hours: half. Ten minutes: a sliver.
+  await store.add('events', { bookId: book, day: day(3), at: at(3), pages: 300, words: 40, activeMs: 5 * 3600000, chapters: 2 });
+  await store.add('events', { bookId: book, day: day(4), at: at(4), pages: 0, words: 31200, activeMs: 0, chapters: 6, elsewhere: true });
+  await store.add('events', { bookId: book, day: day(5), at: at(5), pages: 40, words: 100, activeMs: 2 * 3600000, chapters: 1 });
+  await store.add('events', { bookId: book, day: day(6), at: at(6), pages: 6, words: 2000, activeMs: 10 * 60000, chapters: 1 });
+  await minute();
+  const cell = (n) => body.querySelector(`.heat i[data-day="${day(n)}"]`);
+  assert.equal(cell(3).style.getPropertyValue('--fill'), '1');
+  assert.equal(cell(3).dataset.l, '4');
+  assert.equal(cell(3).style.getPropertyValue('--heat-c'), 'var(--grad-s0)');
+  assert.equal(cell(4).style.getPropertyValue('--fill'), '0.5');
+  assert.equal(cell(4).dataset.l, '2');
+  assert.equal(cell(5).style.getPropertyValue('--fill'), '0.5');
+  assert.equal(Number(cell(6).style.getPropertyValue('--fill')).toFixed(3), (10 / 240).toFixed(3));
+  assert.equal(cell(6).dataset.l, '1');
+  // The heaviest day shown no longer takes the far end because it is the heaviest.
+  assert.notEqual(cell(4).style.getPropertyValue('--heat-c'), 'var(--grad-s0)');
+  // A day with nothing: empty.
+  assert.equal(cell(9).dataset.l, '0');
+});
+
 await t('not under a day’s card left open: it waits for the card to close', async () => {
   body.querySelector('.heat i.today').click();
   assert.ok(!body.querySelector('.heat-tip').hidden);

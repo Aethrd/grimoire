@@ -1730,13 +1730,13 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
 
 
 /* The theme's gradient, not five flat steps: a heavy day should read as
-   heavier than a merely busy one. --fill is set per cell from the words read
-   that day, and --heat-c is the gradient at that point (panels.js) -- a
-   light day from its start, the heaviest from its end, and a light one
-   fainter too, so the weight still reads in a gradient of two like colours. */
+   heavier than a merely busy one. --fill is set per cell from how much was
+   read that day against four hours (or its words), and --heat-c is the
+   gradient at that point (panels.js) -- a light day from its end, four hours
+   or more from its start. */
 .heat i[data-l="0"] { background: var(--heat-0); }
 .heat i[data-l]:not([data-l="0"]) {
-  /* The gradient's own colour at the day's rank, whole: faded toward the empty
+  /* The gradient's own colour at the day's fill, whole: faded toward the empty
      shade, the light days' colours were washed out of sight. */
   background: var(--heat-c, var(--accent));
 }

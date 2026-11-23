@@ -1151,11 +1151,14 @@ t('a file opened from outside waits for the reader to be ready', () => {
   assert.match(app, /handoffFailed\(reason\)/);
 });
 
-t('the heat map is drawn from words, not pages', () => {
+t('the heat map is drawn from words (or time), not pages, against a real day of reading', () => {
   // A page is a function of type size; the same chapter is thirty pages at
   // one setting and twelve at another, and a chapter read elsewhere is none.
   const panels = read('app/src/main/assets/www/js/panels.js');
-  assert.match(panels, /\.map\(\(d\) => d\.words\)\.filter/);
+  assert.match(panels, /Math\.max\(\(day\?\.words \|\| 0\) \/ FULL_DAY_WORDS, \(day\?\.ms \|\| 0\) \/ FULL_DAY_MS\)/);
+  // Against four hours of reading, or an average reader's words in four hours (260 a minute): not ranked.
+  assert.match(panels, /const FULL_DAY_MS = 4 \* 60 \* 60000;\s+const FULL_DAY_WORDS = 260 \* 4 \* 60;/);
+  assert.ok(!/rankOf|quintile/.test(panels), 'still ranked');
   assert.match(panels, /words\.toLocaleString\(\)\} words/);
   // A continuous shade within each level, so a heavy day is not flattened
   // into the same step as a merely busy one.

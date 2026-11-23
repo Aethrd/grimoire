@@ -2719,18 +2719,18 @@ await t('a bundle of editions is one book in every count', async () => {
   document.body.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
   assert.equal(tip.hidden, true, 'a tap elsewhere did not close it');
   assert.ok(!cells[0].classList.contains('picked'));
-  // Every colour of the gradient in use: the lightest day read its start, the heaviest its end, the rest between.
-  for (const [ago, words] of [[2, 50], [3, 400], [4, 1200], [5, 30000], [6, 9000]]) {
+  // Shaded against a real day's reading, not ranked: 62,400 words (four hours at 260 a minute) or more the
+  // gradient's left end; half that, its middle; a light day near its right end -- and no day takes an end for being the heaviest.
+  for (const [ago, words] of [[2, 50], [3, 400], [4, 1200], [5, 62400], [6, 31200], [7, 30000]]) {
     await store.add('events', { bookId: alone, day: store.dayKey(Date.now() - ago * 86400e3), at: Date.now() - ago * 86400e3, pages: 1, words, activeMs: 1000, chapters: 1 });
   }
   await panels.openStats();
-  const shades = [...document.querySelectorAll('#stats-body .heat i')].map((c) => c.style.getPropertyValue('--heat-c')).filter(Boolean);
-  assert.ok(shades.includes('var(--grad-s0)') && shades.includes('var(--grad-s16)'), `ends of the gradient unused: ${[...new Set(shades)]}`);
-  // The heaviest day (30,000 words) the gradient's left end; the lightest (50) its right.
   const shadeOf = (ago) => document.querySelector(`#stats-body .heat i[data-day="${store.dayKey(Date.now() - ago * 86400e3)}"]`).style.getPropertyValue('--heat-c');
   assert.equal(shadeOf(5), 'var(--grad-s0)');
+  assert.equal(shadeOf(6), 'var(--grad-s8)');
   assert.equal(shadeOf(2), 'var(--grad-s16)');
-  assert.ok(new Set(shades).size >= 5, 'the days not spread across it');
+  // 30,000 words, the heaviest of an ordinary run, is not the far end.
+  assert.equal(shadeOf(7), 'var(--grad-s8)');
   const stats = document.getElementById('stats-body').textContent;
   assert.match(stats, /2Books — in the library/, `the library is not two books: ${/\d+Books/.exec(stats)?.[0]}`);
   assert.match(stats, /1Finished/, 'finishing one edition is not finishing one book');
