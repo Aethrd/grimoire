@@ -2479,6 +2479,8 @@ function startSession() {
     start: Date.now(), last: Date.now(), active: 0, pages: 0, words: 0, chapters: 0,
     // The furthest point reached so far, so re-reading is not counted twice.
     furthest: pageInBook(),
+    // And in each chapter, the furthest page or screen reached: what words are counted from (countPage).
+    reachedIn: new Map(state.chapters.length ? [[state.chapterIndex, pageInChapter() + 1]] : []),
   };
 }
 
@@ -2519,6 +2521,34 @@ function countPage() {
   if (gap < IDLE_MS) session.active += gap;
   session.last = now;
 
+  // As much as could have been read since the last turn: a page a second and a half, one after a pause (below).
+  const allowed = gap < IDLE_MS ? Math.max(1, Math.ceil(gap / PAGE_MS)) : 1;
+
+  /* Words from the ground covered in the chapter itself -- its own pages, or
+   * its own screens scrolling -- not from the place in the book.
+   *
+   * Scrolling, a page's words were the chapter's words over the screens of
+   * everything loaded: the chapters above and below it too, so each screen
+   * was credited a third of its words or less. And the place in the book is
+   * an estimate, made again at each new chapter: when it came out lower, the
+   * new chapter's first screens fell short of the mark already passed and
+   * none of their words counted. Each chapter's furthest page or screen is
+   * kept instead, and only what goes past it, as fast as it could be read,
+   * counts. */
+  const chapter = state.chapters.find((c) => c.index === state.chapterIndex);
+  const screens = isScroll() ? screensInChapter() : state.pageCount;
+  // Scrolling, only a chapter laid out: one not yet there measures as a single screen, and would be counted whole.
+  const laidOut = !isScroll() || (sectionFor(state.chapterIndex)?.getBoundingClientRect().height || 0) > 0;
+  if (chapter && laidOut && Number.isFinite(screens) && screens > 0) {
+    const at = Math.min(screens, pageInChapter() + 1);
+    const before = session.reachedIn.get(state.chapterIndex) || 0;
+    if (at > before) {
+      session.reachedIn.set(state.chapterIndex, at);
+      noteReading();
+      session.words += Math.round(((chapter.words || 0) / screens) * Math.min(at - before, allowed));
+    }
+  }
+
   const reached = pageInBook();
   if (reached <= session.furthest) return;
 
@@ -2533,13 +2563,7 @@ function countPage() {
    * the reading counted is what the time allows. */
   const advanced = reached - session.furthest;
   session.furthest = reached;
-  const credited = Math.min(advanced, gap < IDLE_MS ? Math.max(1, Math.ceil(gap / PAGE_MS)) : 1);
-  session.pages += credited;
-
-  const chapter = state.chapters.find((c) => c.index === state.chapterIndex);
-  if (chapter && state.pageCount) {
-    session.words += Math.round(((chapter.words || 0) / state.pageCount) * credited);
-  }
+  session.pages += Math.min(advanced, allowed);
 
   // Long reads should survive being killed by the system, not vanish.
   if (session.pages >= FLUSH_EVERY_PAGES) flushSession();
@@ -2569,7 +2593,7 @@ export async function flushSession() {
   // fresh window and nothing is counted twice.
   session = {
     start: Date.now(), last: done.last, active: 0, pages: 0, words: 0, chapters: 0,
-    furthest: done.furthest,
+    furthest: done.furthest, reachedIn: done.reachedIn,
   };
 
   await store.recordEvent({

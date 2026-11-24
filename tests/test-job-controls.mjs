@@ -379,8 +379,10 @@ await t('why the app last ended: said only for the app itself, and only when som
 await t('the reading log: jumps not counted as reading, sessions not doubled by restoring, and each kept with its own book', async () => {
   const reader = read('app/src/main/assets/www/js/reader.js');
   // A turn counts what its time allows -- a page a second and a half -- not however far the place moved.
-  assert.match(reader, /const credited = Math\.min\(advanced, gap < IDLE_MS \? Math\.max\(1, Math\.ceil\(gap \/ PAGE_MS\)\) : 1\);/);
-  assert.match(reader, /session\.pages \+= credited;/);
+  assert.match(reader, /const allowed = gap < IDLE_MS \? Math\.max\(1, Math\.ceil\(gap \/ PAGE_MS\)\) : 1;/);
+  assert.match(reader, /session\.pages \+= Math\.min\(advanced, allowed\);/);
+  // Words the same: no more than the time allows.
+  assert.match(reader, /Math\.min\(at - before, allowed\)/);
   // What was recorded before, put right: twice-kept sessions once, and jumps brought down to their time.
   const before = (await store.all('events')).length;
   const book = (await store.all('books')).find((b) => !b.binnedAt);

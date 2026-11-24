@@ -149,6 +149,22 @@ t('reading counts progress, not page turns', () => {
     'the clock stops when you turn back');
 });
 
+t('words counted from each chapter\'s own pages or screens -- not from everything loaded around it', () => {
+  // Scrolling, a screen's words were the chapter's words over the screens of every chapter loaded,
+  // so endless scroll logged about half of what was read. Paged and scrolled now count the same way.
+  const js = read('app/src/main/assets/www/js/reader.js');
+  const count = js.slice(js.indexOf('function countPage'), js.indexOf('export async function flushSession'));
+  assert.match(count, /const screens = isScroll\(\) \? screensInChapter\(\) : state\.pageCount;/);
+  assert.doesNotMatch(count, /chapter\.words \|\| 0\) \/ state\.pageCount/);
+  // Each chapter's furthest page or screen kept: re-reading is not counted twice, a re-estimated place in the book loses nothing.
+  assert.match(count, /const before = session\.reachedIn\.get\(state\.chapterIndex\) \|\| 0;/);
+  assert.match(count, /Math\.min\(at - before, allowed\)/);
+  // A chapter not laid out yet is not counted whole.
+  assert.match(count, /const laidOut = !isScroll\(\) \|\| /);
+  // Carried across a flush, as the furthest place is.
+  assert.match(js, /furthest: done\.furthest, reachedIn: done\.reachedIn,/);
+});
+
 t('several language packs can be fetched in one go', () => {
   const panels = read('app/src/main/assets/www/js/panels.js');
   assert.match(panels, /Download all \$\{missing\.length\}/);
