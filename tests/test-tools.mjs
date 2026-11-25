@@ -3351,7 +3351,7 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.doesNotThrow(() => opening.playScene(document.createElement('canvas'), { letters: Promise.reject(new Error('gone')) }).stop());
   const src = read('app/src/main/assets/www/js/opening.js');
   // The quill held as a right hand holds it: nib at the foot on the left, plume to the top right (mirrored, turned the other way).
-  assert.match(src, /ctx\.rotate\(0\.95 - lean\);\s+ctx\.scale\(-S, S\);/);
+  assert.match(src, /ctx\.rotate\(lerp\(0\.95 - lean, UPRIGHT, upright\)\);\s+ctx\.scale\(-S, S\);/);
   // Dipped, then tapped twice on the rim, a drop shaken loose each time and falling back into the ink.
   assert.match(src, /for \(const at of \[1\.45, 1\.85\]\)/);
   assert.match(src, /state\.drops\.push\(/);
@@ -3360,10 +3360,18 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   // The inkwell clear glass, the ink inside it the gradient's own colours mixed; the nib dipped down into it, seen through the glass.
   assert.match(src, /function inkMix\(from, to, t, c, rx, ry\)/);
   assert.match(src, /across\.addColorStop\(0, rgba\(from, 1\)\); across\.addColorStop\(1, rgba\(to, 1\)\);/);
-  assert.match(src, /const DIP = INK_Z - 3 - \(WELL\.h \+ WELL\.nh\);/);
-  // Thick glass: the ink a wall's thickness in, standing on a heavy base, under a lip as wide as the glass.
-  assert.match(src, /const WALL = 2\.8, BASE = 3\.4, LIP_W = 1\.8;\s+const INK_R = WELL\.r - WALL;/);
-  assert.match(src, /const body = ellipsePts\(x, y, BASE, INK_R/);
+  assert.match(src, /const DIP = INK_Z - 3 - WELL\.top;/);
+  // A round flask of thick glass, a rolled collar at its mouth, its cork beside it; the ink a wall's thickness in, in its belly.
+  assert.match(src, /const WELL = \{ x: PW \* 0\.74, y: -PH \/ 2 - 36, r: 15, zc: 14, neck: 5\.5, collar: 7\.2, collarH: 3\.2 \};/);
+  assert.match(src, /const INK_R = Math\.sqrt\(\(WELL\.r - WALL\) \*\* 2 - \(INK_Z - WELL\.zc\) \*\* 2\);/);
+  assert.match(src, /function drawCork\(\)/);
+  // The quill: a steel nib with its slit and breather hole, wet from the ink and drying as it writes, in a banded brass holder.
+  assert.match(src, /function drawQuill\(at, lean, from, to, wet = 0, upright = 0\)/);
+  // Into the flask it stands up, the lower the straighter, eased: through the mouth, never the glass.
+  assert.match(src, /ctx\.rotate\(lerp\(0\.95 - lean, UPRIGHT, upright\)\);/);
+  assert.match(src, /const wantUpright = overMouth \? clamp\(\(wellTop\(\) \+ 8 - state\.nib\.z\) \/ 8\) : 0;/);
+  assert.match(src, /if \(state\.nib\.z < INK_Z\) state\.wet = 1;/);
+  assert.match(src, /state\.wet = Math\.max\(0, state\.wet - dt \* 0\.07\);/);
   assert.match(src, /if \(under\) drawInk\(from, to, swirl, true\);\s+drawWellFront\(to\);/);
   // Still with reduced motion.
   assert.match(src, /const swirl = calm \? 0 : now \/ 1000;/);
