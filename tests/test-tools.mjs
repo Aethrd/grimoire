@@ -3365,6 +3365,10 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.match(src, /const WELL = \{ x: PW \* 0\.74, y: -PH \/ 2 - 36, r: 15, zc: 14, neck: 5\.5, collar: 7\.2, collarH: 3\.2 \};/);
   assert.match(src, /const INK_R = Math\.sqrt\(\(WELL\.r - WALL\) \*\* 2 - \(INK_Z - WELL\.zc\) \*\* 2\);/);
   assert.match(src, /function drawCork\(\)/);
+  // No cage round it: the flask alone.
+  assert.doesNotMatch(src, /drawCage|CAGE/);
+  // The quill's hardware: a two-tone nib with a heart-shaped breather, a leather grip bound in brass, a crown retainer set with a gem, a second feather tucked in.
+  for (const part of ['The breather: a small heart', 'The grip: dark leather', 'The retainer: brass, rising to a crown', 'A second, smaller feather tucked in']) assert.ok(src.includes(part), part);
   // The quill: a steel nib with its slit and breather hole, wet from the ink and drying as it writes, in a banded brass holder.
   assert.match(src, /function drawQuill\(at, lean, from, to, wet = 0, upright = 0\)/);
   // Into the flask it stands up, the lower the straighter, eased: through the mouth, never the glass.

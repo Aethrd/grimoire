@@ -943,6 +943,30 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
       outer.push({ x: spine(v) - (1.2 + 8.4 * width), y: v });
       inner.push({ x: spine(v) + (0.6 + 3.8 * width), y: v });
     }
+    /* A second, smaller feather tucked in beside it, behind: the other end
+     * of the gradient, barred darker across, as a pheasant's is. */
+    ctx.save();
+    ctx.rotate(-0.2);
+    const accent = [];
+    for (let i = 0; i <= 14; i += 1) {
+      const v = -22 - (34 * i) / 14, f = i / 14, w = Math.sin(Math.PI * Math.pow(f, 0.7));
+      accent.push({ v, left: -(0.8 + 4.2 * w), right: 0.5 + 2.2 * w });
+    }
+    ctx.beginPath(); ctx.moveTo(0, -22);
+    accent.forEach((a) => ctx.lineTo(a.left, a.v));
+    for (let i = accent.length - 1; i >= 0; i -= 1) ctx.lineTo(accent[i].right, accent[i].v);
+    ctx.closePath();
+    const accentGrad = ctx.createLinearGradient(0, -22, 0, -56);
+    accentGrad.addColorStop(0, rgba(mix(from, WHITE, 0.2), 0.9)); accentGrad.addColorStop(1, rgba(mix(from, [0, 0, 0], 0.2), 0.95));
+    ctx.fillStyle = accentGrad; ctx.fill();
+    ctx.save(); ctx.clip();
+    ctx.strokeStyle = rgba(mix(from, [0, 0, 0], 0.55), 0.55); ctx.lineWidth = 0.9;
+    for (let v = -27; v > -55; v -= 3.4) { ctx.beginPath(); ctx.moveTo(-6, v + 1.2); ctx.quadraticCurveTo(0, v - 0.8, 4, v + 0.6); ctx.stroke(); }
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(0, -22); ctx.lineTo(-0.6, -55); ctx.stroke();
+    ctx.restore();
+
     const vaneGrad = ctx.createLinearGradient(0, -26, 0, -90);
     vaneGrad.addColorStop(0, rgba(mix(to, WHITE, 0.15), 0.92));
     vaneGrad.addColorStop(0.55, rgba(mix(to, from, 0.5), 0.95));
@@ -986,37 +1010,70 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
       ctx.beginPath(); ctx.moveTo(spine(v0), v0); ctx.lineTo(spine(v1), v1); ctx.stroke();
     }
 
-    /* The holder: a short barrel of worked brass, banded, the shaft set in it. */
-    const brass = ctx.createLinearGradient(-2, 0, 2, 0);
+    /* The retainer: brass, rising to a crown of points the feather is set
+     * into, a gem of the theme's colour in its face. */
+    const brass = ctx.createLinearGradient(-2.2, 0, 2.2, 0);
     brass.addColorStop(0, '#6e5428'); brass.addColorStop(0.35, '#e6c67e'); brass.addColorStop(0.55, '#b8934c'); brass.addColorStop(1, '#5a4320');
     ctx.fillStyle = brass;
     ctx.beginPath();
-    ctx.moveTo(-1.3, -8.5); ctx.lineTo(-1.9, -12); ctx.lineTo(-1.6, -16); ctx.lineTo(-1.9, -20.5);
-    ctx.lineTo(1.9, -20.5); ctx.lineTo(1.6, -16); ctx.lineTo(1.9, -12); ctx.lineTo(1.3, -8.5);
+    ctx.moveTo(-1.7, -17.2); ctx.lineTo(-2.3, -21.6);
+    // The crown: four points, the feather between them.
+    ctx.lineTo(-2.6, -24.2); ctx.lineTo(-1.6, -22.4); ctx.lineTo(-0.9, -24.8); ctx.lineTo(0, -22.6);
+    ctx.lineTo(0.9, -24.8); ctx.lineTo(1.6, -22.4); ctx.lineTo(2.6, -24.2);
+    ctx.lineTo(2.3, -21.6); ctx.lineTo(1.7, -17.2);
     ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = 'rgba(60,40,14,.85)'; ctx.lineWidth = 0.45;
-    for (const v of [-10, -12, -16, -18.5, -20.5]) { ctx.beginPath(); ctx.moveTo(-1.9, v); ctx.lineTo(1.9, v); ctx.stroke(); }
-    ctx.strokeStyle = 'rgba(255,240,200,.75)'; ctx.lineWidth = 0.4;
-    ctx.beginPath(); ctx.moveTo(-0.6, -9); ctx.lineTo(-0.8, -20); ctx.stroke();
+    ctx.strokeStyle = 'rgba(60,40,14,.85)'; ctx.lineWidth = 0.4; ctx.stroke();
+    for (const v of [-17.6, -21.4]) { ctx.beginPath(); ctx.moveTo(-2.1, v); ctx.lineTo(2.1, v); ctx.stroke(); }
+    ctx.fillStyle = 'rgba(255,240,200,.9)';
+    for (const x of [-2.6, -0.9, 0.9, 2.6]) { ctx.beginPath(); ctx.arc(x, x === -0.9 || x === 0.9 ? -24.8 : -24.2, 0.32, 0, TAU); ctx.fill(); }
+    const gem = ctx.createRadialGradient(-0.3, -19.8, 0.1, 0, -19.5, 1.1);
+    gem.addColorStop(0, 'rgba(255,255,255,.95)'); gem.addColorStop(0.35, rgba(mix(from, WHITE, 0.2), 1)); gem.addColorStop(1, rgba(mix(from, [0, 0, 0], 0.4), 1));
+    ctx.fillStyle = gem; ctx.beginPath(); ctx.ellipse(0, -19.5, 0.95, 1.25, 0, 0, TAU); ctx.fill();
+    ctx.strokeStyle = 'rgba(60,40,14,.9)'; ctx.lineWidth = 0.35; ctx.stroke();
 
-    /* The nib: steel, tapering to its point, a slit up its middle to a
-     * breather hole -- and, dipped, wet with ink from its point up. */
+    /* The grip: dark leather, bound round with brass thread. */
+    const leather = ctx.createLinearGradient(-1.6, 0, 1.6, 0);
+    leather.addColorStop(0, '#2a1a10'); leather.addColorStop(0.4, '#7a4e2e'); leather.addColorStop(0.6, '#5c3a22'); leather.addColorStop(1, '#22150c');
+    ctx.fillStyle = leather;
+    ctx.beginPath(); ctx.moveTo(-1.5, -10.3); ctx.lineTo(-1.7, -17.4); ctx.lineTo(1.7, -17.4); ctx.lineTo(1.5, -10.3); ctx.closePath(); ctx.fill();
+    ctx.save(); ctx.clip();
+    ctx.strokeStyle = 'rgba(214,176,98,.75)'; ctx.lineWidth = 0.3;
+    for (let v = -10; v > -18.5; v -= 1.15) { ctx.beginPath(); ctx.moveTo(-1.8, v); ctx.lineTo(1.8, v - 0.9); ctx.stroke(); }
+    ctx.restore();
+
+    /* The collar the nib is set in: a ring of brass. */
+    ctx.fillStyle = brass;
+    ctx.beginPath(); ctx.moveTo(-1.35, -8.6); ctx.lineTo(-1.6, -10.4); ctx.lineTo(1.6, -10.4); ctx.lineTo(1.35, -8.6); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(60,40,14,.85)'; ctx.lineWidth = 0.35; ctx.stroke();
+
+    /* The nib: steel to its point, gold over its shoulders, an engraved
+     * scroll on the gold, a slit up its middle to a heart-shaped breather --
+     * and, dipped, wet with ink from its point up. */
+    const nib = () => { ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(-1.5, -4, -1.3, -8.7); ctx.lineTo(1.3, -8.7); ctx.quadraticCurveTo(1.5, -4, 0, 0); ctx.closePath(); };
     const steel = ctx.createLinearGradient(-1.4, 0, 1.4, 0);
-    steel.addColorStop(0, '#5f646e'); steel.addColorStop(0.4, '#dfe4ec'); steel.addColorStop(0.6, '#a7adb8'); steel.addColorStop(1, '#4b505a');
-    ctx.fillStyle = steel;
-    ctx.beginPath();
-    ctx.moveTo(0, 0); ctx.quadraticCurveTo(-1.5, -4, -1.3, -8.6); ctx.lineTo(1.3, -8.6); ctx.quadraticCurveTo(1.5, -4, 0, 0);
-    ctx.closePath(); ctx.fill();
+    steel.addColorStop(0, '#5f646e'); steel.addColorStop(0.4, '#e4e8ef'); steel.addColorStop(0.6, '#a7adb8'); steel.addColorStop(1, '#4b505a');
+    ctx.fillStyle = steel; nib(); ctx.fill();
+    ctx.save(); nib(); ctx.clip();
+    const gilt = ctx.createLinearGradient(-1.4, 0, 1.4, 0);
+    gilt.addColorStop(0, '#7a5c26'); gilt.addColorStop(0.4, '#f0d58e'); gilt.addColorStop(0.6, '#c29a4e'); gilt.addColorStop(1, '#634a1e');
+    ctx.fillStyle = gilt;
+    ctx.beginPath(); ctx.moveTo(-2, -8.8); ctx.lineTo(-2, -5.6); ctx.quadraticCurveTo(0, -4.2, 2, -5.6); ctx.lineTo(2, -8.8); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(90,62,20,.75)'; ctx.lineWidth = 0.22;
+    for (const side of [-1, 1]) { ctx.beginPath(); ctx.moveTo(side * 0.35, -7.9); ctx.bezierCurveTo(side * 1.1, -7.6, side * 1.1, -6.6, side * 0.5, -6.7); ctx.stroke(); }
     if (wet > 0.02) {
-      ctx.save(); ctx.clip();
       const ink = ctx.createLinearGradient(0, 0, 0, -7);
       ink.addColorStop(0, rgba(from, 0.95 * wet)); ink.addColorStop(0.6, rgba(to, 0.7 * wet)); ink.addColorStop(1, rgba(to, 0));
       ctx.fillStyle = ink; ctx.fillRect(-2, -9, 4, 9.5);
-      ctx.restore();
     }
-    ctx.strokeStyle = 'rgba(20,22,28,.9)'; ctx.lineWidth = 0.35;
-    ctx.beginPath(); ctx.moveTo(0, -0.4); ctx.lineTo(0, -4.6); ctx.stroke();
-    ctx.beginPath(); ctx.arc(0, -5.3, 0.55, 0, TAU); ctx.stroke();
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(20,22,28,.9)'; ctx.lineWidth = 0.32;
+    ctx.beginPath(); ctx.moveTo(0, -0.4); ctx.lineTo(0, -4.3); ctx.stroke();
+    // The breather: a small heart, its point down to the slit.
+    ctx.fillStyle = 'rgba(20,22,28,.92)';
+    ctx.beginPath(); ctx.moveTo(0, -4.3);
+    ctx.bezierCurveTo(-0.9, -4.9, -0.75, -5.9, 0, -5.45);
+    ctx.bezierCurveTo(0.75, -5.9, 0.9, -4.9, 0, -4.3);
+    ctx.fill();
     ctx.restore();
   }
 
