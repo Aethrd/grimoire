@@ -399,8 +399,11 @@ function relayout() {
     flow.style.columnGap = '';
     wrapWidth = flow.clientWidth;
     // "Pages" stay meaningful in scroll mode so the counters and the scrub
-    // rail keep working: one page is one screenful.
-    state.pageCount = Math.max(1, Math.ceil(viewport.scrollHeight / viewportHeight()));
+    // rail keep working: one page is one screenful. Not measured while the
+    // reader has no height (being left, the app put away): 0 over 0, kept
+    // as the count, made every total and percentage after it NaN.
+    const count = Math.ceil(viewport.scrollHeight / viewportHeight());
+    if (Number.isFinite(count)) state.pageCount = Math.max(1, count);
     return;
   }
   const width = contentWidth();
@@ -772,11 +775,23 @@ function atStartOf(index) {
 
 function chapterAtViewport() {
   if (!isScroll()) return state.chapterIndex;
+  /* The space above a chapter is its own: the seam and the gap before it
+   * (and its heading's margin) belong to the chapter below, not the one
+   * above. Counted from a chapter's top edge alone, a view whose top was in
+   * that space -- a chapter opened at its start, put at the top of a column
+   * that begins with space, then the chapter before it put in above, the
+   * place kept -- was still in the last chapter, and that was saved: opened
+   * at chapter 28 and closed again, it was at chapter 27. Past the end of a
+   * chapter's text is the next chapter. */
   const top = viewport.getBoundingClientRect().top;
   let current = state.loaded[0] ?? state.chapterIndex;
+  let above = null;
   for (const index of state.loaded) {
     const section = sectionFor(index);
-    if (section && section.getBoundingClientRect().top - top <= 1) current = index;
+    if (!section) continue;
+    const box = section.getBoundingClientRect();
+    if (box.top - top <= 1 || (above && above.bottom - top <= 1)) current = index;
+    above = box;
   }
   return current;
 }
@@ -1290,12 +1305,20 @@ function picturesIn(chapter) {
 /** How many screenfuls the open chapter is in scroll mode, as it stands now.
  *  Pictures arriving change it, so it is asked again rather than kept. */
 function screensInChapter() {
-  return Math.max(1, Math.ceil((sectionFor(state.chapterIndex)?.getBoundingClientRect().height || 0) / viewportHeight()));
+  /* Nothing to measure while the reader has no height -- being left, the app
+   * put away: a chapter's 0 over the window's 0 is NaN, and the book's total
+   * and percentage after it, which were then saved: "p. 317 of NaN · NaN%"
+   * on the shelf. The last measure stands until there is one. */
+  const height = viewportHeight();
+  if (!(height > 0)) return Number.isFinite(state.measuredPages) && state.measuredPages >= 1 ? state.measuredPages : 1;
+  return Math.max(1, Math.ceil((sectionFor(state.chapterIndex)?.getBoundingClientRect().height || 0) / height));
 }
 
 function estimateTotals() {
   const current = state.chapters.find((c) => c.index === state.chapterIndex);
   const measured = isScroll() ? screensInChapter() : state.pageCount;
+  // Nothing real to go on: the totals already worked out stand.
+  if (!Number.isFinite(measured) || measured < 1) return;
   state.measuredPages = measured;
   /* A book of pictures is measured in pictures.
    *
@@ -1370,7 +1393,9 @@ function pageInChapter() {
 }
 
 export function percent() {
-  return Math.min(1, pageInBook() / state.totalPages);
+  const fraction = pageInBook() / state.totalPages;
+  // Never NaN or past the ends: what is saved is shown on the shelf.
+  return Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : (lastSaved.percent ?? 0);
 }
 
 /* ── long strips ──────────────────────────────────────────────────────── */
@@ -2510,18 +2535,38 @@ function legacyCopy(text) {
 
 /* ── persistence and the reading log ──────────────────────────────────── */
 
+/* The last totals saved that were real numbers, for the book open: a place
+ * saved while nothing could be measured keeps its chapter and its place in
+ * it, which are known, and these, which are not -- never NaN (screensInChapter). */
+const lastSaved = { bookId: null, pageInBook: null, totalPages: null, percent: null };
+
 function save() {
   if (!state.book) return;
-  store.queuePosition({
+  if (lastSaved.bookId !== state.book.id) Object.assign(lastSaved, { bookId: state.book.id, pageInBook: null, totalPages: null, percent: null });
+  const real = (value) => Number.isFinite(value) && value >= 0;
+  /* Measured only when there is something to measure. Hidden -- left for the
+   * shelf, the app put away -- a turn of the phone still lays the reader out
+   * again, at no height, and its place in the chapter came back as the
+   * chapter's start: the page saved went back a few, the percentage with it.
+   * The chapter and the place in it (the anchor) are kept as they are. */
+  if (viewport.clientHeight > 0 && viewport.clientWidth > 0) {
+    const page = pageInBook();
+    const fraction = percent();
+    if (real(page) && page >= 1 && real(state.totalPages) && state.totalPages >= 1) {
+      Object.assign(lastSaved, { pageInBook: page, totalPages: state.totalPages });
+    }
+    if (real(fraction)) lastSaved.percent = fraction;
+  }
+  const row = {
     bookId: state.book.id,
     chapterIndex: state.chapterIndex,
     anchor: state.anchor,
     page: state.page,
-    pageInBook: pageInBook(),
-    totalPages: state.totalPages,
-    percent: percent(),
     updatedAt: Date.now(),
-  });
+  };
+  if (lastSaved.totalPages != null) Object.assign(row, { pageInBook: lastSaved.pageInBook, totalPages: lastSaved.totalPages });
+  if (lastSaved.percent != null) row.percent = lastSaved.percent;
+  store.queuePosition(row);
 }
 
 const IDLE_MS = 3 * 60 * 1000;

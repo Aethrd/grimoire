@@ -868,8 +868,11 @@ async function positionOnBook(row) {
      written on the next start. */
   await update('books', row.bookId, (book) => {
     book.lastOpenedAt = Date.now();
-    book.percent = row.percent;
-    if (row.percent >= 0.999) book.finishedAt = book.finishedAt || Date.now();
+    // Only a real fraction: a NaN here showed on the shelf as no progress at all, and in the bar as nothing.
+    if (Number.isFinite(row.percent)) {
+      book.percent = Math.min(1, Math.max(0, row.percent));
+      if (row.percent >= 0.999) book.finishedAt = book.finishedAt || Date.now();
+    }
     return book;
   });
 }

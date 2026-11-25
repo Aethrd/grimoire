@@ -1468,11 +1468,30 @@ async function renderContinueCard(books, onOpen) {
   cover.style.backgroundImage = '';
   cover.innerHTML = coverUrl ? `<img src="${coverUrl}" alt="">` : '';
   card.toggleAttribute('data-blur', !!book.coverBlur);
-  el('continue-meta').textContent = position
-    ? `Ch. ${position.chapterIndex + 1} · p. ${position.pageInBook} of ${position.totalPages} · ${Math.round(position.percent * 100)}%`
-    : 'Not started';
-  el('continue-bar').style.width = `${Math.round((book.percent || 0) * 100)}%`;
+  el('continue-meta').textContent = position ? continueMeta(position, edition) : 'Not started';
+  // The book's own progress as before (a series', for a series); the place's, only where that is not known.
+  el('continue-bar').style.width = `${Math.round((known(book.percent) ? Math.min(1, book.percent) : progressOf(position, edition)) * 100)}%`;
   card.onclick = () => onOpen(edition);
+}
+
+/* How far through, as the Continue card says it. Only what is known: a place
+ * saved while the reader could measure nothing (left, or the app put away)
+ * held NaN for its total and its percentage -- "p. 317 of NaN · NaN%" -- or,
+ * now, leaves them out. The chapter and the place in it were always right. */
+const known = (value) => Number.isFinite(value) && value >= 0;
+export function progressOf(position, book) {
+  const fraction = known(position?.percent) ? position.percent : known(book?.percent) ? book.percent : 0;
+  return Math.min(1, Math.max(0, fraction));
+}
+export function continueMeta(position, book) {
+  const parts = [`Ch. ${(position.chapterIndex ?? 0) + 1}`];
+  if (known(position.pageInBook) && position.pageInBook >= 1) {
+    parts.push(known(position.totalPages) && position.totalPages >= position.pageInBook
+      ? `p. ${position.pageInBook} of ${position.totalPages}`
+      : `p. ${position.pageInBook}`);
+  }
+  if (known(position.percent) || known(book?.percent)) parts.push(`${Math.round(progressOf(position, book) * 100)}%`);
+  return parts.join(' · ');
 }
 
 /**

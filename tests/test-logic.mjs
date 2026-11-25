@@ -236,6 +236,50 @@ await t2('the reading and the position, written together, both land', async () =
   await store.deleteBook(id);
 });
 
+await t2('a place saved while the reader could measure nothing: never NaN on the book, nor on the Continue card', async () => {
+  /* Left for the shelf, a turn of the phone laid the hidden reader out again at
+   * no height: 0 screens over 0 was NaN, saved as the book's total and percentage
+   * -- "p. 317 of NaN · NaN%". The chapter and the place in it were right. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const lib = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const id = await store.add('books', { title: 'Not a number', fingerprint: 'nan:1', addedAt: 1, percent: 0.97 });
+  store.queuePosition({ bookId: id, chapterIndex: 314, page: 0, pageInBook: 317, totalPages: NaN, percent: NaN, updatedAt: Date.now() });
+  await store.flushPosition();
+  assert.equal((await store.get('books', id)).percent, 0.97, 'a NaN overwrote the book\'s progress');
+  // Left out altogether (as the reader now does when it cannot measure): kept too.
+  store.queuePosition({ bookId: id, chapterIndex: 314, page: 0, updatedAt: Date.now() });
+  await store.flushPosition();
+  assert.equal((await store.get('books', id)).percent, 0.97);
+  // A real one still lands, and is held between 0 and 1.
+  store.queuePosition({ bookId: id, chapterIndex: 315, page: 0, pageInBook: 320, totalPages: 330, percent: 1.4, updatedAt: Date.now() });
+  await store.flushPosition();
+  assert.equal((await store.get('books', id)).percent, 1);
+  await store.deleteBook(id);
+
+  // The card: only what is known.
+  assert.equal(lib.continueMeta({ chapterIndex: 314, pageInBook: 317, totalPages: NaN, percent: NaN }, { percent: 0.97 }), 'Ch. 315 · p. 317 · 97%');
+  assert.equal(lib.continueMeta({ chapterIndex: 314, pageInBook: 317 }, {}), 'Ch. 315 · p. 317');
+  assert.equal(lib.continueMeta({ chapterIndex: 314 }, {}), 'Ch. 315');
+  assert.equal(lib.continueMeta({ chapterIndex: 30, pageInBook: 215, totalPages: 280, percent: 0.7679 }, { percent: 0.5 }), 'Ch. 31 · p. 215 of 280 · 77%');
+  // A total smaller than the page is not a total.
+  assert.equal(lib.continueMeta({ chapterIndex: 2, pageInBook: 40, totalPages: 12, percent: 1 }, {}), 'Ch. 3 · p. 40 · 100%');
+  assert.equal(lib.progressOf({ percent: NaN }, { percent: NaN }), 0);
+  assert.equal(lib.progressOf({ percent: NaN }, { percent: 0.4 }), 0.4);
+  assert.ok(!/NaN|undefined/.test(lib.continueMeta({ chapterIndex: 0, pageInBook: NaN, totalPages: undefined, percent: undefined }, { percent: undefined })));
+
+  // The reader: nothing measured at no height, nothing NaN saved.
+  const fs = await import('node:fs');
+  const js = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
+  assert.match(js, /if \(!\(height > 0\)\) return Number\.isFinite\(state\.measuredPages\)/);
+  assert.match(js, /if \(Number\.isFinite\(count\)\) state\.pageCount = Math\.max\(1, count\);/);
+  assert.match(js, /if \(!Number\.isFinite\(measured\) \|\| measured < 1\) return;/);
+  const save = js.slice(js.indexOf('function save() {'), js.indexOf('const IDLE_MS'));
+  assert.match(save, /if \(viewport\.clientHeight > 0 && viewport\.clientWidth > 0\) \{/);
+  assert.doesNotMatch(save, /totalPages: state\.totalPages,\n/);
+  // The space above a chapter is its own: past the end of one chapter's text is the next.
+  assert.match(js, /if \(box\.top - top <= 1 \|\| \(above && above\.bottom - top <= 1\)\) current = index;/);
+});
+
 await t2('out of a book, the shelf is drawn once what was read is written', async () => {
   const fs = await import('node:fs');
   const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
