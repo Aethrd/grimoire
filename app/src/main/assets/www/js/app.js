@@ -8888,7 +8888,8 @@ async function runJob(job) {
   settleJob(job, outcome, under.pausing && !under.siteStop && !under.yielding);
   if (dropCancelled(job, under)) outcome.said = '';
   if (outcome.said) whenNotReading(() => toast(outcome.said, 8000, { kind: 'done' }));
-  await purgeSuperseded().catch(() => 0);
+  // This entry too, should a Stop have just taken it out of the queue.
+  await purgeSuperseded({ jobs: [job] }).catch(() => 0);
   if (job.status === 'done' && job.kind !== 'refetch') {
     await purgeEarlier(job).catch(() => 0);
     await binOutgrown(job).catch(() => 0);
@@ -8925,13 +8926,23 @@ async function purgeEarlier(job) {
  * deleted as soon as that is seen: after each turn of the queue, when the
  * Bin is opened, at start. A book put in the Bin by hand that nothing carries
  * on is left alone, and so are books joined in Build from files.
+ *
+ * And a version with no website of its own -- a book imported from a file,
+ * then carried on from its contents page pasted in -- shares no address with
+ * what carried it on, so it was kept in the Bin past every pause, and for
+ * good if the download was then stopped. Those are let go of too, but only
+ * where the queue itself put them there: one in a queue entry's `earlier`
+ * (the versions it carried on and binned), that the entry's book is built
+ * from, directly or through the versions between, and that is the entry's
+ * book still (jobOwns) -- never another book an old restored queue mixed in.
+ * `jobs`: entries just taken out of the queue (a Stop), not in it any more.
  */
-async function purgeSuperseded() {
+async function purgeSuperseded({ jobs = [] } = {}) {
   const books = await store.all('books');
   const byId = new Map(books.map((book) => [book.id, book]));
   const doomed = new Set();
-  for (const book of books) {
-    if (book.binnedAt || book.transient || !book.webSources?.length) continue;
+  // The versions a book is built from, directly or through the versions between.
+  const versionsOf = (book, visit) => {
     const seen = new Set([book.id]);
     const stack = (book.builtFrom || []).map((part) => part.bookId).filter((id) => id != null);
     while (stack.length) {
@@ -8940,10 +8951,27 @@ async function purgeSuperseded() {
       seen.add(id);
       const older = byId.get(id);
       if (!older) continue;
-      if (older.binnedAt && (older.webSources || []).some((address) => book.webSources.includes(address))) doomed.add(id);
+      visit(older);
       for (const part of older.builtFrom || []) if (part.bookId != null) stack.push(part.bookId);
     }
+  };
+  for (const book of books) {
+    if (book.binnedAt || book.transient || !book.webSources?.length) continue;
+    versionsOf(book, (older) => {
+      if (older.binnedAt && (older.webSources || []).some((address) => book.webSources.includes(address))) doomed.add(older.id);
+    });
   }
+  for (const job of new Set([...webQueue, ...jobs])) {
+    if (!job || job.bookId == null || !Array.isArray(job.earlier) || !job.earlier.length || job.kind === 'refetch') continue;
+    const book = byId.get(job.bookId);
+    if (!book || book.binnedAt || book.transient || book.importing || !jobOwns(job, book)) continue;
+    const carried = new Set(job.earlier);
+    versionsOf(book, (older) => {
+      if (older.binnedAt && carried.has(older.id) && !older.importing && !older.inVault && jobOwns(job, older)) doomed.add(older.id);
+    });
+  }
+  // Never one open to read: let go of next time instead.
+  if (reader.state?.book?.id != null) doomed.delete(reader.state.book.id);
   if (!doomed.size) return 0;
   await library.destroyBooks([...doomed]);
   return doomed.size;
