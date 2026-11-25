@@ -3287,10 +3287,11 @@ function askKeepSmaller(books, label) {
   list.innerHTML = '';
   const note = document.createElement('p');
   note.className = 'muted keep-small-note';
-  note.textContent = 'Sized as a Smart export is: as sharp as the S23 or the Boox Note X5 Mini shows it, upright or on its side. '
+  note.textContent = 'Sized as an export at the same size is. '
     + 'Pictures bigger than that are made smaller for good: the originals are not kept, and exports carry the smaller ones '
-    + '(a Smart export then copies them as they are, never made worse twice). '
-    + 'Long strips keep their full length — only their width is limited. Left as they are: pictures already small enough, '
+    + '(an export at that size or larger then copies them as they are, never made worse twice). '
+    + 'Long strips are never cut or squeezed: only their width is limited, their length scaled with it. '
+    + 'Each picture must come out at least a tenth smaller, or it is left. Left as they are too: pictures already small enough, '
     + 'animations, see-through pictures, blacked-out ones and photos marked to be turned.';
   list.appendChild(note);
   for (const [key, size] of Object.entries(shrink.KEEP_SIZES)) {

@@ -416,19 +416,23 @@ export function describeSaving(bytes) {
  * The picture keeps its name in the book; what it is now (a JPEG) is read off
  * the picture itself wherever that matters -- an export names it for that.
  */
-/* One rule, the export's Smart: a picture kept smaller in the book is then
- * already within Smart, so exporting it at Smart copies it byte for byte --
+/* The export's own sizes, so a picture kept smaller in the book is then
+ * already within that size, and exporting it there copies it byte for byte --
  * it is written smaller once, never a second generation worse on the way out.
+ *   - Smart: as sharp as the S23 or the Boox shows it (smartScale)
+ *   - Small: the export's Small -- longest side 1000, strips 450 wide -- for
+ *     the most room saved, at the cost of sharpness on a large screen
  * (Two sizes were offered here before -- half as big again as this phone's
  * screen, or the screen -- and neither agreed with Smart.) An older choice
- * of either is taken as Smart. */
+ * of either, or any unknown one, is taken as Smart. */
 export const KEEP_SIZES = {
   smart: { quality: SIZES.smart.quality, label: 'Smart', note: 'As sharp as the S23 or the Boox Note X5 Mini shows it, upright or on its side. Strips keep their full length.' },
+  small: { quality: SIZES.small.quality, label: 'Small', note: 'Longest side 1000 px, strips 450 wide. Saves the most room; pages look softer on the Boox.' },
 };
-const keepingAt = (size) => KEEP_SIZES[size] || KEEP_SIZES.smart;
+const keepingAt = (size) => (Object.prototype.hasOwnProperty.call(KEEP_SIZES, size) ? size : 'smart');
 
-/** How much smaller a picture is kept, 1 to leave it as it is: Smart's rule (smartScale). */
-export const keptScale = (width, height) => smartScale(width, height);
+/** How much smaller a picture is kept at a size, 1 to leave it as it is: the export's rule for that size (scaleFor). */
+export const keptScale = (width, height, size = 'smart') => scaleFor(width, height, SIZES[keepingAt(size)]);
 
 /* Made smaller by less than this, a picture is left: not worth a generation. */
 const WORTH_SCALING = 0.9;
@@ -457,7 +461,8 @@ const KEEPABLE = /^image\/(jpeg|jpg|png)$/i;
  * `image` is its record in the book (images store).
  */
 export async function keptSmaller(image, { size = 'smart' } = {}) {
-  const keep = keepingAt(size);
+  const key = keepingAt(size);
+  const keep = KEEP_SIZES[key];
   const blob = image?.blob;
   if (!blob || !(blob.size > 0) || image.original || image.animated) return null;
   if (!KEEPABLE.test(blob.type || '')) return null;
@@ -470,8 +475,9 @@ export async function keptSmaller(image, { size = 'smart' } = {}) {
   // Marked to be shown turned: its header's sides are the wrong way round to decode it to (mayBeTurned). Left.
   if (mayBeTurned(head)) return null;
   const { width, height } = await pictureSize(blob, { decode: false });
-  const scale = keptScale(width, height);
-  if (scale > WORTH_SCALING) return null;
+  const scale = keptScale(width, height, key);
+  // Already within the size: left exactly as it is, never only re-encoded.
+  if (!(scale > 0) || scale >= 1 || (key === 'smart' && scale > WORTH_SCALING)) return null;
   const to = { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
   if (to.width > MOST_CANVAS || to.height > MOST_CANVAS || typeof createImageBitmap !== 'function') return null;
   // Too many pixels to decode safely, whatever it comes out as: kept as it is.

@@ -3386,9 +3386,10 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.match(src, /const EFFECTS = \['shine', 'fluctuate', 'poison', 'erode', 'burn', 'freeze'\];/);
   // Each effect seen, not just a tint: flames, ice crystals, toxic drips and bubbles, crumbling, sparkle, lightning -- none with reduced motion.
   for (const fx of ['burn(c, place, k, now, dt)', 'freeze(c, place, k, now, dt)', 'poison(c, place, k, now, dt)', 'erode(c, place, k, now, dt, from, to)', 'shine(c, place, k, now)', 'fluctuate(c, place, k, now, dt, from, to)']) assert.ok(src.includes(fx), fx);
-  // Fire licks in tongues; ice stands in faceted clusters with icicles under; poison glows, its slime run together, smoke curling off it.
-  assert.match(src, /function tongue\(x, y, h, w, now, speed, phase, lean\)/);
-  assert.match(src, /The lit face, and the face in shadow\./);
+  // Fire is a particle fire of motes cooling as they rise; ice stands in faceted clusters with icicles under; poison glows, its slime run together, smoke curling off it.
+  assert.match(src, /kind: 'flame'/);
+  assert.match(src, /globalCompositeOperation = 'lighter'/);
+  assert.match(src, /The lit face and the face in shadow, by one light for every\b/);
   assert.match(src, /Icicles under a few/);
   assert.match(src, /A wisp: a ribbon rising and curling over/);
   // At random along every line, each with its own character -- not evenly spaced, not in step.

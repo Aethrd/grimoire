@@ -100,7 +100,8 @@ await t('kept smaller by the same rule as a Smart export: either screen, held ei
   // Unknown size: left.
   assert.equal(shrink.keptScale(0, 0), 1);
   // One size offered, Smart; a choice made before (room to zoom, fits the screen) is taken as Smart.
-  assert.deepEqual(Object.keys(shrink.KEEP_SIZES), ['smart']);
+  assert.deepEqual(Object.keys(shrink.KEEP_SIZES), ['smart', 'small']);
+  assert.equal(shrink.KEEP_SIZES.small.quality, shrink.SIZES.small.quality);
   assert.equal(shrink.KEEP_SIZES.smart.quality, shrink.SIZES.smart.quality);
 });
 
@@ -264,6 +265,32 @@ await t('kept smaller: pages and wide strips made smaller, as JPEG, to Smart', a
   assert.equal(await shrink.keptSmaller({ blob: png(2000, 18000) }), null);
 });
 
+await t('kept smaller at Small: the export\'s Small, so a Small or Smart export copies it; a picture within it left', async () => {
+  drawn.length = 0;
+  const page = await shrink.keptSmaller({ blob: jpeg(3000, 4300) }, { size: 'small' });
+  assert.deepEqual([page.width, page.height], [698, 1000]);
+  assert.equal(last().quality, shrink.SIZES.small.quality);
+  assert.equal(shrink.scaleFor(page.width, page.height, shrink.SIZES.small), 1, 'a Small export would shrink it again');
+  assert.equal(shrink.smartScale(page.width, page.height), 1, 'a Smart export would shrink it again');
+  // A strip: 450 wide, its length in the same measure.
+  const strip = await shrink.keptSmaller({ blob: png(1600, 12000) }, { size: 'small' });
+  assert.deepEqual([strip.width, strip.height], [450, 3375]);
+  // Already within Small: never only re-encoded.
+  const count = drawn.length;
+  assert.equal(await shrink.keptSmaller({ blob: jpeg(700, 1000) }, { size: 'small' }), null);
+  assert.equal(await shrink.keptSmaller({ blob: png(450, 9000) }, { size: 'small' }), null);
+  assert.equal(drawn.length, count);
+  // The same safety as Smart: too many pixels, turned photos, see-through -- left.
+  assert.equal(await shrink.keptSmaller({ blob: png(3000, 4000, { colour: 6 }) }, { size: 'small' }), null);
+  assert.equal(await shrink.keptSmaller({ blob: jpeg(2400, 20000) }, { size: 'small' }), null);
+  // Unknown sizes are Smart, never Small.
+  const odd = await shrink.keptSmaller({ blob: jpeg(2000, 2900) }, { size: 'constructor' });
+  assert.deepEqual([odd.width, odd.height], [1291, 1872]);
+  // keptScale by size.
+  assert.equal(shrink.keptScale(3000, 4300, 'small').toFixed(4), (1000 / 4300).toFixed(4));
+  assert.equal(shrink.keptScale(2000, 2900, 'nonsense'), shrink.smartScale(2000, 2900));
+});
+
 await t('kept smaller: left alone wherever smaller would be worse', async () => {
   const left = async (image, why) => {
     const count = drawn.length;
@@ -350,7 +377,9 @@ await t('asked for from the selection and from a folder, saying what it does fir
   assert.match(app, /choice\('Keep its pictures smaller'[\s\S]{0,120}askKeepSmaller\(await library\.booksInFolder\(folder\)/);
   const ask = app.slice(app.indexOf('function askKeepSmaller'), app.indexOf('async function keepSmaller'));
   assert.match(ask, /the originals are not kept, and exports carry the smaller ones/);
-  assert.match(ask, /Long strips keep their full length/);
+  assert.match(ask, /Long strips are never cut or squeezed: only their width is limited/);
+  // Every size offered, each with its own label and note.
+  assert.match(ask, /for \(const \[key, size\] of Object\.entries\(shrink\.KEEP_SIZES\)\)/);
   assert.match(ask, /Sure\? \$\{escapeText\(size\.label\)\}, for good/);
   assert.match(app, /finish\.controls\(\{ cancel: \(\) => \{ stopped = true; \} \}\);\s*try \{\s*const done = await shrink\.keepSmaller/);
 });

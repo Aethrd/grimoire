@@ -735,92 +735,70 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(o.x, o.y, R, 0, TAU); ctx.fill();
     ctx.restore();
   }
-  /* A tongue of flame: up from its foot, waving as it rises -- the wave
-   * running up it, as flame does -- narrowing to a tip that curls. */
-  function tongue(x, y, h, w, now, speed, phase, lean) {
-    const n = 10, left = [], right = [];
-    for (let i = 0; i <= n; i += 1) {
-      const u = i / n;
-      const sway = Math.sin(u * 3.2 - now / speed + phase) * w * 0.55 * u + lean * u * u;
-      const half = (w / 2) * Math.pow(1 - u, 0.85) * (0.75 + 0.35 * Math.sin(u * Math.PI));
-      left.push({ x: x + sway - half, y: y - h * u });
-      right.push({ x: x + sway + half, y: y - h * u });
-    }
-    ctx.beginPath();
-    ctx.moveTo(left[0].x, left[0].y);
-    for (let i = 1; i < left.length; i += 1) ctx.lineTo(left[i].x, left[i].y);
-    for (let i = right.length - 1; i >= 0; i -= 1) ctx.lineTo(right[i].x, right[i].y);
-    ctx.closePath();
-  }
-
   const STATUS = {
-    /* Burn: fire as fire is -- tongues licking up off the lines, layered
-     * deep red, orange and a yellow-white heart, each waving and curling on
-     * its own, flaring and dying down; bits of flame breaking off its tips,
-     * sparks, smoke above, and the light of it over the circle. */
+    /* Burn: fire as a particle fire is -- glowing motes streaming up off
+     * the lines, many and small, each born white-hot and cooling as it
+     * rises through yellow, orange and red, swelling then shrinking away,
+     * swaying as it goes; added together, so where they crowd the fire is
+     * brightest. Each point burns on its own beat, flaring and dying down.
+     * Fine sparks shoot higher; smoke rises dark above; the circle is lit. */
     burn(c, place, k, now, dt) {
       circleGlow(c, place, [255, 120, 40], 0.16 * k);
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
+      // New flame at each point, as fast as it is burning there.
       for (const a of c.anchors) {
-        const q = screenOf(place, a.p);
         const flare = Math.max(0, Math.sin(now / a.beat + a.phase) * 0.8 + 0.4);
-        const flicker = 0.7 + 0.3 * Math.sin(now / a.f1 + a.phase * 7) * Math.sin(now / a.f2 + a.seed * 17);
-        const h = (7 + 14 * a.size) * flare * flicker * S * k;
-        if (h < 1) continue;
-        const w = h * 0.42, lean = Math.sin(now / (a.f2 * 3) + a.phase) * h * 0.25;
-        // Two or three licks to a flame, each its own height and lean.
-        const licks = h > 9 * S ? 3 : h > 4 * S ? 2 : 1;
-        for (const [hk, wk, dl, ph] of [[1, 1, 0, 0], [0.72, 0.7, -0.6, 2.1], [0.55, 0.6, 0.7, 4.2]].slice(0, licks)) {
-          for (const [layer, colourAt] of [[1, [[0, 'rgba(255,120,30,.55)'], [0.6, 'rgba(200,40,10,.35)'], [1, 'rgba(120,10,0,0)']]],
-            [0.66, [[0, 'rgba(255,190,70,.7)'], [0.7, 'rgba(255,110,20,.35)'], [1, 'rgba(255,80,10,0)']]],
-            [0.36, [[0, 'rgba(255,250,215,.85)'], [0.8, 'rgba(255,210,120,.3)'], [1, 'rgba(255,200,100,0)']]]]) {
-            const hh = h * hk * (0.55 + 0.45 * layer), ww = w * wk * layer;
-            const g = ctx.createLinearGradient(q.x, q.y, q.x, q.y - hh);
-            for (const [at, col] of colourAt) g.addColorStop(at, col.replace(/,\.?[\d.]+\)$/, (m) => `,${(parseFloat(m.slice(1)) * k).toFixed(3)})`));
-            ctx.fillStyle = g;
-            tongue(q.x + dl * w * 0.5, q.y, hh, ww, now, a.f1 * 2.2, a.phase + ph, lean * (1 + dl));
-            ctx.fill();
-          }
-        }
-        // Now and then a bit of flame breaks off its tip and lifts away.
-        if (flare > 0.7 && Math.random() < dt * 1.4 && c.fx.length < 70) c.fx.push({ kind: 'wisp', x: q.x + lean, y: q.y - h * 0.8, life: 0, size: w * 0.6, phase: a.phase });
-      }
-      if (Math.random() < dt * 22 && c.fx.length < 70) {
-        const a = c.anchors[Math.floor(Math.random() * c.anchors.length)];
-        const q = screenOf(place, a.p);
-        c.fx.push({ kind: 'spark', x: q.x, y: q.y, life: 0, drift: rand(-8, 8), size: rand(0.7, 1.6) });
-      }
-      for (const e of c.fx) {
-        e.life += dt;
-        if (e.kind === 'wisp') {
-          const f = 1 - clamp(e.life / 0.7);
-          const g = ctx.createLinearGradient(e.x, e.y, e.x, e.y - e.size * 3);
-          g.addColorStop(0, `rgba(255,170,60,${0.6 * f * k})`); g.addColorStop(1, 'rgba(255,90,20,0)');
-          ctx.fillStyle = g;
-          tongue(e.x, e.y - e.life * 30 * S, e.size * 3 * f, e.size * f, now, 120, e.phase, 0); ctx.fill();
-        } else if (e.kind === 'spark') {
-          const x = e.x + Math.sin(e.life * 4 + e.drift) * e.drift * 0.6 * S, y = e.y - e.life * 30 * S;
-          const f = Math.sin(clamp(e.life / 1.5) * Math.PI) * k;
-          ctx.fillStyle = `rgba(255,200,100,${0.3 * f})`; ctx.beginPath(); ctx.arc(x, y, e.size * 2.6 * S, 0, TAU); ctx.fill();
-          ctx.fillStyle = `rgba(255,245,200,${f})`; ctx.beginPath(); ctx.arc(x, y, e.size * S, 0, TAU); ctx.fill();
+        a.timer -= dt * (6 + 26 * flare * a.size);
+        while (a.timer <= 0 && c.fx.length < 420) {
+          const q = screenOf(place, a.p);
+          c.fx.push({ kind: 'flame', x: q.x + rand(-2.2, 2.2) * S, y: q.y + rand(-1, 1) * S, life: 0, span: rand(0.45, 0.95) * (0.7 + 0.5 * flare),
+            rise: rand(18, 34) * (0.7 + 0.5 * flare), size: rand(1, 2.2) * (0.7 + 0.5 * a.size), sway: rand(0, TAU), wide: rand(2, 5) });
+          a.timer += 1;
         }
       }
-      ctx.restore();
-      // Smoke above it, grey and rising slow -- drawn over, not added, so it darkens.
-      if (Math.random() < dt * 4 && c.fx.length < 80) {
+      if (Math.random() < dt * 16) {
         const a = c.anchors[Math.floor(Math.random() * c.anchors.length)];
         const q = screenOf(place, a.p);
-        c.fx.push({ kind: 'smoke', x: q.x, y: q.y - 12 * S, life: 0, drift: rand(-6, 6), size: rand(5, 10) });
+        c.fx.push({ kind: 'spark', x: q.x, y: q.y, life: 0, span: rand(0.9, 1.7), rise: rand(34, 60), drift: rand(-10, 10), size: rand(0.5, 1) });
       }
+      if (Math.random() < dt * 4) {
+        const a = c.anchors[Math.floor(Math.random() * c.anchors.length)];
+        const q = screenOf(place, a.p);
+        c.fx.push({ kind: 'smoke', x: q.x, y: q.y - 14 * S, life: 0, span: 2.4, drift: rand(-6, 6), size: rand(5, 10) });
+      }
+      // Smoke first, under the fire, darkening.
       for (const e of c.fx) {
         if (e.kind !== 'smoke') continue;
         const x = e.x + Math.sin(e.life * 1.2) * e.drift * S, y = e.y - e.life * 14 * S, r = e.size * (0.6 + e.life * 0.6) * S;
         const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-        g.addColorStop(0, `rgba(60,52,48,${0.22 * Math.sin(clamp(e.life / 2.4) * Math.PI) * k})`); g.addColorStop(1, 'rgba(60,52,48,0)');
+        g.addColorStop(0, `rgba(50,44,40,${0.24 * Math.sin(clamp(e.life / e.span) * Math.PI) * k})`); g.addColorStop(1, 'rgba(50,44,40,0)');
         ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
       }
-      c.fx = c.fx.filter((e) => e.life < (e.kind === 'wisp' ? 0.7 : e.kind === 'spark' ? 1.5 : 2.4));
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      // Its colour cooling as it rises: white, yellow, orange, red, gone.
+      const heat = (u) => (u < 0.06 ? [255, 246, 214] : u < 0.4 ? mix([255, 246, 214], [255, 190, 70], (u - 0.06) / 0.34)
+        : u < 0.7 ? mix([255, 190, 70], [240, 90, 24], (u - 0.4) / 0.3) : mix([240, 90, 24], [150, 24, 8], (u - 0.7) / 0.3));
+      for (const e of c.fx) {
+        e.life += dt;
+        const u = clamp(e.life / e.span);
+        if (e.kind === 'flame') {
+          const x = e.x + Math.sin(e.life * 7 + e.sway) * e.wide * u * S;
+          const y = e.y - e.rise * e.life * S * (1 + u * 0.6);
+          const r = e.size * S * Math.sin(Math.min(1, u * 1.6 + 0.15) * Math.PI) * (1 - u * 0.4);
+          if (r <= 0.05) continue;
+          const col = heat(u), a = (1 - u) * 0.42 * k;
+          // A bright core and a short soft edge, so each mote reads as one.
+          const g = ctx.createRadialGradient(x, y, 0, x, y, r * 1.6);
+          g.addColorStop(0, rgba(col, a)); g.addColorStop(0.35, rgba(col, a * 0.7)); g.addColorStop(1, rgba(col, 0));
+          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r * 1.6, 0, TAU); ctx.fill();
+        } else if (e.kind === 'spark') {
+          const x = e.x + Math.sin(e.life * 5 + e.drift) * e.drift * 0.5 * S, y = e.y - e.rise * e.life * S;
+          const f = Math.sin(u * Math.PI) * k;
+          ctx.fillStyle = `rgba(255,230,160,${f})`; ctx.beginPath(); ctx.arc(x, y, e.size * S, 0, TAU); ctx.fill();
+        }
+      }
+      ctx.restore();
+      c.fx = c.fx.filter((e) => e.life < e.span);
     },
 
     /* Freeze: ice as ice is -- clusters of tall faceted crystals standing up
@@ -855,19 +833,31 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
           const shoulderR = { x: base.x + dx * len * 0.55 + px * bw * 0.7, y: base.y + dy * len * 0.55 + py * bw * 0.7 };
           const L = { x: base.x - px * bw, y: base.y - py * bw }, R = { x: base.x + px * bw, y: base.y + py * bw };
           const spine = { x: base.x + dx * len * 0.1, y: base.y + dy * len * 0.1 };
-          // The lit face, and the face in shadow.
-          ctx.fillStyle = `rgba(150,222,250,${0.92 * k})`;
+          /* The lit face and the face in shadow, by one light for every
+           * crystal -- from the upper left -- whichever way it leans: the
+           * face turned to the light lit, the other shaded, each paling
+           * evenly towards its tip. */
+          const leftLit = (-px * -0.7 + -py * -0.7) > 0;
+          const face = (lit) => {
+            const g = ctx.createLinearGradient(base.x, base.y, tip.x, tip.y);
+            if (lit) { g.addColorStop(0, `rgba(120,200,240,${0.95 * k})`); g.addColorStop(1, `rgba(214,244,255,${0.95 * k})`); }
+            else { g.addColorStop(0, `rgba(30,96,156,${0.95 * k})`); g.addColorStop(1, `rgba(78,156,210,${0.95 * k})`); }
+            return g;
+          };
+          ctx.fillStyle = face(leftLit);
           ctx.beginPath(); ctx.moveTo(L.x, L.y); ctx.lineTo(shoulderL.x, shoulderL.y); ctx.lineTo(tip.x, tip.y); ctx.lineTo(spine.x, spine.y); ctx.closePath(); ctx.fill();
-          ctx.fillStyle = `rgba(40,120,180,${0.92 * k})`;
+          ctx.fillStyle = face(!leftLit);
           ctx.beginPath(); ctx.moveTo(spine.x, spine.y); ctx.lineTo(tip.x, tip.y); ctx.lineTo(shoulderR.x, shoulderR.y); ctx.lineTo(R.x, R.y); ctx.closePath(); ctx.fill();
           // A facet across the lit face, a little paler.
-          ctx.fillStyle = `rgba(210,242,255,${0.6 * k})`;
-          ctx.beginPath(); ctx.moveTo(shoulderL.x, shoulderL.y); ctx.lineTo(tip.x, tip.y);
-          ctx.lineTo(base.x + dx * len * 0.5 - px * bw * 0.1, base.y + dy * len * 0.5 - py * bw * 0.1); ctx.closePath(); ctx.fill();
+          const litShoulder = leftLit ? shoulderL : shoulderR, side = leftLit ? -1 : 1;
+          ctx.fillStyle = `rgba(226,248,255,${0.45 * k})`;
+          ctx.beginPath(); ctx.moveTo(litShoulder.x, litShoulder.y); ctx.lineTo(tip.x, tip.y);
+          ctx.lineTo(base.x + dx * len * 0.5 + side * px * bw * 0.1, base.y + dy * len * 0.5 + side * py * bw * 0.1); ctx.closePath(); ctx.fill();
           // Its edges catching the light.
           ctx.strokeStyle = `rgba(240,252,255,${0.8 * k})`; ctx.lineWidth = 0.45 * S;
           ctx.beginPath(); ctx.moveTo(spine.x, spine.y); ctx.lineTo(tip.x, tip.y); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(L.x, L.y); ctx.lineTo(shoulderL.x, shoulderL.y); ctx.lineTo(tip.x, tip.y); ctx.stroke();
+          const litEdge = leftLit ? [L, shoulderL] : [R, shoulderR];
+          ctx.beginPath(); ctx.moveTo(litEdge[0].x, litEdge[0].y); ctx.lineTo(litEdge[1].x, litEdge[1].y); ctx.lineTo(tip.x, tip.y); ctx.stroke();
           const glint = Math.max(0, Math.sin(now / (a.beat * 0.45) + a.phase + j * 2.3));
           if (glint > 0.88 && grown > 0.8) star(tip.x, tip.y, 3.4 * S * (glint - 0.88) * 8, k, [255, 255, 255]);
         }
