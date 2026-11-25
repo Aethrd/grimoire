@@ -657,100 +657,219 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
     }
   }
 
-  /* ── the inkwell: a squat glass bottle, its neck open ─────────────────── */
+  /* ── the inkwell: a squat bottle of clear glass, ink swirling in it ───────
+   * The glass is drawn as glass is seen: hardly there in the middle, its
+   * edges and its thickness catching the light. The ink inside is the
+   * theme's gradient, its colours mixed into one another, seen through the
+   * side and, down the neck, on top -- a bright line where it meets the
+   * glass, rings where anything goes in. */
   // In front of the book, to the right: within reach of the page, and on screen on a phone.
   const WELL = { x: PW * 0.74, y: -PH / 2 - 36, r: 16, h: 22, neck: 8, nh: 7 };
   const wellTop = () => WELL.h + WELL.nh;
   // Where the nib is tapped after dipping: over the opening, by its right-hand rim -- lifted, and touching.
   const RIM = { x: WELL.x + WELL.neck * 0.8, y: WELL.y + 1, lift: 11, touch: 3 };
-  const INK_Z = WELL.h + WELL.nh - 1.5;
+  // The ink: most of the way up the body, under the shoulder, inside the glass's thickness.
+  const INK_Z = WELL.h - 5;
+  const INK_R = WELL.r - 1.6;
+  // How far below the rim the nib goes to be under it.
+  const DIP = INK_Z - 3 - (WELL.h + WELL.nh);
   const GRAVITY = 160;
-  function ellipsePts(cx, cy, z, r, n = 28, from = 0, to = Math.PI * 2) {
+  const TAU = Math.PI * 2;
+  const WHITE = [255, 255, 255];
+  function ellipsePts(cx, cy, z, r, n = 28, from = 0, to = TAU) {
     const pts = [];
     for (let i = 0; i <= n; i += 1) { const a = lerp(from, to, i / n); pts.push(P(cx + Math.cos(a) * r, cy + Math.sin(a) * r, z)); }
     return pts;
   }
-  function drawWellBack(from, to) {
-    const { x, y, r, h, neck, nh } = WELL;
-    // Its shadow, then the body: the near half of its base and the whole of its shoulder.
-    const s = P(x + 4, y - 3, 0);
-    const shadow = ctx.createRadialGradient(s.x, s.y, 2, s.x, s.y, r * 1.8 * S);
-    shadow.addColorStop(0, 'rgba(0,0,0,.45)'); shadow.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = shadow; ctx.beginPath(); ctx.arc(s.x, s.y, r * 1.8 * S, 0, Math.PI * 2); ctx.fill();
-    const left = P(x - r, y, 0), right = P(x + r, y, 0);
-    const g = ctx.createLinearGradient(left.x, 0, right.x, 0);
-    g.addColorStop(0, '#16151b'); g.addColorStop(0.32, '#2a2832'); g.addColorStop(0.45, '#3a3744'); g.addColorStop(0.6, '#24222b'); g.addColorStop(1, '#141318');
-    ctx.fillStyle = g;
-    // Its outline: the near half of its base, up, and the far half of its top.
-    path(ellipsePts(x, y, 0, r, 28, Math.PI, Math.PI * 2).concat(ellipsePts(x, y, h, r, 28, 0, Math.PI)));
-    ctx.fill();
-    // Its top, a shoulder, and the neck's back half.
-    ctx.fillStyle = '#25232c';
-    path(ellipsePts(x, y, h, r)); ctx.fill();
-    ctx.fillStyle = '#1b1a21';
-    path(ellipsePts(x, y, h, neck, 20, Math.PI, Math.PI * 2).concat(ellipsePts(x, y, h + nh, neck, 20, 0, Math.PI))); ctx.fill();
-    // The ink inside, a dark pool with the faintest sheen of the theme.
-    const ink = ellipsePts(x, y, h + nh - 1.5, neck - 1.3);
-    const c = P(x - 2, y + 2, h + nh);
-    const sheen = ctx.createRadialGradient(c.x, c.y, 0.5, c.x, c.y, neck * 1.3 * S);
-    sheen.addColorStop(0, rgba(mix(to, [0, 0, 0], 0.3), 0.55)); sheen.addColorStop(1, 'rgba(8,7,10,1)');
-    ctx.fillStyle = sheen; path(ink); ctx.fill();
-    // The rim's far half.
-    ctx.strokeStyle = rgba(to, 0.55); ctx.lineWidth = 1.2 * S;
-    path(ellipsePts(x, y, h + nh, neck, 20, 0, Math.PI), false); ctx.stroke();
-    // A highlight down the glass.
-    const hl = [P(x - r * 0.45, y - r * 0.85, 3), P(x - r * 0.45, y - r * 0.85, h - 3)];
-    ctx.strokeStyle = 'rgba(255,255,255,.07)'; ctx.lineWidth = 2.2 * S;
-    path(hl, false); ctx.stroke();
-  }
-  // Drawn over the quill: the near half of the neck and rim, so a dipped nib is inside it.
-  function drawWellFront(to) {
-    const { x, y, h, neck, nh } = WELL;
-    ctx.fillStyle = '#1e1d25';
-    path(ellipsePts(x, y, h, neck, 20, Math.PI, Math.PI * 2).concat(ellipsePts(x, y, h + nh, neck, 20, Math.PI, Math.PI * 2).reverse())); ctx.fill();
-    ctx.strokeStyle = rgba(to, 0.6); ctx.lineWidth = 1.2 * S;
-    path(ellipsePts(x, y, h + nh, neck, 20, Math.PI, Math.PI * 2), false); ctx.stroke();
+  // An ellipse on screen as its centre and two radii, for gradients drawn into it.
+  function screenEllipse(cx, cy, z, r) {
+    const c = P(cx, cy, z);
+    return { c, rx: Math.abs(P(cx + r, cy, z).x - c.x), ry: Math.abs(c.y - P(cx, cy + r, z).y) || 1 };
   }
 
-  /* ── ink: a bead at the nib, drops shaken loose, rings on the ink ─────── */
-  // A drop of ink: near black, caught by the theme's light on its top.
-  function inkDot(at, r, to, alpha = 1) {
-    ctx.fillStyle = `rgba(10,9,13,${(0.95 * alpha).toFixed(3)})`;
-    ctx.beginPath(); ctx.arc(at.x, at.y, r, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = rgba(to, 0.4 * alpha); ctx.lineWidth = 0.6 * S;
-    ctx.stroke();
-    ctx.fillStyle = rgba(to, 0.75 * alpha);
-    ctx.beginPath(); ctx.arc(at.x - r * 0.3, at.y - r * 0.35, r * 0.32, 0, Math.PI * 2); ctx.fill();
+  /* The ink, side and top: the theme's gradient, its colours mixed into one
+   * another and drifting slowly, as two inks poured together. Front only: the
+   * part in front of a nib dipped in it, drawn again over the quill. */
+  function inkMix(from, to, t, c, rx, ry) {
+    // A wash across, one end of the gradient to the other...
+    const across = ctx.createLinearGradient(c.x - rx, c.y - ry, c.x + rx, c.y + ry);
+    across.addColorStop(0, rgba(from, 1)); across.addColorStop(1, rgba(to, 1));
+    ctx.fillStyle = across;
+    ctx.fillRect(c.x - rx - 2, c.y - ry - 2, rx * 2 + 4, ry * 2 + 4);
+    // ...and soft clouds of each colour drifting through it.
+    const clouds = [[from, 0, 0.62], [to, 2.1, 0.58], [mix(from, to, 0.5), 4.2, 0.5], [from, 5.3, 0.4], [to, 1.1, 0.42]];
+    for (const [colour, phase, size] of clouds) {
+      const cx = c.x + Math.cos(t * 0.35 + phase) * rx * 0.55;
+      const cy = c.y + Math.sin(t * 0.27 + phase * 1.3) * ry * 0.55;
+      const r = Math.max(rx, ry) * size;
+      const cloud = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      cloud.addColorStop(0, rgba(colour, 0.75)); cloud.addColorStop(1, rgba(colour, 0));
+      ctx.fillStyle = cloud;
+      ctx.fillRect(c.x - rx - 2, c.y - ry - 2, rx * 2 + 4, ry * 2 + 4);
+    }
   }
-  function drawBead(nib, size, to) {
+  function drawInk(from, to, t, frontOnly = false) {
+    const { x, y } = WELL;
+    ctx.save();
+    if (frontOnly) {
+      path(ellipsePts(x, y, 0, INK_R, 24, Math.PI, TAU).concat(ellipsePts(x, y, INK_Z, INK_R, 24, TAU, Math.PI)));
+      ctx.clip();
+    }
+    // Its side, through the glass: the mix, a little deeper towards the foot.
+    const body = ellipsePts(x, y, 0, INK_R, 28, Math.PI, TAU).concat(ellipsePts(x, y, INK_Z, INK_R, 28, 0, Math.PI));
+    // Over the whole of it, the curve of its foot included.
+    const xs = body.map((p) => p.x), ys = body.map((p) => p.y);
+    const box = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
+    const foot = { y: Math.max(...ys) }, top = { y: Math.min(...ys) };
+    ctx.save();
+    path(body); ctx.clip();
+    inkMix(from, to, t, box, (Math.max(...xs) - Math.min(...xs)) / 2 + 1, (foot.y - top.y) / 2 + 1);
+    const deeper = ctx.createLinearGradient(0, foot.y, 0, top.y);
+    deeper.addColorStop(0, 'rgba(0,0,0,.32)'); deeper.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = deeper; path(body); ctx.fill();
+    ctx.restore();
+
+    // Its top, seen down the neck: the same mix, shaded where the glass meets it.
+    const surface = ellipsePts(x, y, INK_Z, INK_R, 36);
+    const { c, rx, ry } = screenEllipse(x, y, INK_Z, INK_R);
+    ctx.save();
+    path(surface); ctx.clip();
+    inkMix(from, to, t + 7, c, rx, ry);
+    ctx.save();
+    ctx.translate(c.x, c.y); ctx.scale(1, ry / rx);
+    const walls = ctx.createRadialGradient(0, 0, rx * 0.45, 0, 0, rx);
+    walls.addColorStop(0, 'rgba(0,0,0,0)'); walls.addColorStop(1, 'rgba(0,0,0,.28)');
+    ctx.fillStyle = walls; ctx.beginPath(); ctx.arc(0, 0, rx, 0, TAU); ctx.fill();
+    ctx.restore();
+    ctx.restore();
+    ctx.strokeStyle = rgba(mix(to, WHITE, 0.35), 0.4); ctx.lineWidth = 0.7 * S;
+    path(surface); ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawWellBack(from, to, t) {
+    const { x, y, r, h, neck, nh } = WELL;
+    // Its shadow, a little of the ink's colour let through the glass into it.
+    const s = P(x + 4, y - 3, 0);
+    const shadow = ctx.createRadialGradient(s.x, s.y, 2, s.x, s.y, r * 1.8 * S);
+    shadow.addColorStop(0, 'rgba(0,0,0,.34)');
+    shadow.addColorStop(0.55, rgba(mix(from, [0, 0, 0], 0.35), 0.16));
+    shadow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = shadow; ctx.beginPath(); ctx.arc(s.x, s.y, r * 1.8 * S, 0, TAU); ctx.fill();
+    // The back of the glass, seen through the front: hardly there.
+    const outline = ellipsePts(x, y, 0, r, 28, Math.PI, TAU).concat(ellipsePts(x, y, h, r, 28, 0, Math.PI));
+    ctx.fillStyle = 'rgba(255,255,255,.035)';
+    path(outline); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 0.7 * S;
+    path(ellipsePts(x, y, 0, r, 28, 0, Math.PI), false); ctx.stroke();
+    drawInk(from, to, t);
+    // The far half of the shoulder and of the neck.
+    ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 0.7 * S;
+    path(ellipsePts(x, y, h, r, 28, 0, Math.PI), false); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,.04)';
+    path(ellipsePts(x, y, h, neck, 20, 0, Math.PI).concat(ellipsePts(x, y, h + nh, neck, 20, Math.PI, 0))); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.26)'; ctx.lineWidth = 0.9 * S;
+    path(ellipsePts(x, y, h + nh, neck, 20, 0, Math.PI), false); ctx.stroke();
+  }
+
+  // The near glass: over the ink, and over a nib dipped in it -- clear, so the nib still shows.
+  function drawWellFront(to) {
+    const { x, y, r, h, neck, nh } = WELL;
+    const left = P(x - r, y, 0), right = P(x + r, y, 0);
+    // The near wall: brighter at its edges, where the light meets more glass.
+    const wall = ctx.createLinearGradient(left.x, 0, right.x, 0);
+    wall.addColorStop(0, 'rgba(255,255,255,.13)'); wall.addColorStop(0.16, 'rgba(255,255,255,.03)');
+    wall.addColorStop(0.5, 'rgba(255,255,255,0)'); wall.addColorStop(0.84, 'rgba(255,255,255,.03)');
+    wall.addColorStop(1, 'rgba(255,255,255,.14)');
+    ctx.fillStyle = wall;
+    path(ellipsePts(x, y, 0, r, 28, Math.PI, TAU).concat(ellipsePts(x, y, h, r, 28, TAU, Math.PI))); ctx.fill();
+    // Its outline: a shade for a light page, a light for a dark one.
+    const sides = [[P(x - r, y, 0), P(x - r, y, h)], [P(x + r, y, 0), P(x + r, y, h)]];
+    for (const [stroke, width] of [['rgba(0,0,0,.22)', 1.7], ['rgba(255,255,255,.34)', 0.8]]) {
+      ctx.strokeStyle = stroke; ctx.lineWidth = width * S;
+      for (const side of sides) { path(side, false); ctx.stroke(); }
+      path(ellipsePts(x, y, 0, r, 28, Math.PI, TAU), false); ctx.stroke();
+    }
+    // The thick glass of the base, catching the light along its near edge.
+    ctx.strokeStyle = 'rgba(255,255,255,.2)'; ctx.lineWidth = 1.4 * S;
+    path(ellipsePts(x, y, 1.2, r - 0.8, 28, Math.PI * 1.1, Math.PI * 1.9), false); ctx.stroke();
+    // The shoulder: a ring of glass from the body in to the neck.
+    ctx.fillStyle = 'rgba(255,255,255,.05)';
+    ctx.beginPath();
+    for (const ring of [ellipsePts(x, y, h, r, 32), ellipsePts(x, y, h, neck, 24)]) ring.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    ctx.fill('evenodd');
+    ctx.strokeStyle = 'rgba(255,255,255,.3)'; ctx.lineWidth = 0.8 * S;
+    path(ellipsePts(x, y, h, r, 28, Math.PI, TAU), false); ctx.stroke();
+    // The window's light, down the glass; and a fainter one across from it.
+    for (const [ax, w, a] of [[-0.62, 2, 0.5], [0.7, 1.2, 0.2]]) {
+      const p0 = P(x + r * ax, y - r * 0.78, 3), p1 = P(x + r * ax, y - r * 0.78, h - 2);
+      const streak = ctx.createLinearGradient(p0.x, p0.y, p1.x, p1.y);
+      streak.addColorStop(0, 'rgba(255,255,255,0)'); streak.addColorStop(0.45, `rgba(255,255,255,${a})`);
+      streak.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.strokeStyle = streak; ctx.lineWidth = w * S; ctx.lineCap = 'round';
+      path([p0, p1], false); ctx.stroke();
+    }
+    // The neck: a short clear tube; its lip, thick glass, catching the light all round.
+    ctx.fillStyle = 'rgba(255,255,255,.07)';
+    path(ellipsePts(x, y, h, neck, 20, Math.PI, TAU).concat(ellipsePts(x, y, h + nh, neck, 20, TAU, Math.PI))); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.3)'; ctx.lineWidth = 0.8 * S;
+    for (const side of [[P(x - neck, y, h), P(x - neck, y, h + nh)], [P(x + neck, y, h), P(x + neck, y, h + nh)]]) { path(side, false); ctx.stroke(); }
+    ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 1.1 * S;
+    path(ellipsePts(x, y, h + nh, neck, 24)); ctx.stroke();
+    ctx.strokeStyle = rgba(to, 0.3); ctx.lineWidth = 0.6 * S;
+    path(ellipsePts(x, y, h + nh, neck - 0.8, 24)); ctx.stroke();
+  }
+
+  /* ── ink: a drop hanging from the nib, drops shaken loose, rings ──────────
+   * Round below, drawn to a point above where it hangs or as it falls, the
+   * gradient's colours mixed in it, a point of light on it. */
+  function inkDrop(at, r, from, to, t, stretch = 0) {
+    ctx.save();
+    ctx.translate(at.x, at.y);
+    const tip = -r * (1 + stretch * 1.6);
+    ctx.beginPath();
+    ctx.moveTo(0, tip);
+    ctx.bezierCurveTo(r * 0.5, tip * 0.6, r, -r * 0.35, r, 0);
+    ctx.arc(0, 0, r, 0, Math.PI, false);
+    ctx.bezierCurveTo(-r, -r * 0.35, -r * 0.5, tip * 0.6, 0, tip);
+    ctx.closePath();
+    // The gradient's two colours mixed in it, turning a little as it goes.
+    const a = t * 1.5;
+    const mixIn = ctx.createLinearGradient(Math.cos(a) * r, tip / 2 + Math.sin(a) * r, -Math.cos(a) * r, -Math.sin(a) * r);
+    mixIn.addColorStop(0, rgba(from, 1)); mixIn.addColorStop(1, rgba(to, 1));
+    ctx.fillStyle = mixIn; ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.beginPath(); ctx.ellipse(-r * 0.36, -r * 0.34, r * 0.26, r * 0.18, -0.5, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+  function drawBead(nib, size, from, to, t) {
     const r = (0.8 + 1.6 * size) * S;
-    inkDot({ x: nib.x, y: nib.y + r * 0.7 }, r, to);
+    // Hanging from the nib: its point at the nib, longer the more of it there is.
+    const stretch = 0.3 + 0.7 * size;
+    inkDrop({ x: nib.x, y: nib.y + r * (1 + stretch * 1.6) }, r, from, to, t, stretch);
   }
-  function drawDrops(dt, to) {
+  function drawDrops(dt, from, to, t) {
     if (calm) { state.drops.length = 0; state.ripples.length = 0; return; }
     for (const d of state.drops) {
       d.vz -= GRAVITY * dt; d.z += d.vz * dt;
       if (d.z <= INK_Z) { d.done = true; state.ripples.push({ x: d.x, y: d.y, life: 0, size: d.size }); continue; }
-      // Falling: drawn a little drawn-out along its fall.
-      const p = P(d.x, d.y, d.z), r = d.size * S;
-      ctx.save(); ctx.translate(p.x, p.y); ctx.scale(1, 1 + Math.min(0.8, -d.vz / 60)); ctx.translate(-p.x, -p.y);
-      inkDot(p, r, to);
-      ctx.restore();
+      // Falling: drawn out along its fall, its point up.
+      inkDrop(P(d.x, d.y, d.z), d.size * S, from, to, t, Math.min(1, -d.vz / 70));
     }
     state.drops = state.drops.filter((d) => !d.done);
     if (!state.ripples.length) return;
-    // The rings, on the ink only: clipped to the well's opening.
+    // The rings, on the ink only.
     ctx.save();
-    path(ellipsePts(WELL.x, WELL.y, INK_Z, WELL.neck - 1.3)); ctx.clip();
+    path(ellipsePts(WELL.x, WELL.y, INK_Z, INK_R)); ctx.clip();
     for (const r of state.ripples) {
       r.life += dt;
-      const k = clamp(r.life / 0.8);
-      ctx.strokeStyle = rgba(to, 0.5 * (1 - k));
-      ctx.lineWidth = 0.7 * S;
-      path(ellipsePts(r.x, r.y, INK_Z, 0.6 + k * 3.4 * r.size, 20)); ctx.stroke();
+      const k = clamp(r.life / 0.9);
+      ctx.strokeStyle = rgba(mix(from, to, k), 0.6 * (1 - k));
+      ctx.lineWidth = (0.9 - 0.4 * k) * S;
+      path(ellipsePts(r.x, r.y, INK_Z, 0.6 + k * 3.8 * r.size, 20)); ctx.stroke();
     }
     ctx.restore();
-    state.ripples = state.ripples.filter((r) => r.life < 0.8);
+    state.ripples = state.ripples.filter((r) => r.life < 0.9);
   }
 
   /* ── the quill: drawn at its nib, its plume up to the right ──────────────
@@ -846,7 +965,7 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
     if (calm) {
       // No travel, no turning: the quill rests in the well; lines appear one at a time; a full page hands over by a fade.
       state.leaf = null; state.from = null;
-      state.nib = nibAtWell(-6);
+      state.nib = nibAtWell(DIP + 1);
       if (state.handover < 1) {
         state.handover = Math.min(1, state.handover + dt / 1.5);
         if (state.handover >= 1) { state.right = []; state.circle = state.nextCircle || newCircle(); state.nextCircle = null; }
@@ -890,12 +1009,12 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
        * over the well again. The page turns meanwhile. */
       const k = state.t;
       const tap = (at) => { const s = (k - at) / 0.4; return s < 0.32 ? ease(s / 0.32) : 1 - ease((s - 0.32) / 0.68); };
-      if (k < 0.6) state.nib = nibAtWell(lerp(14, -7, ease(k / 0.6)));
-      else if (k < 0.95) state.nib = nibAtWell(-7);
+      if (k < 0.6) state.nib = nibAtWell(lerp(14, DIP, ease(k / 0.6)));
+      else if (k < 0.95) state.nib = nibAtWell(DIP);
       else if (k < 1.45) {
         // Up out of the neck first, then across: never through the glass.
         const s = (k - 0.95) / 0.5, up = ease(clamp(s / 0.6)), across = ease(clamp((s - 0.3) / 0.7));
-        state.nib = { x: lerp(WELL.x, RIM.x, across), y: lerp(WELL.y, RIM.y, across), z: wellTop() + lerp(-7, RIM.lift, up) };
+        state.nib = { x: lerp(WELL.x, RIM.x, across), y: lerp(WELL.y, RIM.y, across), z: wellTop() + lerp(DIP, RIM.lift, up) };
       } else if (k < 2.25) {
         // Two taps, 0.4 s each: down onto the rim quickly, up slower.
         const down = tap(k < 1.85 ? 1.45 : 1.85);
@@ -1017,8 +1136,16 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
     }
 
     // ── the inkwell, the quill, the letters drawn into it ──
-    drawWellBack(from, to);
+    // The ink turns slowly; with reduced motion it is still.
+    const swirl = calm ? 0 : now / 1000;
+    drawWellBack(from, to, swirl);
     const inNeck = state.nib.z < wellTop() + 2 && Math.hypot(state.nib.x - WELL.x, state.nib.y - WELL.y) < 3;
+    // A ring where the nib goes into the ink, and where it comes out.
+    const under = inNeck && state.nib.z < INK_Z + 0.5;
+    if (under !== state.under) {
+      if (state.under !== undefined && !calm) state.ripples.push({ x: state.nib.x, y: state.nib.y, life: 0, size: 2.2 });
+      state.under = under;
+    }
     // The glow behind the nib: short, faint, fading.
     if (!calm && state.phase === 'write' && writing) {
       const end = Math.floor(writing.drawn);
@@ -1030,15 +1157,20 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
         ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
       }
     }
-    drawDrops(dt, to);
+    drawDrops(dt, from, to, swirl);
     for (const l of letters) if (l.feed) drawLetter(l);
     // After a tap on the rim the feather shakes, quick and dying away.
     state.shake = Math.max(0, state.shake - dt * 2.4);
     const shake = state.shake * state.shake * Math.sin(now / 26) * 0.1;
     const lean = (state.phase === 'write' ? Math.sin(now / 150) * 0.05 : 0.18) + shake;
+    // The glass in front of the quill -- or, the nib down in it, over the quill, the ink in front of it first.
+    if (!inNeck) drawWellFront(to);
     drawQuill(nibScreen, lean, from, to);
-    if (state.bead > 0.02 && !calm) drawBead(nibScreen, state.bead, to);
-    if (inNeck) drawWellFront(to);
+    if (state.bead > 0.02 && !calm) drawBead(nibScreen, state.bead, from, to, swirl);
+    if (inNeck) {
+      if (under) drawInk(from, to, swirl, true);
+      drawWellFront(to);
+    }
   }
 
   let last = performance.now();

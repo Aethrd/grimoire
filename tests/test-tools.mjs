@@ -3357,6 +3357,13 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.match(src, /state\.drops\.push\(/);
   assert.match(src, /if \(d\.z <= INK_Z\) \{ d\.done = true; state\.ripples\.push/);
   assert.match(src, /if \(k > 2\.75\) \{ state\.phase = 'wait';/);
+  // The inkwell clear glass, the ink inside it the gradient's own colours mixed; the nib dipped down into it, seen through the glass.
+  assert.match(src, /function inkMix\(from, to, t, c, rx, ry\)/);
+  assert.match(src, /across\.addColorStop\(0, rgba\(from, 1\)\); across\.addColorStop\(1, rgba\(to, 1\)\);/);
+  assert.match(src, /const DIP = INK_Z - 3 - \(WELL\.h \+ WELL\.nh\);/);
+  assert.match(src, /if \(under\) drawInk\(from, to, swirl, true\);\s+drawWellFront\(to\);/);
+  // Still with reduced motion.
+  assert.match(src, /const swirl = calm \? 0 : now \/ 1000;/);
   // Four times in ten the circle lies dark; otherwise one effect of six, at random.
   assert.match(src, /Math\.random\(\) < 0\.4 \? 'dark' : EFFECTS\[Math\.floor\(Math\.random\(\) \* EFFECTS\.length\)\]/);
   assert.match(src, /const EFFECTS = \['shine', 'fluctuate', 'decay', 'erode', 'burn', 'freeze'\];/);
