@@ -2686,7 +2686,12 @@ export function releaseImages() {
  */
 export async function flushSession() {
   if (!session || !state.book) return;
-  if (session.pages <= 0 && session.active <= 0) return;
+  /* Nothing read, nothing logged -- time alone is not reading. Opened and
+   * left, a book had a session of minutes and no pages: on the stats and the
+   * heat map as a day of reading. The time is not lost: the session goes on,
+   * and is logged with the page it was spent on once that page is turned;
+   * left unread, it goes with it (endSession). */
+  if (session.pages <= 0 && session.words <= 0) return;
 
   const done = session;
   // Replaced rather than nulled, so reading continues to accumulate against a

@@ -325,7 +325,7 @@ console.log('books left unread');
     assert.deepEqual(titles(lib.goneQuiet(books, { days: 5, now })), ['Inferred', 'Set to Reading']);
   });
 
-  t('opening a book counts as picking it up; the bin and other editions of the last book are spared', () => {
+  t('opening a book is not picking it up -- reading it is; the bin and other editions of the last book are spared', () => {
     const old = now - 30 * DAY;
     const books = [
       { id: 1, title: 'Last', lastReadAt: now - DAY, bundleId: 1 },
@@ -335,7 +335,8 @@ console.log('books left unread');
       { id: 5, title: 'Passing through', lastReadAt: old, transient: true },
       { id: 6, title: 'Quiet', lastReadAt: old },
     ];
-    assert.deepEqual(titles(lib.goneQuiet(books, { days: 5, now })), ['Quiet']);
+    // Opened yesterday by accident, not read in a month: it goes quiet as well.
+    assert.deepEqual(titles(lib.goneQuiet(books, { days: 5, now })), ['Opened yesterday', 'Quiet']);
   });
 
   t('nothing is held when it is turned off', () => {

@@ -3368,7 +3368,9 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   // No cage round it: the flask alone.
   assert.doesNotMatch(src, /drawCage|CAGE/);
   // The quill's hardware: a two-tone nib with a heart-shaped breather, a leather grip bound in brass, a crown retainer set with a gem, a second feather tucked in.
-  for (const part of ['The breather: a small heart', 'The grip: dark leather', 'The retainer: brass, rising to a crown', 'A second, smaller feather tucked in']) assert.ok(src.includes(part), part);
+  for (const part of ['The breather: a small heart', 'The grip: dark leather', 'The retainer: brass, rising to a crown']) assert.ok(src.includes(part), part);
+  // No second feather tucked in behind: it looked odd.
+  assert.ok(!src.includes('A second, smaller feather'));
   // The quill: a steel nib with its slit and breather hole, wet from the ink and drying as it writes, in a banded brass holder.
   assert.match(src, /function drawQuill\(at, lean, from, to, wet = 0, upright = 0\)/);
   // Into the flask it stands up, the lower the straighter, eased: through the mouth, never the glass.
@@ -3381,7 +3383,19 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.match(src, /const swirl = calm \? 0 : now \/ 1000;/);
   // Four times in ten the circle lies dark; otherwise one effect of six, at random.
   assert.match(src, /Math\.random\(\) < 0\.4 \? 'dark' : EFFECTS\[Math\.floor\(Math\.random\(\) \* EFFECTS\.length\)\]/);
-  assert.match(src, /const EFFECTS = \['shine', 'fluctuate', 'decay', 'erode', 'burn', 'freeze'\];/);
+  assert.match(src, /const EFFECTS = \['shine', 'fluctuate', 'poison', 'erode', 'burn', 'freeze'\];/);
+  // Each effect seen, not just a tint: flames, ice crystals, toxic drips and bubbles, crumbling, sparkle, lightning -- none with reduced motion.
+  for (const fx of ['burn(c, place, k, now, dt)', 'freeze(c, place, k, now, dt)', 'poison(c, place, k, now, dt)', 'erode(c, place, k, now, dt, from, to)', 'shine(c, place, k, now)', 'fluctuate(c, place, k, now, dt, from, to)']) assert.ok(src.includes(fx), fx);
+  // Fire licks in tongues; ice stands in faceted clusters with icicles under; poison glows, its slime run together, smoke curling off it.
+  assert.match(src, /function tongue\(x, y, h, w, now, speed, phase, lean\)/);
+  assert.match(src, /The lit face, and the face in shadow\./);
+  assert.match(src, /Icicles under a few/);
+  assert.match(src, /A wisp: a ribbon rising and curling over/);
+  // At random along every line, each with its own character -- not evenly spaced, not in step.
+  assert.match(src, /const count = Math\.round\(rand\(36, 62\)\);/);
+  // One page turned a dip: the dip outlasts the turn, which was started again when it ended.
+  assert.match(src, /if \(!state\.leaf && !state\.turned && k > 0\.3\) \{\s+state\.turned = true;/);
+  assert.match(src, /if \(!calm\) \{\s+const strength = ease\(c\.blend\) \* fade;/);
   // A quarter faster than it was; reduced motion read from the phone; an effect handed over from where it was.
   assert.match(src, /const WRITE_SPEED = 37\.5;/);
   assert.match(src, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
@@ -3796,7 +3810,7 @@ await t('a blurred book is blurred in Continue reading too', async () => {
   await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
   const book = await byPrint(VEILED);
   await library.blurCovers([book.id], true);
-  await store.put('books', { ...(await store.get('books', book.id)), coverBlob: new window.Blob(['x'], { type: 'image/png' }), coverBytes: 1, lastOpenedAt: Date.now() + 1000 });
+  await store.put('books', { ...(await store.get('books', book.id)), coverBlob: new window.Blob(['x'], { type: 'image/png' }), coverBytes: 1, lastOpenedAt: Date.now() + 1000, lastReadAt: Date.now() + 1000 });
   tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
   await settle();
   tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
@@ -3869,11 +3883,11 @@ await t('the shelf drawn twice at once ends drawn from the library as it is now'
   const [first, second] = books;
   assert.ok(first && second, 'two books to draw');
   const at = Date.now() + 1e9;
-  await store.put('books', { ...(await store.get('books', first.id)), lastOpenedAt: at });
+  await store.put('books', { ...(await store.get('books', first.id)), lastOpenedAt: at, lastReadAt: at });
   tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
   await settle();
   tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));      // a drawing, reading the library
-  const written = store.put('books', { ...(await store.get('books', second.id)), folder: first.folder, lastOpenedAt: at + 1000 });
+  const written = store.put('books', { ...(await store.get('books', second.id)), folder: first.folder, lastOpenedAt: at + 1000, lastReadAt: at + 1000 });
   // Another asked for before the first is done (away and back, without waiting).
   tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
   tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));

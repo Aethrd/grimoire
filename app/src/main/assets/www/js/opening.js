@@ -176,7 +176,9 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
   const lerp = (a, b, t) => a + (b - a) * t;
   const rand = (a, b) => a + Math.random() * (b - a);
   const WARM = [226, 140, 96];
-  const COOL = [164, 200, 236];
+  const COOL = [130, 210, 245];
+  const TOXIC = [60, 200, 70];
+  const LIME = [170, 236, 90];
 
   let ctx, W, H;
   function fit() {
@@ -351,7 +353,7 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
    * Drawn new for each page that lands on the left: rings, a star, rune
    * marks round the band, small circles at the star's points. Four times in
    * ten it lies dark; otherwise one effect takes it, at random, for a while. */
-  const EFFECTS = ['shine', 'fluctuate', 'decay', 'erode', 'burn', 'freeze'];
+  const EFFECTS = ['shine', 'fluctuate', 'poison', 'erode', 'burn', 'freeze'];
   const rollEffect = () => (Math.random() < 0.4 ? 'dark' : EFFECTS[Math.floor(Math.random() * EFFECTS.length)]);
   /* Rune-like marks, drawn in a unit box: x across, y up (y=1 the top). Each is
    * a few strokes, none of them a real alphabet's letter. */
@@ -567,28 +569,47 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
     return {
       segs, widths, seeds: segs.map(() => Math.random()),
       effect: rollEffect(), was: 'dark', wasT: 0, blend: 1, since: 0, next: rand(5, 9),
-      embers: [], frost: segs.slice(0, 2).flatMap((one) => one.filter((_, i) => i % 6 === 0).map((p) => ({ p, len: 0, max: rand(0.015, 0.04) }))),
+      fx: [], anchors: anchorsOf(segs),
     };
   }
 
   // A point of the circle on a page: local (a, b) in page widths, centred on the page.
   const circlePoint = (place, a, b) => place(0.5 + a, 0.5 + b * (PW / PH));
 
+  /* What each effect does to the circle -- strongly: each one should be
+   * unmistakable at a glance. A halo is a wide faint stroke under the line,
+   * a glow without the cost of a blur; sag lets a decaying circle droop. */
   function effectLook(name, c, seed, now, t) {
-    // { alpha, colour mix (warm/cool), width, rotation, scale, gap } for one segment.
-    const look = { alpha: 0.2, warm: 0, cool: 0, width: 1, rot: 0, scale: 1, keep: 1 };
+    // { alpha, colour mix (warm/cool/toxic), width, rotation, scale, gap, halo, sag } for one segment.
+    const look = { alpha: 0.2, warm: 0, cool: 0, toxic: 0, bright: 0, width: 1, rot: 0, scale: 1, keep: 1, halo: 0, sag: 0 };
     switch (name) {
-      case 'dark': look.alpha = 0.16; break;
-      case 'shine': look.alpha = 0.3 + 0.32 * (0.5 - 0.5 * Math.cos(t * 1.4)); look.width = 1.2; break;
-      case 'fluctuate':
-        look.alpha = 0.32 + 0.14 * Math.sin(now / 900 + seed * 6);
-        look.rot = Math.sin(now / 2600) * 0.08;
-        look.scale = 1 + Math.sin(now / 1700) * 0.025;
+      case 'dark': look.alpha = 0.12; break;
+      case 'shine': {
+        const pulse = 0.5 - 0.5 * Math.cos(t * 1.6);
+        look.alpha = 0.6 + 0.4 * pulse; look.width = 1.5 + 0.9 * pulse; look.halo = 0.6 + 0.6 * pulse; look.bright = 0.35 + 0.45 * pulse;
         break;
-      case 'decay': look.alpha = Math.max(0.05, 0.42 - t * (0.06 + seed * 0.12)); break;
-      case 'erode': look.alpha = 0.36; look.keep = clamp(1 - t * (0.05 + seed * 0.08), 0.15, 1); break;
-      case 'burn': look.alpha = 0.4 + 0.08 * Math.sin(now / 300 + seed * 9); look.warm = clamp(t / 2); break;
-      case 'freeze': look.alpha = 0.36; look.cool = clamp(t / 2.5); break;
+      }
+      case 'fluctuate':
+        // Breathing unevenly: each line its own beat, the whole circle swaying.
+        look.alpha = 0.45 + 0.4 * Math.sin(now / 520 + seed * 6);
+        look.rot = Math.sin(now / 1500) * 0.26 + Math.sin(now / 610 + seed * 4) * 0.04;
+        look.scale = 1 + Math.sin(now / 900) * 0.07 + Math.sin(now / 340 + seed * 9) * 0.025;
+        look.width = 1 + 0.5 * (0.5 + 0.5 * Math.sin(now / 430 + seed * 7));
+        look.halo = 0.25;
+        break;
+      case 'poison':
+        // Toxic: dark green, swelling and ebbing like something alive.
+        look.alpha = 0.6 + 0.25 * Math.sin(now / 700 + seed * 5);
+        look.toxic = clamp(t / 1) * 1.2; look.width = 2.6; look.halo = 0.6 * clamp(t / 1);
+        // Heavy with it: the circle sagging a little under the slime.
+        look.sag = Math.min(0.012, t * 0.004);
+        break;
+      case 'erode': look.alpha = 0.6; look.keep = clamp(1 - t * (0.12 + seed * 0.18), 0.06, 1); break;
+      case 'burn':
+        look.alpha = 0.65 + 0.3 * Math.sin(now / 90 + seed * 9) * Math.sin(now / 230 + seed * 3);
+        look.warm = clamp(t / 1.2) * 1.5; look.width = 1.4; look.halo = 0.7 * clamp(t / 1.2);
+        break;
+      case 'freeze': look.alpha = 0.6; look.cool = clamp(t / 1.6) * 1.5; look.width = 1.2; look.halo = 0.45 * clamp(t / 1.6); break;
       default: break;
     }
     return look;
@@ -600,7 +621,7 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
     if (!calm && c.since > c.next) {
       // Handed over from exactly where the last effect was, so nothing jumps.
       c.was = c.effect; c.wasT = c.since; c.effect = rollEffect(); c.blend = 0; c.since = 0; c.next = rand(5, 9);
-      c.embers.length = 0; c.frost.forEach((f) => { f.len = 0; });
+      c.fx.length = 0; c.anchors.forEach((a) => { a.grown = 0; a.timer = rand(0, 1.5); });
     }
     if (calm && c.effect !== 'dark' && c.effect !== 'shine') { c.was = c.effect; c.wasT = c.since; c.effect = 'shine'; c.blend = 0; }
     c.blend = Math.min(1, c.blend + dt / 1.4);
@@ -613,14 +634,27 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
       const alpha = lerp(b.alpha, a.alpha, k) * fade;
       const warm = lerp(b.warm, a.warm, k), cool = lerp(b.cool, a.cool, k);
       const rot = lerp(b.rot, a.rot, k), scale = lerp(b.scale, a.scale, k), keep = lerp(b.keep, a.keep, k);
+      const halo = lerp(b.halo, a.halo, k), sag = lerp(b.sag, a.sag, k);
       let colour = mix(from, to, seed * 0.8);
-      if (warm) colour = mix(colour, WARM, warm * 0.55);
-      if (cool) colour = mix(colour, COOL, cool * 0.55);
-      ctx.strokeStyle = rgba(colour, alpha);
-      ctx.lineWidth = lerp(b.width, a.width, k) * (c.widths[si] || 1) * S;
+      if (warm) colour = mix(colour, WARM, Math.min(1, warm * 0.6));
+      if (cool) colour = mix(colour, COOL, Math.min(1, cool * 0.6));
+      const toxic = lerp(b.toxic, a.toxic, k);
+      if (toxic) colour = mix(colour, TOXIC, Math.min(1, toxic * 0.75));
+      const bright = lerp(b.bright, a.bright, k);
+      if (bright) colour = mix(colour, [255, 252, 236], bright);
+      const width = lerp(b.width, a.width, k) * (c.widths[si] || 1) * S;
       ctx.lineCap = 'round';
       const cr = Math.cos(rot), sr = Math.sin(rot);
-      const pts = seg.map(([x, y]) => circlePoint(place, (x * cr - y * sr) * scale, (x * sr + y * cr) * scale));
+      // Drooping: lower the further out, as if it were running.
+      const pts = seg.map(([x, y]) => circlePoint(place, (x * cr - y * sr) * scale, (x * sr + y * cr) * scale + sag * (0.4 + Math.abs(x) * 3)));
+      // The glow under it.
+      if (halo > 0.02 && keep >= 0.999) {
+        ctx.strokeStyle = rgba(colour, alpha * halo * 0.28);
+        ctx.lineWidth = width * 4.5;
+        path(pts, false); ctx.stroke();
+      }
+      ctx.strokeStyle = rgba(colour, Math.min(1, alpha));
+      ctx.lineWidth = width;
       if (keep >= 0.999) { path(pts, false); ctx.stroke(); }
       else {
         // Eaten away: only stretches of it left, where its own noise allows.
@@ -630,32 +664,413 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
         }
       }
     });
-    // Burn: a few embers lift off the rings and fade. Freeze: frost creeps out from the rings.
-    if (c.effect === 'burn' && !calm) {
-      if (Math.random() < dt * 6 && c.embers.length < 24) {
-        const ring = c.segs[0], p = ring[Math.floor(Math.random() * ring.length)];
-        c.embers.push({ a: p[0], b: p[1], z: 0, life: 0 });
-      }
-      for (const e of c.embers) {
-        e.life += dt; e.z += dt * 9;
-        const at = place(0.5 + e.a, 0.5 + e.b * (PW / PH));
-        const fadeE = Math.sin(clamp(e.life / 2.2) * Math.PI) * 0.4 * ease(c.blend) * fade;
-        ctx.fillStyle = rgba(mix(WARM, from, 0.3), fadeE);
-        ctx.beginPath(); ctx.arc(at.x, at.y - e.z * S, 1.3 * S, 0, Math.PI * 2); ctx.fill();
-      }
-      c.embers = c.embers.filter((e) => e.life < 2.2);
-    }
-    if (c.effect === 'freeze') {
-      ctx.strokeStyle = rgba(mix(COOL, from, 0.25), 0.35 * ease(c.blend) * fade);
-      ctx.lineWidth = 0.8 * S;
-      for (const f of c.frost) {
-        f.len = Math.min(f.max, f.len + dt * 0.012);
-        const [x, y] = f.p, r = Math.hypot(x, y) || 1;
-        const o = circlePoint(place, x, y), e = circlePoint(place, x + (x / r) * f.len, y + (y / r) * f.len);
-        ctx.beginPath(); ctx.moveTo(o.x, o.y); ctx.lineTo(e.x, e.y); ctx.stroke();
-      }
+    // Each effect, seen: flames, ice, poison, crumbling, sparkle, lightning.
+    if (!calm) {
+      const strength = ease(c.blend) * fade;
+      const fx = STATUS[c.effect];
+      if (fx && strength > 0.02) fx(c, place, strength, now, dt, from, to);
     }
   }
+
+  /* ── the status effects: what each one looks like on the circle ──────────
+   * Drawn on the rings at anchor points spread along them, in screen space:
+   * up is up the screen, outward is away from the circle's centre. */
+  /* Points scattered at random along every line of the circle -- its rings,
+   * its figure, its heart -- each with a character of its own: how big, how
+   * fast, how its crystals lie. Nothing evenly spaced or in step. */
+  function anchorsOf(segs) {
+    const lengths = segs.map((seg) => seg.length);
+    const total = lengths.reduce((n, l) => n + l, 0) || 1;
+    const count = Math.round(rand(36, 62));
+    const all = [];
+    for (let n = 0; n < count; n += 1) {
+      let pick = Math.random() * total, si = 0;
+      while (si < segs.length - 1 && pick > lengths[si]) { pick -= lengths[si]; si += 1; }
+      const seg = segs[si];
+      if (!seg.length) continue;
+      const shards = [];
+      const many = Math.floor(rand(0, 4.6));
+      for (let j = 0; j < many; j += 1) shards.push({ angle: rand(-0.9, 0.9), len: rand(4, 15), wide: rand(0.16, 0.3), rate: rand(0.25, 0.9) });
+      all.push({
+        p: seg[Math.floor(Math.random() * seg.length)], seed: Math.random(),
+        size: rand(0.5, 1.5), f1: rand(45, 110), f2: rand(110, 260), beat: rand(700, 2600), phase: rand(0, TAU),
+        shards, grown: 0, timer: rand(0, 2.5),
+      });
+    }
+    return all;
+  }
+  const screenOf = (place, [x, y]) => circlePoint(place, x, y);
+  function outward(place, p) {
+    const o = circlePoint(place, 0, 0), q = screenOf(place, p);
+    const d = Math.hypot(q.x - o.x, q.y - o.y) || 1;
+    return { q, ux: (q.x - o.x) / d, uy: (q.y - o.y) / d };
+  }
+  // A teardrop, point up, round at its foot: a flame, a drop.
+  function teardrop(x, y, w, h, lean = 0) {
+    ctx.beginPath();
+    ctx.moveTo(x - w / 2, y);
+    ctx.bezierCurveTo(x - w / 2, y - h * 0.45, x + lean - w * 0.15, y - h * 0.7, x + lean, y - h);
+    ctx.bezierCurveTo(x + lean + w * 0.15, y - h * 0.7, x + w / 2, y - h * 0.45, x + w / 2, y);
+    ctx.arc(x, y, w / 2, 0, Math.PI, false);
+    ctx.closePath();
+  }
+  function star(x, y, r, alpha, colour) {
+    ctx.fillStyle = rgba(colour, alpha);
+    ctx.beginPath();
+    for (let i = 0; i < 8; i += 1) {
+      const a = (i * Math.PI) / 4 - Math.PI / 2, rr = i % 2 ? r * 0.22 : r;
+      ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.closePath(); ctx.fill();
+  }
+
+  // A soft light spread over the circle and round it: its colour lit up, as a glow is.
+  function circleGlow(c, place, colour, alpha) {
+    const o = circlePoint(place, 0, 0);
+    const edge = circlePoint(place, Math.max(...c.segs[0].map(([x]) => Math.abs(x))), 0);
+    const R = Math.abs(edge.x - o.x) * 1.35;
+    const g = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, R);
+    g.addColorStop(0, rgba(colour, alpha)); g.addColorStop(0.55, rgba(colour, alpha * 0.45)); g.addColorStop(1, rgba(colour, 0));
+    ctx.save(); ctx.translate(o.x, o.y); ctx.scale(1, 0.62); ctx.translate(-o.x, -o.y);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(o.x, o.y, R, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+  /* A tongue of flame: up from its foot, waving as it rises -- the wave
+   * running up it, as flame does -- narrowing to a tip that curls. */
+  function tongue(x, y, h, w, now, speed, phase, lean) {
+    const n = 10, left = [], right = [];
+    for (let i = 0; i <= n; i += 1) {
+      const u = i / n;
+      const sway = Math.sin(u * 3.2 - now / speed + phase) * w * 0.55 * u + lean * u * u;
+      const half = (w / 2) * Math.pow(1 - u, 0.85) * (0.75 + 0.35 * Math.sin(u * Math.PI));
+      left.push({ x: x + sway - half, y: y - h * u });
+      right.push({ x: x + sway + half, y: y - h * u });
+    }
+    ctx.beginPath();
+    ctx.moveTo(left[0].x, left[0].y);
+    for (let i = 1; i < left.length; i += 1) ctx.lineTo(left[i].x, left[i].y);
+    for (let i = right.length - 1; i >= 0; i -= 1) ctx.lineTo(right[i].x, right[i].y);
+    ctx.closePath();
+  }
+
+  const STATUS = {
+    /* Burn: fire as fire is -- tongues licking up off the lines, layered
+     * deep red, orange and a yellow-white heart, each waving and curling on
+     * its own, flaring and dying down; bits of flame breaking off its tips,
+     * sparks, smoke above, and the light of it over the circle. */
+    burn(c, place, k, now, dt) {
+      circleGlow(c, place, [255, 120, 40], 0.16 * k);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const a of c.anchors) {
+        const q = screenOf(place, a.p);
+        const flare = Math.max(0, Math.sin(now / a.beat + a.phase) * 0.8 + 0.4);
+        const flicker = 0.7 + 0.3 * Math.sin(now / a.f1 + a.phase * 7) * Math.sin(now / a.f2 + a.seed * 17);
+        const h = (7 + 14 * a.size) * flare * flicker * S * k;
+        if (h < 1) continue;
+        const w = h * 0.42, lean = Math.sin(now / (a.f2 * 3) + a.phase) * h * 0.25;
+        // Two or three licks to a flame, each its own height and lean.
+        const licks = h > 9 * S ? 3 : h > 4 * S ? 2 : 1;
+        for (const [hk, wk, dl, ph] of [[1, 1, 0, 0], [0.72, 0.7, -0.6, 2.1], [0.55, 0.6, 0.7, 4.2]].slice(0, licks)) {
+          for (const [layer, colourAt] of [[1, [[0, 'rgba(255,120,30,.55)'], [0.6, 'rgba(200,40,10,.35)'], [1, 'rgba(120,10,0,0)']]],
+            [0.66, [[0, 'rgba(255,190,70,.7)'], [0.7, 'rgba(255,110,20,.35)'], [1, 'rgba(255,80,10,0)']]],
+            [0.36, [[0, 'rgba(255,250,215,.85)'], [0.8, 'rgba(255,210,120,.3)'], [1, 'rgba(255,200,100,0)']]]]) {
+            const hh = h * hk * (0.55 + 0.45 * layer), ww = w * wk * layer;
+            const g = ctx.createLinearGradient(q.x, q.y, q.x, q.y - hh);
+            for (const [at, col] of colourAt) g.addColorStop(at, col.replace(/,\.?[\d.]+\)$/, (m) => `,${(parseFloat(m.slice(1)) * k).toFixed(3)})`));
+            ctx.fillStyle = g;
+            tongue(q.x + dl * w * 0.5, q.y, hh, ww, now, a.f1 * 2.2, a.phase + ph, lean * (1 + dl));
+            ctx.fill();
+          }
+        }
+        // Now and then a bit of flame breaks off its tip and lifts away.
+        if (flare > 0.7 && Math.random() < dt * 1.4 && c.fx.length < 70) c.fx.push({ kind: 'wisp', x: q.x + lean, y: q.y - h * 0.8, life: 0, size: w * 0.6, phase: a.phase });
+      }
+      if (Math.random() < dt * 22 && c.fx.length < 70) {
+        const a = c.anchors[Math.floor(Math.random() * c.anchors.length)];
+        const q = screenOf(place, a.p);
+        c.fx.push({ kind: 'spark', x: q.x, y: q.y, life: 0, drift: rand(-8, 8), size: rand(0.7, 1.6) });
+      }
+      for (const e of c.fx) {
+        e.life += dt;
+        if (e.kind === 'wisp') {
+          const f = 1 - clamp(e.life / 0.7);
+          const g = ctx.createLinearGradient(e.x, e.y, e.x, e.y - e.size * 3);
+          g.addColorStop(0, `rgba(255,170,60,${0.6 * f * k})`); g.addColorStop(1, 'rgba(255,90,20,0)');
+          ctx.fillStyle = g;
+          tongue(e.x, e.y - e.life * 30 * S, e.size * 3 * f, e.size * f, now, 120, e.phase, 0); ctx.fill();
+        } else if (e.kind === 'spark') {
+          const x = e.x + Math.sin(e.life * 4 + e.drift) * e.drift * 0.6 * S, y = e.y - e.life * 30 * S;
+          const f = Math.sin(clamp(e.life / 1.5) * Math.PI) * k;
+          ctx.fillStyle = `rgba(255,200,100,${0.3 * f})`; ctx.beginPath(); ctx.arc(x, y, e.size * 2.6 * S, 0, TAU); ctx.fill();
+          ctx.fillStyle = `rgba(255,245,200,${f})`; ctx.beginPath(); ctx.arc(x, y, e.size * S, 0, TAU); ctx.fill();
+        }
+      }
+      ctx.restore();
+      // Smoke above it, grey and rising slow -- drawn over, not added, so it darkens.
+      if (Math.random() < dt * 4 && c.fx.length < 80) {
+        const a = c.anchors[Math.floor(Math.random() * c.anchors.length)];
+        const q = screenOf(place, a.p);
+        c.fx.push({ kind: 'smoke', x: q.x, y: q.y - 12 * S, life: 0, drift: rand(-6, 6), size: rand(5, 10) });
+      }
+      for (const e of c.fx) {
+        if (e.kind !== 'smoke') continue;
+        const x = e.x + Math.sin(e.life * 1.2) * e.drift * S, y = e.y - e.life * 14 * S, r = e.size * (0.6 + e.life * 0.6) * S;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `rgba(60,52,48,${0.22 * Math.sin(clamp(e.life / 2.4) * Math.PI) * k})`); g.addColorStop(1, 'rgba(60,52,48,0)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+      }
+      c.fx = c.fx.filter((e) => e.life < (e.kind === 'wisp' ? 0.7 : e.kind === 'spark' ? 1.5 : 2.4));
+    },
+
+    /* Freeze: ice as ice is -- clusters of tall faceted crystals standing up
+     * off the lines, a light face and a dark face to each, white glints on
+     * their edges; icicles hanging under; a cold light over the circle. */
+    freeze(c, place, k, now, dt) {
+      circleGlow(c, place, [140, 210, 255], 0.13 * k);
+      for (const a of c.anchors) {
+        a.grown = Math.min(1, a.grown + dt * 0.55);
+        const { q, ux, uy } = outward(place, a.p);
+        // Icicles under a few: hanging, growing longer.
+        if (a.seed < 0.3) {
+          const len = (4 + 9 * a.size) * a.grown * S * k, wd = (1 + a.size) * S;
+          const g = ctx.createLinearGradient(q.x, q.y, q.x, q.y + len);
+          g.addColorStop(0, `rgba(230,248,255,${0.9 * k})`); g.addColorStop(1, `rgba(120,200,240,${0.2 * k})`);
+          ctx.fillStyle = g;
+          ctx.beginPath(); ctx.moveTo(q.x - wd, q.y); ctx.lineTo(q.x + wd * 0.3, q.y + len); ctx.lineTo(q.x + wd, q.y); ctx.closePath(); ctx.fill();
+        }
+        // A cluster: its shards leaning up and out, each its own height.
+        const up = { x: ux * 0.45, y: uy * 0.45 - 0.8 };
+        const n = Math.hypot(up.x, up.y) || 1;
+        for (const [j, shard] of a.shards.entries()) {
+          const grown = Math.min(1, a.grown * shard.rate * 2);
+          const cs = Math.cos(shard.angle * 0.8), sn = Math.sin(shard.angle * 0.8);
+          const dx = (up.x / n) * cs - (up.y / n) * sn, dy = (up.x / n) * sn + (up.y / n) * cs;
+          const len = shard.len * 1.15 * grown * S * k, bw = len * shard.wide;
+          if (len < 1) continue;
+          const px = -dy, py = dx;   // across the shard
+          const base = { x: q.x + px * (j - (a.shards.length - 1) / 2) * bw * 0.9, y: q.y + py * (j - (a.shards.length - 1) / 2) * bw * 0.9 };
+          const tip = { x: base.x + dx * len, y: base.y + dy * len };
+          const shoulderL = { x: base.x + dx * len * 0.62 - px * bw * 0.75, y: base.y + dy * len * 0.62 - py * bw * 0.75 };
+          const shoulderR = { x: base.x + dx * len * 0.55 + px * bw * 0.7, y: base.y + dy * len * 0.55 + py * bw * 0.7 };
+          const L = { x: base.x - px * bw, y: base.y - py * bw }, R = { x: base.x + px * bw, y: base.y + py * bw };
+          const spine = { x: base.x + dx * len * 0.1, y: base.y + dy * len * 0.1 };
+          // The lit face, and the face in shadow.
+          ctx.fillStyle = `rgba(150,222,250,${0.92 * k})`;
+          ctx.beginPath(); ctx.moveTo(L.x, L.y); ctx.lineTo(shoulderL.x, shoulderL.y); ctx.lineTo(tip.x, tip.y); ctx.lineTo(spine.x, spine.y); ctx.closePath(); ctx.fill();
+          ctx.fillStyle = `rgba(40,120,180,${0.92 * k})`;
+          ctx.beginPath(); ctx.moveTo(spine.x, spine.y); ctx.lineTo(tip.x, tip.y); ctx.lineTo(shoulderR.x, shoulderR.y); ctx.lineTo(R.x, R.y); ctx.closePath(); ctx.fill();
+          // A facet across the lit face, a little paler.
+          ctx.fillStyle = `rgba(210,242,255,${0.6 * k})`;
+          ctx.beginPath(); ctx.moveTo(shoulderL.x, shoulderL.y); ctx.lineTo(tip.x, tip.y);
+          ctx.lineTo(base.x + dx * len * 0.5 - px * bw * 0.1, base.y + dy * len * 0.5 - py * bw * 0.1); ctx.closePath(); ctx.fill();
+          // Its edges catching the light.
+          ctx.strokeStyle = `rgba(240,252,255,${0.8 * k})`; ctx.lineWidth = 0.45 * S;
+          ctx.beginPath(); ctx.moveTo(spine.x, spine.y); ctx.lineTo(tip.x, tip.y); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(L.x, L.y); ctx.lineTo(shoulderL.x, shoulderL.y); ctx.lineTo(tip.x, tip.y); ctx.stroke();
+          const glint = Math.max(0, Math.sin(now / (a.beat * 0.45) + a.phase + j * 2.3));
+          if (glint > 0.88 && grown > 0.8) star(tip.x, tip.y, 3.4 * S * (glint - 0.88) * 8, k, [255, 255, 255]);
+        }
+      }
+    },
+
+    /* Poison: toxic, glowing -- the lines a sick bright green, coated in
+     * slime that clumps and runs together, glowing; green smoke curling up
+     * off it in wisps; drops oozing off; bubbles; glowing motes drifting up;
+     * the green light of it over everything. */
+    poison(c, place, k, now, dt) {
+      circleGlow(c, place, [70, 230, 90], 0.2 * k);
+      const grow = clamp(c.since / 3);
+      // The slime: one mass, so where it gathers it runs together.
+      const goo = `rgba(30,120,36,${0.9 * k})`;
+      ctx.strokeStyle = goo; ctx.fillStyle = goo; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.lineWidth = (2 + 2.2 * grow) * S;
+      for (const seg of c.segs) { path(seg.map((p) => screenOf(place, p)), false); ctx.stroke(); }
+      const clumps = c.anchors.filter((a) => a.size > 0.85);
+      const where = clumps.map((a) => {
+        const q = screenOf(place, a.p);
+        const r = (2.2 + 6 * (a.size - 0.85)) * (0.5 + 0.9 * grow) * (0.9 + 0.12 * Math.sin(now / a.beat + a.phase)) * S * k;
+        return { q, r, a };
+      });
+      for (let i = 0; i < where.length; i += 1) {
+        for (let j = i + 1; j < where.length; j += 1) {
+          const A = where[i], B = where[j];
+          if (Math.hypot(A.q.x - B.q.x, A.q.y - B.q.y) > (A.r + B.r) * (1.8 + 2.2 * grow)) continue;
+          ctx.lineWidth = Math.min(A.r, B.r) * (0.7 + 0.5 * grow);
+          ctx.beginPath(); ctx.moveTo(A.q.x, A.q.y); ctx.lineTo(B.q.x, B.q.y); ctx.stroke();
+        }
+      }
+      for (const { q, r } of where) { ctx.beginPath(); ctx.ellipse(q.x, q.y + r * 0.2, r * 1.25, r, 0, 0, TAU); ctx.fill(); }
+      // Glowing from inside: the slime lit through, brightest at its heart.
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = `rgba(110,255,90,${0.5 * k})`; ctx.lineWidth = (0.8 + 0.8 * grow) * S;
+      for (const seg of c.segs) { path(seg.map((p) => screenOf(place, p)), false); ctx.stroke(); }
+      for (const { q, r } of where) {
+        const g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r * 1.6);
+        g.addColorStop(0, `rgba(150,255,110,${0.55 * k})`); g.addColorStop(1, 'rgba(60,200,60,0)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(q.x, q.y, r * 1.6, 0, TAU); ctx.fill();
+      }
+      ctx.restore();
+      for (const { q, r, a } of where) {
+        ctx.fillStyle = `rgba(230,255,200,${0.75 * k})`;
+        ctx.beginPath(); ctx.ellipse(q.x - r * 0.45, q.y - r * 0.25, r * 0.28, r * 0.16, -0.4, 0, TAU); ctx.fill();
+        a.timer -= dt;
+        if (a.timer <= 0 && c.fx.filter((f) => f.kind === 'drip').length < 8) {
+          c.fx.push({ kind: Math.random() < 0.55 ? 'drip' : 'bubble', p: a.p, life: 0, size: rand(2, 3.6), fall: 0, v: 0, snapped: 0 });
+          a.timer = rand(1.5, 5);
+        }
+      }
+      // Smoke curling up off it, and glowing motes drifting.
+      if (Math.random() < dt * 5 && c.fx.filter((f) => f.kind === 'smoke').length < 14) {
+        const a = c.anchors[Math.floor(Math.random() * c.anchors.length)];
+        c.fx.push({ kind: 'smoke', p: a.p, life: 0, curl: rand(-1, 1), size: rand(3, 6), span: rand(2.4, 3.6) });
+      }
+      if (Math.random() < dt * 9 && c.fx.filter((f) => f.kind === 'mote').length < 30) {
+        const a = c.anchors[Math.floor(Math.random() * c.anchors.length)];
+        c.fx.push({ kind: 'mote', p: a.p, life: 0, drift: rand(-6, 6), size: rand(0.6, 1.4) });
+      }
+      const gloop = (x, y, r, stretch) => {
+        const g = ctx.createRadialGradient(x - r * 0.3, y - r * 0.3, 0, x, y, r * 1.5);
+        g.addColorStop(0, `rgba(200,255,150,${0.95 * k})`); g.addColorStop(0.45, `rgba(70,200,60,${0.95 * k})`); g.addColorStop(1, `rgba(20,90,24,${0.97 * k})`);
+        ctx.fillStyle = g;
+        ctx.save(); ctx.translate(x, y); ctx.scale(1, -1); teardrop(0, 0, r * 2, r * (2 + stretch)); ctx.restore();
+        ctx.fill();
+        ctx.fillStyle = `rgba(235,255,210,${0.75 * k})`;
+        ctx.beginPath(); ctx.ellipse(x - r * 0.35, y + r * 0.1, r * 0.25, r * 0.4, 0.3, 0, TAU); ctx.fill();
+      };
+      for (const f of c.fx) {
+        f.life += dt;
+        const q = screenOf(place, f.p);
+        if (f.kind === 'drip') {
+          const swell = clamp(f.life / 1.6);
+          const r = f.size * (0.45 + 0.55 * swell) * S;
+          if (f.life > 1.6) {
+            if (!f.snapped) { f.fall += dt * (5 + f.fall * 0.9); if (f.fall > 12 + f.size * 3) f.snapped = f.life; }
+            else { f.v += dt * 90; f.fall += f.v * dt; }
+          }
+          const y = q.y + f.fall * S + r;
+          if (!f.snapped) {
+            const w = Math.max(0.35, r * 0.9 * (1 - f.fall / 30));
+            ctx.fillStyle = `rgba(40,140,40,${0.92 * k})`;
+            ctx.beginPath();
+            ctx.moveTo(q.x - r * 0.8, q.y);
+            ctx.quadraticCurveTo(q.x - w * 0.5, (q.y + y) / 2, q.x - r * 0.7, y - r * 0.5);
+            ctx.lineTo(q.x + r * 0.7, y - r * 0.5);
+            ctx.quadraticCurveTo(q.x + w * 0.5, (q.y + y) / 2, q.x + r * 0.8, q.y);
+            ctx.closePath(); ctx.fill();
+          } else {
+            const back = clamp((f.life - f.snapped) / 0.35);
+            if (back < 1) {
+              ctx.strokeStyle = `rgba(40,140,40,${0.9 * (1 - back) * k})`; ctx.lineWidth = 0.7 * S;
+              ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(q.x, q.y + (12 * S) * (1 - back) * (1 - back)); ctx.stroke();
+            }
+          }
+          gloop(q.x, y, r, f.snapped ? Math.min(1.8, f.v / 40) : 0.4 + swell * 0.4);
+        } else if (f.kind === 'bubble') {
+          const rise = f.life * 4 * S, r = f.size * (0.5 + f.life * 0.4) * S;
+          const y = q.y - rise;
+          if (f.life < 2) {
+            ctx.fillStyle = `rgba(80,210,70,${0.35 * k})`; ctx.beginPath(); ctx.ellipse(q.x, y, r * 1.08, r * 0.95, 0, 0, TAU); ctx.fill();
+            ctx.strokeStyle = `rgba(170,255,110,${0.9 * k})`; ctx.lineWidth = 0.7 * S; ctx.stroke();
+            ctx.fillStyle = `rgba(235,255,210,${0.85 * k})`; ctx.beginPath(); ctx.arc(q.x - r * 0.35, y - r * 0.35, r * 0.25, 0, TAU); ctx.fill();
+          } else {
+            const pop = clamp((f.life - 2) / 0.3);
+            ctx.strokeStyle = `rgba(170,255,110,${0.8 * (1 - pop) * k})`; ctx.lineWidth = 0.7 * S;
+            ctx.beginPath(); ctx.arc(q.x, y, r * (1 + pop * 0.8), 0, TAU); ctx.stroke();
+          }
+        } else if (f.kind === 'smoke') {
+          // A wisp: a ribbon rising and curling over, widening and thinning out.
+          const f0 = clamp(f.life / f.span);
+          const pts = [];
+          for (let i = 0; i <= 12; i += 1) {
+            const u = i / 12, rise = (u * 26 * f0 + f.life * 4) * S;
+            pts.push({ x: q.x + Math.sin(u * 4 + f.life * 1.6) * f.size * S * u + f.curl * u * u * 14 * S, y: q.y - rise });
+          }
+          const fade = Math.sin(f0 * Math.PI) * k;
+          ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+          ctx.strokeStyle = `rgba(40,170,70,${0.16 * fade})`; ctx.lineWidth = f.size * 1.6 * S; path(pts, false); ctx.stroke();
+          ctx.strokeStyle = `rgba(90,230,110,${0.22 * fade})`; ctx.lineWidth = f.size * 0.6 * S; path(pts, false); ctx.stroke();
+          ctx.restore();
+        } else {
+          // A glowing mote, drifting up.
+          const x = q.x + Math.sin(f.life * 2 + f.drift) * f.drift * S, y = q.y - f.life * 16 * S;
+          const fade = Math.sin(clamp(f.life / 2) * Math.PI) * k;
+          ctx.save(); ctx.globalCompositeOperation = 'lighter';
+          ctx.fillStyle = `rgba(110,255,100,${0.3 * fade})`; ctx.beginPath(); ctx.arc(x, y, f.size * 2.8 * S, 0, TAU); ctx.fill();
+          ctx.fillStyle = `rgba(210,255,190,${0.95 * fade})`; ctx.beginPath(); ctx.arc(x, y, f.size * S, 0, TAU); ctx.fill();
+          ctx.restore();
+        }
+      }
+      c.fx = c.fx.filter((f) => (f.kind === 'drip' ? f.fall < 70 : f.kind === 'bubble' ? f.life < 2.3 : f.kind === 'smoke' ? f.life < f.span : f.life < 2));
+    },
+
+    // Erode: the rings crumbling, grit breaking off and falling away.
+    erode(c, place, k, now, dt, from, to) {
+      if (Math.random() < dt * 20 && c.fx.length < 60) {
+        const a = c.anchors[Math.floor(Math.random() * c.anchors.length)];
+        c.fx.push({ p: a.p, life: 0, v: 0, fall: 0, spin: rand(0, TAU), size: rand(1.1, 2.6), drift: rand(-4, 4), tone: Math.random() });
+      }
+      for (const g of c.fx) {
+        g.life += dt; g.v += dt * 90; g.fall += g.v * dt;
+        const q = screenOf(place, g.p);
+        const x = q.x + g.drift * g.life * S, y = q.y + g.fall * S, s = g.size * S;
+        ctx.save(); ctx.translate(x, y); ctx.rotate(g.spin + g.life * 4);
+        // Pieces of the ring itself, in its own colour, greying as they fall.
+        ctx.fillStyle = rgba(mix(mix(from, to, g.tone), [150, 140, 130], clamp(g.life / 1.4) * 0.6), 0.9 * (1 - clamp(g.life / 1.4)) * k);
+        ctx.beginPath(); ctx.moveTo(-s, -s * 0.6); ctx.lineTo(s * 0.8, -s); ctx.lineTo(s, s * 0.7); ctx.lineTo(-s * 0.5, s); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+      c.fx = c.fx.filter((g) => g.life < 1.4);
+    },
+
+    // Shine: the whole circle lit -- light filling it, pulsing -- and stars twinkling along its lines.
+    shine(c, place, k, now) {
+      const o = circlePoint(place, 0, 0);
+      const edge = circlePoint(place, Math.max(...c.segs[0].map(([x]) => Math.abs(x))), 0);
+      const R = Math.abs(edge.x - o.x) * 1.15;
+      const pulse = 0.5 - 0.5 * Math.cos(now / 640);
+      const light = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, R);
+      light.addColorStop(0, `rgba(255,250,228,${(0.32 + 0.2 * pulse) * k})`);
+      light.addColorStop(0.6, `rgba(255,244,210,${(0.14 + 0.1 * pulse) * k})`);
+      light.addColorStop(1, 'rgba(255,240,200,0)');
+      ctx.save(); ctx.translate(o.x, o.y); ctx.scale(1, 0.62); ctx.translate(-o.x, -o.y);
+      ctx.fillStyle = light; ctx.beginPath(); ctx.arc(o.x, o.y, R, 0, TAU); ctx.fill();
+      ctx.restore();
+      for (const a of c.anchors) {
+        const tw = Math.sin(now / (a.beat * 0.35) + a.phase);
+        if (tw < 0.55) continue;
+        const { q } = outward(place, a.p);
+        const r = (2.5 + 4.5 * a.size) * (tw - 0.55) / 0.45 * S;
+        star(q.x, q.y, r * 2.2, 0.25 * k, [255, 240, 200]);
+        star(q.x, q.y, r, 0.95 * k, [255, 255, 240]);
+      }
+    },
+
+    // Fluctuate: an arcane surge -- lightning cracking across the circle as it sways.
+    fluctuate(c, place, k, now, dt, from, to) {
+      if (Math.random() < dt * 7 && c.fx.length < 6) {
+        const a = c.anchors[Math.floor(Math.random() * c.anchors.length)];
+        const b = c.anchors[Math.floor(Math.random() * c.anchors.length)];
+        if (a !== b) c.fx.push({ a: a.p, b: b.p, life: 0, seed: Math.random() * 100 });
+      }
+      for (const bolt of c.fx) {
+        bolt.life += dt;
+        const p0 = screenOf(place, bolt.a), p1 = screenOf(place, bolt.b);
+        const pts = [p0];
+        const len = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1, nx = -(p1.y - p0.y) / len, ny = (p1.x - p0.x) / len;
+        for (let i = 1; i < 9; i += 1) {
+          const f = i / 9, jag = (Math.sin(bolt.seed + i * 12.9 + Math.floor(now / 60)) * 0.5) * len * 0.12;
+          pts.push({ x: lerp(p0.x, p1.x, f) + nx * jag, y: lerp(p0.y, p1.y, f) + ny * jag });
+        }
+        pts.push(p1);
+        const f = (1 - clamp(bolt.life / 0.3)) * k;
+        ctx.strokeStyle = rgba(mix(from, to, 0.5), 0.35 * f); ctx.lineWidth = 4 * S; path(pts, false); ctx.stroke();
+        ctx.strokeStyle = rgba(mix(to, [255, 255, 255], 0.5), 0.9 * f); ctx.lineWidth = 1.1 * S; path(pts, false); ctx.stroke();
+        ctx.strokeStyle = `rgba(255,255,255,${f})`; ctx.lineWidth = 0.45 * S; path(pts, false); ctx.stroke();
+      }
+      c.fx = c.fx.filter((b) => b.life < 0.3);
+    },
+  };
 
   /* ── the inkwell: a round flask of thick glass, the ink inside it ──────────
    * A round belly on the desk, a narrow neck, a rolled collar at its mouth;
@@ -943,30 +1358,6 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
       outer.push({ x: spine(v) - (1.2 + 8.4 * width), y: v });
       inner.push({ x: spine(v) + (0.6 + 3.8 * width), y: v });
     }
-    /* A second, smaller feather tucked in beside it, behind: the other end
-     * of the gradient, barred darker across, as a pheasant's is. */
-    ctx.save();
-    ctx.rotate(-0.2);
-    const accent = [];
-    for (let i = 0; i <= 14; i += 1) {
-      const v = -22 - (34 * i) / 14, f = i / 14, w = Math.sin(Math.PI * Math.pow(f, 0.7));
-      accent.push({ v, left: -(0.8 + 4.2 * w), right: 0.5 + 2.2 * w });
-    }
-    ctx.beginPath(); ctx.moveTo(0, -22);
-    accent.forEach((a) => ctx.lineTo(a.left, a.v));
-    for (let i = accent.length - 1; i >= 0; i -= 1) ctx.lineTo(accent[i].right, accent[i].v);
-    ctx.closePath();
-    const accentGrad = ctx.createLinearGradient(0, -22, 0, -56);
-    accentGrad.addColorStop(0, rgba(mix(from, WHITE, 0.2), 0.9)); accentGrad.addColorStop(1, rgba(mix(from, [0, 0, 0], 0.2), 0.95));
-    ctx.fillStyle = accentGrad; ctx.fill();
-    ctx.save(); ctx.clip();
-    ctx.strokeStyle = rgba(mix(from, [0, 0, 0], 0.55), 0.55); ctx.lineWidth = 0.9;
-    for (let v = -27; v > -55; v -= 3.4) { ctx.beginPath(); ctx.moveTo(-6, v + 1.2); ctx.quadraticCurveTo(0, v - 0.8, 4, v + 0.6); ctx.stroke(); }
-    ctx.restore();
-    ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.lineWidth = 0.5;
-    ctx.beginPath(); ctx.moveTo(0, -22); ctx.lineTo(-0.6, -55); ctx.stroke();
-    ctx.restore();
-
     const vaneGrad = ctx.createLinearGradient(0, -26, 0, -90);
     vaneGrad.addColorStop(0, rgba(mix(to, WHITE, 0.15), 0.92));
     vaneGrad.addColorStop(0.55, rgba(mix(to, from, 0.5), 0.95));
@@ -1186,7 +1577,7 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
     } else if (state.phase === 'glide') {
       if (stepMove(dt)) state.phase = 'write';
     } else if (state.phase === 'toWell') {
-      if (stepMove(dt)) { state.phase = 'dip'; state.t = 0; state.tapped = 0; }
+      if (stepMove(dt)) { state.phase = 'dip'; state.t = 0; state.tapped = 0; state.turned = false; }
     } else if (state.phase === 'dip') {
       // Under the ink: wet to the holder.
       if (state.nib.z < INK_Z) state.wet = 1;
@@ -1219,7 +1610,9 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
       }
       // The bead at the nib: gathering once out of the ink, gone with the taps.
       state.bead = k < 0.95 ? 0 : k < 1.45 + 0.128 ? clamp((k - 0.95) / 0.4) : k < 1.85 + 0.128 ? 0.45 : 0;
-      if (!state.leaf && k > 0.3) {
+      // Once a dip: the dip outlasts the turn now (the taps on the rim), and the turn was started again when it ended.
+      if (!state.leaf && !state.turned && k > 0.3) {
+        state.turned = true;
         state.nextCircle = newCircle();
         state.leaf = { lines: state.right, theta: 0 };
         state.right = [];

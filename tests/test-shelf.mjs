@@ -1061,9 +1061,11 @@ t('opening records a different thing from reading', () => {
   const reader = read('app/src/main/assets/www/js/reader.js');
   assert.match(reader, /function noteReading/);
   assert.match(reader, /store\.markRead\(state\.book\.id\)/);
-  // Continue still follows what was opened, which is where you were.
+  // Continue follows what was read, not what was opened: a glance does not take the card.
   const library = read('app/src/main/assets/www/js/library.js');
-  assert.match(library, /b\.lastOpenedAt \|\| b\.lastReadAt/);
+  assert.match(library, /const openedAt = \(b\) => b\.lastReadAt \|\| 0;/);
+  // Nothing read, nothing logged: time alone is not reading.
+  assert.match(reader, /if \(session\.pages <= 0 && session\.words <= 0\) return;/);
 });
 
 t('a file opened from elsewhere is read, not collected', () => {

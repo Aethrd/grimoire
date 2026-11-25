@@ -605,8 +605,9 @@ async function openBook(book, opts) {
 
 async function readIn(book, opts) {
   try {
-    // Opened, not read. Continue follows this; the status does not, because
-    // glancing at a book is not reading it.
+    // Opened, not read: neither Continue nor the status follows this, because
+    // glancing at a book is not reading it. (Kept, so a book just opened is
+    // never taken for a half-finished import and cleared.)
     /* Stamped on the book as it is stored now, not on the copy that was
      * tapped. The shelf hands over the record it drew the tile from, which
      * can be older than the book: writing that back undid whatever had been

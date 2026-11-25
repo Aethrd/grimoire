@@ -326,7 +326,8 @@ const rereading = (book) => !!(book.lastReadAt && book.lastReadAt > book.finishe
 
 const DAY = 24 * 60 * 60 * 1000;
 /** When a book was last read, or opened -- opening it is picking it up. */
-const touchedAt = (book) => Math.max(book.lastReadAt || 0, book.lastOpenedAt || 0);
+// Last read: opening a book is not reading it, so a glance does not keep a book from going quiet, nor spare it.
+const touchedAt = (book) => book.lastReadAt || 0;
 
 /**
  * The books to put on hold: on the shelf, Reading, and not read for `days`
@@ -1442,9 +1443,11 @@ async function renderContinueCard(books, onOpen) {
   // opened" and "continue reading" disagreed.
   // Anything opened and not put aside. A book marked finished, dropped or on
   // hold is not what you want offered next, whatever its dates say.
-  // Opened, whether or not a page was turned: Continue is about where you
-  // were, not about what counts as reading.
-  const openedAt = (b) => b.lastOpenedAt || b.lastReadAt || 0;
+  /* Read, not merely opened. It followed the last book opened, page turned
+   * or not -- so a book opened by accident, or to look at its cover, took
+   * the card from the one being read. Only reading counts now: a page
+   * turned, or scrolled past (markRead). */
+  const openedAt = (b) => b.lastReadAt || 0;
   const candidates = books
     .filter((b) => openedAt(b) && !['finished', 'dropped', 'onHold'].includes(statusOf(b)))
     .sort((a, b) => openedAt(b) - openedAt(a));
