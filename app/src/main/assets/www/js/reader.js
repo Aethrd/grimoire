@@ -93,6 +93,10 @@ export function init(handlers) {
   // or dropped, the fitting of a picture once its shape is known -- and the
   // line at the top of the screen is put back where it was (keepPlace).
   if (typeof ResizeObserver === 'function') new ResizeObserver(() => keepPlace()).observe(flow);
+  // The reader scrolling for themselves: a chapter being gone to is given up (arrive).
+  const takeOver = () => { going = null; };
+  viewport.addEventListener('touchstart', takeOver, { passive: true });
+  viewport.addEventListener('wheel', takeOver, { passive: true });
 }
 
 /* A book of pictures read in endless scroll runs to the top and bottom of the
@@ -724,6 +728,48 @@ function hydrateImages(section, index) {
 }
 
 /** The chapter occupying the top of the viewport right now. */
+/* Where a chapter begins in the scrolled text, as the scroll offset that puts
+ * it at the top of the window. Not its offsetTop: that is measured from the
+ * text's own column (the flow, which is what is positioned), and the column
+ * starts some way down inside what scrolls -- 30px on an S23 -- so a chapter
+ * gone to by it stopped that far short, its top still in the gap below the
+ * last one, and the reader rightly took the last one for the chapter on
+ * screen: Ch › needed pressing twice. Measured on screen instead. */
+function scrollTopOf(section) {
+  return viewport.scrollTop + section.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+}
+
+/* A chapter gone to by Ch › or ‹ in scroll mode: smooth-scrolled there, and
+ * checked when the scroll settles (onScrolled). Anything moving the text on
+ * the way -- the next chapter added below, the oldest dropped off the top and
+ * the place kept for it, a picture above arriving -- stops a smooth scroll
+ * short, or moves where it was going. Then it is put there, at once. Given
+ * up if the reader takes over (a touch, the wheel), or after a while. */
+let going = null;
+const GOING_FOR_MS = 6000;
+function goingTo(index) { going = { index, until: Date.now() + GOING_FOR_MS }; }
+function arrive() {
+  if (!going) return;
+  const { index, until } = going;
+  going = null;
+  if (Date.now() > until) return;
+  atStartOf(index);
+}
+
+/* A chapter's start at the top of the window, scrolling: its own top, not the
+ * space above it. Loaded on its own, a chapter sits below the top of the text
+ * column (the space the column starts with) -- and with the chapter before it
+ * then put in above, the place kept for it showed the end of that one instead,
+ * which the reader took for the chapter being read. */
+function atStartOf(index) {
+  const section = sectionFor(index);
+  if (!section || !isScroll() || !measurable()) return false;
+  const off = section.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+  if (Math.abs(off) > 1) viewport.scrollTop += off;
+  state.chapterIndex = index;
+  return true;
+}
+
 function chapterAtViewport() {
   if (!isScroll()) return state.chapterIndex;
   const top = viewport.getBoundingClientRect().top;
@@ -1193,6 +1239,9 @@ function onScrolled() {
    */
   if (!measurable()) return;
 
+  // Gone to by Ch › or ‹: there, whatever moved on the way.
+  arrive();
+
   const previous = state.chapterIndex;
   state.anchor = currentAnchor();
   state.page = Math.round(viewport.scrollTop / viewportHeight());
@@ -1303,7 +1352,7 @@ function pageInChapter() {
   const height = viewportHeight();
   if (!section || height <= 0) return 0;
   const screens = screensInChapter();
-  const top = section.offsetTop || 0;
+  const top = scrollTopOf(section);
   /* The end of a chapter is its last page.
    *
    * The page was the screenful at the top of the view, and a chapter counted
@@ -1845,11 +1894,13 @@ export async function nextChapter() {
   if (isScroll() && state.loaded.includes(state.chapterIndex + 1)) {
     const section = sectionFor(state.chapterIndex + 1);
     state.chapterIndex += 1;
-    viewport.scrollTo({ top: section.offsetTop, behavior: reducedMotion() ? 'auto' : 'smooth' });
+    goingTo(state.chapterIndex);
+    viewport.scrollTo({ top: scrollTopOf(section), behavior: reducedMotion() ? 'auto' : 'smooth' });
     onChange(state);
     return true;
   }
   await loadChapter(state.chapterIndex + 1, 0);
+  if (isScroll() && atStartOf(state.chapterIndex)) { state.anchor = 0; save(); onChange(state); }
 
   /* Stated, not measured.
    *
@@ -1871,11 +1922,13 @@ export async function prevChapter(toEnd = false) {
   if (isScroll() && state.loaded.includes(state.chapterIndex - 1)) {
     const section = sectionFor(state.chapterIndex - 1);
     state.chapterIndex -= 1;
-    viewport.scrollTo({ top: section.offsetTop, behavior: reducedMotion() ? 'auto' : 'smooth' });
+    goingTo(state.chapterIndex);
+    viewport.scrollTo({ top: scrollTopOf(section), behavior: reducedMotion() ? 'auto' : 'smooth' });
     onChange(state);
     return true;
   }
   await loadChapter(state.chapterIndex - 1, 0);
+  if (isScroll() && !toEnd && atStartOf(state.chapterIndex)) { state.anchor = 0; save(); onChange(state); }
   // Going back lands at the end of the previous chapter, which is where you
   // were reading; going back by button lands at its start.
   if (!isScroll()) show(toEnd ? state.pageCount - 1 : 0, { animate: false });
@@ -1884,6 +1937,8 @@ export async function prevChapter(toEnd = false) {
 
 export async function goTo({ chapter, anchor = 0, flash = false }) {
   await loadChapter(chapter, anchor);
+  // To a chapter's start (the chapter list): its start, not the end of the one before.
+  if (!anchor && isScroll() && atStartOf(state.chapterIndex)) { state.anchor = 0; save(); onChange(state); }
   if (flash) flashAt(anchor);
 }
 
@@ -2286,7 +2341,7 @@ function onLastPage() {
   if (isScroll()) {
     const section = sectionFor(chapterAtViewport());
     if (!section) return false;
-    return viewport.scrollTop + viewport.clientHeight >= section.offsetTop + section.offsetHeight - 2;
+    return viewport.scrollTop + viewport.clientHeight >= scrollTopOf(section) + section.offsetHeight - 2;
   }
   return state.page >= state.pageCount - 1;
 }
@@ -2406,7 +2461,7 @@ export async function goToBookFraction(fraction) {
     const section = sectionFor(place.chapterIndex);
     if (section) {
       const span = Math.max(0, section.offsetHeight - viewport.clientHeight);
-      viewport.scrollTop = section.offsetTop + place.within * span;
+      viewport.scrollTop = scrollTopOf(section) + place.within * span;
       state.chapterIndex = place.chapterIndex;
       state.anchor = currentAnchor();
       save();

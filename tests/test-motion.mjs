@@ -165,6 +165,27 @@ t('words counted from each chapter\'s own pages or screens -- not from everythin
   assert.match(js, /furthest: done\.furthest, reachedIn: done\.reachedIn,/);
 });
 
+t('Ch \u203a and \u2039 in endless scroll: one press, the chapter\'s own top at the top of the window', () => {
+  const js = read('app/src/main/assets/www/js/reader.js');
+  // Never offsetTop as a scroll position: it is measured from the text column, which starts 30px into what scrolls,
+  // so a chapter gone to by it stopped short in the gap below the last one, and that one was taken for the chapter read.
+  assert.doesNotMatch(js.replace(/\/\*[\s\S]*?\*\//g, ''), /offsetTop/);
+  assert.match(js, /function scrollTopOf\(section\) \{\s+return viewport\.scrollTop \+ section\.getBoundingClientRect\(\)\.top - viewport\.getBoundingClientRect\(\)\.top;/);
+  const next = js.slice(js.indexOf('export async function nextChapter'), js.indexOf('export async function prevChapter'));
+  const prev = js.slice(js.indexOf('export async function prevChapter'), js.indexOf('export async function goTo'));
+  for (const go of [next, prev]) {
+    // Smooth-scrolled there, and checked when the scroll settles: whatever moved on the way (a chapter added or dropped, a picture).
+    assert.match(go, /goingTo\(state\.chapterIndex\);\s+viewport\.scrollTo\(\{ top: scrollTopOf\(section\)/);
+    // Loaded fresh: put at its start, not at the end of the one put in above it.
+    assert.match(go, /atStartOf\(state\.chapterIndex\)/);
+  }
+  assert.match(js.slice(js.indexOf('function onScrolled'), js.indexOf('function onScrolled') + 900), /arrive\(\);/);
+  // The reader taking over gives it up.
+  assert.match(js, /viewport\.addEventListener\('touchstart', takeOver, \{ passive: true \}\);/);
+  // The chapter list, to a chapter's start, the same.
+  assert.match(js, /if \(!anchor && isScroll\(\) && atStartOf\(state\.chapterIndex\)\)/);
+});
+
 t('several language packs can be fetched in one go', () => {
   const panels = read('app/src/main/assets/www/js/panels.js');
   assert.match(panels, /Download all \$\{missing\.length\}/);
