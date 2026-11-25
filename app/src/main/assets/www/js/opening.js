@@ -658,8 +658,9 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
   }
 
   /* ── the inkwell: a squat bottle of clear glass, ink swirling in it ───────
-   * The glass is drawn as glass is seen: hardly there in the middle, its
-   * edges and its thickness catching the light. The ink inside is the
+   * The glass is thick, and drawn as thick glass is seen: walls with an
+   * inner face, a heavy base the ink stands on, a lip as wide as the glass,
+   * clear in the middle and dense where it is seen edge on. The ink inside is the
    * theme's gradient, its colours mixed into one another, seen through the
    * side and, down the neck, on top -- a bright line where it meets the
    * glass, rings where anything goes in. */
@@ -670,7 +671,9 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
   const RIM = { x: WELL.x + WELL.neck * 0.8, y: WELL.y + 1, lift: 11, touch: 3 };
   // The ink: most of the way up the body, under the shoulder, inside the glass's thickness.
   const INK_Z = WELL.h - 5;
-  const INK_R = WELL.r - 1.6;
+  // The glass has substance: walls this thick, a heavy base the ink sits on, a thick lip.
+  const WALL = 2.8, BASE = 3.4, LIP_W = 1.8;
+  const INK_R = WELL.r - WALL;
   // How far below the rim the nib goes to be under it.
   const DIP = INK_Z - 3 - (WELL.h + WELL.nh);
   const GRAVITY = 160;
@@ -712,11 +715,11 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
     const { x, y } = WELL;
     ctx.save();
     if (frontOnly) {
-      path(ellipsePts(x, y, 0, INK_R, 24, Math.PI, TAU).concat(ellipsePts(x, y, INK_Z, INK_R, 24, TAU, Math.PI)));
+      path(ellipsePts(x, y, BASE, INK_R, 24, Math.PI, TAU).concat(ellipsePts(x, y, INK_Z, INK_R, 24, TAU, Math.PI)));
       ctx.clip();
     }
     // Its side, through the glass: the mix, a little deeper towards the foot.
-    const body = ellipsePts(x, y, 0, INK_R, 28, Math.PI, TAU).concat(ellipsePts(x, y, INK_Z, INK_R, 28, 0, Math.PI));
+    const body = ellipsePts(x, y, BASE, INK_R, 28, Math.PI, TAU).concat(ellipsePts(x, y, INK_Z, INK_R, 28, 0, Math.PI));
     // Over the whole of it, the curve of its foot included.
     const xs = body.map((p) => p.x), ys = body.map((p) => p.y);
     const box = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
@@ -756,12 +759,18 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
     shadow.addColorStop(0.55, rgba(mix(from, [0, 0, 0], 0.35), 0.16));
     shadow.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = shadow; ctx.beginPath(); ctx.arc(s.x, s.y, r * 1.8 * S, 0, TAU); ctx.fill();
-    // The back of the glass, seen through the front: hardly there.
+    // The back of the glass, seen through the front: thick enough to tint what is behind it.
     const outline = ellipsePts(x, y, 0, r, 28, Math.PI, TAU).concat(ellipsePts(x, y, h, r, 28, 0, Math.PI));
-    ctx.fillStyle = 'rgba(255,255,255,.035)';
+    ctx.fillStyle = 'rgba(255,255,255,.07)';
     path(outline); ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 0.7 * S;
+    ctx.strokeStyle = 'rgba(255,255,255,.16)'; ctx.lineWidth = 0.8 * S;
     path(ellipsePts(x, y, 0, r, 28, 0, Math.PI), false); ctx.stroke();
+    // The far wall's inner face, a wall's thickness in.
+    ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.lineWidth = 0.7 * S;
+    path(ellipsePts(x, y, h - 1.5, r - WALL, 28, 0, Math.PI), false); ctx.stroke();
+    // The heavy base: solid glass the ink stands on, lit through.
+    ctx.fillStyle = 'rgba(255,255,255,.12)';
+    path(ellipsePts(x, y, 0, r - 0.6, 28, Math.PI, TAU).concat(ellipsePts(x, y, BASE, r - 0.6, 28, 0, Math.PI))); ctx.fill();
     drawInk(from, to, t);
     // The far half of the shoulder and of the neck.
     ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 0.7 * S;
@@ -776,48 +785,62 @@ export function playScene(canvas, { faint = false, glyphs = '', letters: letters
   function drawWellFront(to) {
     const { x, y, r, h, neck, nh } = WELL;
     const left = P(x - r, y, 0), right = P(x + r, y, 0);
-    // The near wall: brighter at its edges, where the light meets more glass.
+    const wallShare = WALL / (2 * r);
+    // The near wall: thick glass, so brighter and denser where it is seen edge on, at its sides.
     const wall = ctx.createLinearGradient(left.x, 0, right.x, 0);
-    wall.addColorStop(0, 'rgba(255,255,255,.13)'); wall.addColorStop(0.16, 'rgba(255,255,255,.03)');
-    wall.addColorStop(0.5, 'rgba(255,255,255,0)'); wall.addColorStop(0.84, 'rgba(255,255,255,.03)');
-    wall.addColorStop(1, 'rgba(255,255,255,.14)');
+    wall.addColorStop(0, 'rgba(255,255,255,.26)'); wall.addColorStop(wallShare, 'rgba(255,255,255,.12)');
+    wall.addColorStop(wallShare * 1.6, 'rgba(255,255,255,.04)'); wall.addColorStop(0.5, 'rgba(255,255,255,.025)');
+    wall.addColorStop(1 - wallShare * 1.6, 'rgba(255,255,255,.04)'); wall.addColorStop(1 - wallShare, 'rgba(255,255,255,.13)');
+    wall.addColorStop(1, 'rgba(255,255,255,.28)');
     ctx.fillStyle = wall;
     path(ellipsePts(x, y, 0, r, 28, Math.PI, TAU).concat(ellipsePts(x, y, h, r, 28, TAU, Math.PI))); ctx.fill();
+    // The wall's inner face, a wall's thickness in from each side: where the ink meets the glass.
+    ctx.strokeStyle = 'rgba(255,255,255,.2)'; ctx.lineWidth = 0.7 * S;
+    for (const side of [-1, 1]) { path([P(x + side * (r - WALL), y - 0.5, BASE), P(x + side * (r - WALL), y - 0.5, h - 1.5)], false); ctx.stroke(); }
     // Its outline: a shade for a light page, a light for a dark one.
     const sides = [[P(x - r, y, 0), P(x - r, y, h)], [P(x + r, y, 0), P(x + r, y, h)]];
-    for (const [stroke, width] of [['rgba(0,0,0,.22)', 1.7], ['rgba(255,255,255,.34)', 0.8]]) {
+    for (const [stroke, width] of [['rgba(0,0,0,.26)', 2], ['rgba(255,255,255,.42)', 1]]) {
       ctx.strokeStyle = stroke; ctx.lineWidth = width * S;
       for (const side of sides) { path(side, false); ctx.stroke(); }
       path(ellipsePts(x, y, 0, r, 28, Math.PI, TAU), false); ctx.stroke();
     }
-    // The thick glass of the base, catching the light along its near edge.
-    ctx.strokeStyle = 'rgba(255,255,255,.2)'; ctx.lineWidth = 1.4 * S;
-    path(ellipsePts(x, y, 1.2, r - 0.8, 28, Math.PI * 1.1, Math.PI * 1.9), false); ctx.stroke();
-    // The shoulder: a ring of glass from the body in to the neck.
-    ctx.fillStyle = 'rgba(255,255,255,.05)';
+    // The heavy base, its near face: solid glass, its top edge catching the light.
+    ctx.fillStyle = 'rgba(255,255,255,.14)';
+    path(ellipsePts(x, y, 0, r, 28, Math.PI, TAU).concat(ellipsePts(x, y, BASE, r, 28, TAU, Math.PI))); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.34)'; ctx.lineWidth = 0.9 * S;
+    path(ellipsePts(x, y, BASE, r - 0.4, 28, Math.PI * 1.06, Math.PI * 1.94), false); ctx.stroke();
+    // The shoulder: a thick ring of glass from the body in to the neck.
+    ctx.fillStyle = 'rgba(255,255,255,.1)';
     ctx.beginPath();
     for (const ring of [ellipsePts(x, y, h, r, 32), ellipsePts(x, y, h, neck, 24)]) ring.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
     ctx.fill('evenodd');
-    ctx.strokeStyle = 'rgba(255,255,255,.3)'; ctx.lineWidth = 0.8 * S;
+    ctx.strokeStyle = 'rgba(255,255,255,.36)'; ctx.lineWidth = 0.9 * S;
     path(ellipsePts(x, y, h, r, 28, Math.PI, TAU), false); ctx.stroke();
     // The window's light, down the glass; and a fainter one across from it.
-    for (const [ax, w, a] of [[-0.62, 2, 0.5], [0.7, 1.2, 0.2]]) {
-      const p0 = P(x + r * ax, y - r * 0.78, 3), p1 = P(x + r * ax, y - r * 0.78, h - 2);
+    for (const [ax, w, a] of [[-0.6, 2.4, 0.55], [0.68, 1.4, 0.24]]) {
+      const p0 = P(x + r * ax, y - r * 0.8, BASE + 1), p1 = P(x + r * ax, y - r * 0.8, h - 2);
       const streak = ctx.createLinearGradient(p0.x, p0.y, p1.x, p1.y);
       streak.addColorStop(0, 'rgba(255,255,255,0)'); streak.addColorStop(0.45, `rgba(255,255,255,${a})`);
       streak.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.strokeStyle = streak; ctx.lineWidth = w * S; ctx.lineCap = 'round';
       path([p0, p1], false); ctx.stroke();
     }
-    // The neck: a short clear tube; its lip, thick glass, catching the light all round.
-    ctx.fillStyle = 'rgba(255,255,255,.07)';
+    // The neck: a short tube of thick glass, its inner face showing.
+    ctx.fillStyle = 'rgba(255,255,255,.1)';
     path(ellipsePts(x, y, h, neck, 20, Math.PI, TAU).concat(ellipsePts(x, y, h + nh, neck, 20, TAU, Math.PI))); ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,.3)'; ctx.lineWidth = 0.8 * S;
+    ctx.strokeStyle = 'rgba(255,255,255,.36)'; ctx.lineWidth = 0.9 * S;
     for (const side of [[P(x - neck, y, h), P(x - neck, y, h + nh)], [P(x + neck, y, h), P(x + neck, y, h + nh)]]) { path(side, false); ctx.stroke(); }
-    ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 1.1 * S;
-    path(ellipsePts(x, y, h + nh, neck, 24)); ctx.stroke();
-    ctx.strokeStyle = rgba(to, 0.3); ctx.lineWidth = 0.6 * S;
-    path(ellipsePts(x, y, h + nh, neck - 0.8, 24)); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,.16)'; ctx.lineWidth = 0.6 * S;
+    for (const side of [-1, 1]) { path([P(x + side * (neck - LIP_W), y - 0.3, h + 0.5), P(x + side * (neck - LIP_W), y - 0.3, h + nh)], false); ctx.stroke(); }
+    // The lip: a ring of glass as wide as the glass is thick, bright on top.
+    ctx.fillStyle = 'rgba(255,255,255,.24)';
+    ctx.beginPath();
+    for (const ring of [ellipsePts(x, y, h + nh, neck, 28), ellipsePts(x, y, h + nh, neck - LIP_W, 28)]) ring.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    ctx.fill('evenodd');
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 0.9 * S;
+    path(ellipsePts(x, y, h + nh, neck, 28)); ctx.stroke();
+    ctx.strokeStyle = rgba(to, 0.32); ctx.lineWidth = 0.6 * S;
+    path(ellipsePts(x, y, h + nh, neck - LIP_W, 28)); ctx.stroke();
   }
 
   /* ── ink: a drop hanging from the nib, drops shaken loose, rings ──────────

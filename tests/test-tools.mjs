@@ -3361,6 +3361,9 @@ await t('the opening scene: only for a slow open, faded in and out, faint behind
   assert.match(src, /function inkMix\(from, to, t, c, rx, ry\)/);
   assert.match(src, /across\.addColorStop\(0, rgba\(from, 1\)\); across\.addColorStop\(1, rgba\(to, 1\)\);/);
   assert.match(src, /const DIP = INK_Z - 3 - \(WELL\.h \+ WELL\.nh\);/);
+  // Thick glass: the ink a wall's thickness in, standing on a heavy base, under a lip as wide as the glass.
+  assert.match(src, /const WALL = 2\.8, BASE = 3\.4, LIP_W = 1\.8;\s+const INK_R = WELL\.r - WALL;/);
+  assert.match(src, /const body = ellipsePts\(x, y, BASE, INK_R/);
   assert.match(src, /if \(under\) drawInk\(from, to, swirl, true\);\s+drawWellFront\(to\);/);
   // Still with reduced motion.
   assert.match(src, /const swirl = calm \? 0 : now \/ 1000;/);
