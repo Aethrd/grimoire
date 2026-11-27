@@ -710,6 +710,13 @@ body[data-mode="paged"] .page-flow figure.grimoire-cover {
   width: 4px; height: 20%; min-height: 24px; border-radius: var(--radius-pill);
   left: 50%; transform: translateX(-50%);
 }
+/* And only the handle is held, there: the rest of the rail lets a touch
+   through to the text, so a swipe to read down the right edge scrolls as it
+   does anywhere else rather than jumping to where the finger is (app.js). The
+   handle is taken by the whole width of the rail. */
+[data-mode="scroll"] .scrub-rail { pointer-events: none; }
+[data-mode="scroll"] .scrub-thumb { pointer-events: auto; }
+[data-mode="scroll"] .scrub-thumb::after { content: ""; position: absolute; top: 0; bottom: 0; left: -11px; right: -11px; }
 /* It tracks a finger and a continuous scroll, so easing it would only put it
    behind both. */
 [data-mode="scroll"] .scrub-thumb,

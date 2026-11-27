@@ -10542,7 +10542,10 @@ function wireReader() {
   const bubble = el('scrub-bubble');
   const scrub = (clientY) => {
     const box = rail.getBoundingClientRect();
-    const fraction = Math.max(0, Math.min(1, (clientY - box.top) / box.height));
+    const fraction = Math.max(0, Math.min(1, railFrom?.handle
+      // Scrolling, the handle is moved by how far the finger has gone since it took hold: never to the finger.
+      ? railFrom.fraction + (clientY - railFrom.y) / Math.max(1, box.height * (1 - Math.min(0.94, reader.viewportRatio())))
+      : (clientY - box.top) / box.height));
     bubble.hidden = false;
     bubble.style.top = `${fraction * 100}%`;
     // A page number is meaningless in scroll mode, so say percent instead.
@@ -10561,21 +10564,47 @@ function wireReader() {
    * the reader several pages on, and a tap on the far edge jumped instead of
    * turning one page. Now a touch that stays where it landed is left alone,
    * to be the tap or the long press it was, and the rail takes over only once
-   * the finger slides along it. */
+   * the finger slides along it.
+   *
+   * Scrolling, only the handle is taken hold of (app.css: the rest of the
+   * rail lets the touch through to the text). The rail runs down the edge a
+   * right thumb reads by, and a swipe to read on that began on it went to
+   * wherever the finger was -- which, with five chapters in the window, was
+   * chapters on. And the handle only once the finger has rested on it a
+   * moment: a swipe that moves at once is reading, and moves the text by as
+   * far as the finger goes, as a swipe anywhere else does. */
   const DRAG = 10;
+  const HOLD_MS = 180;
   let railFrom = null;
   let railOn = false;
   rail.addEventListener('touchstart', (e) => {
-    railFrom = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    const scrolling = reader.state.mode === 'scroll';
+    railFrom = {
+      x: e.touches[0].clientX, y: e.touches[0].clientY, at: Date.now(), last: e.touches[0].clientY,
+      handle: scrolling, fraction: scrolling ? reader.scrollFraction() : 0, swiping: false,
+    };
     railOn = false;
   }, { passive: true });
   rail.addEventListener('touchmove', (e) => {
     const touch = e.touches[0];
     if (!railOn) {
       if (!railFrom) return;
+      if (railFrom.swiping) {
+        reader.scrollTextBy(railFrom.last - touch.clientY);
+        railFrom.last = touch.clientY;
+        if (e.cancelable) e.preventDefault();
+        return;
+      }
       const dy = Math.abs(touch.clientY - railFrom.y);
       const dx = Math.abs(touch.clientX - railFrom.x);
       if (dy < DRAG || dy < dx) return;     // not a drag along the rail, yet
+      if (railFrom.handle && Date.now() - railFrom.at < HOLD_MS) {
+        railFrom.swiping = true;
+        reader.scrollTextBy(railFrom.last - touch.clientY);
+        railFrom.last = touch.clientY;
+        if (e.cancelable) e.preventDefault();
+        return;
+      }
       railOn = true;
     }
     scrub(touch.clientY);
@@ -10654,16 +10683,29 @@ function wireProgressBar() {
     if (e.touches.length !== 1) return;
     // The bar's, not the page's: no scrolling, no tap on what is behind it.
     e.preventDefault();
+    barFrom = { x: e.touches[0].clientX, y: e.touches[0].clientY, along: false };
     at = fractionAt(e.touches[0].clientX);
     preview(at);
   }, { passive: false });
+  /* A finger that goes up or down the screen from the bar, not along it, was
+   * scrolling the text: the bar sits where a thumb reads by, and the place
+   * under where it started was gone to on the lift -- chapters on. Let go of,
+   * not gone to. A tap, and a drag along, are as they were. */
+  let barFrom = null;
   hit.addEventListener('touchmove', (e) => {
     if (at === null) return;
     e.preventDefault();
-    at = fractionAt(e.touches[0].clientX);
+    const touch = e.touches[0];
+    if (barFrom && !barFrom.along) {
+      const dx = Math.abs(touch.clientX - barFrom.x);
+      const dy = Math.abs(touch.clientY - barFrom.y);
+      if (dy >= 16 && dy > dx * 1.5) { barFrom = null; finish(false); return; }
+      if (dx >= 10) barFrom.along = true;
+    }
+    at = fractionAt(touch.clientX);
     preview(at);
   }, { passive: false });
-  hit.addEventListener('touchend', () => { if (at !== null) finish(true); });
+  hit.addEventListener('touchend', () => { barFrom = null; if (at !== null) finish(true); });
   // Interrupted -- a call, the system taking the gesture -- is not a choice.
   hit.addEventListener('touchcancel', () => { if (at !== null) finish(false); });
   // A mouse, or a tap the browser delivered as a click.

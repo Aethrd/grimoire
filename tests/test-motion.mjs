@@ -861,4 +861,29 @@ t('every supported language can be downloaded, not just the library\u2019s', () 
   assert.match(panelsSrc, /Other languages \(\$\{rest\.length\}\)/);
 });
 
+t('scrolling, a swipe to read down the right edge or up from the progress bar is reading, not a jump', () => {
+  /* Measured in Chromium with real touches, five chapters in the window: a
+   * 165px swipe up that began on the rail moved the text 968px -- to where the
+   * finger was on the rail -- against 205px a little further in; and a swipe
+   * up that began on the progress bar went, on the lift, to the place under
+   * where it started. Now the edge swipe moves the text as far as any other,
+   * a quick swipe on the handle moves it by the finger's travel, the handle
+   * rested on and dragged moves from where it was, and the bar lets a swipe
+   * up or down go. A tap on the bar, and paged mode's rail, are as they were. */
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\[data-mode="scroll"\] \.scrub-rail \{ pointer-events: none; \}/);
+  assert.match(css, /\[data-mode="scroll"\] \.scrub-thumb \{ pointer-events: auto; \}/);
+  assert.match(css, /\[data-mode="scroll"\] \.scrub-thumb::after \{ content: ""; position: absolute; top: 0; bottom: 0; left: -11px; right: -11px; \}/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /const HOLD_MS = 180;/);
+  assert.match(app, /if \(railFrom\.handle && Date\.now\(\) - railFrom\.at < HOLD_MS\) \{\s*railFrom\.swiping = true;\s*reader\.scrollTextBy\(railFrom\.last - touch\.clientY\);/);
+  assert.match(app, /railFrom\.fraction \+ \(clientY - railFrom\.y\) \/ Math\.max\(1, box\.height \* \(1 - Math\.min\(0\.94, reader\.viewportRatio\(\)\)\)\)/);
+  // Paged, the rail goes to the finger still: a page marker within the chapter.
+  assert.match(app, /handle: scrolling, fraction: scrolling \? reader\.scrollFraction\(\) : 0, swiping: false,/);
+  assert.match(app, /if \(dy >= 16 && dy > dx \* 1\.5\) \{ barFrom = null; finish\(false\); return; \}/);
+  assert.match(app, /hit\.addEventListener\('touchend', \(\) => \{ barFrom = null; if \(at !== null\) finish\(true\); \}\);/);
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /export function scrollTextBy\(dy\) \{\s*if \(!isScroll\(\) \|\| !measurable\(\) \|\| !Number\.isFinite\(dy\)\) return;\s*viewport\.scrollTop \+= dy;/);
+});
+
 console.log(`\n${pass} assertions passed`);

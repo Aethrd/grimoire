@@ -1893,6 +1893,12 @@ export function setScrubbing(on) {
   if (!on) extendIfNeeded();
 }
 
+/** The text moved by a finger's travel, scrolling: a swipe to read that began on the rail's handle (app.js). */
+export function scrollTextBy(dy) {
+  if (!isScroll() || !measurable() || !Number.isFinite(dy)) return;
+  viewport.scrollTop += dy;
+}
+
 /** Drag target for the rail and the progress bar. */
 export function scrubTo(fraction) {
   const f = Math.max(0, Math.min(1, fraction));
