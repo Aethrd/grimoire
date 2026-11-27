@@ -43,7 +43,8 @@ export const state = {
   mergeMarks: true,
 
   mode: 'paged',     // 'paged' | 'scroll'
-  held: false,       // switched to scrolling for a book of long strips (releaseStrips)
+  held: false,       // in a mode of its kind's, not the mode for text (releaseStrips)
+  kind: 'text',      // 'text' | 'pictures' | 'strips': which remembered mode it reads in (modeFor)
   endless: true,     // scroll mode only: run on into the next chapter
   pictureBook: false, // more pictures than words (mostlyPictures): endless scroll runs edge to edge
   loaded: [],        // chapter indices currently in the DOM, ascending
@@ -183,17 +184,47 @@ export const placeForTest = { holdPlace, keepPlace, trimWindow: (from) => trimWi
 
 const isScroll = () => state.mode === 'scroll';
 
+/* A mode remembered for each kind of book: text in the mode of the setting
+ * there has always been, picture books and long strips each in their own --
+ * paged pictures and scrolled strips to begin with. Choosing a mode with a
+ * book open chooses it for books of that kind; the next one opens in it. */
+export const KINDS = ['text', 'pictures', 'strips'];
+const MODE_KEY = { text: 'readingMode', pictures: 'pictureMode', strips: 'stripMode' };
+const MODE_FIRST = { text: 'paged', pictures: 'paged', strips: 'scroll' };
+export const modeKeyFor = (kind) => MODE_KEY[kind] || MODE_KEY.text;
+export function modeFor(settings, kind) {
+  const mode = settings?.[modeKeyFor(kind)];
+  return mode === 'paged' || mode === 'scroll' ? mode : (MODE_FIRST[kind] || 'paged');
+}
+/** The kind the open book is read as: what a mode chosen now is remembered for. */
+export const kindShowing = () => (state.book ? state.kind : 'text');
+
+/** The mode on screen, without reloading: the classes and the attribute the stylesheet reads. */
+function putMode(mode) {
+  state.mode = mode;
+  viewport?.classList.toggle('scrolling', isScroll());
+  flow?.classList.toggle('scrolling', isScroll());
+  paintEdges();
+  document.body.dataset.mode = mode;
+}
+
+/** Opening: the book read in the mode remembered for its kind. Nothing drawn yet, nothing saved. */
+function takeModeFor(kind, settings) {
+  state.kind = KINDS.includes(kind) ? kind : 'text';
+  const mode = modeFor(settings, state.kind);
+  state.held = state.kind !== 'text' && mode !== modeFor(settings, 'text');
+  if (mode !== state.mode) putMode(mode);
+  else document.body.dataset.mode = state.mode;
+}
+
 export async function setMode(mode) {
-  /* Chosen while the book was switched to scrolling for its strips: the
-     choice is the reader's own, so it is kept, and the book is no longer
-     switched back on leaving it. */
-  const wasHeld = state.held;
-  state.held = false;
-  if (mode === state.mode) {
-    if (wasHeld) await store.saveSettings({ readingMode: mode });
-    return;
-  }
-  await store.saveSettings({ readingMode: mode });
+  if (mode !== 'paged' && mode !== 'scroll') return;
+  const kind = kindShowing();
+  // Remembered for books of this kind -- with no book open, for text.
+  await store.saveSettings({ [modeKeyFor(kind)]: mode });
+  const settings = await store.settings();
+  state.held = !!state.book && kind !== 'text' && mode !== modeFor(settings, 'text');
+  if (mode === state.mode) return;
   // The stylesheet needs to know before anything is drawn in the new mode.
   document.body.dataset.mode = mode;
   const anchor = state.anchor;
@@ -214,14 +245,16 @@ export async function setMode(mode) {
  * measure against -- back in it, scrolling would not move, or the next page
  * came up blank, and only opening the book again put it right. */
 let chosen = null;
-export async function chooseWhileAway({ mode, endless } = {}) {
+export async function chooseWhileAway({ mode, endless, kind = kindShowing() } = {}) {
   const change = {};
-  if (mode === 'paged' || mode === 'scroll') change.readingMode = mode;
+  if (mode === 'paged' || mode === 'scroll') change[modeKeyFor(kind)] = mode;
   if (typeof endless === 'boolean') change.endlessScroll = endless;
   if (!Object.keys(change).length) return;
   await store.saveSettings(change);
   if (!state.book) return;
-  chosen = { ...chosen, ...(change.readingMode ? { mode } : {}), ...(typeof endless === 'boolean' ? { endless } : {}) };
+  // A mode chosen for another kind of book is for the next one of that kind, not this one.
+  const forThis = (mode === 'paged' || mode === 'scroll') && (KINDS.includes(kind) ? kind : 'text') === state.kind;
+  chosen = { ...chosen, ...(forThis ? { mode } : {}), ...(typeof endless === 'boolean' ? { endless } : {}) };
 }
 
 /** The mode the book will be in on going back to it: the one chosen meanwhile, or the one showing. */
@@ -1003,6 +1036,7 @@ export async function open(bookId, opts = {}) {
   applyLayout(state.layout, settings);
   holdForStrips(await tall, settings);
   state.pictureBook = await pictures;
+  takeModeFor((await tall) ? 'strips' : state.pictureBook ? 'pictures' : 'text', settings);
   paintEdges();
 
   const saved = await store.get('positions', bookId);
@@ -1605,27 +1639,19 @@ export async function tallStrips(images, { needed = STRIPS_NEEDED, within = STRI
   return found >= needed;
 }
 
-/** Switched to scrolling and the width for a book of strips, or put back. */
+/** The width for a book of strips, or put back. Its mode is its kind's (takeModeFor). */
 function holdForStrips(tall, settings) {
   const body = document.body;
   if (!tall) {
-    state.held = false;
     delete body.dataset.imagesHeld;
     body.dataset.images = settings.imageFit || 'screen';
     return;
   }
-  state.held = true;
   body.dataset.imagesHeld = 'width';
   body.dataset.images = 'width';
-  if (state.mode !== 'scroll') {
-    state.mode = 'scroll';
-    viewport.classList.add('scrolling');
-    flow.classList.add('scrolling');
-    body.dataset.mode = 'scroll';
-  }
 }
 
-/** The book is put down: a book switched for its strips goes back as it was. */
+/** The book is put down: a book read in its kind's mode, and at the strips' width, goes back as it was. */
 export async function releaseStrips() {
   const body = document.body;
   const fitHeld = !!body.dataset.imagesHeld;
@@ -1637,14 +1663,8 @@ export async function releaseStrips() {
   }
   if (state.held) {
     state.held = false;
-    const mode = settings.readingMode || 'paged';
-    if (mode !== state.mode) {
-      state.mode = mode;
-      viewport?.classList.toggle('scrolling', isScroll());
-      flow?.classList.toggle('scrolling', isScroll());
-      paintEdges();
-      body.dataset.mode = mode;
-    }
+    const mode = modeFor(settings, 'text');
+    if (mode !== state.mode) putMode(mode);
   }
 }
 

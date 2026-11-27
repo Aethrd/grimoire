@@ -25,6 +25,9 @@ console.log('reading mode');
 t('paged is the default, endless is on for when scroll is chosen', () => {
   assert.equal(store.DEFAULT_SETTINGS.readingMode, 'paged');
   assert.equal(store.DEFAULT_SETTINGS.endlessScroll, true);
+  // A mode for each kind of book: picture books in pages, long strips scrolled, to begin with.
+  assert.equal(store.DEFAULT_SETTINGS.pictureMode, 'paged');
+  assert.equal(store.DEFAULT_SETTINGS.stripMode, 'scroll');
 });
 
 t('how you read is a setting, not a property of one book', () => {
@@ -34,7 +37,9 @@ t('how you read is a setting, not a property of one book', () => {
   assert.ok(!('endless' in store.DEFAULT_LAYOUT));
 
   const reader = read('app/src/main/assets/www/js/reader.js');
-  assert.match(reader, /store\.saveSettings\(\{ readingMode: mode \}\)/);
+  // Saved for the kind of book open -- text, picture books, long strips -- not for the one book.
+  assert.match(reader, /await store\.saveSettings\(\{ \[modeKeyFor\(kind\)\]: mode \}\);/);
+  assert.match(reader, /const MODE_KEY = \{ text: 'readingMode', pictures: 'pictureMode', strips: 'stripMode' \};/);
   assert.match(reader, /store\.saveSettings\(\{ endlessScroll: on \}\)/);
   // An older install still carrying it in a layout row is honoured once, so
   // nobody loses the mode they had.
@@ -57,8 +62,10 @@ await (async (name, fn) => { await fn(); console.log('  ok  ' + name); pass++; }
   const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
   const was = await store.settings();
   const book = reader.state.book;
+  const kind = reader.state.kind;
   try {
     reader.state.book = { id: 9999, title: 'Open' };
+    reader.state.kind = 'text';
     reader.state.mode = 'paged';
     await reader.chooseWhileAway({ mode: 'scroll' });
     assert.equal((await store.settings()).readingMode, 'scroll', 'not saved');
@@ -71,6 +78,26 @@ await (async (name, fn) => { await fn(); console.log('  ok  ' + name); pass++; }
     await reader.takeUpChosen();
     assert.equal(reader.state.mode, 'paged');
     assert.equal(reader.modeShowing(), 'paged');
+    // Chosen for another kind than the book open: saved for that kind, not taken up in this book.
+    await reader.chooseWhileAway({ mode: 'scroll', kind: 'pictures' });
+    assert.equal((await store.settings()).pictureMode, 'scroll');
+    assert.equal((await store.settings()).readingMode, 'scroll', 'the text mode was changed by a picture-book choice');
+    assert.equal(reader.modeShowing(), 'paged', 'a picture-book choice was to be taken up in a book of text');
+    // A picture book open: chosen on its Layout screen, for picture books.
+    reader.state.kind = 'pictures';
+    await reader.chooseWhileAway({ mode: 'paged' });
+    assert.equal((await store.settings()).pictureMode, 'paged');
+    assert.equal((await store.settings()).readingMode, 'scroll');
+    assert.equal(reader.modeShowing(), 'paged');
+    await reader.takeUpChosen();
+    reader.state.kind = 'text';
+    // What each kind opens in, from the settings, and what an old or odd value falls back to.
+    assert.equal(reader.modeFor({ readingMode: 'scroll' }, 'text'), 'scroll');
+    assert.equal(reader.modeFor({}, 'text'), 'paged');
+    assert.equal(reader.modeFor({}, 'pictures'), 'paged');
+    assert.equal(reader.modeFor({}, 'strips'), 'scroll');
+    assert.equal(reader.modeFor({ stripMode: 'sideways' }, 'strips'), 'scroll');
+    assert.equal(reader.modeFor({ readingMode: 'scroll' }, 'nonsense'), 'scroll');
     // No book open: only saved.
     reader.state.book = null;
     await reader.chooseWhileAway({ mode: 'paged' });
@@ -80,8 +107,9 @@ await (async (name, fn) => { await fn(); console.log('  ok  ' + name); pass++; }
     assert.equal((await store.settings()).readingMode, 'paged', 'an unknown mode was saved');
   } finally {
     reader.state.book = book;
+    reader.state.kind = kind;
     reader.state.mode = 'paged';
-    await store.saveSettings({ readingMode: was.readingMode, endlessScroll: was.endlessScroll });
+    await store.saveSettings({ readingMode: was.readingMode, pictureMode: was.pictureMode, stripMode: was.stripMode, endlessScroll: was.endlessScroll });
   }
   const src = read('app/src/main/assets/www/js/reader.js');
   assert.match(src, /if \(!was \|\| !state\.book \|\| !measurable\(\)\) return;/);
@@ -92,7 +120,10 @@ await (async (name, fn) => { await fn(); console.log('  ok  ' + name); pass++; }
   assert.match(screens, /await reader\.chooseWhileAway\(\{ endless: on \}\);/);
   assert.doesNotMatch(screens, /reader\.setMode\(|reader\.setEndless\(/);
   const panels = read('app/src/main/assets/www/js/panels.js');
-  assert.match(panels, /reader\.chooseWhileAway\(\{ mode: value \}\)/);
+  assert.match(panels, /reader\.chooseWhileAway\(\{ mode: value, kind \}\)/);
+  // A row for each kind of book, each showing its own.
+  assert.match(panels, /\['text', 'Books of text',[\s\S]{0,200}\['pictures', 'Picture books',[\s\S]{0,200}\['strips', 'Long strips',/);
+  assert.match(panels, /reader\.modeFor\(settings, kind\) === value/);
   assert.match(panels, /reader\.chooseWhileAway\(\{ endless: on \}\)/);
   // Taken up on going back into the book: back() -> reloadReader.
   const app = read('app/src/main/assets/www/js/app.js');
@@ -485,9 +516,9 @@ t('a chapter added above or dropped off the top keeps the place once, not twice'
     // Known when the book opens, the last book's never carried into the next.
     const src = read('app/src/main/assets/www/js/reader.js');
     assert.match(src, /state\.book = book;\s*\/\/[^\n]*\n\s*state\.pictureBook = false;\s*paintEdges\(\);/);
-    assert.match(src, /state\.pictureBook = await pictures;\s*paintEdges\(\);/);
+    assert.match(src, /state\.pictureBook = await pictures;\s*takeModeFor\([^\n]*\);\s*paintEdges\(\);/);
     // Long strips are picture books too: switched to scrolling for them first, then edged.
-    assert.match(src, /holdForStrips\(await tall, settings\);\s*state\.pictureBook = await pictures;\s*paintEdges\(\);/);
+    assert.match(src, /holdForStrips\(await tall, settings\);\s*state\.pictureBook = await pictures;\s*takeModeFor\(\(await tall\) \? 'strips' : state\.pictureBook \? 'pictures' : 'text', settings\);\s*paintEdges\(\);/);
     assert.equal((src.match(/classList\.toggle\('scrolling', isScroll\(\)\);\s*paintEdges\(\);/g) || []).length, 3);
   });
 

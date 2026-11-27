@@ -1640,7 +1640,9 @@ await t('a book of two or more long strips opens scrolling at the width, and goe
   const hold = src.slice(src.indexOf('function holdForStrips'), src.indexOf('export async function releaseStrips'));
   assert.doesNotMatch(hold, /saveSettings/);
   assert.match(hold, /body\.dataset\.images = 'width'/);
-  assert.match(hold, /state\.mode = 'scroll'/);
+  // Its mode is no longer forced to scrolling here: it is the one remembered for strips (takeModeFor).
+  assert.doesNotMatch(hold, /state\.mode = /);
+  assert.match(src, /const MODE_FIRST = \{ text: 'paged', pictures: 'paged', strips: 'scroll' \};/);
   const app = read('app/src/main/assets/www/js/app.js');
   assert.match(app, /if \(wasInBook && !inBook\) reader\.releaseStrips\(\)/);
   // A theme change while reading does not undo the width.
@@ -1649,7 +1651,8 @@ await t('a book of two or more long strips opens scrolling at the width, and goe
   for (const file of ['screens.js', 'panels.js']) {
     assert.match(read(`app/src/main/assets/www/js/${file}`), /delete document\.body\.dataset\.imagesHeld;/);
   }
-  assert.match(src, /const wasHeld = state\.held;\s+state\.held = false;/);
+  // Chosen in a book of strips: kept for strips, and nothing switched back on leaving it unless it differs from text's.
+  assert.match(src, /state\.held = !!state\.book && kind !== 'text' && mode !== modeFor\(settings, 'text'\);/);
 });
 
 console.log(`\n${pass} assertions passed`);

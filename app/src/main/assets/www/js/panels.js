@@ -2719,18 +2719,26 @@ async function renderLayoutPane(body) {
   const settings = await store.settings();
   const layout = await store.layoutFor(0);
 
+  /* A mode for each kind of book, remembered apart (reader.modeFor): the one
+   * chosen in a book is the one the next book of its kind opens in. With a
+   * book open, taken up on going back to it (reader.takeUpChosen). */
   body.innerHTML = '<p class="eyebrow">Reading mode</p>';
-  const seg = document.createElement('div');
-  seg.className = 'seg';
-  for (const [value, label] of [['paged', 'Paged'], ['scroll', 'Scroll']]) {
-    const button = document.createElement('button');
-    button.textContent = label;
-    button.setAttribute('aria-pressed', String(settings.readingMode === value));
-    // With a book open, taken up on going back to it (reader.takeUpChosen) -- not only on opening it again.
-    button.onclick = async () => { await reader.chooseWhileAway({ mode: value }); renderSettings(); };
-    seg.appendChild(button);
+  for (const [kind, title, sub] of [
+    ['text', 'Books of text', 'Novels and anything mostly words'],
+    ['pictures', 'Picture books', 'Comics and scans, a picture to a page'],
+    ['strips', 'Long strips', 'Webtoons: pictures far taller than the screen'],
+  ]) {
+    const seg = document.createElement('div');
+    seg.className = 'seg';
+    for (const [value, label] of [['paged', 'Paged'], ['scroll', 'Scroll']]) {
+      const button = document.createElement('button');
+      button.textContent = label;
+      button.setAttribute('aria-pressed', String(reader.modeFor(settings, kind) === value));
+      button.onclick = async () => { await reader.chooseWhileAway({ mode: value, kind }); renderSettings(); };
+      seg.appendChild(button);
+    }
+    body.appendChild(row(title, sub, seg));
   }
-  body.appendChild(seg);
 
   body.appendChild(row('Endless scroll', 'Run into the next chapter instead of stopping',
     toggle(settings.endlessScroll !== false, (on) => reader.chooseWhileAway({ endless: on }))));

@@ -852,7 +852,8 @@ await (async () => {
   };
 
   await t('a book of long strips is read scrolling at the width, and put back on leaving', async () => {
-    await store.saveSettings({ readingMode: 'paged', imageFit: 'screen' });
+    // Each kind as it begins: the tests before this one chose scrolling with picture books open.
+    await store.saveSettings({ readingMode: 'paged', pictureMode: 'paged', stripMode: 'scroll', imageFit: 'screen' });
     reader.init({ onChange() {} });
     const strips = await make('Webtoon', [[690, 5000], [690, 6200], [690, 4800]]);
     const comic = await make('Comic', [[800, 1200], [800, 1200], [690, 5000]]);
@@ -874,24 +875,45 @@ await (async () => {
     assert.equal(window.document.body.dataset.images, 'screen');
     assert.equal(window.document.body.dataset.imagesHeld, undefined);
 
-    // One strip among pages: left as the settings say.
+    // One strip among pages: a picture book, in the mode for picture books.
     await reader.open(comic);
+    assert.equal(reader.state.kind, 'pictures');
     assert.equal(reader.state.mode, 'paged');
     assert.equal(window.document.body.dataset.images, 'screen');
 
     await reader.open(novel);
+    assert.equal(reader.state.kind, 'text');
     assert.equal(reader.state.mode, 'paged');
     assert.equal(window.document.body.dataset.images, 'screen');
 
-    // Chosen by hand while held: kept.
+    // Chosen by hand in a book of strips: kept for strips -- the next one opens in it -- and text left as it was.
     await reader.open(strips);
     await reader.setMode('paged');
+    assert.equal((await store.settings()).stripMode, 'paged');
+    assert.equal((await store.settings()).readingMode, 'paged');
+    await reader.releaseStrips();
     await reader.open(strips);
+    assert.equal(reader.state.mode, 'paged', 'strips did not open in the mode chosen for them');
+    assert.equal(window.document.body.dataset.images, 'width', 'still at the width');
+    await reader.setMode('scroll');
+    assert.equal((await store.settings()).stripMode, 'scroll');
+    assert.equal((await store.settings()).readingMode, 'paged', 'a choice for strips changed the mode for text');
+    // Text and picture books are as they were.
+    await reader.releaseStrips();
+    assert.equal(reader.state.mode, 'paged');
+    await reader.open(novel);
+    assert.equal(reader.state.mode, 'paged');
+    await reader.open(comic);
+    assert.equal(reader.state.mode, 'paged');
+    // Text chosen to scroll: the next book of text scrolls, the strips and pictures do not follow.
+    await reader.open(novel);
     await reader.setMode('scroll');
     assert.equal((await store.settings()).readingMode, 'scroll');
-    await reader.releaseStrips();
+    await reader.open(comic);
+    assert.equal(reader.state.mode, 'paged');
+    await reader.open(novel);
     assert.equal(reader.state.mode, 'scroll');
-    await store.saveSettings({ readingMode: 'paged' });
+    await store.saveSettings({ readingMode: 'paged', pictureMode: 'paged', stripMode: 'scroll' });
   });
 })();
 

@@ -174,17 +174,19 @@ export async function openLayout(bookId) {
   // Reading mode first: it changes what every control below means.
   const modeField = document.createElement('div');
   modeField.className = 'field';
-  modeField.innerHTML = '<label><span>Reading mode</span></label>';
+  // Remembered for books of this kind: the next one opens in it (reader.modeFor).
+  const kindName = { text: 'books of text', pictures: 'picture books', strips: 'long strips' }[reader.kindShowing()] || 'books of text';
+  modeField.innerHTML = `<label><span>Reading mode</span><small class="muted">Remembered for ${kindName}</small></label>`;
   const modeSeg = document.createElement('div');
   modeSeg.className = 'seg';
   for (const [value, label] of [['paged', 'Paged'], ['scroll', 'Scroll']]) {
     const button = document.createElement('button');
     button.textContent = label;
-    // The mode showing, which a book of long strips can differ from the setting in.
-    button.setAttribute('aria-pressed', String((reader.state.book ? reader.modeShowing() : settings.readingMode) === value));
+    // The mode showing: the one for this kind of book, or the one just chosen for it.
+    button.setAttribute('aria-pressed', String((reader.state.book ? reader.modeShowing() : reader.modeFor(settings, 'text')) === value));
     button.onclick = async () => {
-      // Saved now, and applied everywhere: choosing how to read is a habit,
-      // not a property of the book in front of you. The book switches on
+      // Saved now, for every book of this kind: choosing how to read is a
+      // habit, kept apart for text, picture books and strips. The book switches on
       // going back to it (reader.takeUpChosen), where it can be measured --
       // switched here, behind this screen, it came back unscrollable or with
       // a blank next page until opened again. The anchor carries the place

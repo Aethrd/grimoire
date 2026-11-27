@@ -676,7 +676,11 @@ export const DEFAULT_SETTINGS = {
   /* Typography that only matters at a page boundary. */
   keepParagraphs: false,    // never split a paragraph across a page
 
-  readingMode: 'paged',
+  readingMode: 'paged',     // books of text
+  /* Remembered for each kind of book apart (reader.modeFor): a picture book
+     in pages, a book of long strips scrolled, unless chosen otherwise. */
+  pictureMode: 'paged',
+  stripMode: 'scroll',
   endlessScroll: true,
 
   translateTarget: 'EN-US',
