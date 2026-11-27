@@ -181,13 +181,15 @@ export async function openLayout(bookId) {
     const button = document.createElement('button');
     button.textContent = label;
     // The mode showing, which a book of long strips can differ from the setting in.
-    button.setAttribute('aria-pressed', String((reader.state.book ? reader.state.mode : settings.readingMode) === value));
+    button.setAttribute('aria-pressed', String((reader.state.book ? reader.modeShowing() : settings.readingMode) === value));
     button.onclick = async () => {
-      // Saved by setMode, and applied everywhere: choosing how to read is a
-      // habit, not a property of the book in front of you. Switching rebuilds
-      // the view; the anchor carries the place across, so you land on the
-      // same sentence either way.
-      await reader.setMode(value);
+      // Saved now, and applied everywhere: choosing how to read is a habit,
+      // not a property of the book in front of you. The book switches on
+      // going back to it (reader.takeUpChosen), where it can be measured --
+      // switched here, behind this screen, it came back unscrollable or with
+      // a blank next page until opened again. The anchor carries the place
+      // across, so you land on the same sentence either way.
+      await reader.chooseWhileAway({ mode: value });
       openLayout(bookId);
     };
     modeSeg.appendChild(button);
@@ -260,7 +262,7 @@ export async function openLayout(bookId) {
   greyField.appendChild(greyRow);
   body.appendChild(greyField);
 
-  if ((reader.state.book ? reader.state.mode : settings.readingMode) === 'scroll') {
+  if ((reader.state.book ? reader.modeShowing() : settings.readingMode) === 'scroll') {
     const endless = document.createElement('div');
     endless.className = 'row';
     endless.innerHTML = `<div class="row-text"><b>Endless scroll</b>
@@ -272,7 +274,8 @@ export async function openLayout(bookId) {
     sw.onclick = async () => {
       const on = sw.getAttribute('aria-pressed') !== 'true';
       sw.setAttribute('aria-pressed', String(on));
-      reader.setEndless(on);
+      // On going back to the book, as the mode is: chapters are not read in behind this screen.
+      await reader.chooseWhileAway({ endless: on });
     };
     endless.appendChild(sw);
     body.appendChild(endless);

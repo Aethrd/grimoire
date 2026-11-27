@@ -4366,7 +4366,12 @@ let readerLanding = null;   // the picture on screen when the book was left
 async function reloadReader() {
   const stale = readerStale;
   const book = reader.state.book;
-  if (!stale || !book || stale.bookId !== book.id) return;
+  // Scroll or pages, endless or not, chosen in Settings meanwhile: taken up now, from the same sentence.
+  // (Reopened instead, below, the book reads the settings as they are.)
+  if (!stale || !book || stale.bookId !== book.id) {
+    try { await reader.takeUpChosen(); paintReader(); } catch { /* left as it was: reopening the book still takes it up */ }
+    return;
+  }
   readerStale = null;
   readerLanding = null;
   try {

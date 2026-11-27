@@ -2726,13 +2726,14 @@ async function renderLayoutPane(body) {
     const button = document.createElement('button');
     button.textContent = label;
     button.setAttribute('aria-pressed', String(settings.readingMode === value));
-    button.onclick = async () => { await store.saveSettings({ readingMode: value }); renderSettings(); };
+    // With a book open, taken up on going back to it (reader.takeUpChosen) -- not only on opening it again.
+    button.onclick = async () => { await reader.chooseWhileAway({ mode: value }); renderSettings(); };
     seg.appendChild(button);
   }
   body.appendChild(seg);
 
   body.appendChild(row('Endless scroll', 'Run into the next chapter instead of stopping',
-    toggle(settings.endlessScroll !== false, (on) => store.saveSettings({ endlessScroll: on }))));
+    toggle(settings.endlessScroll !== false, (on) => reader.chooseWhileAway({ endless: on }))));
 
   const shelf = document.createElement('section');
   shelf.className = 'block';

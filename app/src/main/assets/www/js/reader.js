@@ -207,6 +207,39 @@ export async function setMode(mode) {
   await loadChapter(chapter, anchor);
 }
 
+/* Chosen with a book open but out of sight -- on the Layout screen, or in
+ * Settings: saved at once, and taken up on coming back to the book
+ * (takeUpChosen, from app.js). Not there and then: those screens hide the
+ * reader, and a book switched while hidden was laid out with nothing to
+ * measure against -- back in it, scrolling would not move, or the next page
+ * came up blank, and only opening the book again put it right. */
+let chosen = null;
+export async function chooseWhileAway({ mode, endless } = {}) {
+  const change = {};
+  if (mode === 'paged' || mode === 'scroll') change.readingMode = mode;
+  if (typeof endless === 'boolean') change.endlessScroll = endless;
+  if (!Object.keys(change).length) return;
+  await store.saveSettings(change);
+  if (!state.book) return;
+  chosen = { ...chosen, ...(change.readingMode ? { mode } : {}), ...(typeof endless === 'boolean' ? { endless } : {}) };
+}
+
+/** The mode the book will be in on going back to it: the one chosen meanwhile, or the one showing. */
+export const modeShowing = () => chosen?.mode || state.mode;
+
+/** Back in the book: what was chosen meanwhile, applied from the same sentence, as switching does. */
+export async function takeUpChosen() {
+  const was = chosen;
+  chosen = null;
+  if (!was || !state.book || !measurable()) return;
+  if (typeof was.endless === 'boolean' && was.endless !== state.endless) {
+    state.endless = was.endless;
+    paintEdges();
+  }
+  if (was.mode) await setMode(was.mode);
+  else if (isScroll() && state.endless) extendIfNeeded();
+}
+
 export function setEndless(on) {
   state.endless = on;
   paintEdges();
@@ -950,6 +983,8 @@ export async function open(bookId, opts = {}) {
   // Not the last book's, until this one is known.
   state.pictureBook = false;
   paintEdges();
+  // Opened afresh, the settings are read as they are: nothing chosen is still to take up.
+  chosen = null;
   state.chapters = await store.byIndex('chapters', 'bookId', bookId);
   state.chapters.sort((a, b) => a.index - b.index);
 

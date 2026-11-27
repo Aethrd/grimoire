@@ -49,6 +49,57 @@ t('the reader exposes both switches', () => {
   assert.equal(typeof reader.setEndless, 'function');
 });
 
+await (async (name, fn) => { await fn(); console.log('  ok  ' + name); pass++; })('scroll or pages chosen with the book out of sight is taken up on going back to it, not on opening it again', async () => {
+  /* Measured in Chromium: switched on the Layout screen, behind which the
+   * reader is hidden, the book came back to the top of the chapter, would
+   * not scroll, or turned to a blank page, until opened again. Now chosen,
+   * saved, and taken up on going back -- from the same sentence. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const was = await store.settings();
+  const book = reader.state.book;
+  try {
+    reader.state.book = { id: 9999, title: 'Open' };
+    reader.state.mode = 'paged';
+    await reader.chooseWhileAway({ mode: 'scroll' });
+    assert.equal((await store.settings()).readingMode, 'scroll', 'not saved');
+    assert.equal(reader.state.mode, 'paged', 'switched behind the screen, with nothing to measure');
+    assert.equal(reader.modeShowing(), 'scroll', 'the choice is not shown as made');
+    await reader.chooseWhileAway({ endless: false });
+    assert.equal((await store.settings()).endlessScroll, false);
+    assert.equal(reader.modeShowing(), 'scroll', 'a later choice dropped the earlier one');
+    // Nothing to measure (jsdom): let go of, not applied blind.
+    await reader.takeUpChosen();
+    assert.equal(reader.state.mode, 'paged');
+    assert.equal(reader.modeShowing(), 'paged');
+    // No book open: only saved.
+    reader.state.book = null;
+    await reader.chooseWhileAway({ mode: 'paged' });
+    assert.equal((await store.settings()).readingMode, 'paged');
+    assert.equal(reader.modeShowing(), 'paged');
+    await reader.chooseWhileAway({ mode: 'sideways' });
+    assert.equal((await store.settings()).readingMode, 'paged', 'an unknown mode was saved');
+  } finally {
+    reader.state.book = book;
+    reader.state.mode = 'paged';
+    await store.saveSettings({ readingMode: was.readingMode, endlessScroll: was.endlessScroll });
+  }
+  const src = read('app/src/main/assets/www/js/reader.js');
+  assert.match(src, /if \(!was \|\| !state\.book \|\| !measurable\(\)\) return;/);
+  assert.match(src, /if \(was\.mode\) await setMode\(was\.mode\);/);
+  assert.match(src, /paintEdges\(\);\s*\/\/ Opened afresh[^\n]*\n\s*chosen = null;/);
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /await reader\.chooseWhileAway\(\{ mode: value \}\);/);
+  assert.match(screens, /await reader\.chooseWhileAway\(\{ endless: on \}\);/);
+  assert.doesNotMatch(screens, /reader\.setMode\(|reader\.setEndless\(/);
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /reader\.chooseWhileAway\(\{ mode: value \}\)/);
+  assert.match(panels, /reader\.chooseWhileAway\(\{ endless: on \}\)/);
+  // Taken up on going back into the book: back() -> reloadReader.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /if \(!stale \|\| !book \|\| stale\.bookId !== book\.id\) \{\s*try \{ await reader\.takeUpChosen\(\); paintReader\(\); \}/);
+  assert.match(app, /if \(target === 'reader'\) reloadReader\(\);/);
+});
+
 t('state starts paged with one chapter and no assumptions', () => {
   assert.equal(reader.state.mode, 'paged');
   assert.deepEqual(reader.state.loaded, []);
