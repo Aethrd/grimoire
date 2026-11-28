@@ -118,9 +118,34 @@ export function removablePages(chapters, unitsByChapter = null) {
   return pagesOf(chapters, unitsByChapter).map((page, at) => ({ ...page, at }));
 }
 
+/**
+ * Every picture in a book but its cover, as pages to take out.
+ *
+ * A page that is a picture and nothing else. The cover is the picture the
+ * book opens on, alone (as coverpage.js takes it), or one chosen for it and
+ * put in; the cover on the shelf is the book's own and is never touched here.
+ * A picture inside a block with words in it is left where it is -- taking
+ * its page would take the words -- and counted, so it can be said.
+ *
+ * @returns { picked: page numbers, inText: how many were left in text }
+ */
+export function picturesButCover(pages, book = null) {
+  const chosen = book?.coverPage?.href || null;
+  const picked = [];
+  let inText = 0;
+  for (const page of pages || []) {
+    if (!page.picture) continue;
+    const cover = page.picture === chosen || (page.at === 0 && !page.text);
+    if (cover) continue;
+    if (page.text) inText += 1;
+    else picked.push(page.at);
+  }
+  return { picked, inText };
+}
+
 /* ── taking it out ────────────────────────────────────────────────────── */
 
-const label = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const label =(n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 /* ── planning it, before any of it happens ───────────────────────────────
  *

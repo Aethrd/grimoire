@@ -25,6 +25,9 @@ console.log('reading mode');
 t('paged is the default, endless is on for when scroll is chosen', () => {
   assert.equal(store.DEFAULT_SETTINGS.readingMode, 'paged');
   assert.equal(store.DEFAULT_SETTINGS.endlessScroll, true);
+  // A mode for each kind of book: picture books in pages, long strips scrolled, to begin with.
+  assert.equal(store.DEFAULT_SETTINGS.pictureMode, 'paged');
+  assert.equal(store.DEFAULT_SETTINGS.stripMode, 'scroll');
 });
 
 t('how you read is a setting, not a property of one book', () => {
@@ -34,7 +37,9 @@ t('how you read is a setting, not a property of one book', () => {
   assert.ok(!('endless' in store.DEFAULT_LAYOUT));
 
   const reader = read('app/src/main/assets/www/js/reader.js');
-  assert.match(reader, /store\.saveSettings\(\{ readingMode: mode \}\)/);
+  // Saved for the kind of book open -- text, picture books, long strips -- not for the one book.
+  assert.match(reader, /await store\.saveSettings\(\{ \[modeKeyFor\(kind\)\]: mode \}\);/);
+  assert.match(reader, /const MODE_KEY = \{ text: 'readingMode', pictures: 'pictureMode', strips: 'stripMode' \};/);
   assert.match(reader, /store\.saveSettings\(\{ endlessScroll: on \}\)/);
   // An older install still carrying it in a layout row is honoured once, so
   // nobody loses the mode they had.
@@ -47,6 +52,83 @@ t('how you read is a setting, not a property of one book', () => {
 t('the reader exposes both switches', () => {
   assert.equal(typeof reader.setMode, 'function');
   assert.equal(typeof reader.setEndless, 'function');
+});
+
+await (async (name, fn) => { await fn(); console.log('  ok  ' + name); pass++; })('scroll or pages chosen with the book out of sight is taken up on going back to it, not on opening it again', async () => {
+  /* Measured in Chromium: switched on the Layout screen, behind which the
+   * reader is hidden, the book came back to the top of the chapter, would
+   * not scroll, or turned to a blank page, until opened again. Now chosen,
+   * saved, and taken up on going back -- from the same sentence. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const was = await store.settings();
+  const book = reader.state.book;
+  const kind = reader.state.kind;
+  try {
+    reader.state.book = { id: 9999, title: 'Open' };
+    reader.state.kind = 'text';
+    reader.state.mode = 'paged';
+    await reader.chooseWhileAway({ mode: 'scroll' });
+    assert.equal((await store.settings()).readingMode, 'scroll', 'not saved');
+    assert.equal(reader.state.mode, 'paged', 'switched behind the screen, with nothing to measure');
+    assert.equal(reader.modeShowing(), 'scroll', 'the choice is not shown as made');
+    await reader.chooseWhileAway({ endless: false });
+    assert.equal((await store.settings()).endlessScroll, false);
+    assert.equal(reader.modeShowing(), 'scroll', 'a later choice dropped the earlier one');
+    // Nothing to measure (jsdom): let go of, not applied blind.
+    await reader.takeUpChosen();
+    assert.equal(reader.state.mode, 'paged');
+    assert.equal(reader.modeShowing(), 'paged');
+    // Chosen for another kind than the book open: saved for that kind, not taken up in this book.
+    await reader.chooseWhileAway({ mode: 'scroll', kind: 'pictures' });
+    assert.equal((await store.settings()).pictureMode, 'scroll');
+    assert.equal((await store.settings()).readingMode, 'scroll', 'the text mode was changed by a picture-book choice');
+    assert.equal(reader.modeShowing(), 'paged', 'a picture-book choice was to be taken up in a book of text');
+    // A picture book open: chosen on its Layout screen, for picture books.
+    reader.state.kind = 'pictures';
+    await reader.chooseWhileAway({ mode: 'paged' });
+    assert.equal((await store.settings()).pictureMode, 'paged');
+    assert.equal((await store.settings()).readingMode, 'scroll');
+    assert.equal(reader.modeShowing(), 'paged');
+    await reader.takeUpChosen();
+    reader.state.kind = 'text';
+    // What each kind opens in, from the settings, and what an old or odd value falls back to.
+    assert.equal(reader.modeFor({ readingMode: 'scroll' }, 'text'), 'scroll');
+    assert.equal(reader.modeFor({}, 'text'), 'paged');
+    assert.equal(reader.modeFor({}, 'pictures'), 'paged');
+    assert.equal(reader.modeFor({}, 'strips'), 'scroll');
+    assert.equal(reader.modeFor({ stripMode: 'sideways' }, 'strips'), 'scroll');
+    assert.equal(reader.modeFor({ readingMode: 'scroll' }, 'nonsense'), 'scroll');
+    // No book open: only saved.
+    reader.state.book = null;
+    await reader.chooseWhileAway({ mode: 'paged' });
+    assert.equal((await store.settings()).readingMode, 'paged');
+    assert.equal(reader.modeShowing(), 'paged');
+    await reader.chooseWhileAway({ mode: 'sideways' });
+    assert.equal((await store.settings()).readingMode, 'paged', 'an unknown mode was saved');
+  } finally {
+    reader.state.book = book;
+    reader.state.kind = kind;
+    reader.state.mode = 'paged';
+    await store.saveSettings({ readingMode: was.readingMode, pictureMode: was.pictureMode, stripMode: was.stripMode, endlessScroll: was.endlessScroll });
+  }
+  const src = read('app/src/main/assets/www/js/reader.js');
+  assert.match(src, /if \(!was \|\| !state\.book \|\| !measurable\(\)\) return;/);
+  assert.match(src, /if \(was\.mode\) await setMode\(was\.mode\);/);
+  assert.match(src, /paintEdges\(\);\s*\/\/ Opened afresh[^\n]*\n\s*chosen = null;/);
+  const screens = read('app/src/main/assets/www/js/screens.js');
+  assert.match(screens, /await reader\.chooseWhileAway\(\{ mode: value \}\);/);
+  assert.match(screens, /await reader\.chooseWhileAway\(\{ endless: on \}\);/);
+  assert.doesNotMatch(screens, /reader\.setMode\(|reader\.setEndless\(/);
+  const panels = read('app/src/main/assets/www/js/panels.js');
+  assert.match(panels, /reader\.chooseWhileAway\(\{ mode: value, kind \}\)/);
+  // A row for each kind of book, each showing its own.
+  assert.match(panels, /\['text', 'Books of text',[\s\S]{0,200}\['pictures', 'Picture books',[\s\S]{0,200}\['strips', 'Long strips',/);
+  assert.match(panels, /reader\.modeFor\(settings, kind\) === value/);
+  assert.match(panels, /reader\.chooseWhileAway\(\{ endless: on \}\)/);
+  // Taken up on going back into the book: back() -> reloadReader.
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /if \(!stale \|\| !book \|\| stale\.bookId !== book\.id\) \{\s*try \{ await reader\.takeUpChosen\(\); paintReader\(\); \}/);
+  assert.match(app, /if \(target === 'reader'\) reloadReader\(\);/);
 });
 
 t('state starts paged with one chapter and no assumptions', () => {
@@ -149,6 +231,43 @@ t('reading counts progress, not page turns', () => {
     'the clock stops when you turn back');
 });
 
+t('words counted from each chapter\'s own pages or screens -- not from everything loaded around it', () => {
+  // Scrolling, a screen's words were the chapter's words over the screens of every chapter loaded,
+  // so endless scroll logged about half of what was read. Paged and scrolled now count the same way.
+  const js = read('app/src/main/assets/www/js/reader.js');
+  const count = js.slice(js.indexOf('function countPage'), js.indexOf('export async function flushSession'));
+  assert.match(count, /const screens = isScroll\(\) \? screensInChapter\(\) : state\.pageCount;/);
+  assert.doesNotMatch(count, /chapter\.words \|\| 0\) \/ state\.pageCount/);
+  // Each chapter's furthest page or screen kept: re-reading is not counted twice, a re-estimated place in the book loses nothing.
+  assert.match(count, /const before = session\.reachedIn\.get\(state\.chapterIndex\) \|\| 0;/);
+  assert.match(count, /Math\.min\(at - before, allowed\)/);
+  // A chapter not laid out yet is not counted whole.
+  assert.match(count, /const laidOut = !isScroll\(\) \|\| /);
+  // Carried across a flush, as the furthest place is.
+  assert.match(js, /furthest: done\.furthest, reachedIn: done\.reachedIn,/);
+});
+
+t('Ch \u203a and \u2039 in endless scroll: one press, the chapter\'s own top at the top of the window', () => {
+  const js = read('app/src/main/assets/www/js/reader.js');
+  // Never offsetTop as a scroll position: it is measured from the text column, which starts 30px into what scrolls,
+  // so a chapter gone to by it stopped short in the gap below the last one, and that one was taken for the chapter read.
+  assert.doesNotMatch(js.replace(/\/\*[\s\S]*?\*\//g, ''), /offsetTop/);
+  assert.match(js, /function scrollTopOf\(section\) \{\s+return viewport\.scrollTop \+ section\.getBoundingClientRect\(\)\.top - viewport\.getBoundingClientRect\(\)\.top;/);
+  const next = js.slice(js.indexOf('export async function nextChapter'), js.indexOf('export async function prevChapter'));
+  const prev = js.slice(js.indexOf('export async function prevChapter'), js.indexOf('export async function goTo'));
+  for (const go of [next, prev]) {
+    // Smooth-scrolled there, and checked when the scroll settles: whatever moved on the way (a chapter added or dropped, a picture).
+    assert.match(go, /goingTo\(state\.chapterIndex\);\s+viewport\.scrollTo\(\{ top: scrollTopOf\(section\)/);
+    // Loaded fresh: put at its start, not at the end of the one put in above it.
+    assert.match(go, /atStartOf\(state\.chapterIndex\)/);
+  }
+  assert.match(js.slice(js.indexOf('function onScrolled'), js.indexOf('function onScrolled') + 900), /arrive\(\);/);
+  // The reader taking over gives it up.
+  assert.match(js, /viewport\.addEventListener\('touchstart', takeOver, \{ passive: true \}\);/);
+  // The chapter list, to a chapter's start, the same.
+  assert.match(js, /if \(!anchor && isScroll\(\) && atStartOf\(state\.chapterIndex\)\)/);
+});
+
 t('several language packs can be fetched in one go', () => {
   const panels = read('app/src/main/assets/www/js/panels.js');
   assert.match(panels, /Download all \$\{missing\.length\}/);
@@ -178,6 +297,259 @@ t('dragging the rail does not fight endless loading', () => {
   // And a handle longer than its rail would overhang the bottom.
   assert.match(reader, /Math\.min\(1, viewport\.clientHeight \/ viewport\.scrollHeight\)/);
 });
+
+t('both bars come and go over the text: the page is the same page in every state of them', () => {
+  /* In their own room, the top bar moved the page down and up and the reader
+   * moved the text back each time -- a blank band where the bar had been, and
+   * sometimes the text left a bar's height off -- and the bar at the foot put
+   * the page's last lines onto the next. Measured in Chromium with this
+   * stylesheet: the reading area is the same, top and foot, in all three
+   * states of the bars, in scroll and in pages. */
+  assert.match(css, /\.reader-screen \.reader-top \{\s*position: absolute; top: 0; left: var\(--safe-left\); right: var\(--safe-right\); z-index: 25;\s*\}/);
+  assert.match(css, /\.reader-screen \.reader-bottom \{\s*position: absolute; bottom: 0; left: var\(--safe-left\); right: var\(--safe-right\); z-index: 25;\s*\}/);
+  // Above the chapter pad, so a pad left low never sits on the bar's buttons.
+  assert.match(css, /\.chapter-pad \{\s*position: absolute;\s*z-index: 24;/);
+  // What sits at the foot rises above the bar while it shows; the end of a scroll has room to clear it.
+  assert.match(css, /\.reader-screen \.scrub-rail \{ bottom: calc\(12% \+ var\(--reader-foot, 0px\)\); \}/);
+  assert.match(css, /\.reader-screen \.edge-hint \{ bottom: calc\(14px \+ var\(--reader-foot, 0px\)\); \}/);
+  assert.match(css, /\.page-flow\.scrolling \{[^}]*padding-bottom: var\(--reader-foot, 0px\);/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /foot\.parentElement\?\.style\.setProperty\('--reader-foot', `\$\{foot\.offsetHeight \|\| 0\}px`\)/);
+  assert.match(app, /new ResizeObserver\(keepFoot\)\.observe\(foot\);/);
+  // And no scrollbar of the WebView's own flashed on the page's edge as they did.
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /webView\.setVerticalScrollBarEnabled\(false\);/);
+  assert.match(activity, /webView\.setHorizontalScrollBarEnabled\(false\);/);
+});
+
+t("Android's own bar at the foot is put away while a book is open, and comes back by a swipe", () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /window\.GrimoireNative\?\.readingBars\?\.\(name === 'reader'\)/);
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /bars\.setSystemBarsBehavior\(WindowInsetsControllerCompat\.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE\);/);
+  assert.match(activity, /if \(readingBarsHidden\) bars\.hide\(WindowInsetsCompat\.Type\.navigationBars\(\)\);\s+else bars\.show\(WindowInsetsCompat\.Type\.navigationBars\(\)\);/);
+  // Put away again after a dialog, the shade, or coming back to the app.
+  assert.match(activity, /if \(hasFocus && readingBarsHidden\) applyReadingBars\(\);/);
+  assert.match(activity, /webView\.onResume\(\);\s+if \(readingBarsHidden\) applyReadingBars\(\);/);
+  const bridge = read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java');
+  assert.match(bridge, /public void readingBars\(boolean hide\) \{/);
+});
+
+t('a chapter added above or dropped off the top keeps the place once, not twice', () => {
+  /* The browser's scroll anchoring, left on, moved the view as well as the
+   * reader: in Chromium it was thrown a whole chapter back on a trim and
+   * forward on a prepend. Anchoring stays off; the reader keeps the place
+   * itself, one way (keepPlace), with the observer for anything else. */
+  assert.match(css, /\.page-viewport\.scrolling \{[^}]*overflow-anchor: none;/);
+  const src = read('app/src/main/assets/www/js/reader.js');
+  assert.match(src, /new ResizeObserver\(\(\) => keepPlace\(\)\)\.observe\(flow\)/);
+  assert.ok(!/scrollHeight - before/.test(src), 'a sum still made for a chapter added above');
+  assert.ok(!/viewport\.scrollTop -= height/.test(src), 'a sum still made for a chapter dropped');
+});
+
+/* The place kept, against a layout: jsdom lays nothing out, so a small one is
+ * stood in for -- chapters of paragraphs, each so high, and the gap above
+ * every chapter but the first (.chapter + .chapter, 2.5em) -- and the reader's
+ * own keeping is driven against it. */
+{
+  const document = globalThis.document;
+  const viewport = document.getElementById('page-viewport');
+  const flow = document.getElementById('page-flow');
+  reader.init({ onChange: () => {} });
+  let scroll = 0;
+  Object.defineProperty(viewport, 'scrollTop', { configurable: true, get: () => scroll, set: (v) => { scroll = Math.max(0, v); } });
+  Object.defineProperty(viewport, 'clientHeight', { configurable: true, get: () => 800 });
+  const GAP = 40;
+  const high = new WeakMap();
+  const sectionHeight = (section) => [...section.children].reduce((sum, p) => sum + (high.get(p) ?? 0), 0);
+  const gapAbove = (section) => (section.previousElementSibling ? GAP : 0);
+  Object.defineProperty(viewport, 'scrollHeight', { configurable: true,
+    get: () => [...flow.children].reduce((sum, section) => sum + gapAbove(section) + sectionHeight(section), 0) });
+  const top = (el) => {
+    if (el.parentElement === flow) {
+      let y = 0;
+      for (const s of flow.children) {
+        y += gapAbove(s);
+        if (s === el) return y;
+        y += sectionHeight(s);
+      }
+    }
+    if (el.parentElement?.parentElement === flow) {
+      let y = top(el.parentElement);
+      for (const p of el.parentElement.children) { if (p === el) return y; y += high.get(p) ?? 0; }
+    }
+    return null;
+  };
+  const proto = Object.getPrototypeOf(Object.getPrototypeOf(viewport));
+  const realRect = window.HTMLElement.prototype.getBoundingClientRect;
+  window.HTMLElement.prototype.getBoundingClientRect = function () {
+    const box = (y, h) => ({ top: y, bottom: y + h, height: h, left: 0, right: 400, width: 400, x: 0, y });
+    if (this === viewport) return box(0, 800);
+    const y = top(this);
+    if (y == null) return realRect.call(this);
+    const h = this.parentElement === flow ? sectionHeight(this) : (high.get(this) ?? 0);
+    return box(y - scroll, h);
+  };
+  void proto;
+  const chapter = (index, paragraphs = 10, each = 100) => {
+    const section = document.createElement('section');
+    section.className = 'chapter';
+    section.dataset.chapter = String(index);
+    for (let i = 0; i < paragraphs; i += 1) {
+      const p = document.createElement('p');
+      p.textContent = `c${index} p${i}`;
+      high.set(p, each);
+      section.appendChild(p);
+    }
+    return section;
+  };
+  const lay = (count, paragraphs, each) => {
+    flow.innerHTML = '';
+    for (let i = 0; i < count; i += 1) flow.appendChild(chapter(i, paragraphs, each));
+    reader.state.mode = 'scroll';
+    reader.state.loaded = [...Array(count).keys()];
+  };
+  const atTop = () => [...flow.querySelectorAll('p')].find((p) => p.getBoundingClientRect().bottom > 1);
+  const { holdPlace, keepPlace, trimWindow } = reader.placeForTest;
+
+  t('a chapter dropped off the top: the line read stays put, the gap above the next chapter and all', () => {
+    lay(6, 10, 100);
+    scroll = 5 * 1040 + 330;          // a third of a paragraph into the last chapter's fourth
+    const line = atTop();
+    const was = line.getBoundingClientRect().top;
+    trimWindow('start');
+    assert.equal(reader.state.loaded.length, 5);
+    assert.ok(!flow.querySelector('[data-chapter="0"]'));
+    assert.equal(line.getBoundingClientRect().top, was, 'the page skipped');
+    // 1000 of chapter and the 40 of gap that went with it -- by the sum it was 1000, and a 40px skip.
+    assert.equal(scroll, 4 * 1040 + 330);
+  });
+
+  t('a picture above the screen arriving late: the page does not move', () => {
+    lay(3, 10, 100);
+    scroll = 2 * 1040 + 500;
+    holdPlace();
+    const line = atTop();
+    const was = line.getBoundingClientRect().top;
+    high.set(flow.children[1].children[2], 700);   // a picture in the chapter above, come in at its height
+    keepPlace();
+    assert.equal(line.getBoundingClientRect().top, was);
+    // Growing below the line read: nothing to undo.
+    const at = scroll;
+    holdPlace();
+    high.set(flow.children[2].children[9], 900);
+    assert.equal(keepPlace(), 0);
+    assert.equal(scroll, at);
+  });
+
+  t('a chapter added above: the line read stays put, at once and as its pictures come', () => {
+    lay(2, 10, 100);
+    scroll = 700;
+    holdPlace();
+    const line = atTop();
+    const was = line.getBoundingClientRect().top;
+    flow.insertBefore(chapter(9, 4, 250), flow.firstChild);
+    keepPlace();
+    assert.equal(line.getBoundingClientRect().top, was, 'moved by the chapter added');
+    high.set(flow.firstChild.children[0], 1200);   // and one of its pictures arriving
+    keepPlace();
+    assert.equal(line.getBoundingClientRect().top, was, 'moved by its picture');
+  });
+
+  t('scrolled, or sent somewhere, since: never pulled back', () => {
+    lay(3, 10, 100);
+    scroll = 1500;
+    holdPlace();
+    scroll = 1900;                       // the reader scrolls on (or a mark is jumped to)
+    high.set(flow.children[0].children[0], 600);
+    assert.equal(keepPlace(), 0);
+    assert.equal(scroll, 1900);
+    // And from there it is held anew.
+    const line = atTop();
+    const was = line.getBoundingClientRect().top;
+    high.set(flow.children[0].children[1], 300);
+    keepPlace();
+    assert.equal(line.getBoundingClientRect().top, was);
+  });
+
+  t('a chapter still on the screen is never dropped (chapters a few lines long)', () => {
+    lay(7, 1, 100);
+    scroll = 0;
+    trimWindow('start');
+    assert.equal(reader.state.loaded.length, 7);
+    assert.ok(flow.querySelector('[data-chapter="0"]'));
+    // Read past them, they go.
+    scroll = 6 * 140 - 40 + 10;
+    trimWindow('start');
+    assert.equal(reader.state.loaded.length, 5);
+  });
+
+  t('paged: nothing kept, nothing moved', () => {
+    lay(2, 10, 100);
+    reader.state.mode = 'paged';
+    scroll = 300;
+    holdPlace();
+    high.set(flow.children[0].children[0], 900);
+    assert.equal(keepPlace(), 0);
+    assert.equal(scroll, 300);
+  });
+
+  t('a picture book in endless scroll runs edge to edge, top and bottom; its sides keep their margins', () => {
+    const rule = css.match(/\.page-viewport\.scrolling\.edge-to-edge \{([^}]*)\}/);
+    assert.ok(rule, 'no edge-to-edge rule');
+    assert.match(rule[1], /^\s*top: 0; bottom: 0;\s*$/, 'more than the top and bottom changed');
+    const edges = () => viewport.classList.contains('edge-to-edge');
+    reader.state.mode = 'scroll';
+    reader.state.pictureBook = true;
+    reader.setEndless(true);
+    assert.ok(edges(), 'a picture book in endless scroll kept its top and bottom bands');
+    reader.setEndless(false);
+    assert.ok(!edges(), 'scroll without endless: margins as set');
+    reader.state.pictureBook = false;
+    reader.setEndless(true);
+    assert.ok(!edges(), 'a book of text lost its margins');
+    reader.state.pictureBook = true;
+    reader.state.mode = 'paged';
+    reader.setEndless(true);
+    assert.ok(!edges(), 'paged pictures lost their margins');
+    reader.state.pictureBook = false;
+    // Known when the book opens, the last book's never carried into the next.
+    const src = read('app/src/main/assets/www/js/reader.js');
+    assert.match(src, /state\.book = book;\s*\/\/[^\n]*\n\s*state\.pictureBook = false;\s*paintEdges\(\);/);
+    assert.match(src, /state\.pictureBook = await pictures;\s*takeModeFor\([^\n]*\);\s*paintEdges\(\);/);
+    // Long strips are picture books too: switched to scrolling for them first, then edged.
+    assert.match(src, /holdForStrips\(await tall, settings\);\s*state\.pictureBook = await pictures;\s*takeModeFor\(\(await tall\) \? 'strips' : state\.pictureBook \? 'pictures' : 'text', settings\);\s*paintEdges\(\);/);
+    assert.equal((src.match(/classList\.toggle\('scrolling', isScroll\(\)\);\s*paintEdges\(\);/g) || []).length, 3);
+  });
+
+  await t('the window only taller or shorter (bars, keyboard, insets sent again): a page being scrolled is not pulled back', async () => {
+    lay(3, 10, 100);
+    reader.state.mode = 'scroll';
+    const book = reader.state.book;
+    reader.state.book = { id: 'resized', title: 'Words' };
+    reader.state.chapterIndex = 1;
+    reader.placeForTest.relayout();          // laid out at this width
+    scroll = 1500;
+    reader.state.anchor = 0;                 // noted when scrolling last settled: the chapter's top
+    reader.repaginate({ resized: true });
+    scroll = 1564;                           // and the finger still moving, before the frame
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(scroll, 1564, 'pulled back to the place last noted');
+    reader.state.book = book;
+    // Sent from the app as resized, and only when the window or its insets really changed.
+    const app = read('app/src/main/assets/www/js/app.js');
+    assert.match(app, /if \(now === shape\) return;\s*shape = now;\s*if \(reader\.state\.book\) reader\.repaginate\(\{ resized: true \}\);/);
+    // A change of width re-wraps the text: put back by the place, as before.
+    const src = read('app/src/main/assets/www/js/reader.js');
+    assert.match(src, /if \(isScroll\(\) && opts\.resized && flow\.clientWidth === wrapWidth\) \{/);
+    assert.match(src, /flow\.style\.columnGap = '';\s*wrapWidth = flow\.clientWidth;/);
+  });
+
+  window.HTMLElement.prototype.getBoundingClientRect = realRect;
+  flow.innerHTML = '';
+  reader.state.mode = 'paged';
+  reader.state.loaded = [];
+}
 
 t('the overlay never takes a touch, so text can be selected', () => {
   // It sat over the words, so a long press landed on it and Android's Copy,
@@ -569,6 +941,31 @@ t('every supported language can be downloaded, not just the library\u2019s', () 
   for (const tag of names) assert.ok(translate.LANGUAGE_NAMES[tag].length > 2);
   const panelsSrc = read('app/src/main/assets/www/js/panels.js');
   assert.match(panelsSrc, /Other languages \(\$\{rest\.length\}\)/);
+});
+
+t('scrolling, a swipe to read down the right edge or up from the progress bar is reading, not a jump', () => {
+  /* Measured in Chromium with real touches, five chapters in the window: a
+   * 165px swipe up that began on the rail moved the text 968px -- to where the
+   * finger was on the rail -- against 205px a little further in; and a swipe
+   * up that began on the progress bar went, on the lift, to the place under
+   * where it started. Now the edge swipe moves the text as far as any other,
+   * a quick swipe on the handle moves it by the finger's travel, the handle
+   * rested on and dragged moves from where it was, and the bar lets a swipe
+   * up or down go. A tap on the bar, and paged mode's rail, are as they were. */
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\[data-mode="scroll"\] \.scrub-rail \{ pointer-events: none; \}/);
+  assert.match(css, /\[data-mode="scroll"\] \.scrub-thumb \{ pointer-events: auto; \}/);
+  assert.match(css, /\[data-mode="scroll"\] \.scrub-thumb::after \{ content: ""; position: absolute; top: 0; bottom: 0; left: -11px; right: -11px; \}/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /const HOLD_MS = 180;/);
+  assert.match(app, /if \(railFrom\.handle && Date\.now\(\) - railFrom\.at < HOLD_MS\) \{\s*railFrom\.swiping = true;\s*reader\.scrollTextBy\(railFrom\.last - touch\.clientY\);/);
+  assert.match(app, /railFrom\.fraction \+ \(clientY - railFrom\.y\) \/ Math\.max\(1, box\.height \* \(1 - Math\.min\(0\.94, reader\.viewportRatio\(\)\)\)\)/);
+  // Paged, the rail goes to the finger still: a page marker within the chapter.
+  assert.match(app, /handle: scrolling, fraction: scrolling \? reader\.scrollFraction\(\) : 0, swiping: false,/);
+  assert.match(app, /if \(dy >= 16 && dy > dx \* 1\.5\) \{ barFrom = null; finish\(false\); return; \}/);
+  assert.match(app, /hit\.addEventListener\('touchend', \(\) => \{ barFrom = null; if \(at !== null\) finish\(true\); \}\);/);
+  const reader = read('app/src/main/assets/www/js/reader.js');
+  assert.match(reader, /export function scrollTextBy\(dy\) \{\s*if \(!isScroll\(\) \|\| !measurable\(\) \|\| !Number\.isFinite\(dy\)\) return;\s*viewport\.scrollTop \+= dy;/);
 });
 
 console.log(`\n${pass} assertions passed`);

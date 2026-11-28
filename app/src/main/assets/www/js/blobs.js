@@ -129,6 +129,81 @@ export function measure(blob) {
 }
 
 
+/**
+ * A picture's size read from its first bytes, without decoding it.
+ *
+ * Decoding a page of a comic to learn its shape costs as much as showing it,
+ * and a book is checked while it opens; the size is written near the start
+ * of every common format, so a slice of the file is enough. PNG, GIF, WebP,
+ * JPEG, BMP and AVIF are read here; anything else is measured the slow way,
+ * unless `decode` is false.
+ * @returns {Promise<{width:number,height:number}>} zero both ways if unknown
+ */
+export async function pictureSize(blob, { decode = true } = {}) {
+  const none = { width: 0, height: 0 };
+  if (!blob) return none;
+  let bytes;
+  try {
+    bytes = new Uint8Array(await readArrayBuffer(blob.slice(0, Math.min(blob.size, 262144))));
+  } catch {
+    return decode ? measure(blob) : none;
+  }
+  const found = sizeFromBytes(bytes);
+  return found || (decode ? measure(blob) : none);
+}
+
+/** The size written in a picture's header, or null. Exported for the tests. */
+export function sizeFromBytes(b) {
+  const n = b.length;
+  const u16be = (i) => (b[i] << 8) | b[i + 1];
+  const u16le = (i) => b[i] | (b[i + 1] << 8);
+  const u32be = (i) => ((b[i] << 24) >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3];
+  const u24le = (i) => b[i] | (b[i + 1] << 8) | (b[i + 2] << 16);
+  const ascii = (i, len) => String.fromCharCode(...b.subarray(i, i + len));
+  if (n >= 24 && b[0] === 0x89 && ascii(1, 3) === 'PNG') return { width: u32be(16), height: u32be(20) };
+  if (n >= 10 && ascii(0, 4) === 'GIF8') return { width: u16le(6), height: u16le(8) };
+  if (n >= 30 && ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') {
+    const kind = ascii(12, 4);
+    if (kind === 'VP8 ') return { width: u16le(26) & 0x3fff, height: u16le(28) & 0x3fff };
+    if (kind === 'VP8L') {
+      const [b0, b1, b2, b3] = [b[21], b[22], b[23], b[24]];
+      return { width: 1 + (((b1 & 0x3f) << 8) | b0), height: 1 + (((b3 & 0xf) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6)) };
+    }
+    if (kind === 'VP8X') return { width: 1 + u24le(24), height: 1 + u24le(27) };
+    return null;
+  }
+  if (n >= 26 && b[0] === 0x42 && b[1] === 0x4d) {
+    const height = b[22] | (b[23] << 8) | (b[24] << 16) | (b[25] << 24);
+    return { width: b[18] | (b[19] << 8) | (b[20] << 16), height: Math.abs(height) };
+  }
+  // AVIF and HEIF: the image's extent is an 'ispe' box near the start.
+  if (n >= 12 && ascii(4, 4) === 'ftyp') {
+    for (let i = 8; i + 16 <= n; i++) {
+      if (b[i] === 0x69 && b[i + 1] === 0x73 && b[i + 2] === 0x70 && b[i + 3] === 0x65) {
+        return { width: u32be(i + 8), height: u32be(i + 12) };
+      }
+    }
+    return null;
+  }
+  if (n >= 4 && b[0] === 0xff && b[1] === 0xd8) {
+    let i = 2;
+    while (i + 9 < n) {
+      if (b[i] !== 0xff) { i += 1; continue; }
+      const marker = b[i + 1];
+      if (marker === 0xff) { i += 1; continue; }
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { i += 2; continue; }
+      // A frame header: its size, whichever kind of compression.
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { width: u16be(i + 7), height: u16be(i + 5) };
+      }
+      if (marker === 0xd9 || marker === 0xda) return null;
+      i += 2 + u16be(i + 2);
+    }
+  }
+  return null;
+}
+
+
 /* ── cover images ─────────────────────────────────────────────────────── */
 
 /** What a cover can be picked from. */

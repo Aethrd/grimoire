@@ -28,6 +28,9 @@
          moved, and the downloader is the only thing that asks. The reader
          itself loads only from the app's own https origin. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Only for "Notify me when it's built or stops" in Build, asked for when
+         that is turned on, never before. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".GrimoireApp"
@@ -88,7 +91,7 @@
                 <data android:mimeType="text/markdown" />
                 <data android:mimeType="text/html" />
             </intent-filter>
-            <!-- The "Back to Quire" button on the page the browser shows
+            <!-- The "Back to Mythos" button on the page the browser shows
                  after signing in to OpenRouter (OpenRouterLink). It only
                  brings the app to the front; nothing is read from it. -->
             <intent-filter>

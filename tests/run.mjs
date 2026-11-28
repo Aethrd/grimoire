@@ -30,7 +30,7 @@ if (missing.length) {
 }
 
 let failed = 0;
-for (const file of ['test-boot.mjs', 'test-logic.mjs', 'test-parse.mjs', 'test-zip.mjs', 'test-pdf.mjs', 'test-more.mjs', 'test-archive.mjs', 'test-blobs.mjs', 'test-shelf.mjs', 'test-trim.mjs', 'test-tools.mjs', 'test-redact.mjs', 'test-motion.mjs', 'test-reflow.mjs', 'test-web.mjs', 'test-ocr.mjs', 'test-ocr-accuracy.mjs', 'test-glossary.mjs', 'test-openrouter.mjs', 'test-freedom.mjs']) {
+for (const file of ['test-boot.mjs', 'test-logic.mjs', 'test-parse.mjs', 'test-zip.mjs', 'test-pdf.mjs', 'test-more.mjs', 'test-archive.mjs', 'test-blobs.mjs', 'test-shelf.mjs', 'test-trim.mjs', 'test-tools.mjs', 'test-redact.mjs', 'test-motion.mjs', 'test-reflow.mjs', 'test-web.mjs', 'test-queue.mjs', 'test-queue-halt.mjs', 'test-queue-carry.mjs', 'test-queue-twin.mjs', 'test-queue-refetch.mjs', 'test-library-guard.mjs', 'test-auto-export.mjs', 'test-job-controls.mjs', 'test-stats-live.mjs', 'test-keep-small.mjs', 'test-llm-keys.mjs', 'test-book-translate.mjs', 'test-ocr.mjs', 'test-ocr-accuracy.mjs', 'test-glossary.mjs', 'test-openrouter.mjs', 'test-freedom.mjs']) {
   console.log(`\n── ${file} ─────────────────────────────────`);
   const run = spawnSync(process.execPath, [`tests/${file}`], { cwd: root, stdio: 'inherit' });
   if (run.status !== 0) failed++;

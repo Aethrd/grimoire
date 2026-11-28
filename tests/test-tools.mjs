@@ -143,7 +143,7 @@ await t('the bin survives a backup and a restore', async () => {
 await t('the bin has a seat on the bar and a screen of its own', async () => {
   assert.match(html, /data-screen="bin"/);
   assert.match(html, /data-go="bin"/);
-  assert.match(app, /case 'bin': return renderBin\(\)/);
+  assert.match(app, /case 'bin': return purgeSuperseded\(\)\.catch\(\(\) => 0\)\.then\(renderBin\)/);
   // Deleting for good is asked for in full, because it is the one delete in
   // the app that cannot be undone.
   assert.match(app, /cannot be undone/);
@@ -239,9 +239,10 @@ await t('reaching the end of a chapter no longer raises a toast', async () => {
 console.log('\nsmaller copies');
 
 await t('the sizes are named for what they are for', async () => {
-  assert.deepEqual(Object.keys(shrink.SIZES), ['full', 'large', 'screen', 'small']);
+  assert.deepEqual(Object.keys(shrink.SIZES), ['full', 'smart', 'small']);
   assert.equal(shrink.SIZES.full.edge, 0, 'full size must touch nothing');
-  assert.ok(shrink.SIZES.small.edge < shrink.SIZES.screen.edge);
+  assert.ok(shrink.SIZES.small.edge < shrink.sizeFor('screen').edge);
+  assert.ok(shrink.SIZES.smart.smart);
   assert.match(shrink.describeSize('screen'), /1400/);
   assert.equal(shrink.describeSize('full'), 'full size');
 });
@@ -267,7 +268,8 @@ await t('sizes read as bytes somebody can judge', async () => {
 
 await t('the export writes a copy and never edits the book', async () => {
   const epub = read('app/src/main/assets/www/js/epub.js');
-  assert.match(epub, /const wanted = size && size !== 'full' && SIZES\[size\]/);
+  // Full size touches nothing; an earlier size (Large, Screen) is still known, to carry an export on at it.
+  assert.match(epub, /const wanted = size && size !== 'full' && sizeFor\(size\) \? sizeFor\(size\) : null;/);
   assert.match(epub, /await shrinkPicture\(image\.blob, wanted\)/);
   // Nothing is written back to the images store on the way out.
   const writing = epub.slice(epub.indexOf('const renamed = new Map()'));
@@ -601,7 +603,8 @@ await t('search does not find deleted books', async () => {
   assert.match(panelsSource, /const visible = books\.filter\(\(b\) => onShelf\(b\)/);
   assert.match(app, /library\.shownOnShelf\.has\(book\.id\)/);
   const screensSource = read('app/src/main/assets/www/js/screens.js');
-  assert.equal((screensSource.match(/!b\.binnedAt/g) || []).length, 3);
+  // (A hidden folder's book found by its title is held to the same, in hiddenBooks.)
+  assert.equal((screensSource.match(/!b\.binnedAt/g) || []).length, 4);
 });
 
 
@@ -650,7 +653,7 @@ await t('tags: one of each, spelled as the list spells them, and found by search
   const tg = await import(new URL('../app/src/main/assets/www/js/tags.js', import.meta.url).href);
   const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
   // The list: every kind from the directory, the Chinese table left out, each tag once.
-  assert.equal(tg.TAG_GROUPS.length, 15);
+  assert.equal(tg.TAG_GROUPS.length, 16);
   const all = tg.TAG_GROUPS.flatMap(([, list]) => list);
   assert.equal(new Set(all.map(tg.tagKey)).size, all.length, 'a tag is listed twice');
   assert.ok(!all.some((t) => /[一-鿿]/.test(t)), 'a Chinese tag got in');
@@ -705,7 +708,48 @@ await t('tags are set from Details, for one book, a bundle, or several', async (
   assert.match(app, /if \(tags\.closeTagPicker\(\)\) return true;/);
   const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/tags.js', import.meta.url), 'utf8');
   // The long list stays out of the way: folded until searched, capped when it is.
-  assert.match(src, /section\(label, tags\.filter\(fits\), \{ open: searching, cap: searching \? 8 : Infinity \}\)/);
+  assert.match(src, /section\(label, tags\.filter\(fits\), \{ open: searching \|\| tags === SERIAL_TAGS, cap: searching \? 8 : Infinity \}\)/);
+});
+
+await t('serialisation tags: their own kind, first, one at a time; a book of many tags shows a few', async () => {
+  const tg = await import(new URL('../app/src/main/assets/www/js/tags.js', import.meta.url).href);
+  assert.deepEqual(tg.TAG_GROUPS[0], ['Serialisation', ['Ongoing', 'Completed', 'Hiatus', 'Season Break', 'Dropped', 'Axed']]);
+  assert.equal(tg.normaliseTag('season-break'), 'Season Break');
+  assert.ok(tg.isSerialTag('completed') && !tg.isSerialTag('Fantasy'));
+  assert.deepEqual(tg.serialFirst(['Fantasy', 'Harem', 'Completed']), ['Completed', 'Fantasy', 'Harem']);
+
+  // In the picker: open where the other kinds are folded, and picking one takes off the one it had.
+  const picking = tg.openTagPicker({ chosen: ['Fantasy', 'Ongoing'], used: [] });
+  const groups = [...el('tag-list').querySelectorAll('.tag-group')];
+  const serial = groups.find((g) => g.querySelector('summary').textContent.startsWith('Serialisation'));
+  assert.ok(serial?.open, 'Serialisation folded');
+  assert.ok(!groups.find((g) => g.querySelector('summary').textContent.startsWith('Genres')).open);
+  [...serial.querySelectorAll('.tag-chip')].find((c) => c.textContent === 'Completed').click();
+  const chosen = () => [...el('tag-chosen').querySelectorAll('.chip')].map((c) => c.textContent.replace(/\s+✕$/, ''));
+  assert.deepEqual(chosen(), ['Completed', 'Fantasy']);
+  assert.equal([...serial.querySelectorAll('.tag-chip')].find((c) => c.textContent === 'Ongoing').getAttribute('aria-pressed'), 'false');
+  el('tag-done').click();
+  assert.deepEqual(await picking, ['Fantasy', 'Completed']);
+
+  // The search's tags: serialisation first after what is picked.
+  const a = await aBook({ title: 'Serial A', tags: ['Fantasy', 'Harem', 'Ongoing'] });
+  const b = await aBook({ title: 'Serial B', tags: ['Fantasy', 'Harem'] });
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  screensMod.initFind(() => {}, false);
+  [...el('find-scope').children].find((chip) => chip.textContent === 'Tags').click();
+  await settle(300);
+  const first = el('find-results').querySelector('.find-tags .chip');
+  assert.ok(first.textContent.startsWith('Ongoing'), first.textContent);
+  el('find-scope').firstElementChild.click();   // back to Everything, for what follows
+  await settle(300);
+  await library.binBooks([a, b]);
+
+  // Details: ten shown, serialisation first, the rest on asking -- unless there are only a couple more.
+  const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /const DETAILS_TAGS = 10;/);
+  assert.match(app, /const ordered = tags\.serialFirst\(tagList\);/);
+  assert.match(app, /const shown = allTagsShown \|\| ordered\.length <= DETAILS_TAGS \+ 2 \? ordered : ordered\.slice\(0, DETAILS_TAGS\);/);
+  assert.match(app, /fold\.textContent = allTagsShown \? 'Fewer' : `\$\{ordered\.length - shown\.length\} more`;/);
 });
 
 await t('a folder hidden from the shelf is only found under Folders', async () => {
@@ -740,14 +784,38 @@ await t('a folder hidden from the shelf is only found under Folders', async () =
   assert.ok(shown.includes(kept) && shown.includes(nested), 'opening the folder does not show its books');
   assert.ok(!shown.includes(out));
 
-  // The shelf's search leaves it out too.
+  // The shelf's search leaves it out too -- typed as much as this, less than most of its title.
   screensMod.initFind(() => {}, false);
-  el('find-input').value = 'Brambleway';
+  el('find-input').value = 'Bram';
   el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
   await settle(450);
   const found = [...el('find-results').querySelectorAll('[data-book]')].map((n) => Number(n.dataset.book));
   assert.ok(found.includes(out));
   assert.ok(!found.includes(kept) && !found.includes(nested), 'search finds a hidden folder');
+
+  // Unless enough of its title is typed right: 40% of it, every word in it -- then found, and said where.
+  const findFor = async (text) => {
+    el('find-input').value = text;
+    el('find-input').dispatchEvent(new window.Event('input', { bubbles: true }));
+    await settle(450);
+    return [...el('find-results').querySelectorAll('[data-book]')].map((n) => Number(n.dataset.book));
+  };
+  assert.ok((await findFor('brambleway kep')).includes(kept), 'most of a hidden book\u2019s title typed right, not found');
+  assert.match(el('find-results').textContent, /in Private \(hidden\)/);
+  assert.ok(!(await findFor('kept')).includes(kept), 'a word of a hidden book\u2019s title found it');
+  assert.ok(!(await findFor('brambleway kepx')).includes(kept), 'a hidden book found by a title typed wrong');
+  assert.ok((await findFor('Brambleway Nested')).includes(nested));
+  const sweet = { id: -1, title: "A Sweet Girl Won't Be Fooled By The Villainess" };
+  // Two in five of its letters and numbers, typed right.
+  assert.equal(library.TITLE_SHARE, 0.4);
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont be fooled by'), true);   // 24 of 37
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont be'), true);             // 16 of 37
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont'), false);               // 14 of 37: just short
+  assert.equal(library.titleTyped(sweet, 'sweet girl'), false);
+  assert.equal(library.titleTyped(sweet, 'a sweet girl wont be foolex by'), false);
+  assert.equal(library.titleTyped({ id: -2, title: '快穿女配：反派BOSS有毒' }, '快穿女配：反派BOSS'), true);
+  assert.equal(library.titleTyped({ id: -2, title: '快穿女配：反派BOSS有毒' }, '有毒'), false);
+  await findFor('');
 
   // Still listed under Folders, and marked.
   await panelsMod.openFolders(() => {});
@@ -860,7 +928,8 @@ await t('Save in the details puts the cover into the book, and opening a book do
   // ...and the book is never overwritten by an older copy of itself: the
   // shelf's tile record, written back on opening, brought the old cover back.
   const open = app.slice(app.indexOf('async function openBook'), app.indexOf('/* ── selection'));
-  assert.match(open, /const current = \(await store\.get\('books', book\.id\)\) \|\| book;/);
+  // On the book as stored, in one transaction -- and a book gone not written back from the tapped copy.
+  assert.match(open, /await store\.update\('books', book\.id, \(current\) => \(\{ \.\.\.current, lastOpenedAt: Date\.now\(\) \}\)\);/);
   assert.ok(!/await store\.put\('books', book\);/.test(open), 'opening writes the tapped copy back');
   assert.match(app, /async function openDetails\(tapped, \{ editions = \[\] \} = \{\}\) \{[\s\S]{0,300}await store\.get\('books', tapped\.id\)/);
 });
@@ -881,6 +950,682 @@ await t('a backup puts a chosen cover back into the book, not only onto the shel
   assert.ok(book.coverPage?.href, 'the cover came back to the shelf only');
   const html = parse.chapterHtml((await store.byIndex('chapters', 'bookId', id))[0]);
   assert.ok(html.includes(book.coverPage.href));
+});
+
+await t('a backup from a library imported twice over: each book here gets its record, the furthest along', async () => {
+  /* A library that held each book twice (it and a copy imported over it,
+   * alike but for their files) restored into the books imported afresh: every
+   * such title was left unmatched rather than guessed at -- a third put back,
+   * and the books being read none at all. Measured on a real backup: 330 of
+   * 844 books put back before, 809 after (the rest two books of one title,
+   * added apart: still not guessed between). */
+  const reading = await aBook({ title: 'Twice Read', fingerprint: '[9] Twice Read.epub:999' });
+  const plain = await aBook({ title: 'Twice Unread', fingerprint: '[8] Twice Unread.epub:998' });
+  const report = await store.importBackup({
+    format: 'grimoire-backup', version: 1,
+    books: [
+      { fingerprint: 'Twice Read.epub:100', title: 'Twice Read', addedAt: 5, folder: 'kept', lastReadAt: 900, percent: 0.6 },
+      { fingerprint: '[1] [1] Twice Read.epub:101', title: 'Twice Read', addedAt: 5, folder: 'kept', lastReadAt: 900, percent: 0.6 },
+      // Added as a copy of it, but read less: not the one put back.
+      { fingerprint: 'Twice Read (2).epub:102', title: 'Twice Read', addedAt: 5, folder: 'kept' },
+      { fingerprint: 'Twice Unread.epub:200', title: 'Twice Unread', addedAt: 7, folder: 'other', status: 'onHold' },
+      { fingerprint: '[2] Twice Unread.epub:201', title: 'Twice Unread', addedAt: 7, folder: 'other', status: 'onHold' },
+    ],
+    positions: [{ fingerprint: '[1] [1] Twice Read.epub:101', bookId: 1, chapterIndex: 3, anchor: 40, percent: 0.6, updatedAt: 900 }],
+    covers: [], marks: [],
+  });
+  const read = await store.get('books', reading);
+  assert.equal(read.lastReadAt, 900, 'the book being read was not put back');
+  assert.equal(read.percent, 0.6);
+  assert.equal(read.folder, 'kept');
+  assert.equal((await store.get('positions', reading))?.chapterIndex, 3, 'its place was not put back');
+  assert.equal((await store.get('books', plain)).status, 'onHold');
+  // The copies are the same books: not said to be waiting for an import.
+  assert.equal(report.missing, 0);
+  assert.equal(report.copies, 3);
+  // A bundle led by a copy is led by the book it was a copy of.
+  const leader = await aBook({ title: 'Led Book', fingerprint: '[7] Led Book.epub:5' });
+  const edition = await aBook({ title: 'Led Edition', fingerprint: 'Led Edition.epub:6' });
+  await store.importBackup({
+    format: 'grimoire-backup', version: 1,
+    books: [
+      { fingerprint: 'Led Book.epub:1', title: 'Led Book', addedAt: 3, folder: 'f' },
+      { fingerprint: '[4] [4] Led Book.epub:2', title: 'Led Book', addedAt: 3, folder: 'f', lastReadAt: 50 },
+      { fingerprint: 'Led Edition.epub:6', title: 'Led Edition', bundleLeader: 'Led Book.epub:1' },
+    ],
+    positions: [], covers: [], marks: [],
+  });
+  assert.equal((await store.get('books', edition)).bundleId, leader, 'a bundle led by a copy was not joined');
+});
+
+await t('a restore never takes a book back: read since the backup, it keeps its own place and shelf', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const now = Date.now();
+  const DAY = 86400000;
+  const backup = (over = {}) => ({
+    format: 'grimoire-backup', version: 1,
+    books: [{ fingerprint: 'Since.epub:1', title: 'Read Since', folder: 'kept', lastReadAt: now - 20 * DAY, percent: 0.2, status: 'onHold', heldAt: now - 10 * DAY, heldAutomatically: true, ...over }],
+    positions: [{ fingerprint: 'Since.epub:1', bookId: 1, chapterIndex: 2, anchor: 0, percent: 0.2, updatedAt: now - 20 * DAY }],
+    covers: [], marks: [],
+  });
+  // Read here since: its own reading kept, its place too; the rest (the folder) from the backup.
+  const id = await aBook({ title: 'Read Since', fingerprint: 'Since.epub:1', lastReadAt: now - DAY, percent: 0.7 });
+  await store.put('positions', { bookId: id, chapterIndex: 9, anchor: 0, percent: 0.7, updatedAt: now - DAY });
+  await store.importBackup(backup());
+  let book = await store.get('books', id);
+  assert.equal(book.percent, 0.7, 'taken back to the backup');
+  assert.equal(library.statusOf(book), 'reading', 'put On hold by an older backup');
+  assert.equal(book.folder, 'kept');
+  assert.equal((await store.get('positions', id)).chapterIndex, 9, 'its place taken back');
+  // Not read since: as backed up -- On hold, by the app, and said so.
+  const other = await aBook({ title: 'Not Since', fingerprint: 'NotSince.epub:1' });
+  await store.importBackup({ ...backup({ fingerprint: 'NotSince.epub:1', title: 'Not Since' }), positions: [] });
+  book = await store.get('books', other);
+  assert.equal(book.status, 'onHold');
+  assert.equal(book.heldAutomatically, true, 'a hold by the app restored as one by hand');
+  // Backups carry it.
+  const out = await store.exportBackup();
+  assert.equal(out.books.find((b) => b.fingerprint === 'NotSince.epub:1').heldAutomatically, true);
+});
+
+await t('after a restore, books being read stay Reading: days to On hold counted from the restore', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const now = Date.now();
+  const DAY = 86400000;
+  const shelf = [
+    { id: 1, title: 'Being read', lastReadAt: now - 8 * DAY },
+    { id: 2, title: 'Read last', lastReadAt: now - 6 * DAY },
+  ];
+  assert.deepEqual(library.goneQuiet(shelf, { days: 5, now }).map((b) => b.title), ['Being read']);
+  assert.deepEqual(library.goneQuiet(shelf, { days: 5, now, since: now - 2 * DAY }), [], 'held at once after a restore');
+  assert.deepEqual(library.goneQuiet(shelf, { days: 5, now: now + 4 * DAY, since: now - 2 * DAY }).map((b) => b.title), ['Being read']);
+  // A restore says when it was, and it is this phone's alone.
+  await store.importBackup({ format: 'grimoire-backup', version: 1, books: [], positions: [], covers: [], marks: [] });
+  assert.ok(Date.now() - (await store.settings()).restoredAt < 60000);
+  assert.ok(store.DEVICE_SETTINGS.includes('restoredAt'));
+});
+
+await t('books kept twice: one of each kept, bundles kept whole, nothing the copies held lost', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const same = (title, extra = {}) => aBook({ title, words: 5000, chapterCount: 10, ...extra });
+  const put = async (id, fields) => { const b = await store.get('books', id); await store.put('books', { ...b, ...fields }); };
+  // Two bundles of the same editions (English and Korean), one also holding a Japanese edition of its own.
+  const a1 = await same('Knight Twice', { lastReadAt: 900 });
+  const a2 = await aBook({ title: '기사 두 번', words: 7000, chapterCount: 10 });
+  const b1 = await same('Knight Twice');
+  const b2 = await aBook({ title: '기사 두 번', words: 7000, chapterCount: 10 });
+  const b3 = await aBook({ title: '騎士', words: 6000, chapterCount: 10 });
+  await put(a1, { bundleId: a1 }); await put(a2, { bundleId: a1 });
+  await put(b1, { bundleId: b1 }); await put(b2, { bundleId: b1 }); await put(b3, { bundleId: b1 });
+  // A book and its own copy in one bundle, the copy read further, with a bookmark and a session.
+  const c1 = await same('Maze Tale', { lastReadAt: 100, percent: 0.1 });
+  const c2 = await same('Maze Tale', { lastReadAt: 500, percent: 0.5, tags: ['Ongoing'] });
+  const c3 = await aBook({ title: 'Maze Tale (EN)', words: 9000, chapterCount: 10 });
+  await put(c1, { bundleId: c1 }); await put(c2, { bundleId: c1 }); await put(c3, { bundleId: c1 });
+  await store.put('positions', { bookId: c2, chapterIndex: 6, anchor: 0, percent: 0.5, updatedAt: 500 });
+  await store.add('marks', { bookId: c2, kind: 'bookmark', chapterIndex: 6, anchor: 3 });
+  const session = await store.add('events', { bookId: c2, day: '2026-11-20', at: 500, pages: 3, words: 900, activeMs: 60000, chapters: 1 });
+  // Not doubles: a chapter more, or another title.
+  const longer = await aBook({ title: 'Knight Twice', words: 5600, chapterCount: 11 });
+
+  const sets = library.findDoubles(await store.all('books'));
+  const mine = sets.filter((set) => set.some((b) => [a1, a2, c1].includes(b.id)));
+  assert.equal(mine.length, 3);
+  // The bundle read last is kept whole: English and Korean from the same one.
+  assert.deepEqual(mine.map((set) => set[0].id).sort(), [a1, a2, c1].sort());
+  assert.ok(!sets.flat().some((b) => b.id === longer || b.id === b3 || b.id === c3), 'a book that is not a double was taken for one');
+
+  const moved = await library.removeDoubles(mine);
+  assert.equal(moved, 3);
+  for (const id of [b1, b2, c2]) assert.ok((await store.get('books', id)).binnedAt, `${id} not in the Bin`);
+  // The edition only in the bundle going joins the bundle kept, not the Bin.
+  const japanese = await store.get('books', b3);
+  assert.ok(!japanese.binnedAt);
+  assert.equal(japanese.bundleId, a1);
+  assert.equal((await store.get('books', a2)).bundleId, a1);
+  // The copy read further: its reading, place, bookmark, session and tags on the one kept, in its bundle.
+  const maze = await store.get('books', c1);
+  assert.equal(maze.lastReadAt, 500);
+  assert.equal(maze.percent, 0.5);
+  assert.deepEqual(maze.tags, ['Ongoing']);
+  assert.equal(maze.bundleId, c1);
+  assert.equal((await store.get('positions', c1)).chapterIndex, 6);
+  assert.equal((await store.byIndex('marks', 'bookId', c1)).length, 1);
+  assert.equal((await store.get('events', session)).bookId, c1);
+  assert.equal((await store.get('books', c3)).bundleId, c1);
+  // Found again: none left.
+  assert.equal(library.findDoubles(await store.all('books')).filter((set) => set.some((b) => [a1, a2, c1].includes(b.id))).length, 0);
+
+  // A copy leading the bundle, the book kept a member of it: the kept one leads, the others follow it.
+  const d1 = await same('Led Copy', { lastReadAt: 50 });
+  const d2 = await same('Led Copy', { lastReadAt: 10 });
+  const d3 = await aBook({ title: 'Led Copy (KR)', words: 4000, chapterCount: 10 });
+  await put(d2, { bundleId: d2 }); await put(d1, { bundleId: d2 }); await put(d3, { bundleId: d2 });
+  const [set] = library.findDoubles(await store.all('books')).filter((s2) => s2.some((b) => b.id === d1));
+  // Within one bundle the leader is kept, so make the member the one kept by hand, as a set ordered so.
+  await library.removeDoubles([[set.find((b) => b.id === d1), set.find((b) => b.id === d2)]]);
+  assert.equal((await store.get('books', d1)).bundleId, d1, 'the kept book does not lead');
+  assert.equal((await store.get('books', d3)).bundleId, d1, 'an edition left following a binned leader');
+  // A bundle left with its leader alone is unbundled.
+  const e1 = await same('Alone After', { lastReadAt: 9 });
+  const e2 = await same('Alone After');
+  await put(e1, { bundleId: e1 }); await put(e2, { bundleId: e1 });
+  await library.removeDoubles(library.findDoubles(await store.all('books')).filter((s2) => s2.some((b) => b.id === e1)));
+  assert.equal((await store.get('books', e1)).bundleId, undefined);
+});
+
+await t('a book and its copy both found by what they came from: put back as one, the copy read on, moved and bundled winning', async () => {
+  // As the restore was run: the library imported from the app's exports, each book carrying its original.
+  const kept = await aBook({ title: 'Sweet Copy', fingerprint: 'Books/1.epub:9', sourceId: 'built:100' });
+  const edition = await aBook({ title: 'Sweet Copy (KR)', fingerprint: 'Books/2.epub:8', sourceId: 'raw.epub:7' });
+  await store.importBackup({
+    format: 'grimoire-backup', version: 1,
+    books: [
+      // The original: read to Nov 13, in the old folder, not bundled.
+      { fingerprint: 'built:100', title: 'Sweet Copy', addedAt: 1000, folder: 'not slop', lastReadAt: 13, percent: 0.385 },
+      // Its copy: read on to Nov 20, moved deeper, bundled with the Korean raw.
+      { fingerprint: 'Sweet Copy.epub:55', title: 'Sweet Copy', addedAt: 1000, folder: 'not slop/favourites', lastReadAt: 20, percent: 0.598, bundleLeader: 'Sweet Copy.epub:55' },
+      { fingerprint: 'raw.epub:7', title: 'Sweet Copy (KR)', addedAt: 1001, folder: 'not slop/favourites', bundleLeader: 'Sweet Copy.epub:55' },
+    ],
+    positions: [
+      { fingerprint: 'built:100', bookId: 1, chapterIndex: 153, anchor: 0, percent: 0.385, updatedAt: 13 },
+      { fingerprint: 'Sweet Copy.epub:55', bookId: 2, chapterIndex: 245, anchor: 0, percent: 0.598, updatedAt: 20 },
+    ],
+    covers: [], marks: [{ fingerprint: 'built:100', kind: 'bookmark', chapterIndex: 2, anchor: 1 }],
+  });
+  const book = await store.get('books', kept);
+  assert.equal(book.percent, 0.598, 'put back as the original was, before the copy was read on');
+  assert.equal(book.folder, 'not slop/favourites', 'the folder it was moved to lost');
+  assert.equal((await store.get('positions', kept)).chapterIndex, 245);
+  assert.equal(book.bundleId, kept, 'not leading its bundle');
+  assert.equal((await store.get('books', edition)).bundleId, kept, 'the edition bundled through the copy lost');
+  // The original's bookmark is kept too.
+  assert.equal((await store.byIndex('marks', 'bookId', kept)).length, 1);
+});
+
+await t('storage: a book deleted takes its translations; what deleted books left behind is cleared, nothing else', async () => {
+  const keep = await aBook({ title: 'Kept Here' });
+  const doomed = await aBook({ title: 'Deleted Now' });
+  for (const id of [keep, doomed]) {
+    await store.put('chapters', { bookId: id, index: 0, title: 'One', html: '<p>x</p>' });
+    await store.put('translations', { key: `t:${id}:0`, bookId: id, field: 'chapter', lang: 'en', value: 'x', at: 1 });
+    await store.put('layout', { bookId: id, size: 18 });
+  }
+  await store.deleteBook(doomed);
+  assert.equal(await store.get('translations', `t:${doomed}:0`), undefined, 'its translations left behind');
+  assert.equal(await store.get('layout', doomed), undefined);
+  assert.ok(await store.get('translations', `t:${keep}:0`));
+  // Left behind by a delete from before: rows of a book that is no longer here
+  // (one older than a book still here, as every deleted book is but the newest).
+  const ghost = doomed;
+  const later = await aBook({ title: 'Added Since' });
+  // Rows of a number newer than any book -- a book being added -- are never touched.
+  const coming = later + 1000;
+  await store.put('chapters', { bookId: coming, index: 0, title: 'Coming', html: '<p>c</p>' });
+  await store.put('chapters', { bookId: ghost, index: 0, title: 'Gone', html: '<p>g</p>' });
+  await store.put('images', { bookId: ghost, href: 'a.png', blob: new Blob(['a']) });
+  await store.add('marks', { bookId: ghost, kind: 'bookmark', chapterIndex: 0, anchor: 0 });
+  await store.put('positions', { bookId: ghost, chapterIndex: 0, anchor: 0 });
+  await store.put('translations', { key: `t:${ghost}:0`, bookId: ghost, field: 'chapter', lang: 'en', value: 'g', at: 1 });
+  await store.put('translations', { key: 'glossary:any', bookId: -1, field: 'glossary', lang: 'glossary', value: 'kept', at: 1 });
+  const removed = await store.tidyStorage();
+  assert.deepEqual(removed, { chapters: 1, images: 1, marks: 1, translations: 1, positions: 1 });
+  assert.ok(await store.get('chapters', [keep, 0]), 'a live book tidied away');
+  assert.ok(await store.get('chapters', [coming, 0]), 'a book being added tidied away');
+  await store.del('chapters', [coming, 0]);
+  // A book imported while it tidies: its record, then its chapters -- all kept.
+  const tidying = store.tidyStorage();
+  const arriving = await aBook({ title: 'Arriving', importing: true });
+  await store.putAll('chapters', [0, 1, 2].map((index) => ({ bookId: arriving, index, title: `C${index}`, html: '<p>a</p>' })));
+  await tidying;
+  assert.equal((await store.byIndex('chapters', 'bookId', arriving)).length, 3, 'an import under way had its chapters cleared');
+  assert.equal((await store.tidyStorage()).chapters, undefined);
+  assert.equal((await store.byIndex('chapters', 'bookId', arriving)).length, 3);
+  await store.deleteBook(arriving);
+  await store.deleteBook(later);
+  // One transaction, the book list read in it; an empty list clears nothing.
+  const src = read('app/src/main/assets/www/js/store.js');
+  const tidy = src.slice(src.indexOf('export async function tidyStorage'), src.indexOf('/* ── settings'));
+  assert.match(tidy, /const t = await transaction\(\['books', \.\.\.names\], 'readwrite'\);/);
+  assert.match(tidy, /if \(!live\.size\) return;/);
+  assert.equal((tidy.match(/await transaction\(/g) || []).length, 1);
+  assert.ok(await store.get('translations', 'glossary:any'), 'a glossary for no one book tidied away');
+  assert.ok(store.DEVICE_SETTINGS.includes('tidiedAt'));
+});
+
+await t('what takes the room: books ranked by all they hold -- pictures, text, cover -- the Bin’s apart; a book named there made smaller from there', async () => {
+  // Sizes as the records give them (the harness's storage keeps a size, not a Blob).
+  const big = await aBook({ title: 'Mostly Pictures', coverBytes: 400 });
+  const binned = await aBook({ title: 'Binned Pictures', binnedAt: 5, coverThumb: { size: 50 } });
+  await store.putAll('images', [
+    { bookId: big, href: 'a.png', blob: { size: 5000 } },
+    { bookId: big, href: 'b.png', blob: { size: 3000 } },
+    { bookId: binned, href: 'c.png', blob: { size: 1000 }, original: { size: 500 } },
+  ]);
+  // A long novel of text, no pictures: more room than the book of pictures, so ranked above it.
+  const novel = await aBook({ title: 'Long Novel' });
+  const prose = 'word '.repeat(1000);                // 5,000 characters, a byte each
+  await store.putAll('chapters', [0, 1].map((index) => ({ bookId: novel, index, title: '', html: prose })));
+  // Its saved translation, in Japanese: two bytes a character.
+  await store.put('translations', { key: `t:${novel}:0`, bookId: novel, html: 'あ'.repeat(500) });
+  // Text in Chinese counts double.
+  const wide = await aBook({ title: 'Wide Text' });
+  await store.put('chapters', { bookId: wide, index: 0, title: '', html: '字'.repeat(1000) });
+  const realStorage = Object.getOwnPropertyDescriptor(globalThis.navigator, 'storage');
+  Object.defineProperty(globalThis.navigator, 'storage', { configurable: true, value: { estimate: async () => ({ usage: 1e9, quota: 5e9 }) } });
+  try {
+    const told = [];
+    const room = await store.storageBreakdown({ top: 500, onProgress: (n, what) => told.push(what) });
+    const mine = room.biggest.filter((b) => [big, binned, novel, wide].includes(b.id));
+    // Each title as written in aBook, its text counted with it.
+    const textOf = (id) => room.biggest.find((b) => b.id === id).text;
+    const titleBytes = (id) => textOf(id) - (id === novel ? 10000 + 1000 : id === wide ? 2000 : 0);
+    assert.deepEqual(mine.map((b) => [b.title, b.pictures, b.count, b.cover, b.binned]), [
+      ['Long Novel', 0, 0, 0, false],
+      ['Mostly Pictures', 8000, 2, 400, false],
+      ['Wide Text', 0, 0, 0, false],
+      ['Binned Pictures', 1500, 1, 50, true],
+    ]);
+    assert.equal(textOf(novel) - titleBytes(novel), 11000, 'the chapters and their translation not counted as kept');
+    assert.equal(textOf(wide) - titleBytes(wide), 2000, 'Chinese not counted two bytes a character');
+    for (const book of mine) assert.equal(book.bytes, book.pictures + book.text + book.cover);
+    // Ranked by the whole: the novel above the pictures, though it has none.
+    const order = mine.map((b) => b.title);
+    assert.ok(order.indexOf('Long Novel') < order.indexOf('Mostly Pictures'));
+    assert.ok(room.pictures >= 9500 && room.pictureCount >= 3);
+    assert.ok(room.picturesInBin >= 1500);
+    assert.ok(room.inBin >= 1550, 'the Bin’s share of the room not counted whole');
+    assert.ok(room.text >= 13000 && room.chapterCount >= 3);
+    assert.ok(room.covers >= 400 && room.shelfCovers >= 50);
+    assert.equal(room.rest, 1e9 - room.pictures - room.covers - room.shelfCovers - room.text);
+    assert.equal(room.usage, 1e9);
+    // Read a stretch at a time: every record, a picture's and a chapter's alike.
+    const again = [];
+    const src = read('app/src/main/assets/www/js/store.js');
+    assert.match(src, /async function everyRecord\(name, visit, stretch = 2000\)/);
+    void again;
+    void told;
+    // Shown in Settings, beside Tidy storage.
+    const panelsMod = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+    await panelsMod.openSettings(() => {});
+    const find = () => [...document.querySelectorAll('#settings-body button')].find((b) => b.textContent === 'What takes the room');
+    let look = find();
+    for (const tab of document.getElementById('settings-strip').children) {
+      if (look) break;
+      tab.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 150));
+      look = find();
+    }
+    assert.ok(look, 'no "What takes the room" in Settings');
+    look.click();
+    for (let i = 0; i < 40 && !document.querySelector('.room-book'); i += 1) await new Promise((r) => setTimeout(r, 50));
+    const shown = document.querySelector('.room-shown').textContent;
+    assert.match(shown, /Pictures in books/);
+    assert.match(shown, /in books in the Bin/);
+    assert.match(shown, /Text.*about .*chapters, and their saved translations/);
+    assert.match(shown, /Reading log and the rest/);
+    assert.match(shown, /In books in the Bin[\d.]+ [kMG]BGiven back when the Bin is emptied/);
+    assert.match(shown, /Taking the most room:/);
+    assert.ok(!/Most pictures:/.test(shown));
+    const rows = [...document.querySelectorAll('.room-book')];
+    const row = rows.find((r) => r.textContent.includes('Mostly Pictures'));
+    // No text in it: only what it has is said.
+    assert.match(row.textContent, /^Mostly Pictures8 kB — 2 pictures 8 kBSmaller$/);
+    assert.ok(row.querySelector('button'), 'no Smaller beside a book on the shelf');
+    // A book of text alone: its room told, and no Smaller (nothing to make smaller).
+    const novelRow = rows.find((r) => r.textContent.includes('Long Novel'));
+    assert.match(novelRow.textContent, /— text 11 kB$/);
+    assert.ok(!novelRow.querySelector('button'), 'Smaller offered for a book with no pictures');
+    assert.ok(rows.indexOf(novelRow) < rows.indexOf(row), 'shown by pictures, not by room');
+    const binnedRow = [...document.querySelectorAll('.room-book')].find((r) => r.textContent.includes('Binned Pictures'));
+    assert.ok(!binnedRow.querySelector('button'), 'Smaller offered for a book in the Bin');
+    let asked = null;
+    const hear = (event) => { asked = event.detail; };
+    window.addEventListener('grimoire:keep-smaller', hear);
+    row.querySelector('button').click();
+    window.removeEventListener('grimoire:keep-smaller', hear);
+    assert.deepEqual(asked, { ids: [big] });
+    assert.match(read('app/src/main/assets/www/js/app.js'), /window\.addEventListener\('grimoire:keep-smaller', async \(event\) => \{[\s\S]{0,200}askKeepSmaller\(books,/);
+  } finally {
+    if (realStorage) Object.defineProperty(globalThis.navigator, 'storage', realStorage);
+    else delete globalThis.navigator.storage;
+    await store.deleteBook(big);
+    await store.deleteBook(binned);
+    await store.deleteBook(novel);
+    await store.deleteBook(wide);
+  }
+});
+
+await t('the shelf’s covers: small copies, kept with the book and remade when the cover changes; loaded as they come near', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const big = new Blob([new Uint8Array(300 * 1024)], { type: 'image/jpeg' });
+  const thumb = new Blob([new Uint8Array(20 * 1024)], { type: 'image/webp' });
+  const fits = { coverBlob: big, coverBytes: big.size, coverThumb: thumb, coverThumbOf: big.size };
+  assert.ok(library.thumbFits(fits));
+  // The cover changed: the copy is not its any more.
+  assert.ok(!library.thumbFits({ ...fits, coverBytes: 123 }));
+  // A small cover is its own copy; without a way to decode, none is made.
+  assert.equal(await library.makeThumb(new Blob([new Uint8Array(1000)], { type: 'image/png' })), typeof createImageBitmap === 'function' ? 'self' : null);
+  const src = read('app/src/main/assets/www/js/library.js');
+  assert.match(src, /const coverUrl = shelfCoverUrl\(book\);/);
+  assert.match(src, /<img src="\$\{coverUrl\}" alt="\$\{escape\(book\.title\)\}" loading="lazy" decoding="async">/);
+  assert.match(src, /createImageBitmap\(blob, \{ resizeWidth: THUMB_WIDTH, resizeQuality: 'high' \}\)/);
+  // Never in a backup or an export: only the cover is.
+  const store_ = read('app/src/main/assets/www/js/store.js');
+  assert.ok(!/'coverThumb'/.test(store_.slice(store_.indexOf('const BOOK_FIELDS'), store_.indexOf('const READING_FIELDS'))));
+  assert.ok(!/coverThumb/.test(read('app/src/main/assets/www/js/epub.js')));
+});
+
+await t('every book held once: read again only after a write, each caller its own copy', async () => {
+  const id = await aBook({ title: 'Held', tags: ['a'], building: { webParts: [{ url: 'x' }] } });
+  const first = await store.all('books');
+  // The first read overlaps the add finishing, so is given and not kept; the next is kept.
+  await store.all('books');
+  assert.ok(store.booksHeldForTest(), 'not held after a quiet read');
+  // Each caller's own: what one changes, the next does not see.
+  const mine = first.find((b) => b.id === id);
+  mine.title = 'Changed in hand';
+  mine.tags.push('b');
+  mine.building.webParts[0].url = 'y';
+  const again = (await store.all('books')).find((b) => b.id === id);
+  assert.equal(again.title, 'Held');
+  assert.deepEqual(again.tags, ['a']);
+  assert.equal(again.building.webParts[0].url, 'x');
+  // Every way a book is written lets it go, and the next read is the library as it is.
+  const seen = async () => (await store.all('books')).find((b) => b.id === id);
+  await store.put('books', { ...(await store.get('books', id)), title: 'Put' });
+  assert.equal((await seen()).title, 'Put');
+  await store.update('books', id, (b) => ({ ...b, title: 'Updated' }));
+  assert.equal((await seen()).title, 'Updated');
+  await store.putAll('books', [{ ...(await store.get('books', id)), title: 'All' }]);
+  assert.equal((await seen()).title, 'All');
+  const added = await aBook({ title: 'Added' });
+  assert.ok((await store.all('books')).some((b) => b.id === added));
+  await store.del('books', added);
+  assert.ok(!(await store.all('books')).some((b) => b.id === added));
+  const gone = await aBook({ title: 'Gone' });
+  await store.all('books');
+  await store.deleteBook(gone);
+  assert.ok(!(await store.all('books')).some((b) => b.id === gone));
+  // Written and read at once, not waiting between: the read sees the write.
+  store.put('books', { ...(await store.get('books', id)), title: 'Not waited for' });
+  assert.equal((await seen()).title, 'Not waited for');
+  // Read while a write is under way: given, not kept.
+  const writing = store.put('books', { ...(await store.get('books', id)), title: 'During' });
+  await store.all('books');
+  assert.ok(!store.booksHeldForTest(), 'kept a list read across a write');
+  await writing;
+  assert.equal((await seen()).title, 'During');
+  // A write that fails: let go all the same, and read again true.
+  await assert.rejects(store.add('books', { ...(await store.get('books', id)) }));
+  assert.equal((await seen()).title, 'During');
+  // Binned: seen.
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const binned = await aBook({ title: 'Binned Held' });
+  await store.all('books');
+  await library.binBooks([binned]);
+  assert.ok((await store.all('books')).find((b) => b.id === binned).binnedAt);
+  await store.deleteBook(binned);
+  // A restore writes books too.
+  const backup = JSON.parse(JSON.stringify(await store.exportBackup()));
+  await store.put('books', { ...(await store.get('books', id)), folder: 'Moved away' });
+  await store.all('books');
+  backup.books.find((b) => b.title === 'During').folder = 'Restored';
+  await store.importBackup(backup);
+  const restored = (await store.all('books')).find((b) => b.id === id);
+  assert.equal(restored.folder, (await store.get('books', id)).folder);
+  // Other stores are not held.
+  await store.all('marks');
+  // A connection dropped under it: still the library as it is.
+  await store.dropConnectionForTest();
+  await store.put('books', { ...(await store.get('books', id)), title: 'After drop' });
+  assert.equal((await seen()).title, 'After drop');
+  await store.deleteBook(id);
+});
+
+await t('covers made small wait while many books are written out, and start again after', async () => {
+  const src = read('app/src/main/assets/www/js/library.js');
+  // Held: the next cover is not begun; let go: begun again if any are waiting.
+  assert.match(src, /if \(next\.done \|\| document\.hidden \|\| thumbsHeld\) \{ thumbing = false; return; \}/);
+  assert.match(src, /export function holdThumbs\(on\) \{\s*thumbsHeld = !!on;\s*if \(!thumbsHeld && thumbQueue\.size && !thumbing\) \{ thumbing = true; setTimeout\(nextThumb, 1500\); \}/);
+  // The canvas a cover is made small on is emptied, made or not.
+  assert.match(src, /finally \{\s*bitmap\.close\?\.\(\);\s*canvas\.width = 0;\s*canvas\.height = 0;\s*\}/);
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  library.holdThumbs(true);
+  library.holdThumbs(false);
+});
+
+await t('a cover’s small copy is written onto the book as it is by then, and never onto one still landing', async () => {
+  // Read and written in one go: two changes made at once both stay. (Read,
+  // wait, write -- as the copy was first written -- lost whichever came first:
+  // an import marking itself finished, put back to still importing.)
+  const id = await aBook({ importing: true, chapters: 0 });
+  await Promise.all([
+    store.update('books', id, (fresh) => ({ ...fresh, coverThumb: 'self', coverThumbOf: 5 })),
+    store.update('books', id, (fresh) => ({ ...fresh, importing: false, chapters: 3 })),
+  ]);
+  const both = await store.get('books', id);
+  assert.equal(both.coverThumb, 'self');
+  assert.equal(both.importing, false);
+  assert.equal(both.chapters, 3);
+  // Nothing to change: nothing written.
+  assert.equal(await store.update('books', id, () => null), null);
+  assert.equal(await store.update('books', 999999, (b) => b), null);
+  assert.deepEqual(await store.get('books', id), both);
+  // A book still being imported or downloaded is not given one, at the shelf or when made.
+  const src = read('app/src/main/assets/www/js/library.js');
+  assert.match(src, /const inMotion = \(book\) => !!\(book\.importing \|\| book\.transient\);/);
+  assert.match(src, /if \(book\.coverBlob && !thumbFits\(book\) && !inMotion\(book\)\) queueThumb\(book\);/);
+  assert.match(src, /store\.update\('books', id, \(fresh\) =>\s*\(inMotion\(fresh\) \|\| coverSign\(fresh\) !== sign \? null/);
+  assert.ok(!/await store\.put\('books', fresh\)/.test(src.slice(src.indexOf('async function nextThumb'), src.indexOf('async function nextThumb') + 1500)));
+});
+
+await t('with small copies kept: an export and its import, and a backup restores round it', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const epub = await import(new URL('../app/src/main/assets/www/js/epub.js', import.meta.url).href);
+  const cover = new window.Blob([new Uint8Array(70 * 1024)], { type: 'image/png' });
+  const copy = new window.Blob([new Uint8Array([1, 2, 3, 4])], { type: 'image/webp' });
+  const id = await aBook({
+    title: 'Round Trip Cover', author: 'Someone', fingerprint: 'trip:cover', words: 30, chapters: 2,
+    coverBlob: cover, coverBytes: cover.size, coverThumb: copy, coverThumbOf: cover.size,
+    folder: 'Kept', percent: 0.5, status: 'reading', lastReadAt: 5000,
+  });
+  for (let i = 0; i < 2; i++) {
+    await store.put('chapters', { bookId: id, index: i, title: `Part ${i + 1}`, html: `<p>Part ${i + 1} is here, and it goes on.</p>`, words: 15 });
+  }
+  /* The export. (Which picture it carries -- the cover, never the copy -- is
+   * pinned above: the harness's storage gives Blobs back empty, so a stored
+   * cover cannot be followed into the file here.) */
+  const { blob, name } = await epub.buildEpub(id);
+  const bytes = Buffer.from(await new Promise((resolve, reject) => {
+    const reader = new window.FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(blob);
+  }));
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(bytes);
+  assert.ok(!Object.keys(zip.files).some((f) => /thumb/i.test(f)));
+  assert.match(await zip.file('OEBPS/text/ch0002.xhtml').async('string'), /Part 2 is here/);
+  // A backup: no copy in it.
+  const backup = JSON.parse(JSON.stringify(await store.exportBackup()));
+  assert.ok(!JSON.stringify(backup).includes('coverThumb'));
+  // Imported again on its own -- the same book on the shelf: kept once, its copy untouched.
+  const again = await library.importFiles([new window.File([bytes], name)], {});
+  assert.deepEqual(again.existing, [id]);
+  assert.ok(library.thumbFits(await store.get('books', id)));
+  // The shelf lost (a reinstall), the export imported: all its chapters, no copy carried over.
+  await store.deleteBook(id);
+  const before = new Set((await store.all('books')).map((b) => b.id));
+  await library.importFiles([new window.File([bytes], name)], {});
+  const imported = (await store.all('books')).find((b) => !before.has(b.id));
+  assert.ok(imported, 'not imported');
+  assert.equal(imported.title, 'Round Trip Cover');
+  assert.ok(!imported.importing);
+  assert.equal((await store.byIndex('chapters', 'bookId', imported.id)).length, 2);
+  assert.equal(imported.coverThumb, undefined);
+  // And the backup restored onto it: its folder and its reading back.
+  await store.importBackup(backup);
+  const restored = await store.get('books', imported.id);
+  assert.equal(restored.folder, 'Kept');
+  assert.equal(restored.percent, 0.5);
+  assert.equal(restored.coverThumb, undefined);
+  await store.deleteBook(imported.id);
+});
+
+await t('editions on the shelf: a set held and a book tapped, then Editions: the book joins the set, the set not taken apart', async () => {
+  const lead = await aBook({ title: 'Set Lead', fingerprint: 'ed:1' });
+  await store.update('books', lead, (b) => ({ ...b, bundleId: lead }));
+  const raw = await aBook({ title: 'Set Raw', fingerprint: 'ed:2', bundleId: lead });
+  // Still marked as an edition of a set whose leader is gone (deleted, binned, removed as a double).
+  const stale = await aBook({ title: 'Stale Mark', fingerprint: 'ed:3', bundleId: 987001 });
+  const otherLead = await aBook({ title: 'Other Set', fingerprint: 'ed:4' });
+  await store.update('books', otherLead, (b) => ({ ...b, bundleId: otherLead }));
+  const otherRaw = await aBook({ title: 'Other Raw', fingerprint: 'ed:5', bundleId: otherLead });
+  const shelfTile = (id) => el('shelf').querySelector(`[data-book="${id}"]`);
+  const open = async () => {
+    tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+    await settle();
+    tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+    await settle(400);
+  };
+  const hold = async (id) => {
+    shelfTile(id).dispatchEvent(new window.Event('touchstart', { bubbles: true }));
+    await settle(650);
+    shelfTile(id)?.dispatchEvent(new window.Event('touchend', { bubbles: true }));
+    // The tap that ends a press is not a tap: the next one comes after.
+    await settle(900);
+  };
+  const editions = async () => {
+    tap(el('select-actions').querySelector('[data-act="bundle"]'));
+    await settle(500);
+  };
+  const of = async (...ids) => Promise.all(ids.map(async (id) => (await store.get('books', id)).bundleId));
+  await open();
+  assert.ok(shelfTile(lead), 'the set is not on the shelf');
+  assert.ok(!shelfTile(raw), 'the set is not one tile');
+  await hold(lead);
+  tap(shelfTile(stale));
+  await settle(300);
+  await editions();
+  assert.deepEqual(await of(lead, raw, stale), [lead, lead, lead], 'taken apart, not joined');
+  assert.ok(!shelfTile(stale), 'the book added still has its own tile');
+  // Another set added to it: that set comes whole.
+  await open();
+  await hold(lead);
+  tap(shelfTile(otherLead));
+  await settle(300);
+  await editions();
+  assert.deepEqual(await of(lead, raw, stale, otherLead, otherRaw), [lead, lead, lead, lead, lead]);
+  // And the set alone, Editions: taken apart, every edition.
+  await open();
+  await hold(lead);
+  await editions();
+  assert.deepEqual(await of(lead, raw, stale, otherLead, otherRaw), [undefined, undefined, undefined, undefined, undefined]);
+  for (const id of [lead, raw, stale, otherLead, otherRaw]) await store.deleteBook(id);
+});
+
+await t('on starting: a half-written book is cleared, but a finished or read one marked as landing is kept, the mark taken off', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  // Half written, as each kind is begun: an import, a download, a join -- nothing finished, never opened.
+  const half = [
+    await aBook({ title: 'Half Import', importing: true, percent: 0, lastReadAt: null, chapterCount: undefined }),
+    await aBook({ title: 'Half Download', importing: true, format: 'WEB', words: 0, chapterCount: undefined }),
+    await aBook({ title: 'Half Join', importing: true, words: 0, chapterCount: undefined }),
+  ];
+  for (const id of half) await store.put('chapters', { bookId: id, index: 0, title: 'Came', html: '<p>so far</p>' });
+  // Passing through, opened from a file: cleared, read or not, as ever.
+  const passing = await aBook({ title: 'Passing Through', transient: true, lastOpenedAt: 5, chapterCount: 3 });
+  // Finished, or read, with the mark put back by a stale copy: kept.
+  const kept = [
+    await aBook({ title: 'Imported, Marked', importing: true, chapterCount: 12 }),
+    await aBook({ title: 'Built, Marked', importing: true, chapters: 30 }),
+    await aBook({ title: 'Read, Marked', importing: true, lastReadAt: 9, percent: 0.4 }),
+    await aBook({ title: 'Opened, Marked', importing: true, lastOpenedAt: 9 }),
+  ];
+  for (const id of kept) await store.put('chapters', { bookId: id, index: 0, title: 'One', html: '<p>whole</p>' });
+  const plain = await aBook({ title: 'Plain Book', chapterCount: 2, lastReadAt: 3 });
+  const gone = await library.sweepUnfinishedImports();
+  assert.equal(gone, 4);
+  for (const id of [...half, passing]) {
+    assert.equal(await store.get('books', id), undefined, 'a half-written book left');
+    assert.equal((await store.byIndex('chapters', 'bookId', id)).length, 0);
+  }
+  for (const id of kept) {
+    const book = await store.get('books', id);
+    assert.ok(book, 'a finished or read book cleared as half written');
+    assert.equal(book.importing, undefined, 'its mark left on');
+    assert.equal((await store.byIndex('chapters', 'bookId', id)).length, 1, 'its chapters lost');
+  }
+  assert.ok(await store.get('books', plain));
+  // Run again: nothing more.
+  assert.equal(await library.sweepUnfinishedImports(), 0);
+  for (const id of [...kept, plain]) await store.deleteBook(id);
+});
+
+await t('a page turned, a page read, a book opened as it finishes landing: the finishing is never undone', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  // The reading's write begun first, the finishing a moment after -- landing
+  // between the reading's look at the book and its write, when they were two.
+  const tick = () => Promise.resolve();
+  for (let round = 0; round < 6; round += 1) {
+    const id = await aBook({ title: `Landing ${round}`, importing: true, chapterCount: undefined });
+    const kind = round % 3;
+    const reading = kind === 2 ? store.markRead(id)
+      : (store.queuePosition({ bookId: id, chapterIndex: 0, offset: 0, percent: 0.25, at: Date.now() }), store.flushPosition());
+    const also = kind === 1 ? store.markRead(id) : null;
+    for (let i = 0; i < round - (round > 2 ? 3 : 0); i += 1) await tick();
+    const finishing = store.update('books', id, (b) => { delete b.importing; return { ...b, chapterCount: 9, words: 900 }; });
+    await Promise.all([finishing, reading, also]);
+    const kind0 = kind;
+    const book = await store.get('books', id);
+    assert.equal(book.importing, undefined, 'put back to still importing');
+    assert.equal(book.chapterCount, 9);
+    if (kind0 !== 2) assert.equal(book.percent, 0.25);
+    if (kind0 !== 0) assert.ok(book.lastReadAt);
+    await store.deleteBook(id);
+  }
+  // Read and written in one transaction each, these fields alone.
+  const src = read('app/src/main/assets/www/js/store.js');
+  assert.match(src, /async function positionOnBook\(row\) \{[\s\S]{0,700}await update\('books', row\.bookId, \(book\) => \{/);
+  assert.match(src, /async function noteRead\(bookId\) \{[\s\S]{0,200}const book = await update\('books', bookId, \(fresh\) => \{/);
+  const lib = read('app/src/main/assets/www/js/library.js');
+  assert.match(lib, /const done = await store\.update\('books', book\.id, \(fresh\) => \(\s*statusOf\(fresh\) === 'reading' && touchedAt\(fresh\) === touchedAt\(book\) && !fresh\.importing && !fresh\.transient/);
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /const written = await store\.update\('books', job\.bookId, \(book\) => \(\{ \.\.\.book, \.\.\.pending\.changes \}\)\);/);
+  assert.match(app, /const written = await store\.update\('books', job\.bookId, \(fresh\) => \(jobOwns\(job, fresh\)/);
+  void library;
+});
+
+await t('put on hold when left: as the book is then, never over a page read meanwhile', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  await store.saveSettings({ autoHoldDays: 5, restoredAt: 0 });
+  const now = Date.now();
+  const day = 24 * 3600e3;
+  const recent = await aBook({ title: 'Read Lately', lastReadAt: now - day, percent: 0.3, chapterCount: 5 });
+  const quiet = await aBook({ title: 'Left a While', lastReadAt: now - 20 * day, percent: 0.5, chapterCount: 5 });
+  const held = await library.holdQuietBooks({ now });
+  assert.ok(held >= 1);
+  const book = await store.get('books', quiet);
+  assert.equal(book.status, 'onHold');
+  assert.equal(book.heldAutomatically, true);
+  assert.equal(book.percent, 0.5);
+  assert.equal((await store.get('books', recent)).status, undefined);
+  await store.deleteBook(recent);
+  await store.deleteBook(quiet);
+});
+
+await t('a book imported from an export is matched by what it came from, recorded in the backup', async () => {
+  const src = read('app/src/main/assets/www/js/store.js');
+  assert.match(src, /if \(book\.sourceId\) kept\.sourceId = book\.sourceId;/);
+  const id = await aBook({ title: 'Came From', fingerprint: '[5] Came From.epub:77', sourceId: 'built:42:origin' });
+  await store.importBackup({
+    format: 'grimoire-backup', version: 1,
+    // Saved as the reimported copy it was then, with the export it came from.
+    books: [{ fingerprint: '[3] Came From.epub:55', sourceId: 'built:42:origin', title: 'Something else now', addedAt: 9, folder: 'by source' }],
+    positions: [], covers: [], marks: [],
+  });
+  assert.equal((await store.get('books', id)).folder, 'by source');
 });
 
 await t('an exported book names its cover for what the picture is', async () => {
@@ -912,8 +1657,270 @@ await t('many books are written into one zip a book at a time, and it opens anyw
   // book held, then the whole archive again.
   const many = app.slice(app.indexOf('async function exportMany'), app.indexOf('function exportSink'));
   assert.ok(!/new JSZip|generateAsync/.test(many), 'the batch is still built whole in memory');
-  assert.match(many, /await zip\.add\(entry, blob/);
-  assert.match(many, /await zip\.finish\(\);\s*await sink\.done\('application\/zip'\)/);
+  assert.match(many, /await open\.writer\.add\(entry, blob/);
+  assert.match(many, /await open\.writer\.finish\(\);\s*if \(early\) \{/);
+  assert.match(many, /staged\.push\(open\.sink\);\s*open = null;/);
+  assert.match(many, /if \(staged\.length === 1\) await staged\[0\]\.done\('application\/zip'\);\s*else await exportSinksDone\(staged, 'application\/zip', startedReading\);/);
+});
+
+await t('many books written out in zips under a size: whole books, folder order, saved into one folder chosen once', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const fn = (name) => { const at = app.search(new RegExp(`(?:async )?function ${name}\\(`)); return app.slice(at, app.indexOf('\n}\n', at) + 3); };
+  const label = app.match(/const limitLabel = .*;/)[0];
+  // How warm the phone says it is, in turn; the waits made short for the test.
+  const heats = [];
+  const said = [];
+  const fakeWindow = { GrimoireNative: { heat: () => JSON.stringify(heats.shift() || { status: 0, celsius: 30 }), working: (what) => said.push(what) } };
+  const heatSrc = app.slice(app.indexOf('const HEAT_WARM = '), app.indexOf('/** In folder order, then by name'))
+    .replace(/const HEAT_REST = \{[^}]*\};/, 'const HEAT_REST = { between: 1, warm: 5, hot: 10 };');
+  const MB = 1048576;
+  const waits = [];
+  const events = [];
+  const ref = {};
+  const folderSrc = app.slice(app.indexOf('const exportFolder = (() => {'), app.indexOf('async function exportMany('));
+  const saved = {};
+  const pictureSizes = [];
+  const thumbHolds = [];
+  const fakeStore = { settings: async () => saved, saveSettings: async (patch) => { Object.assign(saved, JSON.parse(JSON.stringify(patch))); }, all: async () => [] };
+  const run = async (books, limitMB, { stopAfter = Infinity, ...options } = {}) => {
+    const sinks = [];
+    let stop = null;
+    let built = 0;
+    const toasts = [];
+    let together = null;
+    const exportSink = (name) => {
+      const sink = { name, bytes: 0, entries: [], async write(b) { sink.bytes += b.length; }, async done() { together = [sink]; }, discard() { sink.discarded = true; },
+        // Room taken while it is written, given back when let go (the phone's free space, below).
+        get taken() { return this.discarded ? 0 : this.bytes; },
+        async close() { events.push(`close ${name}`); return name; } };
+      sinks.push(sink);
+      events.push(`open ${name}`);
+      return sink;
+    };
+    // A zip that counts what it writes: each entry's bytes and a header.
+    const zipWriter = (write) => ({
+      async add(name, blob) { sinks.at(-1).entries.push(name); await write(new Uint8Array(blob.size + 60)); },
+      async finish() { await write(new Uint8Array(40)); },
+    });
+    const sizes = new Map(books.map((b) => [b.id, b.mb * MB]));
+    const epub = { buildEpub: async (id, opts = {}) => {
+      if (++built > stopAfter) stop?.();
+      // The picture size each book is asked at; a smaller copy saves something.
+      pictureSizes.push(opts.size);
+      return { blob: { size: sizes.get(id) }, name: `${books.find((b) => b.id === id).title}.epub`, saved: opts.size ? MB : 0 };
+    }, safeName: (x) => x };
+    const progress = {
+      start: () => Object.assign(() => {}, { say() {}, fail() {}, activity(now) { if (now) waits.push(now.why); }, controls({ cancel }) { stop = cancel; } }) };
+    const exportMany = new Function('ref', 'window', 'store', 'library', 'epub', 'progress', 'exportSink', 'zipWriter', 'exportSinksDone', 'toast', 'commonTitle', 'clearSelection', 'refreshShelf', 'inBook', 'shrink',
+      `${label}\n${heatSrc}\n${folderSrc}\n${fn('exportOrder')}\n${fn('zipIsFull')}\n${fn('working')}\n${app.match(/const EXPORT_KEEP_FREE = .*;/)[0]}\n${fn('freeSpace')}\n${fn('exportMany')}\nref.exportFolder = exportFolder;\nref.runLeft = runLeft;\nreturn exportMany;`)(ref, fakeWindow, fakeStore,
+      { displayTitle: (b) => b.title, holdThumbs: (on) => thumbHolds.push(on) }, epub, progress, exportSink, zipWriter,
+      async (staged) => { together = staged; }, (text) => toasts.push(text), () => 'Library', () => {}, async () => {}, false, shrink);
+    await exportMany(books, limitMB, options);
+    return { sinks, together, toasts, progress };
+  };
+  const books = [];
+  for (let i = 0; i < 30; i += 1) books.push({ id: i, title: `Novel ${i}`, folder: i % 3 ? 'Korean' : 'Chinese', mb: i === 7 ? 140 : 9 });
+  // Under 100 MB each: nothing over, every book once and whole, a folder's books together.
+  const { sinks, together, toasts } = await run(books, 100);
+  assert.ok(sinks.length > 3, `${sinks.length} zips`);
+  assert.equal(together.length, sinks.length, 'not all saved into the one folder');
+  for (const sink of sinks) {
+    if (sink.entries.length > 1) assert.ok(sink.bytes <= 100 * MB, `${sink.name} is ${(sink.bytes / MB).toFixed(1)} MB`);
+  }
+  // A book bigger than the limit by itself has a zip to itself.
+  assert.deepEqual(sinks.find((sink) => sink.entries.includes('Novel 7.epub')).entries, ['Novel 7.epub']);
+  const all = sinks.flatMap((sink) => sink.entries);
+  assert.equal(all.length, 30);
+  assert.equal(new Set(all).size, 30);
+  assert.ok(all.slice(0, 10).every((name) => +name.match(/\d+/)[0] % 3 === 0), 'Chinese first, all together');
+  assert.deepEqual(sinks.map((sink) => sink.name).slice(0, 2), ['Library (part 1).zip', 'Library (part 2).zip']);
+  assert.match(toasts.at(-1), new RegExp(`30 books in ${sinks.length} zips, each under 100 MB`));
+  // Stopped from the popup: the book under way finished, then nothing more -- and nothing offered to save.
+  const halted = await run(books, 100, { stopAfter: 12 });
+  assert.equal(halted.together, null, 'a stopped export was still saved');
+  assert.ok(halted.sinks.length && halted.sinks.every((sink) => sink.discarded), 'a stopped zip kept');
+  assert.equal(halted.sinks.flatMap((sink) => sink.entries).length, 13);
+  assert.match(halted.toasts.at(-1), /Export stopped — nothing saved/);
+  // Each book said to Android as it is written, so a crash can name it; cleared when done.
+  assert.ok(said.includes('writing out “Novel 7” (book 13 of 30)') || said.some((w) => /^writing out “Novel \d+” \(book \d+ of 30\)$/.test(w)));
+  assert.equal(said.at(-1), '');
+  const app2 = read('app/src/main/assets/www/js/app.js');
+  assert.match(app2, /const cut = \(\(\) => \{ try \{ return window\.GrimoireNative\?\.cutOff\?\.\(\); \} catch \{ return null; \} \}\)\(\);/);
+  assert.match(read('app/src/main/java/com/grimoire/ereader/MainActivity.java'), /" while " \+ was \+ "\. Your library is untouched\."/);
+  // The phone warm: a breath before the next book; hot, waited out till it is not -- and nothing skipped.
+  heats.push({ status: 0, celsius: 40.4 }, { status: 2, celsius: 43 }, { status: 3, celsius: 44 }, { status: 0, celsius: 38.5 });
+  waits.length = 0;
+  const warm = await run(books.slice(0, 6), 0);
+  assert.equal(warm.sinks[0].entries.length, 6);
+  assert.match(app, /const HEAT_REST = \{ between: 400, warm: 3000, hot: 20000 \};/);
+  assert.equal(waits.length, 3, `rested ${waits.length} times`);
+  assert.match(waits[0], /the phone is warm \(40°C\) — letting it cool/);
+  assert.match(waits[1], /43°C/);
+  // Turned off: however warm, no pause and no wait -- the heat not even asked.
+  saved.exportCoolDown = false;
+  heats.length = 0;
+  heats.push({ status: 3, celsius: 46 }, { status: 3, celsius: 46 });
+  waits.length = 0;
+  const off = await run(books.slice(0, 3), 0);
+  assert.equal(off.sinks[0].entries.length, 3);
+  assert.equal(waits.length, 0, 'waited with it turned off');
+  assert.equal(heats.length, 2, 'asked how warm with it turned off');
+  delete saved.exportCoolDown;
+  heats.length = 0;
+  // Turned off during a wait: the wait ends, rather than running out its time.
+  const longSrc = heatSrc.replace(/const HEAT_REST = \{[^}]*\};/, 'const HEAT_REST = { between: 1, warm: 5, hot: 60000 };');
+  const letCool = new Function('window', 'store', `${longSrc}\nreturn letCool;`)(
+    { GrimoireNative: { heat: () => JSON.stringify({ status: 3, celsius: 46 }) } }, fakeStore);
+  const began = Date.now();
+  setTimeout(() => { saved.exportCoolDown = false; }, 300);
+  await letCool({ activity() {} });
+  assert.ok(Date.now() - began < 3000, `still waited ${Date.now() - began} ms`);
+  delete saved.exportCoolDown;
+  // In Settings and on the export sheet alike.
+  assert.match(read('app/src/main/assets/www/js/panels.js'), /toggle\(settings\.exportCoolDown !== false, \(on\) => store\.saveSettings\(\{ exportCoolDown: on \}\)\)/);
+  assert.match(read('app/src/main/assets/www/index.html'), /<button class="switch" id="export-many-cool" aria-pressed="true"/);
+  // Where the phone can: the folder asked for first, and each zip saved into it the moment it is full --
+  // before the next is begun -- so a crash part-way leaves those already full in the folder.
+  const savedParts = [];
+  let asked = 0;
+  fakeWindow.GrimoireNative.chooseExportSetFolder = () => { asked += 1; setTimeout(() => ref.exportFolder.chosen('Books backup'), 0); };
+  fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => { savedParts.push(handle); events.push(`saved ${handle}`); setTimeout(() => ref.exportFolder.saved(reply, true, ''), 0); };
+  fakeWindow.GrimoireNative.releaseExportSetFolder = () => events.push('released');
+  events.length = 0;
+  const early = await run(books, 100);
+  assert.equal(asked, 1);
+  assert.equal(early.together, null, 'asked for a folder again at the end');
+  assert.deepEqual(savedParts, early.sinks.map((sink) => sink.name));
+  for (let i = 1; i < early.sinks.length; i += 1) {
+    assert.ok(events.indexOf(`saved ${early.sinks[i - 1].name}`) < events.indexOf(`open ${early.sinks[i].name}`), `zip ${i} not saved before zip ${i + 1} began`);
+  }
+  assert.equal(events.at(-1), 'released');
+  assert.match(early.toasts.at(-1), new RegExp(`30 books in ${early.sinks.length} zips, each under 100 MB, saved in “Books backup”`));
+  // No folder chosen: nothing written at all.
+  fakeWindow.GrimoireNative.chooseExportSetFolder = () => setTimeout(() => ref.exportFolder.chosen(null), 0);
+  const none = await run(books, 100);
+  assert.equal(none.sinks.length, 0);
+  assert.match(none.toasts.at(-1), /Not exported — no folder was chosen/);
+  // A zip that will not save: stopped there, saying how many are already in the folder.
+  let n = 0;
+  fakeWindow.GrimoireNative.chooseExportSetFolder = () => setTimeout(() => ref.exportFolder.chosen('Books backup'), 0);
+  fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => { n += 1; setTimeout(() => ref.exportFolder.saved(reply, n < 3, n < 3 ? '' : 'the phone is full'), 0); };
+  pictureSizes.length = 0;
+  const full = await run(books, 100, { kind: 'everything', size: 'small' });
+  // Pictures made smaller, as asked, in every book it wrote.
+  assert.ok(pictureSizes.length && pictureSizes.every((size) => size === 'small'), `asked at ${[...new Set(pictureSizes)]}`);
+  assert.match(full.toasts.at(-1), /Zip 3 could not be saved: the phone is full — the 2 before it are in “Books backup”\. Export again to carry on from there\./);
+  // Written down: the two zips saved, and exactly the books in them.
+  const cut = saved.exportRun;
+  assert.equal(cut.zips, 2);
+  assert.deepEqual(cut.done, full.sinks.slice(0, 2).flatMap((sink) => sink.entries).map((name) => +name.match(/\d+/)[0]));
+  assert.equal(cut.order.length, 30);
+  // Carried on: the books in no saved zip, in the order it began with, zips numbered on from 3, into the same folder.
+  fakeWindow.GrimoireNative.exportSetFolderName = () => 'Books backup';
+  fakeWindow.GrimoireNative.chooseExportSetFolder = () => { throw new Error('asked for the folder again'); };
+  const carriedParts = [];
+  fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => { carriedParts.push(handle); setTimeout(() => ref.exportFolder.saved(reply, true, ''), 0); };
+  const left = await ref.runLeft(cut, books);
+  assert.equal(left.length, 30 - cut.done.length);
+  // Covers made small waited while it wrote, and were taken up again after -- stopped short or not.
+  assert.equal(thumbHolds[0], true);
+  assert.equal(thumbHolds.at(-1), false);
+  assert.equal(thumbHolds.filter((on) => on).length, thumbHolds.filter((on) => !on).length);
+  // Carried on at the size it began with -- written down with the run -- whatever else is passed.
+  assert.equal(cut.size, 'small');
+  pictureSizes.length = 0;
+  const carried = await run(left, 100, { run: cut, kind: 'everything', size: 'full' });
+  assert.ok(pictureSizes.every((size) => size === 'small'), 'carried on at another size');
+  assert.match(carried.toasts.at(-1), /pictures at .+, .+ smaller/);
+  assert.match(carriedParts[0], /\(part 3\)\.zip$/);
+  const everyEntry = [...full.sinks.slice(0, 2), ...carried.sinks].flatMap((sink) => sink.entries);
+  assert.equal(everyEntry.length, 30, 'a book missed or written twice');
+  assert.equal(new Set(everyEntry).size, 30);
+  // Finished: nothing left to carry on, and the folder let go of.
+  assert.equal(saved.exportRun, null);
+  // Closed part-way through a book: carried on, that book is tried once more; closed by it again, left out and named.
+  const culprit = cut.order.find((id) => !cut.done.includes(id));
+  const cutAt = { ...cut, trying: culprit };
+  const again = await run(await ref.runLeft(cutAt, books), 100, { run: cutAt, kind: 'everything' });
+  assert.ok(again.sinks.flatMap((sink) => sink.entries).includes(`Novel ${culprit}.epub`), 'not tried once more');
+  const cutTwice = { ...cut, trying: culprit, crashes: { [culprit]: 1 } };
+  const twice = await run(await ref.runLeft(cutTwice, books), 100, { run: cutTwice, kind: 'everything' });
+  assert.ok(!twice.sinks.flatMap((sink) => sink.entries).includes(`Novel ${culprit}.epub`), 'tried a third time');
+  assert.match(twice.toasts.at(-1), new RegExp(`left out, having closed the app twice: “Novel ${culprit}” — export it on its own`));
+  // Which book it is on, written down before each.
+  assert.match(app, /if \(early\) \{ run = \{ \.\.\.run, trying: book\.id \}; await store\.saveSettings\(\{ exportRun: run \}\); \}/);
+  // A book added meanwhile goes in the rest of an export of every book; a book gone is just not there.
+  const added = [...books.filter((b) => b.id !== 29), { id: 99, title: 'New one', folder: 'Korean', mb: 1 }];
+  const leftNow = await ref.runLeft({ ...cut, kind: 'everything' }, added);
+  assert.ok(leftNow.some((b) => b.id === 99) && !leftNow.some((b) => b.id === 29));
+  assert.equal(leftNow.at(-1).id, 99, 'not after the rest');
+  delete fakeWindow.GrimoireNative.exportSetFolderName;
+  delete fakeWindow.GrimoireNative.chooseExportSetFolder;
+  delete fakeWindow.GrimoireNative.saveExportPart;
+  /* Room on the phone: an export stops before it runs short -- what is saved
+   * kept to carry on, what waits in the app's storage let go -- and never
+   * starts with too little. The phone's free space told by Android. */
+  const GB = 1073741824;
+  let free = 50 * GB;
+  fakeWindow.GrimoireNative.freeSpace = () => String(free);
+  // Into a folder, zips under 100 MB: the first zip saved, then the phone short of room.
+  const roomFor = 2 * GB + 100 * MB;
+  fakeWindow.GrimoireNative.chooseExportSetFolder = () => setTimeout(() => ref.exportFolder.chosen('Roomy'), 0);
+  fakeWindow.GrimoireNative.saveExportPart = (handle, mime, reply) => setTimeout(() => { free = roomFor - 1; ref.exportFolder.saved(reply, true, ''); }, 0);
+  const short = await run(books, 100, { kind: 'everything' });
+  assert.match(short.toasts.at(-1), /^Stopped to keep room on your phone: 2\.1 GB free, and an export keeps 2\.1 GB free while it writes — the 1 zip before is in “Roomy”\./);
+  assert.match(short.toasts.at(-1), /Your library is untouched\. Free some space, then export again to carry on from there\.$/);
+  // What was saved stays written down to carry on; the zip under way let go.
+  assert.ok(saved.exportRun, 'nothing kept to carry on');
+  assert.equal(saved.exportRun.zips, 1);
+  assert.deepEqual(saved.exportRun.done, short.sinks[0].entries.map((name) => +name.match(/\d+/)[0]));
+  assert.equal(saved.exportRun.trying, null, 'a book blamed for a full phone');
+  assert.ok(short.sinks.at(-1).discarded, 'the zip under way kept, taking room');
+  // Never begun with too little.
+  free = GB;
+  const roomless = await run(books.slice(0, 3), 0);
+  assert.match(roomless.toasts.at(-1), /^Stopped to keep room on your phone: 1\.0 GB free, and an export keeps 3\.0 GB free/);
+  assert.ok(roomless.sinks.every((sink) => sink.discarded), 'a zip left in the app’s storage');
+  assert.ok(!/to carry on from there/.test(roomless.toasts.at(-1)));
+  // Android not saying (an older app): not stopped for it.
+  fakeWindow.GrimoireNative.freeSpace = () => '';
+  const unsaid = await run(books.slice(0, 3), 0);
+  assert.ok(!/Stopped to keep room/.test(unsaid.toasts.at(-1)));
+  delete fakeWindow.GrimoireNative.freeSpace;
+  delete fakeWindow.GrimoireNative.chooseExportSetFolder;
+  delete fakeWindow.GrimoireNative.saveExportPart;
+  saved.exportRun = null;
+  // No limit: one zip, saved as ever -- at full size unless asked, nothing said of pictures.
+  pictureSizes.length = 0;
+  const one = await run(books, 0);
+  assert.ok(pictureSizes.every((size) => size === undefined), 'made smaller unasked');
+  assert.ok(!/pictures at/.test(one.toasts.at(-1)));
+  const smallOne = await run(books.slice(0, 3), 0, { size: 'screen' });
+  assert.match(smallOne.toasts.at(-1), /^3 books written out · pictures at .+, 3(\.0)? MB smaller — choose where to save them$/);
+  // An older run written down without a size carries on at full size.
+  pictureSizes.length = 0;
+  const { size: _gone, ...older } = cut;
+  void _gone;
+  await run(await ref.runLeft(older, books), 100, { run: older, kind: 'everything' });
+  assert.ok(pictureSizes.every((size) => size === undefined));
+  assert.equal(one.sinks.length, 1);
+  assert.equal(one.sinks[0].name, 'Library.zip');
+  assert.equal(one.sinks[0].entries.length, 30);
+  // The size asked once and remembered; the choices; a book named twice kept twice.
+  assert.match(app, /const EXPORT_LIMITS = \[0, 2048, 1024, 500, 250, 100\];/);
+  assert.match(app, /store\.saveSettings\(\{ exportZipMB: limit, exportManySize: size \}\)/);
+  assert.match(app, /return askExportParts\(books\);/);
+  assert.match(app, /while \(open\.used\.has\(entry\)\) entry = first\.replace/);
+  assert.match(app, /bridge\.finishExportSet\(JSON\.stringify\(closed\.map\(\(each\) => each\.made\)\), mimeType\);/);
+  const java = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(java, /new Intent\(Intent\.ACTION_OPEN_DOCUMENT_TREE\)/);
+  assert.match(java, /DocumentsContract\.createDocument\(\s*getContentResolver\(\), folder, type, file\.getName\(\)\);/);
+  assert.match(java, /if \(written >= 0 && written != file\.length\(\)\)/);
+  // Kept should Android close the app while the folder is chosen; never dropped without a word.
+  assert.match(java, /\.putString\(STAGED_SET, files\.isEmpty\(\) \? null : paths\.toString\(\)\)/);
+  assert.match(java, /if \(stagedSet\.isEmpty\(\)\) restoreSet\(\);/);
+  assert.match(java, /Not saved — no folder was chosen/);
+  assert.match(read('app/src/main/java/com/grimoire/ereader/GrimoireBridge.java'), /public void finishExportSet\(String handles, String mimeType\)/);
 });
 
 await t('an export survives Android closing the app while the save screen is open', () => {
@@ -976,6 +1983,15 @@ await t('a book written out and given back is the same book, not a second copy',
   const theOriginal = await library.importFiles([original], {});
   assert.equal(theOriginal.added, 0, 'the original file came in beside its own export');
   assert.equal(theOriginal.already, 1);
+
+  /* A different book sharing that identity is not it. Books the queue built
+   * side by side once got one between them ("built:<time>"), and a file
+   * written out of one was said to be on the shelf as the other. */
+  await store.put('books', { ...now[0], title: '凶猛道侣也重生了', chapterCount: 4705 });
+  const notIt = await library.importFiles([new File([await bytesOf(blob)], 'given back.epub')], {});
+  assert.equal(notIt.added, 1, 'a file written out of one book was taken for another sharing its identity');
+  assert.ok(!notIt.already);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /fingerprint: `built:\$\{Date\.now\(\)\}:\$\{Math\.random\(\)/);
 });
 
 await t('a book sent from another app is opened once, not every time the app is', async () => {
@@ -1122,18 +2138,54 @@ await t('the Kindle reader runs on the oldest WebView the app supports', async (
 await t('what finishes while you read waits for the book to be put down', async () => {
   const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
   // One place decides: in a book (the reader, or its own screens), or not.
-  assert.match(app, /function viewChanged\(\) \{\s*if \(current === 'reader'\) inBook = true;\s*else if \(!BESIDE_THE_BOOK\.has\(current\)\) inBook = false;/);
+  assert.match(app, /function viewChanged\(\) \{[\s\S]{0,300}?if \(current === 'reader'\) inBook = true;\s*else if \(!BESIDE_THE_BOOK\.has\(current\)\) inBook = false;/);
   assert.equal((app.match(/viewChanged\(\);/g) || []).length, 2, 'show() and back() both report the change');
   // A finished build opens its book only if Build is still on screen.
-  assert.match(app, /if \(made && current === 'workshop'\) await openBook\(made\);/);
-  assert.match(app, /whenNotReading\(\(\) => toast\(failed\.length/);
+  // (Overnight, not between tries: Build stays up, saying when the next is.)
+  assert.match(app, /if \(made && current === 'workshop' && !again\) await openBook\(made\);/);
+  assert.match(app, /whenNotReading\(\(\) => toast\(paused\s*\?[\s\S]{0,400}?: failed\.length/);
   // An import's report, and the save screen of an export, wait too.
   const importer = app.slice(app.indexOf('async function importNow('), app.indexOf('return results;\n}', app.indexOf('async function importNow(')));
   assert.ok(!/(?<![\w.])toast\(/.test(importer.slice(importer.indexOf('const besides'))), 'an import still reports over the page');
-  assert.equal((app.match(/await untilNotReading\(startedReading\);/g) || []).length, 2);
+  // (The save screen of one file, of parts saved together, and an import's report.)
+  assert.equal((app.match(/await untilNotReading\(startedReading\);/g) || []).length, 3);
   // And the progress panel is a pill in a book, gone with the bars.
   const css = fs.readFileSync(new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
-  assert.match(css, /body\.in-book\[data-chrome="none"\] \.import-progress/);
+  assert.match(css, /body\.on-page\[data-chrome="none"\] \.import-progress/);
+  // Beside the book (search, contents) the tab bar is there: the strip sits on it, not over their chips.
+  assert.ok(!/body\.in-book[^{]*\.import-progress/.test(css), 'the pill placed on screens beside the book too');
+  assert.match(read('app/src/main/assets/www/js/app.js'), /document\.body\.classList\.toggle\('on-page', current === 'reader'\);/);
+  // A back that slips past the keyboard (Samsung's clipboard, deleting its items) does not leave the screen typed in.
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /public void handleOnBackPressed\(\) \{[\s\S]{0,500}?if \(keyboardUp\(\)\) return;/);
+  assert.match(activity, /return insets != null && insets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\) && hasWindowFocus\(\);/);
+  /* And one that comes as the keyboard hides for a moment (the clipboard,
+   * deleting): the page tells it by the keyboard's last showing, pushed with
+   * the insets, and lets it go while a field is being typed in. */
+  assert.match(activity, /boolean ime = windowInsets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\) && hasWindowFocus\(\);/);
+  assert.match(activity, /pushInsets\(bars, ime\);/);
+  // Split screen: the keyboard counted only while this window has the focus, and again whenever that changes.
+  assert.match(activity, /public void onWindowFocusChanged\(boolean hasFocus\) \{[\s\S]{0,200}if \(lastWindowInsets != null\) pushFrom\(lastWindowInsets\);/);
+  assert.match(activity, /return insets != null && insets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\) && hasWindowFocus\(\);/);
+  assert.match(activity, /var ime=%b;if\(ime\|\|window\.GrimoireIme\)window\.GrimoireImeAt=Date\.now\(\);window\.GrimoireIme=ime;/);
+  const field = document.createElement('input');
+  field.type = 'search';
+  document.body.appendChild(field);
+  field.focus();
+  const where = [...document.querySelectorAll('.view')].filter((v) => !v.hidden).map((v) => v.id).join();
+  window.GrimoireIme = true;
+  assert.equal(window.Grimoire.onBack(), true, 'a back with the keyboard up left');
+  // Hidden a moment ago (the clipboard): still let go, the screen as it was.
+  window.GrimoireIme = false;
+  window.GrimoireImeAt = Date.now() - 300;
+  assert.equal(window.Grimoire.onBack(), true, 'a back as the keyboard hid for a moment left');
+  assert.equal([...document.querySelectorAll('.view')].filter((v) => !v.hidden).map((v) => v.id).join(), where);
+  assert.equal(document.activeElement, field, 'the typing was ended');
+  // Long closed, or a box that is not typed in: back as ever.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /return !!window\.GrimoireIme \|\| Date\.now\(\) - \(window\.GrimoireImeAt \|\| 0\) < TYPING_BACK_MS;/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /onBack\(\) \{\s+if \(backWhileTyping\(\)\) return true;/);
+  field.remove();
+  window.GrimoireImeAt = 0;
 });
 
 await t('the copy button\'s amount part is about a fifth of the copy part', async () => {
@@ -1539,7 +2591,7 @@ await t('opened at a folder, imports and builds are filed in it', async () => {
   // The app passes the folder the shelf is open at, captured when it is asked.
   const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
   assert.match(app, /const into = options\.transient \? '' : \(activeFolder \|\| ''\);/);
-  assert.match(app, /folder: activeFolder \|\| null,/);
+  assert.match(app, /folder: \(buildFolder \?\? activeFolder\) \|\| null,/);
   assert.match(app, /const where = into \? ` to “\$\{into\}”` : '';/);
   for (const b of [filed, zipped, glance, book, onto]) await store.deleteBook(b.id);
 });
@@ -1639,6 +2691,46 @@ await t('a bundle of editions is one book in every count', async () => {
   assert.equal(library.countWorks(await store.all('books')), 4, 'the helper does not see the bundle');
 
   await panels.openStats();
+  // The streak grid in the theme's gradient: today, read, coloured from it; a day not read, the empty shade.
+  const cells = [...document.querySelectorAll('#stats-body .heat i')];
+  const today = cells.at(-1);
+  assert.match(today.style.getPropertyValue('--heat-c'), /^var\(--grad-s\d+\)$/, 'a day read is not in the gradient');
+  assert.equal(cells[0].dataset.l, '0');
+  assert.equal(cells[0].style.getPropertyValue('--heat-c'), '');
+  // A calendar: whole weeks from a Monday, ending today.
+  const firstDay = cells[0].dataset.day.split('-').map(Number);
+  assert.equal(new Date(firstDay[0], firstDay[1] - 1, firstDay[2]).getDay(), 1, 'the grid does not start on a Monday');
+  assert.equal(today.dataset.day, store.dayKey(Date.now()));
+  assert.ok(today.classList.contains('today'));
+  assert.equal(cells.length, 25 * 7 + ((new Date().getDay() + 6) % 7) + 1);
+  assert.equal([...document.querySelectorAll('#stats-body .heat-days span')].map((x) => x.textContent).join(','), 'Mon,,Wed,,Fri,,Sun');
+  // A day tapped: its date, pages and time, by it; another tapped, that one instead; a tap elsewhere, closed.
+  const tip = document.querySelector('#stats-body .heat-tip');
+  assert.equal(tip.hidden, true);
+  today.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(tip.hidden, false);
+  assert.match(tip.textContent, /9 pages · 3 min/);
+  assert.match(tip.textContent, /2,700 words/);
+  assert.ok(today.classList.contains('picked'));
+  cells[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(tip.hidden, false);
+  assert.match(tip.textContent, /Nothing read/);
+  assert.ok(!today.classList.contains('picked') && cells[0].classList.contains('picked'));
+  document.body.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+  assert.equal(tip.hidden, true, 'a tap elsewhere did not close it');
+  assert.ok(!cells[0].classList.contains('picked'));
+  // Shaded against a real day's reading, not ranked: 62,400 words (four hours at 260 a minute) or more the
+  // gradient's left end; half that, its middle; a light day near its right end -- and no day takes an end for being the heaviest.
+  for (const [ago, words] of [[2, 50], [3, 400], [4, 1200], [5, 62400], [6, 31200], [7, 30000]]) {
+    await store.add('events', { bookId: alone, day: store.dayKey(Date.now() - ago * 86400e3), at: Date.now() - ago * 86400e3, pages: 1, words, activeMs: 1000, chapters: 1 });
+  }
+  await panels.openStats();
+  const shadeOf = (ago) => document.querySelector(`#stats-body .heat i[data-day="${store.dayKey(Date.now() - ago * 86400e3)}"]`).style.getPropertyValue('--heat-c');
+  assert.equal(shadeOf(5), 'var(--grad-s0)');
+  assert.equal(shadeOf(6), 'var(--grad-s8)');
+  assert.equal(shadeOf(2), 'var(--grad-s16)');
+  // 30,000 words, the heaviest of an ordinary run, is not the far end.
+  assert.equal(shadeOf(7), 'var(--grad-s8)');
   const stats = document.getElementById('stats-body').textContent;
   assert.match(stats, /2Books — in the library/, `the library is not two books: ${/\d+Books/.exec(stats)?.[0]}`);
   assert.match(stats, /1Finished/, 'finishing one edition is not finishing one book');
@@ -1657,6 +2749,24 @@ await t('a bundle of editions is one book in every count', async () => {
   await panels.openStats();
   assert.deepEqual([...document.querySelectorAll('#stats-body .folder-list summary span')].map((x) => x.textContent),
     ['Novels', 'Novels / Done']);
+  // Copied: the whole list, each folder under its name and count, numbered as shown; or just one folder's.
+  let copied = null;
+  const clipboard = Object.getOwnPropertyDescriptor(window.navigator, 'clipboard');
+  Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: async (text) => { copied = text; } } });
+  const copyAll = document.querySelector('#stats-body .folder-lists-head .folder-copy');
+  assert.equal(copyAll.textContent, 'Copy list');
+  copyAll.click();
+  await settle(30);
+  assert.equal(copied, 'Novels (1)\n1. English (Raw)\n\nNovels / Done (1)\n1. Alone');
+  const boxes = [...document.querySelectorAll('#stats-body .folder-list')];
+  const wasOpen = boxes[1].open;
+  boxes[1].querySelector('summary .folder-copy').click();
+  await settle(30);
+  assert.equal(copied, 'Novels / Done (1)\n1. Alone');
+  // Copying from a folder's heading does not open or shut it.
+  assert.equal(boxes[1].open, wasOpen);
+  if (clipboard) Object.defineProperty(window.navigator, 'clipboard', clipboard);
+  else delete window.navigator.clipboard;
   moved.folder = 'Novels';
   await store.put('books', moved);
 
@@ -1925,6 +3035,461 @@ await t('two imports at once are two bars -- one running, one waiting -- and bot
   assert.equal(el('import-progress').hidden, true, 'the panel stayed up after both finished');
 });
 
+await t('made small, the progress page lets go of a tap that was waiting -- it does not open the file picker', async () => {
+  // Its buttons were wired when the imports above began; shown open, as a busy export leaves it.
+  const host = el('import-progress');
+  host.hidden = false;
+  host.classList.add('open');
+  const input = el('file-input');
+  let picked = 0;
+  const real = input.click;
+  input.click = () => { picked += 1; };
+  const importButton = document.querySelector('[data-import]');
+  assert.ok(importButton, 'no Import files button to land on');
+  // Made small, and a second tap -- held up while the app was busy -- arrives straight after.
+  el('import-minimise').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(host.classList.contains('open'), false);
+  importButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(picked, 0, 'the tap behind the minimise opened the file picker');
+  // The strip itself is never let go of: tapped again, it opens the page.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /if \(event\.target\?\.closest\?\.\('#jobs-strip'\)\) return;/);
+  // A moment later, taps are taps again.
+  await settle(600);
+  importButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(picked, 1);
+  input.click = real;
+  host.hidden = true;
+});
+
+await t('the progress strip sits on the tab bar by its real height, and at the foot when the bar is hidden', async () => {
+  const app = read('app/src/main/assets/www/js/app.js');
+  const css = read('app/src/main/assets/www/css/app.css');
+  // No position measured off the window: the bar's own height, kept as it shows, hides and changes.
+  assert.ok(!/window\.innerHeight - bar\.getBoundingClientRect\(\)\.top/.test(app), 'still measured off the window');
+  // To the fraction of a pixel, and lapping the bar's top edge by one: no sliver of the shelf between them.
+  assert.match(app, /const shown = bar && !bar\.hidden && bar\.getClientRects\(\)\.length;\s+const height = shown \? Math\.max\(0, bar\.getBoundingClientRect\(\)\.height - 1\) : 0;[\s\S]{0,400}const value = shown \? `\$\{height\.toFixed\(2\)\}px` : '0px';/);
+  assert.ok(!/bar\.offsetHeight/.test(app.slice(app.indexOf('function seat()'), app.indexOf('function watchSeat()'))), 'still rounded to a whole pixel');
+  assert.match(app, /new MutationObserver\(seat\)\.observe\(bar, \{ attributes: true, attributeFilter: \['hidden', 'class', 'style'\] \}\)/);
+  assert.match(css, /\.import-progress \{ position: fixed;[^}]*bottom: max\(var\(--safe-bottom\), var\(--tabbar-real, calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\) \+ 1px\)\)\); \}/);
+  // In the harness: hidden, it is 0 -- the strip at the foot.
+  el('tabbar').hidden = true;
+  await settle(30);
+  assert.equal(document.documentElement.style.getPropertyValue('--tabbar-real'), '0px');
+  el('tabbar').hidden = false;
+  await settle(30);
+});
+
+await t('a font of your own: checked, kept apart from the settings, a face to read in, let go', async () => {
+  const fonts = await import(new URL('../app/src/main/assets/www/js/fonts.js', import.meta.url).href);
+  const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
+  const real = fs.readFileSync(new URL('../app/src/main/assets/www/fonts/archivo-latin-600-normal.woff2', import.meta.url));
+  assert.equal(fonts.looksLikeFont(real.buffer.slice(real.byteOffset, real.byteOffset + 8)), true);
+  assert.equal(fonts.looksLikeFont(new TextEncoder().encode('<html>').buffer), false);
+  assert.equal(fonts.nameOfFile('Noto_Serif_JP.ttf'), 'Noto Serif JP');
+  // Not a font: said so, nothing kept.
+  await assert.rejects(fonts.add(new window.File(['not a font at all'], 'notes.ttf')), /not a font/);
+  assert.deepEqual(await fonts.list(), []);
+  // A font: kept -- its file apart from the settings, only its name in them.
+  const font = await fonts.add(new window.File([real], 'My_Face.woff2', { type: 'font/woff2' }));
+  assert.equal(font.name, 'My Face');
+  assert.deepEqual((await fonts.list()).map((f) => f.name), ['My Face']);
+  const kept = await store.get('settings', `font:${font.id}`);
+  // (The test database keeps no Blob as a Blob -- as with covers here; the phone's does.)
+  assert.ok(kept?.blob && kept.name === 'My Face', 'the font file is not kept');
+  assert.ok(!JSON.stringify(await store.settings()).includes('wOF2'), 'the font file is in the settings');
+  // A face to read in, beside the app's two, set in its own face.
+  assert.equal(fonts.faceFamily(`font:${font.id}`), `"quire-font-${font.id}", var(--font-body)`);
+  assert.equal(fonts.faceFamily('Archivo'), 'var(--font-heading)');
+  assert.equal(fonts.faceFamily('Newsreader'), 'var(--font-body)');
+  reader.applyLayout({ size: 18, leading: 1.6, para: 8, margin: 20, vmargin: 16, justified: false, face: `font:${font.id}` });
+  assert.equal(document.documentElement.style.getPropertyValue('--read-face'), `"quire-font-${font.id}", var(--font-body)`);
+  // In Appearance, listed in its own face; and Add a font asks for fonts, not only "font/*".
+  const host = document.createElement('div');
+  await panels.openAppearance(host);
+  await settle(50);
+  assert.ok(!/not possible yet/.test(host.textContent));
+  assert.match(host.querySelector('.font-row .font-name').textContent, /My Face/);
+  assert.match(host.querySelector('.fonts-field input[type="file"]').accept, /\.ttf.*\.otf.*\.woff.*application\/octet-stream/);
+  // Let go: its file and its name.
+  await fonts.remove(font.id);
+  assert.deepEqual(await fonts.list(), []);
+  assert.equal(await store.get('settings', `font:${font.id}`), undefined);
+});
+
+await t('the theme gradient: the accent by default, two to five colours of your own with their shares, one direction, kept with a theme', async () => {
+  const theme = await import(new URL('../app/src/main/assets/www/js/theme.js', import.meta.url).href);
+  const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  const root = document.documentElement.style;
+  theme.apply({ ...(await store.settings()), gradient: null, gradientDir: 'auto' });
+  const steps = theme.ramp((await store.settings()).accent);
+  assert.equal(root.getPropertyValue('--grad-from'), steps[2]);
+  assert.equal(root.getPropertyValue('--grad-to'), steps[5]);
+  // An older two-colour gradient reads as two equal shares: the plain blend, end to end, as before.
+  theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' } });
+  assert.equal(root.getPropertyValue('--grad-from'), '#ff8800');
+  assert.equal(root.getPropertyValue('--grad-to'), '#3355ff');
+  assert.equal(document.documentElement.dataset.gradient, 'own');
+  assert.equal(root.getPropertyValue('--grad-bar'), 'linear-gradient(90deg, #ff8800 0.0%, #ff8800 0.0%, #3355ff 100.0%, #3355ff 100.0%)');
+  // A larger share holds its colour solid for longer before it blends.
+  const placed = theme.placeStops([{ color: '#ff0000', share: 70 }, { color: '#0000ff', share: 30 }]);
+  assert.deepEqual(placed.map((p) => [p.color, Number(p.at.toFixed(3))]), [['#ff0000', 0], ['#ff0000', 0.4], ['#0000ff', 1], ['#0000ff', 1]]);
+  // Three equal: each solid at its own place, blended between, never out of order.
+  const three = theme.placeStops([{ color: '#ff0000', share: 50 }, { color: '#00ff00', share: 50 }, { color: '#0000ff', share: 50 }]);
+  for (let i = 1; i < three.length; i += 1) assert.ok(three[i].at >= three[i - 1].at - 1e-9, 'stops out of order');
+  assert.equal(theme.colourAt(three, 0.5), '#00ff00');
+  // Five at most; a bad colour is passed over; shares kept 1 to 100.
+  const many = theme.gradientOf({ stops: [1, 2, 3, 4, 5, 6].map((n) => ({ color: `#0${n}0${n}0${n}`, share: n * 30 })).concat([{ color: 'red', share: 5 }]) });
+  assert.equal(many.stops.length, 5);
+  assert.deepEqual(many.stops.map((s) => s.share), [30, 60, 90, 100, 100]);
+  assert.equal(theme.gradientOf({ stops: [{ color: '#112233' }] }), null);
+  // The marks and pause and resume drawn in samples of it, in the direction set -- turned when it changes.
+  assert.match(read('app/src/main/assets/www/js/library.js'), /gradientSvg\(id, 'mark'\)/);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /theme\.gradientSvg\(id, 'icon'\)/);
+  const svg = theme.gradientSvg('g1', 'icon');
+  assert.equal((svg.match(/<stop /g) || []).length, theme.GRADIENT_SAMPLES);
+  assert.match(svg, /x1="0" y1="0" x2="1" y2="1"/);
+  const holder = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  holder.innerHTML = theme.gradientSvg('g2', 'mark');
+  document.body.appendChild(holder);
+  assert.match(holder.innerHTML, /x1="12" y1="3.6" x2="12" y2="19.5"/);
+  theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 'right' });
+  const g = holder.querySelector('linearGradient');
+  assert.deepEqual(['x1', 'y1', 'x2', 'y2'].map((k) => g.getAttribute(k)), ['4.4', '11.55', '19.6', '11.55']);
+  assert.match(root.getPropertyValue('--grad-bar'), /^linear-gradient\(90deg,/);
+  // Turned by degree: any angle, the marks' lines through their boxes as CSS draws one.
+  theme.apply({ ...(await store.settings()), gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 200 });
+  assert.match(root.getPropertyValue('--grad-bar'), /^linear-gradient\(200deg,/);
+  // Thin bars run along their length: pointing left of straight down, right to left.
+  assert.match(root.getPropertyValue('--grad-across'), /^linear-gradient\(270deg,/);
+  assert.deepEqual([theme.gradientAngle('up'), theme.gradientAngle(-30), theme.gradientAngle(725), theme.gradientAngle('auto'), theme.gradientAngle('sideways')], [0, 330, 5, null, null]);
+  holder.remove();
+  // Every progress bar in it too -- and nothing later in the stylesheet painting one plain over it.
+  const css = read('app/src/main/assets/www/css/app.css');
+  // Spread over the whole track -- filled and still to fill -- the fill uncovering its share.
+  assert.match(css, /\.bar-fill, \.progress-fill, \.tile-bar > span, \.jobs-strip-fill \{\s+background: var\(--grad-across, linear-gradient\(90deg, var\(--grad-from, var\(--accent-300\)\), var\(--grad-to, var\(--accent\)\)\)\);\s+background-size: 100cqw 100%; background-repeat: no-repeat;/);
+  assert.match(css, /\.tile-bar, \.bar, \.progress-track, \.jobs-strip \{ container-type: inline-size; \}/);
+  const gradientRule = css.indexOf('.jobs-strip-fill {\n  background: var(--grad-across');
+  assert.ok(gradientRule > 0);
+  const after = css.slice(css.indexOf('}', gradientRule) + 1);
+  for (const name of ['.bar-fill', '.progress-fill', '.tile-bar > span', '.jobs-strip-fill']) {
+    const later = [...after.matchAll(new RegExp(`(^|\\n)${name.replace(/[.>]/g, (c) => `\\${c}`)} \\{[^}]*background:`, 'g'))];
+    assert.equal(later.length, 0, `${name} painted plain after the gradient`);
+  }
+  // Kept with a theme, read back from a file; a bad colour or direction is not taken.
+  assert.ok(theme.THEME_KEYS.includes('gradient') && theme.THEME_KEYS.includes('gradientDir'));
+  const [read1] = theme.readThemes({ name: 'Sunset', gradient: { from: '#FF8800', to: '#3355ff' }, gradientDir: 'down' });
+  assert.deepEqual(read1.gradient, { from: '#ff8800', to: '#3355ff', stops: [{ color: '#ff8800', share: 50 }, { color: '#3355ff', share: 50 }] });
+  assert.equal(read1.gradientDir, 180);
+  const odd = theme.readThemes({ name: 'Odd', accent: '#112233', gradient: { from: 'red', to: '#3355ff' }, gradientDir: 'sideways' })[0];
+  assert.equal('gradient' in odd, false);
+  assert.equal('gradientDir' in odd, false);
+
+  // In Appearance: each colour with its share, more added, one taken out, a direction, and back to the accent's.
+  await store.saveSettings({ gradient: { from: '#ff8800', to: '#3355ff' }, gradientDir: 'auto' });
+  const host = document.createElement('div');
+  await panels.openAppearance(host);
+  const field = () => host.querySelector('.gradient-field');
+  let colours = field().querySelectorAll('.gradient-stop input[type="color"]');
+  assert.deepEqual([...colours].map((i) => i.value), ['#ff8800', '#3355ff']);
+  assert.deepEqual([...field().querySelectorAll('.gradient-stop output')].map((o) => o.textContent), ['50%', '50%']);
+  assert.equal(field().querySelectorAll('.gradient-drop').length, 0, 'two colours cannot lose one');
+  colours[1].value = '#00aa66';
+  colours[1].dispatchEvent(new window.Event('change'));
+  await settle(50);
+  assert.deepEqual((await store.settings()).gradient.stops.map((s) => s.color), ['#ff8800', '#00aa66']);
+  const shares = field().querySelectorAll('.gradient-stop input[type="range"]');
+  shares[0].value = '75';
+  shares[0].dispatchEvent(new window.Event('input'));
+  assert.deepEqual([...field().querySelectorAll('.gradient-stop output')].map((o) => o.textContent), ['60%', '40%']);
+  shares[0].dispatchEvent(new window.Event('change'));
+  await settle(50);
+  assert.deepEqual((await store.settings()).gradient.stops.map((s) => s.share), [75, 50]);
+  const button = (re) => [...field().querySelectorAll('button')].find((b) => re.test(b.textContent));
+  for (let n = 3; n <= theme.GRADIENT_MAX; n += 1) { button(/Add a colour/).click(); await settle(50); }
+  assert.equal((await store.settings()).gradient.stops.length, theme.GRADIENT_MAX);
+  assert.equal(button(/Add a colour/), undefined, 'more than five could be added');
+  // Added in before the last, ends unchanged.
+  colours = field().querySelectorAll('.gradient-stop input[type="color"]');
+  assert.equal(colours[0].value, '#ff8800');
+  assert.equal(colours[colours.length - 1].value, '#00aa66');
+  field().querySelectorAll('.gradient-drop')[1].click();
+  await settle(50);
+  assert.equal((await store.settings()).gradient.stops.length, theme.GRADIENT_MAX - 1);
+  // Turned by degree: seen as it moves, kept when let go; Auto no longer pressed.
+  const turn = field().querySelector('.gradient-dirs input[type="range"]');
+  turn.value = '200';
+  turn.dispatchEvent(new window.Event('input'));
+  assert.equal(field().querySelector('.gradient-dirs output').textContent, '200°');
+  assert.match(field().querySelector('.gradient-dial g').getAttribute('transform'), /rotate\(200 20 20\)/);
+  turn.dispatchEvent(new window.Event('change'));
+  await settle(50);
+  assert.equal((await store.settings()).gradientDir, 200);
+  assert.equal(field().querySelector('.gradient-dirs [data-dir="auto"]').getAttribute('aria-pressed'), 'false');
+  field().querySelector('.gradient-dirs [data-dir="auto"]').click();
+  await settle(50);
+  assert.equal((await store.settings()).gradientDir, 'auto');
+  button(/Follow the accent/).click();
+  await settle(50);
+  assert.equal((await store.settings()).gradient, null);
+  assert.equal(document.documentElement.dataset.gradient, undefined);
+  await store.saveSettings({ gradientDir: 'auto' });
+  theme.apply(await store.settings());
+});
+
+await t('the gradient colours the app: ranked by share into roles, the largest leading as the accent; solid or the gradient itself', async () => {
+  const theme = await import(new URL('../app/src/main/assets/www/js/theme.js', import.meta.url).href);
+  const panels = await import(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url).href);
+  const root = document.documentElement.style;
+  // Ranked by share, level ones in their order; fewer than five go round again.
+  assert.deepEqual(theme.rolesOf([{ color: '#111111', share: 40 }, { color: '#222222', share: 70 }, { color: '#333333', share: 40 }]),
+    ['#222222', '#111111', '#333333', '#222222', '#111111']);
+  // Colours of your own: the largest share is the accent the whole app is drawn from.
+  const own = { stops: [{ color: '#3fc1c0', share: 40 }, { color: '#d6a2ae', share: 70 }, { color: '#8a7bd6', share: 30 }] };
+  theme.apply({ ...(await store.settings()), gradient: theme.gradientOf(own), colourStyle: 'solid' });
+  const steps = theme.ramp('#d6a2ae');
+  assert.equal(root.getPropertyValue('--accent'), steps[3]);
+  assert.equal(root.getPropertyValue('--role-1'), steps[3]);
+  assert.equal(root.getPropertyValue('--role-2'), '#3fc1c0');
+  assert.equal(root.getPropertyValue('--role-3'), '#8a7bd6');
+  assert.ok(root.getPropertyValue('--role-2-ink'));
+  assert.equal(document.documentElement.dataset.colourStyle, 'solid');
+  // Following the accent, the accent is the one chosen.
+  theme.apply({ ...(await store.settings()), gradient: null });
+  assert.equal(root.getPropertyValue('--accent'), theme.ramp((await store.settings()).accent)[3]);
+  // Its parts: solid in their roles, or the gradient filling and edging them.
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /:root \.btn\.ghost \{ border-color: color-mix\(in srgb, var\(--role-2/);
+  assert.match(css, /:root \.card, :root \.build-leftover \{ border-color: color-mix\(in srgb, var\(--role-3/);
+  assert.match(css, /\[data-colour-style="solid"\] \.play-btn svg circle \{ stroke: var\(--role-2-ink\); \}/);
+  assert.match(css, /\[data-colour-style="gradient"\] \.btn\.primary,[\s\S]{0,300}\{ background: var\(--grad-bar\); color: var\(--on-grad\);/);
+  // Kept with a theme; a style that is not one is not taken.
+  assert.ok(theme.THEME_KEYS.includes('colourStyle'));
+  assert.equal(theme.readThemes({ name: 'G', colourStyle: 'gradient' })[0].colourStyle, 'gradient');
+  assert.equal('colourStyle' in theme.readThemes({ name: 'G', accent: '#112233', colourStyle: 'neon' })[0], false);
+  // In Appearance: what each colour colours, and the choice of solid or gradient.
+  await store.saveSettings({ gradient: theme.gradientOf(own), colourStyle: 'solid' });
+  const host = document.createElement('div');
+  await panels.openAppearance(host);
+  const roles = [...host.querySelectorAll('.gradient-roles li')];
+  assert.equal(roles.length, 5);
+  assert.match(roles[0].textContent, /Primary/);
+  assert.match(roles[1].textContent, /Secondary.*Pause and resume/);
+  host.querySelector('.gradient-style [data-style="gradient"]').click();
+  await settle(50);
+  assert.equal((await store.settings()).colourStyle, 'gradient');
+  assert.equal(document.documentElement.dataset.colourStyle, 'gradient');
+  await store.saveSettings({ gradient: null, colourStyle: 'solid' });
+  theme.apply(await store.settings());
+});
+
+await t('a file picker made for the moment is held in the page until what is chosen comes back', async () => {
+  await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const picker = document.createElement('input');
+  picker.type = 'file';
+  assert.equal(picker.isConnected, false);
+  picker.click();
+  assert.equal(picker.isConnected, true, 'a loose picker was left loose while choosing');
+  assert.equal(picker.hidden, true);
+  picker.dispatchEvent(new window.Event('change'));
+  await settle(10);
+  assert.equal(picker.isConnected, false, 'the picker was left in the page after the choosing');
+  // One already in the page is left as it is.
+  const kept = el('file-input');
+  kept.click();
+  assert.equal(kept.parentNode !== null, true);
+});
+
+await t('the strip holds still while a field is typed in (the system\u2019s Paste bubble is not taken away), and catches up after', async () => {
+  const app = await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const field = document.createElement('input');
+  field.type = 'search';
+  document.body.appendChild(field);
+  const finish = app.progress.start('Holding still');
+  finish.say('Reading', 0.1);
+  await settle(320);
+  const summary = el('jobs-summary');
+  const before = summary.textContent;
+  field.focus();
+  finish.say('Reading', 0.6);
+  await settle(320);
+  assert.equal(summary.textContent, before, 'the strip changed under the field');
+  field.blur();
+  // Redrawn a few times a second at most (paintSoon), not on every word.
+  await settle(320);
+  assert.notEqual(summary.textContent, before, 'the strip did not catch up once the field was left');
+  finish();
+  field.remove();
+  // The page's root property set only when it changes.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /if \(value !== seatedAt\) \{\s+seatedAt = value;\s+document\.documentElement\.style\.setProperty\('--tabbar-real', value\);/);
+});
+
+await t('a book resumed after a pause: its cover mark goes on from where it was, not from nothing', async () => {
+  const app = await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
+  const job = { links: new Array(60).fill('x') };
+  // 40 chapters before the pause, 60 to come: 40% at the start of the run, not 0.
+  assert.equal(app.jobDone(job, { had: 40, at: -1, parts: 2 }), 0.4);
+  // Copying the book so far in first: its counts are not the website's.
+  assert.equal(app.jobDone(job, { had: 40, at: 0, parts: 2, done: 30, total: 40 }), 0.4);
+  // On the website part: 30 of its 60 come -- 70 of 100.
+  assert.equal(app.jobDone(job, { had: 40, at: 1, parts: 2, done: 30, total: 60 }), 0.7);
+  // A first run, nothing before it: as it was.
+  assert.equal(app.jobDone(job, { had: 0, at: 0, parts: 1, done: 15, total: 60 }), 0.25);
+  // Drawn from its record: still to come is the links less this part's own, not less every chapter it has.
+  assert.match(read('app/src/main/assets/www/js/library.js'), /- \(Number\.isFinite\(came\) \? came : have\)\)/);
+  assert.match(read('app/src/main/assets/www/js/build.js'), /book\.building\.at = \{ part: at, next, chapters: index, words, came: streamed \};/);
+});
+
+await t('the opening scene: only for a slow open, faded in and out, faint behind the queue, calm when motion is reduced', async () => {
+  const opening = await import(new URL('../app/src/main/assets/www/js/opening.js', import.meta.url).href);
+  // Where no canvas can be drawn on (here), it starts nothing and stops cleanly.
+  const scene = opening.playScene(document.createElement('canvas'), { glyphs: 'Test' });
+  assert.equal(typeof scene.stop, 'function');
+  scene.stop();
+  assert.doesNotThrow(() => opening.playScene(null).stop());
+  // Letters to come that never do, or fail: nothing thrown, the scene stops as ever.
+  assert.doesNotThrow(() => opening.playScene(document.createElement('canvas'), { letters: Promise.reject(new Error('gone')) }).stop());
+  const src = read('app/src/main/assets/www/js/opening.js');
+  // The quill held as a right hand holds it: nib at the foot on the left, plume to the top right (mirrored, turned the other way).
+  assert.match(src, /ctx\.rotate\(lerp\(0\.95 - lean, UPRIGHT, upright\)\);\s+ctx\.scale\(-S, S\);/);
+  // Dipped, then tapped twice on the rim, a drop shaken loose each time and falling back into the ink.
+  assert.match(src, /for \(const at of \[1\.45, 1\.85\]\)/);
+  assert.match(src, /state\.drops\.push\(/);
+  assert.match(src, /if \(d\.z <= INK_Z\) \{ d\.done = true; state\.ripples\.push/);
+  assert.match(src, /if \(k > 2\.75\) \{ state\.phase = 'wait';/);
+  // The inkwell clear glass, the ink inside it the gradient's own colours mixed; the nib dipped down into it, seen through the glass.
+  assert.match(src, /function inkMix\(from, to, t, c, rx, ry\)/);
+  assert.match(src, /across\.addColorStop\(0, rgba\(from, 1\)\); across\.addColorStop\(1, rgba\(to, 1\)\);/);
+  assert.match(src, /const DIP = INK_Z - 3 - WELL\.top;/);
+  // A round flask of thick glass, a rolled collar at its mouth, its cork beside it; the ink a wall's thickness in, in its belly.
+  assert.match(src, /const WELL = \{ x: PW \* 0\.74, y: -PH \/ 2 - 36, r: 15, zc: 14, neck: 5\.5, collar: 7\.2, collarH: 3\.2 \};/);
+  assert.match(src, /const INK_R = Math\.sqrt\(\(WELL\.r - WALL\) \*\* 2 - \(INK_Z - WELL\.zc\) \*\* 2\);/);
+  assert.match(src, /function drawCork\(\)/);
+  // No cage round it: the flask alone.
+  assert.doesNotMatch(src, /drawCage|CAGE/);
+  // The quill's hardware: a two-tone nib with a heart-shaped breather, a leather grip bound in brass, a crown retainer set with a gem, a second feather tucked in.
+  for (const part of ['The breather: a small heart', 'The grip: dark leather', 'The retainer: brass, rising to a crown']) assert.ok(src.includes(part), part);
+  // No second feather tucked in behind: it looked odd.
+  assert.ok(!src.includes('A second, smaller feather'));
+  // The quill: a steel nib with its slit and breather hole, wet from the ink and drying as it writes, in a banded brass holder.
+  assert.match(src, /function drawQuill\(at, lean, from, to, wet = 0, upright = 0\)/);
+  // Into the flask it stands up, the lower the straighter, eased: through the mouth, never the glass.
+  assert.match(src, /ctx\.rotate\(lerp\(0\.95 - lean, UPRIGHT, upright\)\);/);
+  assert.match(src, /const wantUpright = overMouth \? clamp\(\(wellTop\(\) \+ 8 - state\.nib\.z\) \/ 8\) : 0;/);
+  assert.match(src, /if \(state\.nib\.z < INK_Z\) state\.wet = 1;/);
+  assert.match(src, /state\.wet = Math\.max\(0, state\.wet - dt \* 0\.07\);/);
+  assert.match(src, /if \(under\) drawInk\(from, to, swirl, true\);\s+drawWellFront\(to\);/);
+  // Still with reduced motion.
+  assert.match(src, /const swirl = calm \? 0 : now \/ 1000;/);
+  // Four times in ten the circle lies dark; otherwise one effect of six, at random.
+  assert.match(src, /Math\.random\(\) < 0\.4 \? 'dark' : EFFECTS\[Math\.floor\(Math\.random\(\) \* EFFECTS\.length\)\]/);
+  assert.match(src, /const EFFECTS = \['shine', 'fluctuate', 'poison', 'erode', 'burn', 'freeze'\];/);
+  // Each effect seen, not just a tint: flames, ice crystals, toxic drips and bubbles, crumbling, sparkle, lightning -- none with reduced motion.
+  for (const fx of ['burn(c, place, k, now, dt)', 'freeze(c, place, k, now, dt)', 'poison(c, place, k, now, dt)', 'erode(c, place, k, now, dt, from, to)', 'shine(c, place, k, now)', 'fluctuate(c, place, k, now, dt, from, to)']) assert.ok(src.includes(fx), fx);
+  // Fire is a particle fire of motes cooling as they rise; ice stands in faceted clusters with icicles under; poison glows, its slime run together, smoke curling off it.
+  assert.match(src, /kind: 'flame'/);
+  assert.match(src, /globalCompositeOperation = 'lighter'/);
+  assert.match(src, /The lit face and the face in shadow, by one light for every\b/);
+  assert.match(src, /Icicles under a few/);
+  assert.match(src, /A wisp: a ribbon rising and curling over/);
+  // At random along every line, each with its own character -- not evenly spaced, not in step.
+  assert.match(src, /const count = Math\.round\(rand\(36, 62\)\);/);
+  // One page turned a dip: the dip outlasts the turn, which was started again when it ended.
+  assert.match(src, /if \(!state\.leaf && !state\.turned && k > 0\.3\) \{\s+state\.turned = true;/);
+  assert.match(src, /if \(!calm\) \{\s+const strength = ease\(c\.blend\) \* fade;/);
+  // A quarter faster than it was; reduced motion read from the phone; an effect handed over from where it was.
+  assert.match(src, /const WRITE_SPEED = 37\.5;/);
+  assert.match(src, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
+  assert.match(src, /const b = effectLook\(c\.was, c, seed, now, c\.wasT \|\| 0\);/);
+  // Lighter to draw, moving the same: the theme's colours read once a second, not every frame; faint, a pixel to the CSS pixel.
+  assert.match(src, /if \(!colours \|\| now - colours\.at > 1000\) colours = \{ at: now, from: hexToRgb\(css\('--grad-from'\)\), to: hexToRgb\(css\('--grad-to'\)\) \};/);
+  assert.equal(src.match(/css\('--grad-from'\)/g).length, 1, 'the colours read somewhere else every frame');
+  assert.match(src, /const dpr = faint \? 1 : Math\.min\(2, window\.devicePixelRatio \|\| 1\);/);
+  // Every circle is put together at random, and the pages are plain (no grain).
+  for (const part of ["'spiked'", "'crescents'", "'broken'", "'script'", "'petals'", "'orbit'", "'hexagram'"]) assert.ok(src.includes(part), part);
+  assert.ok(!/grain(Pattern)?\b/.test(src.replace(/no grain/g, '')), 'no paper grain left');
+  const app = read('app/src/main/assets/www/js/app.js');
+  // Only for an open that takes more than a moment; stays long enough not to blink; faded out.
+  assert.match(app, /const SOON_MS = 330;\s+const STAY_MS = 600;/);
+  assert.match(app, /const opened = openingScreen\.soon\(book\);[\s\S]{0,200}finally \{\s+ready\(\);\s+opened\(\);/);
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\.opening \{[^}]*background: var\(--bg\); opacity: 0;\s+transition: opacity \.4s/);
+  assert.match(css, /\.import-progress\.open \.jobs-scene \{[^}]*opacity: var\(--jobs-scene-opacity, \.22\);/);
+  // Its strength is the person's: 0 stops it; a change of faintness starts it afresh.
+  assert.match(app, /host\.classList\.contains\('open'\) && sceneOpacity > 0;/);
+  assert.match(app, /if \(scene && \(!showing \|\| faint !== sceneFaint\)\) \{ scene\.stop\(\); scene = null; \}/);
+  assert.match(app, /store\.saveSettings\(\{ queueSceneOpacity: sceneOpacity \}\)/);
+  // From the queue page's head: a slider, seen as it moves, kept once let go. (Wired when the imports above began.)
+  const button = el('jobs-scene-btn'), row = el('jobs-scene-row'), range = el('jobs-scene-opacity');
+  assert.equal(row.hidden, true);
+  button.click();
+  assert.equal(row.hidden, false);
+  assert.equal(button.getAttribute('aria-expanded'), 'true');
+  range.value = '65';
+  range.dispatchEvent(new window.Event('input'));
+  assert.equal(document.documentElement.style.getPropertyValue('--jobs-scene-opacity'), '0.65');
+  assert.equal(el('jobs-scene-shown').textContent, '65%');
+  range.value = '0';
+  range.dispatchEvent(new window.Event('change'));
+  await settle(30);
+  assert.equal(el('jobs-scene-shown').textContent, 'Off');
+  assert.equal((await store.settings()).queueSceneOpacity, 0);
+  range.value = '22';
+  range.dispatchEvent(new window.Event('change'));
+  await settle(30);
+  button.click();
+  assert.equal(row.hidden, true);
+  // A book that opens at once never shows it.
+  assert.equal(el('opening').hidden, true);
+});
+
+await t('the scene\'s letters in the library\'s own writing, however each book gives its language', async () => {
+  const opening = await import(new URL('../app/src/main/assets/www/js/opening.js', import.meta.url).href);
+  // Korean however it is said; nothing told from "und", nor from "uk" (Ukrainian or British?).
+  for (const said of ['ko', 'kr', 'KOR', 'Korean', '한국어', 'ko-KR', 'ko_KR', 'Korean (South Korea)']) assert.equal(opening.spokenWriting(said), 'hangul', said);
+  for (const said of ['ja', 'JP', 'jpn', 'Japanese', '日本語']) assert.equal(opening.spokenWriting(said), 'japanese', said);
+  for (const said of ['zh', 'zh-TW', 'cn', 'Chinese', '中文']) assert.equal(opening.spokenWriting(said), 'han', said);
+  for (const said of ['en', 'eng', 'English', 'en-US']) assert.equal(opening.spokenWriting(said), 'latin', said);
+  for (const said of ['fr', 'French', 'Français', 'de', 'pt-BR', 'Español']) assert.equal(opening.spokenWriting(said), 'accented', said);
+  for (const said of ['', null, undefined, 'und', 'uk', 'xx']) assert.equal(opening.spokenWriting(said), null, String(said));
+  // From a tag only a whole name, or a code no word shares: "Cat" and "It" are not languages.
+  assert.equal(opening.spokenWriting('Korean', { strict: true }), 'hangul');
+  assert.equal(opening.spokenWriting('KR', { strict: true }), 'hangul');
+  assert.equal(opening.spokenWriting('Cat', { strict: true }), null);
+  assert.equal(opening.spokenWriting('It', { strict: true }), null);
+  assert.equal(opening.spokenWriting('Korean Drama', { strict: true }), null);
+  // A book's writing: its characters over a wrong "en"; a Latin title on a Korean book, half each; kanji with "ja", Japanese.
+  assert.deepEqual(opening.writingOfBook({ title: '전지적 독자 시점', lang: 'en' }), { hangul: 1 });
+  assert.deepEqual(opening.writingOfBook({ title: 'Solo Leveling', lang: 'kr' }), { latin: 0.5, hangul: 0.5 });
+  assert.deepEqual(opening.writingOfBook({ title: 'Solo Leveling', tags: ['Action', 'Korean'] }), { latin: 0.5, hangul: 0.5 });
+  assert.deepEqual(opening.writingOfBook({ title: '三体', lang: 'ja' }), { kana: 0.55, han: 0.45 });
+  assert.deepEqual(opening.writingOfBook({ title: 'Les Misérables' }), { latin: 0.75, accented: 0.25 });
+  assert.deepEqual(opening.writingOfBook({ title: 'Dune' }), { latin: 1 });
+  assert.equal(opening.writingOfBook({ title: '', lang: '' }), null);
+  const tally = (pool) => {
+    const n = { hangul: 0, latin: 0, accented: 0, other: 0 };
+    for (const ch of pool) n[/[가-힯]/.test(ch) ? 'hangul' : /[A-Za-z]/.test(ch) ? 'latin' : /[À-ɏ]/.test(ch) ? 'accented' : 'other'] += 1;
+    return n;
+  };
+  const korean = Array.from({ length: 30 }, (_, i) => ({ title: `나 혼자만 레벨업 ${i}`, lang: 'ko' }));
+  const french = Array.from({ length: 20 }, () => ({ title: 'Le Rouge et le Noir', lang: 'fr' }));
+  // A Korean library: Hangul nearly all of it, a little of the rest now and then.
+  const allKorean = tally(opening.letterMix(korean));
+  assert.ok(allKorean.hangul > 100 && allKorean.latin > 0 && allKorean.latin < 8, JSON.stringify(allKorean));
+  // With French in it as well: Latin letters again, some with their accents.
+  const withFrench = tally(opening.letterMix([...korean, ...french]));
+  assert.ok(withFrench.latin > 30 && withFrench.accented > 5 && withFrench.hangul > withFrench.latin, JSON.stringify(withFrench));
+  // The Bin, and books still coming in, do not count.
+  const binned = tally(opening.letterMix([...korean.map((b) => ({ ...b, binnedAt: 1 })), { title: 'Dune', lang: 'en' }]));
+  assert.ok(binned.latin > 100, JSON.stringify(binned));
+  // An empty library: the mix as it always was. The library's own characters drift too, and the open book's title, whole letters.
+  const empty = tally(opening.letterMix([]));
+  assert.ok(empty.latin > 30 && empty.hangul > 20, JSON.stringify(empty));
+  assert.ok(opening.letterMix(korean).includes('혼'));
+  assert.deepEqual(opening.letterMix([], { title: 'Ab 🌞' }).slice(-3), ['A', 'b', '🌞']);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /const libraryLetters = \(title\) => store\.all\('books'\)\.then\(\(books\) => letterMix\(books, \{ title \}\)\)\.catch\(\(\) => null\);/);
+});
+
 await t('a second notice joins the first instead of replacing it', async () => {
   const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
   el('toast').hidden = true;
@@ -2095,6 +3660,48 @@ await t('a copy from the shell that is not the same file is refused, not importe
   delete window.GrimoireNative;
 });
 
+await t('a copy the shell found by its name goes in, though Android keeps an old size for it; every copy at an address of its own', async () => {
+  const fsMod = await import('node:fs');
+  const bytes = fsMod.readFileSync(path.join(root, 'tests/fixtures/comic.cbz'));
+  let how = null;
+  window.GrimoireNative = {
+    stageForRead(stageId) {
+      setTimeout(() => window.Grimoire.settleFile(stageId, true, 'handoff://s9-1-renewed volume.zip#named'), 10);
+    },
+  };
+  // Saved over with a fresh copy: the size Android gives is the old one.
+  globalThis.fetch = async (url, options) => { how = options; return { ok: true, status: 200, blob: async () => new window.Blob([bytes], { type: 'application/zip' }) }; };
+  pickFiles([refusing('renewed volume.zip', bytes.length + 321)]);
+  await untilIdle();
+  await settle(200);
+  assert.ok((await store.all('books')).find((b) => b.title === 'renewed volume'), 'the rescued file never came in');
+  assert.equal(how?.cache, 'no-store', 'a copy fetched from before could be handed back');
+  delete window.GrimoireNative;
+  // Named apart: a Korean title was all underscores, the same as others of its lengths.
+  const activity = read('app/src/main/java/com/grimoire/ereader/MainActivity.java');
+  assert.match(activity, /String safe = id \+ "-" \+ System\.currentTimeMillis\(\) \+ "-"/);
+  assert.match(activity, /\(named \? "#named" : ""\)/);
+});
+
+await t('picked again while a copy is here but off the shelf: where it is, by the title it has here', async () => {
+  delete window.GrimoireNative;
+  const file = queuedFile('tucked away', 'Kept in a hidden folder.');
+  pickFiles([file]);
+  await untilIdle();
+  const book = (await store.all('books')).find((b) => b.fingerprint === `${file.name}:${file.size}`);
+  assert.ok(book);
+  await store.put('books', { ...book, folder: 'Private/Old', title: '숨은 책' });
+  const before = await store.settings();
+  await store.saveSettings({ hiddenFolders: ['Private'] });
+  pickFiles([queuedFile('tucked away', 'Kept in a hidden folder.')]);
+  await untilIdle();
+  await settle(100);
+  const said = el('toast').textContent;
+  assert.match(said, /Nothing new to add · 1 already on your shelf · “숨은 책” — in “Private”, a folder hidden from the shelf/);
+  await store.saveSettings({ hiddenFolders: before.hiddenFolders || [] });
+  await store.deleteBook(book.id);
+});
+
 /* ── blurred covers, kept ────────────────────────────────────────────── */
 
 console.log('\nblurred covers, kept');
@@ -2204,7 +3811,7 @@ await t('a blurred book is blurred in Continue reading too', async () => {
   await import(new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href);
   const book = await byPrint(VEILED);
   await library.blurCovers([book.id], true);
-  await store.put('books', { ...(await store.get('books', book.id)), coverBlob: new window.Blob(['x'], { type: 'image/png' }), coverBytes: 1, lastOpenedAt: Date.now() + 1000 });
+  await store.put('books', { ...(await store.get('books', book.id)), coverBlob: new window.Blob(['x'], { type: 'image/png' }), coverBytes: 1, lastOpenedAt: Date.now() + 1000, lastReadAt: Date.now() + 1000 });
   tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
   await settle();
   tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
@@ -2221,6 +3828,76 @@ await t('a blurred book is blurred in Continue reading too', async () => {
   tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
   await settle(400);
   assert.ok(!el('continue-card').hasAttribute('data-blur'), 'the blur stayed after the cover was shown again');
+});
+
+await t('a novel downloading now is on the shelf from the start, in its folder, marked -- not yet a book to open or change', async () => {
+  const library = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const links = Array.from({ length: 40 }, (_, i) => ({ url: `https://novel.example/c/${i + 1}`, text: `Chapter ${i + 1}` }));
+  // The book it carries on, from where it paused.
+  const before = await store.add('books', { title: 'Carried', folder: 'Novels', addedAt: 1, chapters: 10, lastOpenedAt: 1 });
+  const making = await store.add('books', {
+    title: 'Carried', folder: 'Novels', addedAt: 2, importing: true, queueJob: 'job-x',
+    coverBlob: new window.Blob(['x'], { type: 'image/png' }), coverBytes: 1,
+    builtFrom: [{ name: 'Carried', bookId: before }, { name: 'Carried' }],
+    building: { webParts: [{ at: 1, links }], at: { part: 1, next: 12, chapters: 22, words: 0 } },
+  });
+  // Something else half read in (an import cut short) is still not a book.
+  const half = await store.add('books', { title: 'Half', folder: 'Novels', addedAt: 3, importing: true });
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await settle(500);
+  const tileOf = (id) => document.querySelector(`.tile[data-book="${id}"]`);
+  assert.ok(tileOf(making), 'the downloading novel is not on the shelf');
+  assert.ok(tileOf(making).hasAttribute('data-downloading'));
+  assert.equal(tileOf(making).dataset.job, 'job-x');
+  assert.ok(tileOf(making).querySelector('.tile-cover img'), 'its cover is not shown');
+  const mark = tileOf(making).querySelector('.tile-unfinished');
+  assert.ok(mark, 'no wash and mark on it');
+  assert.equal(Number(mark.style.getPropertyValue('--done')).toFixed(2), (22 / 40).toFixed(2));
+  assert.equal(tileOf(before), null, 'the book it carries on is shown beside it');
+  assert.equal(tileOf(half), null, 'an import cut short is on the shelf');
+  // Tapped or held: said how far it has come, not opened, not picked.
+  el('toast').hidden = true;
+  tileOf(making).click();
+  await settle(100);
+  assert.notEqual(document.body.dataset.view, 'reader');
+  assert.match(el('toast').textContent, /still downloading — 22 of 40 chapters/);
+  // Never caught up in Select all.
+  assert.equal(library.isDownloading(await store.get('books', making)), true);
+  assert.match(read('app/src/main/assets/www/js/app.js'), /library\.shownOnShelf\.has\(book\.id\) && !library\.isDownloading\(book\)/);
+  // Not counted as a book anywhere else until it is one.
+  assert.equal(library.onShelf(await store.get('books', making)), false);
+  for (const id of [before, making, half]) await store.deleteBook(id);
+});
+
+await t('the soft accent behind text is a deep tint on a dark ground, not the palest step under light text', async () => {
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.ok(!/background: var\(--accent-100\)/.test(css), 'the palest step still sits behind text');
+  assert.match(css, /\.list-row\.current \{ background: var\(--accent-soft\);/);
+  assert.match(css, /:root\[data-mode="dark"\] \{ --accent-soft: color-mix\(in srgb, var\(--accent\) 26%, var\(--surface\)\); \}/);
+});
+
+await t('the shelf drawn twice at once ends drawn from the library as it is now', async () => {
+  // As the queue does, while a book is read: a drawing under way, the book written, another asked for.
+  const books = (await store.all('books')).filter((b) => !b.binnedAt && !b.transient && b.bundleId == null && !b.inVault && !b.status && !b.finishedAt);
+  const [first, second] = books;
+  assert.ok(first && second, 'two books to draw');
+  const at = Date.now() + 1e9;
+  await store.put('books', { ...(await store.get('books', first.id)), lastOpenedAt: at, lastReadAt: at });
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  await settle();
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));      // a drawing, reading the library
+  const written = store.put('books', { ...(await store.get('books', second.id)), folder: first.folder, lastOpenedAt: at + 1000, lastReadAt: at + 1000 });
+  // Another asked for before the first is done (away and back, without waiting).
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'folders'));
+  tap([...el('tabbar').children].find((b) => b.dataset.go === 'library'));
+  await written;
+  await settle(800);
+  assert.equal(el('continue-title').textContent, library.displayTitle(await store.get('books', second.id)),
+    'the shelf was left as an older drawing had it');
+  const app = read('app/src/main/assets/www/js/app.js');
+  assert.match(app, /if \(shelfDrawing\) \{\s+shelfAgain = true;\s+return shelfDrawing;\s+\}/);
 });
 
 /* ── the picture frame ───────────────────────────────────────────────── */
@@ -2569,14 +4246,69 @@ await t("margins are every book's, and a book keeps only what was changed in it"
 
 await t("the book's own indents give way to the reader's margins", async () => {
   const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
-  assert.match(src, /section\.innerHTML = chapterHtml\(chapter\);\n  flattenLayoutIndents\(section\);/);
+  assert.match(src, /section\.innerHTML = html;\n[^\n]*\n  if \(spacedByLines\(html\)\) section\.classList\.add\('lines'\);\n  flattenLayoutIndents\(section\);/);
   const css = fs.readFileSync(new URL('../app/src/main/assets/www/css/app.css', import.meta.url), 'utf8');
   assert.match(css, /\.page-flow \.book-indent \{ margin: 0 !important; padding: 0 !important; border: 0 !important; \}/);
   // Top and bottom margins: the page's padding when paged, the edges of the
   // window the text scrolls through when scrolling.
-  assert.match(css, /padding: var\(--read-vmargin\) var\(--read-margin\);/);
-  assert.match(css, /top: var\(--read-vmargin\); bottom: var\(--read-vmargin\);/);
-  assert.match(src, /root\.setProperty\('--read-vmargin'/);
+  assert.match(css, /padding: var\(--read-vmargin-t\) var\(--read-margin-r\) var\(--read-vmargin-b\) var\(--read-margin-l\);/);
+  assert.match(css, /top: var\(--read-vmargin-t\); bottom: var\(--read-vmargin-b\);/);
+  assert.match(src, /root\.setProperty\('--read-vmargin-t'/);
+});
+
+await t('the text border: drawn on the page, each side its own, kept for every book', async () => {
+  const reader = await import(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href);
+  const frames = await import(new URL('../app/src/main/assets/www/js/frame.js', import.meta.url).href);
+  // Before one is drawn: the side and top-and-bottom margins of before.
+  assert.deepEqual(reader.textEdges({ margin: 20, vmargin: 10 }), { l: 20, r: 20, t: 10, b: 10 });
+  assert.deepEqual(reader.textEdges({ margin: 20, vmargin: 10, edges: { l: 30, r: 12, t: 40, b: 8 } }), { l: 30, r: 12, t: 40, b: 8 });
+  // Applied: each side to the page.
+  reader.applyLayout({ size: 17, leading: 1.6, para: 8, margin: 24, vmargin: 16, edges: { l: 30, r: 12, t: 40, b: 8 }, justified: false, face: 'Newsreader' });
+  const rootStyle = document.documentElement.style;
+  assert.deepEqual(['l', 'r'].map((k) => rootStyle.getPropertyValue(`--read-margin-${k}`)), ['30px', '12px']);
+  assert.deepEqual(['t', 'b'].map((k) => rootStyle.getPropertyValue(`--read-vmargin-${k}`)), ['40px', '8px']);
+  // The screen's, as margins are: drawn in one book, there in every book.
+  await store.resetLayout(0);
+  await store.saveLayout(911, { edges: { l: 50, r: 20, t: 30, b: 10 } });
+  assert.deepEqual((await store.layoutFor(912)).edges, { l: 50, r: 20, t: 30, b: 10 });
+  await store.resetLayout(0);
+
+  // The editor: dragged as the picture frame is; each drag let go tried on the page.
+  const tries = [];
+  const box = { left: 0, top: 0, width: 400, height: 800 };
+  const editing = frames.editTextBorder({ l: 24, r: 24, t: 16, b: 16 }, { box: () => box, onTry: (e) => tries.push(e) });
+  const host = document.querySelector('.frame-edit.text-border');
+  assert.ok(host, 'no border over the page');
+  const svg = host.querySelector('.frame-edit-svg');
+  const fire = (type, x, y) => svg.dispatchEvent(Object.assign(new window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }), { pointerId: 1 }));
+  // The left edge's dot, from 24 to 64.
+  fire('pointerdown', 24, 400); fire('pointermove', 64, 400); fire('pointerup', 64, 400);
+  assert.deepEqual(tries.at(-1), { l: 64, r: 24, t: 16, b: 16 });
+  assert.match(host.querySelector('.frame-edit-caption').textContent, /left 64 · right 24 · top 16 · bottom 16/);
+  // The bottom-right corner, up and in.
+  fire('pointerdown', 376, 784); fire('pointermove', 356, 744); fire('pointerup', 356, 744);
+  assert.deepEqual(tries.at(-1), { l: 64, r: 44, t: 16, b: 56 });
+  // Even sides: left and right alike, top and bottom alike.
+  host.querySelector('[data-act="even"]').click();
+  assert.deepEqual(tries.at(-1), { l: 54, r: 54, t: 36, b: 36 });
+  host.querySelector('[data-act="save"]').click();
+  assert.deepEqual(await editing, { l: 54, r: 54, t: 36, b: 36 });
+  assert.ok(!document.querySelector('.frame-edit'));
+  // Cancelled (Back): nothing kept.
+  const cancelled = frames.editTextBorder({ l: 24, r: 24, t: 16, b: 16 }, { box: () => box });
+  assert.ok(frames.closeFrameEditor());
+  assert.equal(await cancelled, undefined);
+
+  // No sliders for it any more: a button to the page, in Layout and in Settings.
+  const screensSrc = fs.readFileSync(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url), 'utf8');
+  assert.ok(!/margin: \[8, 64, 1, 'px'\]/.test(screensSrc));
+  assert.match(screensSrc, /button\.onclick = \(\) => window\.dispatchEvent\(new CustomEvent\('grimoire:text-border'\)\);/);
+  const panelsSrc = fs.readFileSync(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url), 'utf8');
+  assert.ok(!/\['margin', 'Side margins'/.test(panelsSrc));
+  assert.match(panelsSrc, /body\.appendChild\(textBorderField\(layout\)\);/);
+  const appSrc = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
+  assert.match(appSrc, /window\.addEventListener\('grimoire:text-border'/);
+  assert.match(appSrc, /edges: kept, margin: Math\.round\(\(kept\.l \+ kept\.r\) \/ 2\), vmargin: Math\.round\(\(kept\.t \+ kept\.b\) \/ 2\)/);
 });
 
 await t('the bars coming and going leave the page where it is', async () => {
@@ -2622,6 +4354,109 @@ await t('a divided paragraph is made whole again, with its text as it was', asyn
   p.normalize();
   assert.equal(host.textContent, text);
   assert.equal(host.querySelectorAll('p').length, 1);
+});
+
+await t('an imported EPUB checked for problems is read from the pages it came as -- not every chapter "EMPTY"', async () => {
+  const check = await import(new URL('../app/src/main/assets/www/js/check.js', import.meta.url).href);
+  const fsMod = await import('node:fs');
+  const bytes = fsMod.readFileSync(path.join(root, 'tests/fixtures/salt-almanac.epub'));
+  const result = await library.importFiles([new File([bytes], 'checked almanac.epub')], {});
+  assert.equal(result.added, 1);
+  const book = (await store.all('books')).find((b) => b.fingerprint === `checked almanac.epub:${bytes.length}`);
+  const chapters = (await store.byIndex('chapters', 'bookId', book.id)).sort((a, b) => a.index - b.index);
+  // Kept as it came, not as HTML: what the check read as nothing.
+  assert.ok(chapters.every((c) => !c.html && c.source));
+  const pictures = new Set((await store.byIndex('images', 'bookId', book.id)).map((i) => i.href));
+  const got = await check.fromStored({ meta: { title: book.title, creator: book.author, language: book.lang }, chapters, pictures });
+  const res = check.analyse(got);
+  assert.ok(res.summary.totalChars > 0, 'no text read from the book');
+  assert.ok(!res.items.some((x) => /EMPTY chapter/.test(x.msg)), check.reportText(res));
+  assert.ok(!res.items.some((x) => /image missing/.test(x.msg)), check.reportText(res));
+  // The app reads its books through it.
+  assert.match(read('app/src/main/assets/www/js/app.js'), /return check\.fromStored\(\{ meta, chapters, pictures \}/);
+  await store.deleteBook(book.id);
+});
+
+await t('notices that faded are kept a day: the bell on the Library, a notice held down, cleared', async () => {
+  const screensMod = await import(new URL('../app/src/main/assets/www/js/screens.js', import.meta.url).href);
+  screensMod.clearNotices();
+  el('notices-sheet').hidden = true;
+  assert.equal(el('notices-btn').hidden, true, 'a bell with nothing behind it');
+  screensMod.toast('Nothing new to add · 1 already on your shelf · “Somewhere”', 7000);
+  screensMod.toast('3 books added', 6000, { kind: 'done' });
+  screensMod.toast('3 books added', 6000, { kind: 'done' });
+  assert.equal(el('notices-btn').hidden, false);
+  assert.equal(el('notices-dot').hidden, false, 'no sign of unread notices');
+  el('notices-btn').click();
+  assert.equal(el('notices-sheet').hidden, false);
+  const rows = [...el('notices-list').querySelectorAll('.notice-row')];
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /3 books added \(×2\)/);
+  assert.match(rows[1].textContent, /already on your shelf · “Somewhere”/);
+  assert.ok(rows[0].classList.contains('done'));
+  assert.equal(el('notices-dot').hidden, true, 'still unread once read');
+  el('notices-close').click();
+  // Held down, a notice opens the same list.
+  screensMod.toast('One more', 4000);
+  el('toast').dispatchEvent(new window.Event('pointerdown'));
+  await settle(650);
+  assert.equal(el('notices-sheet').hidden, false);
+  assert.equal(el('toast').hidden, true);
+  // A day on, gone.
+  const realNow = Date.now;
+  Date.now = () => realNow() + 25 * 60 * 60 * 1000;
+  try { assert.equal(screensMod.notices().length, 0); } finally { Date.now = realNow; }
+  el('notices-clear').click();
+  assert.equal(screensMod.notices().length, 0);
+  el('notices-close').click();
+  // Each of a kind, in the theme's colours; a kind turned off is kept here but no longer pops up.
+  assert.equal(screensMod.topicOf('Queue locked — nothing in it can be removed or moved.'), 'downloads');
+  assert.equal(screensMod.topicOf('0 added · x.epub: the copy Android handed back was a different file', 'failed'), 'problem');
+  assert.equal(screensMod.topicOf('Nothing new to add · 1 already on your shelf'), 'files');
+  assert.equal(screensMod.topicOf('3 books added', 'done'), 'done');
+  assert.equal(screensMod.topicOf('Cover blurred', null, 'other'), 'other');
+  el('notices-btn').click();
+  const chip = el('notices-topics').querySelector('[data-topic="downloads"]');
+  assert.equal(chip.getAttribute('aria-pressed'), 'true');
+  chip.click();
+  await settle(50);
+  assert.deepEqual(screensMod.noticeTopicsOff(), ['downloads']);
+  assert.deepEqual((await store.settings()).noticesOff, ['downloads']);
+  el('notices-close').click();
+  screensMod.dismissToast();
+  screensMod.toast('Queue unlocked.');
+  assert.equal(el('toast').hidden, true, 'a kind turned off still popped up');
+  assert.equal(screensMod.notices()[0].text, 'Queue unlocked.');
+  // Nor lights the bell: it never popped up, so it is nothing new to see.
+  assert.equal(screensMod.unseenNotices(), 0);
+  assert.equal(el('notices-dot').hidden, true, 'a kind turned off still lit the bell');
+  screensMod.toast('That file could not be read', 4000);
+  assert.equal(el('toast').hidden, false);
+  assert.equal(el('toast').dataset.topic, 'problem');
+  // Out of the list too: turned off and still listed read as the switch doing nothing. Shown again on asking.
+  el('notices-btn').click();
+  const listed = () => [...el('notices-list').querySelectorAll('.notice-row .text')].map((n) => n.textContent);
+  assert.ok(!listed().some((t) => /Queue (un)?locked/.test(t)), 'a kind turned off still listed');
+  assert.ok(listed().some((t) => /could not be read/.test(t)));
+  const more = el('notices-list').querySelector('.notices-hidden');
+  assert.match(more.textContent, /Show \d+ of the kinds turned off/);
+  more.click();
+  assert.ok(listed().some((t) => /Queue unlocked/.test(t)));
+  el('notices-list').querySelector('.notices-hidden').click();
+  // Turned on again from the list: shown at once.
+  el('notices-topics').querySelector('[data-topic="downloads"]').click();
+  await settle(50);
+  assert.ok(listed().some((t) => /Queue unlocked/.test(t)));
+  el('notices-close').click();
+  screensMod.setNoticeTopicsOff([]);
+  await store.saveSettings({ noticesOff: [] });
+  const css = read('app/src/main/assets/www/css/app.css');
+  assert.match(css, /\[data-topic="problem"\] \{ --topic: var\(--notice-1/);
+  assert.match(read('app/src/main/assets/www/js/theme.js'), /root\.setProperty\(`--notice-\$\{i \+ 1\}`, colour\);/);
+  // Memory only: nothing of it written anywhere, so a fresh start (or an update) has none.
+  const source = read('app/src/main/assets/www/js/screens.js');
+  const kept = source.slice(source.indexOf('const HISTORY_FOR'), source.indexOf('export function onToastHold'));
+  assert.doesNotMatch(kept, /localStorage|sessionStorage|store\.|indexedDB/);
 });
 
 console.log(`\n${pass} assertions passed`);

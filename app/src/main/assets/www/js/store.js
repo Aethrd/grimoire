@@ -11,10 +11,29 @@ const DB_VERSION = 3;
 
 let dbPromise = null;
 
+/* Storage that stops answering is said, not left as buttons that do nothing.
+ *
+ * The WebView can drop the connection to the library (its storage running
+ * into trouble underneath), and an opening can fail. Either was for good:
+ * the dropped connection was kept and every read and write after it failed,
+ * and a failed opening was remembered, so nothing tried again until the app
+ * was closed -- a folder tapped did nothing, as the setting it saves first
+ * failed. A dropped connection is now let go of and opened again at the next
+ * read or write; a failed opening is tried again the next time. If it still
+ * cannot be had, app.js is told (grimoire:storage-trouble), to say so. */
+const STORAGE_SLOW_MS = 20000;
+function storageTrouble(why) {
+  try {
+    window.dispatchEvent(new CustomEvent('grimoire:storage-trouble', { detail: String(why?.message || why || 'storage not answering') }));
+  } catch { /* no window: tests in Node */ }
+}
+
 function open() {
   if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
+  const opening = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
+    // An opening that has not answered in a while is said; it is still waited on.
+    const slow = setTimeout(() => storageTrouble('the library has not opened'), STORAGE_SLOW_MS);
     req.onupgradeneeded = (e) => {
       const db = req.result;
 
@@ -90,19 +109,181 @@ function open() {
       db.createObjectStore('views', { keyPath: 'id', autoIncrement: true });
       db.createObjectStore('layout', { keyPath: 'bookId' }); // bookId 0 = app default
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      clearTimeout(slow);
+      const db = req.result;
+      // Dropped by the WebView: let go of, so the next read or write opens it again.
+      db.onclose = () => { if (dbPromise === opening) dbPromise = null; };
+      db.onversionchange = () => { db.close(); if (dbPromise === opening) dbPromise = null; };
+      resolve(db);
+    };
+    req.onerror = () => {
+      clearTimeout(slow);
+      // Not remembered: the next read or write tries again.
+      if (dbPromise === opening) dbPromise = null;
+      storageTrouble(req.error);
+      reject(req.error);
+    };
   });
-  return dbPromise;
+  dbPromise = opening;
+  return opening;
 }
 
+/** The connection closed as the WebView closes it under the app: for the tests. */
+export async function dropConnectionForTest() { (await open()).close(); }
+
+/** A transaction, begun again on a fresh connection if the one held was closing under it. */
+function transaction(stores, mode = 'readonly') {
+  const ended = mode === 'readwrite' && touchesBooks(stores) ? booksWrite() : null;
+  const made = open().then((db) => {
+    try {
+      return db.transaction(stores, mode);
+    } catch (error) {
+      if (error?.name !== 'InvalidStateError') throw error;
+      dbPromise = null;
+      return open().then((again) => again.transaction(stores, mode))
+        .catch((still) => { storageTrouble(still); throw still; });
+    }
+  });
+  if (!ended) return made;
+  return made.then((t) => {
+    t.addEventListener('complete', ended);
+    t.addEventListener('abort', ended);
+    return t;
+  }, (error) => { ended(); throw error; });
+}
+
+/* Every book, held once.
+ *
+ * The shelf, search, folders, stats and the rest each asked for every book's
+ * record -- some thirty places, several of them on every change to the shelf
+ * -- and each time the whole library was read out of storage again. The
+ * records are read once and kept; each caller is given its own copy (so
+ * nothing it changes reaches the next one), Blobs in it shared, not copied.
+ *
+ * Kept true by the one door every write goes through (transaction above): a
+ * write that can touch books lets the kept list go the moment it is asked
+ * for, and nothing read while one is under way is kept -- a list read across
+ * a write might be from either side of it. */
+let booksHeld = null;
+let booksAge = 0;
+let booksWriting = 0;
+const touchesBooks = (stores) => (Array.isArray(stores) ? stores.includes('books') : stores === 'books');
+function booksWrite() {
+  booksHeld = null;
+  booksAge += 1;
+  booksWriting += 1;
+  let over = false;
+  return () => {
+    if (over) return;
+    over = true;
+    booksWriting -= 1;
+    booksAge += 1;
+    booksHeld = null;
+  };
+}
+/** A record copied: its objects and arrays its own, its Blobs (and other such things) shared. */
+function copied(value) {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(copied);
+  if (value instanceof Date) return new Date(value.getTime());
+  // A plain object from whichever page or realm made it; a Blob, File, Map
+  // or buffer is shared as it is.
+  if (Object.prototype.toString.call(value) !== '[object Object]') return value;
+  const out = {};
+  for (const key of Object.keys(value)) out[key] = copied(value[key]);
+  return out;
+}
+async function allBooks() {
+  if (booksHeld && !booksWriting) return booksHeld.map(copied);
+  const age = booksAge;
+  const books = await wrap((await tx('books')).getAll());
+  if (age === booksAge && !booksWriting) booksHeld = books.map(copied);
+  return books;
+}
+/** For the tests: whether every book is held. */
+export const booksHeldForTest = () => booksHeld != null;
+
 function tx(store, mode = 'readonly') {
-  return open().then((db) => db.transaction(store, mode).objectStore(store));
+  return transaction(store, mode).then((t) => t.objectStore(store));
 }
 
 function wrap(request) {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+/** How many books there are, without reading them. */
+export async function countBooks() {
+  return wrap((await tx('books')).count());
+}
+
+/* A book's chapters a few at a time, in order: for writing out a book too
+ * long to hold every chapter of at once (epub.js). Keyed [bookId, index], so
+ * a range of keys is a run of chapters, in their order. */
+export async function chapterCount(bookId) {
+  return wrap((await tx('chapters')).count(IDBKeyRange.bound([bookId, -Infinity], [bookId, Infinity])));
+}
+export async function chapterBatch(bookId, after = -Infinity, count = 100) {
+  return wrap((await tx('chapters')).getAll(IDBKeyRange.bound([bookId, after], [bookId, Infinity], true, false), count));
+}
+
+/** A reading session by when it was and what it counted -- not by its book, whose number can change. */
+export function eventSignature(event) {
+  return `${event.at}:${event.activeMs || 0}:${event.pages || 0}:${event.words || 0}:${event.elsewhere ? 1 : 0}`;
+}
+
+/**
+ * The log tidied, once: a session there twice (restored twice, under two
+ * books) kept once -- the copy under a book on the shelf, if either is. Said
+ * how many were taken out.
+ */
+export async function dedupeEvents() {
+  const events = await all('events');
+  const books = new Set((await all('books')).filter((b) => !b.binnedAt).map((b) => b.id));
+  const best = new Map();
+  for (const event of events) {
+    const key = eventSignature(event);
+    const kept = best.get(key);
+    if (!kept) { best.set(key, event); continue; }
+    const better = !books.has(kept.bookId) && books.has(event.bookId);
+    const loser = better ? kept : event;
+    if (better) best.set(key, event);
+    await del('events', loser.id);
+  }
+  return events.length - best.size;
+}
+
+/**
+ * The log made right, as far as it can be: each session there once
+ * (dedupeEvents), and none counting more pages than its time allows -- a
+ * page a second and a half, as the reader now counts (reader.js countPage).
+ * Sessions recorded before that counted jumps as reading: thousands of
+ * pages in a few seconds. Those are brought down to what the time allows,
+ * their words with them in the same proportion. Copied-out reading, which
+ * has no pages, is left as it is. Returns what was changed.
+ */
+export async function repairEvents() {
+  const doubled = await dedupeEvents();
+  let capped = 0;
+  for (const event of await all('events')) {
+    if (event.elsewhere || !(event.pages > 0)) continue;
+    const most = Math.max(1, Math.ceil((event.activeMs || 0) / 1500));
+    if (event.pages <= most) continue;
+    const share = most / event.pages;
+    await put('events', { ...event, pages: most, words: Math.round((event.words || 0) * share) });
+    capped += 1;
+  }
+  return { doubled, capped };
+}
+
+/** The newest book's id (books only ever get higher ones), without reading them all. */
+export async function lastBookId() {
+  const request = (await tx('books')).openKeyCursor(null, 'prev');
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result ? request.result.key : 0);
     request.onerror = () => reject(request.error);
   });
 }
@@ -126,8 +307,7 @@ export async function add(store, value) {
  */
 export async function putAll(store, values) {
   if (!values.length) return;
-  const db = await open();
-  const t = db.transaction(store, 'readwrite');
+  const t = await transaction(store, 'readwrite');
   const s = t.objectStore(store);
   for (const value of values) s.put(value);
   return new Promise((res, rej) => {
@@ -142,7 +322,31 @@ export async function get(store, key) {
   return wrap(s.get(key));
 }
 
+/**
+ * A record changed where it stands: read and written in one transaction, so
+ * nothing written to it in between -- an import finishing, a download's
+ * progress -- is put back as it was. `change` gets the record as it is now
+ * and returns it changed, or nothing to leave it; it must not wait on
+ * anything. Resolves to what was written, or null.
+ */
+export async function update(store, key, change) {
+  const t = await transaction(store, 'readwrite');
+  const s = t.objectStore(store);
+  return new Promise((resolve, reject) => {
+    let written = null;
+    const request = s.get(key);
+    request.onsuccess = () => {
+      const next = request.result ? change(request.result) : null;
+      if (next) { s.put(next); written = next; }
+    };
+    t.oncomplete = () => resolve(written);
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error);
+  });
+}
+
 export async function all(store) {
+  if (store === 'books') return allBooks();
   const s = await tx(store);
   return wrap(s.getAll());
 }
@@ -159,11 +363,13 @@ export async function del(store, key) {
 
 /** Delete a book and everything hanging off it, in one pass. */
 export async function deleteBook(bookId) {
-  const db = await open();
-  const t = db.transaction(['books', 'chapters', 'images', 'marks', 'positions'], 'readwrite');
+  /* Its translations and its own layout too: left, a book's translated
+   * chapters stayed in storage after it, for nothing ever to read again. */
+  const t = await transaction(['books', 'chapters', 'images', 'marks', 'positions', 'translations', 'layout'], 'readwrite');
   t.objectStore('books').delete(bookId);
   t.objectStore('positions').delete(bookId);
-  for (const store of ['chapters', 'images', 'marks']) {
+  if (bookId > 0) t.objectStore('layout').delete(bookId);
+  for (const store of ['chapters', 'images', 'marks', 'translations']) {
     const idx = t.objectStore(store).index('bookId');
     idx.openCursor(IDBKeyRange.only(bookId)).onsuccess = (e) => {
       const cur = e.target.result;
@@ -172,6 +378,180 @@ export async function deleteBook(bookId) {
   }
   return new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
 }
+
+/**
+ * Where the room goes, and which books take most of it -- all that each
+ * holds: its pictures by their sizes (each record's picture is a handle to
+ * it, not its bytes), its cover and the shelf's small copy, and its text --
+ * the chapters and their saved translations, counted as storage keeps them
+ * (a character a byte where it can, two where it cannot: Chinese, Japanese,
+ * Korean...). Ranked by that whole, not by pictures alone: a long novel of
+ * text outweighs a slim book of pictures. The rest -- the reading log,
+ * settings -- is what the phone says is used, less all that. What books in
+ * the Bin hold is told apart: it goes when the Bin is emptied.
+ *
+ * Read a record at a time, in stretches of their own transactions, so a
+ * download writing its chapters meanwhile waits a moment, not the whole look.
+ * @returns {{ usage, quota, pictures, pictureCount, picturesInBin, text,
+ *   chapterCount, covers, shelfCovers, inBin, rest,
+ *   biggest: [{ id, title, bytes, pictures, count, text, cover, binned, gone }] }}
+ */
+export async function storageBreakdown({ onProgress, top = 8 } = {}) {
+  const books = new Map((await all('books')).map((b) => [b.id, b]));
+  const size = (blob) => (typeof blob?.size === 'number' ? blob.size : 0);
+  const perBook = new Map();
+  const mine = (id) => {
+    let held = perBook.get(id);
+    if (!held) { held = { pictures: 0, count: 0, text: 0, cover: 0 }; perBook.set(id, held); }
+    return held;
+  };
+  let covers = 0;
+  let shelfCovers = 0;
+  for (const book of books.values()) {
+    const cover = book.coverBytes ?? size(book.coverBlob);
+    const small = size(book.coverThumb);
+    covers += cover;
+    shelfCovers += small;
+    if (cover + small) mine(book.id).cover = cover + small;
+  }
+  let looked = 0;
+  const told = (what) => { looked += 1; if (looked % 500 === 0) onProgress?.(looked, what); };
+  let pictures = 0;
+  let pictureCount = 0;
+  await everyRecord('images', (image) => {
+    const bytes = size(image.blob) + size(image.original);
+    pictures += bytes;
+    pictureCount += 1;
+    const held = mine(image.bookId);
+    held.pictures += bytes;
+    held.count += 1;
+    told('pictures');
+  });
+  let text = 0;
+  let chapterCount = 0;
+  await everyRecord('chapters', (chapter) => {
+    const bytes = textBytes(chapter);
+    text += bytes;
+    chapterCount += 1;
+    mine(chapter.bookId).text += bytes;
+    told('chapters');
+  });
+  await everyRecord('translations', (row) => {
+    const bytes = textBytes(row);
+    text += bytes;
+    if (row.bookId != null) mine(row.bookId).text += bytes;
+    told('translations');
+  });
+  let picturesInBin = 0;
+  let inBin = 0;
+  const biggest = [];
+  for (const [id, held] of perBook) {
+    const book = books.get(id);
+    const bytes = held.pictures + held.text + held.cover;
+    if (book?.binnedAt) { picturesInBin += held.pictures; inBin += bytes; }
+    biggest.push({ id, title: book?.title || 'A deleted book', bytes, ...held, binned: !!book?.binnedAt, gone: !book });
+  }
+  biggest.sort((a, b) => b.bytes - a.bytes);
+  let usage = null;
+  let quota = null;
+  try {
+    const estimate = await navigator.storage?.estimate?.();
+    usage = estimate?.usage ?? null;
+    quota = estimate?.quota ?? null;
+  } catch { /* not told */ }
+  const rest = usage == null ? null : Math.max(0, usage - pictures - covers - shelfCovers - text);
+  return { usage, quota, pictures, pictureCount, picturesInBin, text, chapterCount, covers, shelfCovers, inBin, rest, biggest: biggest.slice(0, top) };
+}
+
+/* The text a record holds, as storage keeps it: its strings, a byte a
+ * character where every character fits one, two where any does not. */
+function textBytes(record) {
+  let bytes = 0;
+  for (const value of Object.values(record || {})) {
+    if (typeof value !== 'string') continue;
+    bytes += /[^\u0000-\u00ff]/.test(value) ? value.length * 2 : value.length;
+  }
+  return bytes;
+}
+
+/* Every record of a store, a stretch at a time: each stretch its own
+ * transaction, taken up after the last key seen -- so the store is free to
+ * be written between them. Nothing is changed. */
+async function everyRecord(name, visit, stretch = 2000) {
+  let after;
+  for (;;) {
+    const t = await transaction(name);
+    const last = await new Promise((resolve, reject) => {
+      const range = after === undefined ? null : IDBKeyRange.lowerBound(after, true);
+      const request = t.objectStore(name).openCursor(range);
+      let seen = 0;
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(undefined); return; }
+        visit(cursor.value);
+        seen += 1;
+        if (seen >= stretch) { resolve(cursor.primaryKey); return; }
+        cursor.continue();
+      };
+    });
+    if (last === undefined) return;
+    after = last;
+  }
+}
+
+/**
+ * What books no longer here left behind: chapters, pictures, marks, places,
+ * translations and layouts whose book is gone -- a delete from before they
+ * went with it, or one cut off. Found by their keys alone (nothing read in
+ * whole), and removed. A glossary kept for no one book (-1) and the default
+ * layout (0) are not a book's, and stay.
+ * @returns { [store]: rows removed }
+ */
+export async function tidyStorage() {
+  /* All in one transaction, the books' list read inside it: no book can be
+   * added between reading which books there are and clearing what is not
+   * theirs. (Read first and cleared after, a book imported in between --
+   * its record written, then its chapters -- had its chapters cleared as
+   * left behind.) A book list that comes back empty clears nothing: an empty
+   * library has nothing left behind worth the risk. Nothing newer than the
+   * newest book is touched either. */
+  const names = ['chapters', 'images', 'marks', 'translations', 'positions', 'layout'];
+  const t = await transaction(['books', ...names], 'readwrite');
+  const removed = {};
+  const finished = new Promise((res, rej) => {
+    t.oncomplete = res;
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error || new Error('Tidying was stopped'));
+  });
+  const keys = t.objectStore('books').getAllKeys();
+  keys.onsuccess = () => {
+    const live = new Set(keys.result);
+    if (!live.size) return;
+    const newest = Math.max(...live);
+    const gone = (id) => typeof id === 'number' && id > 0 && id < newest && !live.has(id);
+    const count = (name) => { removed[name] = (removed[name] || 0) + 1; };
+    for (const name of ['chapters', 'images', 'marks', 'translations']) {
+      const store = t.objectStore(name);
+      store.index('bookId').openKeyCursor().onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (!cursor) return;
+        if (gone(cursor.key)) { store.delete(cursor.primaryKey); count(name); }
+        cursor.continue();
+      };
+    }
+    for (const name of ['positions', 'layout']) {
+      const store = t.objectStore(name);
+      const ids = store.getAllKeys();
+      ids.onsuccess = () => {
+        for (const id of ids.result) if (gone(id)) { store.delete(id); count(name); }
+      };
+    }
+  };
+  await finished;
+  return removed;
+}
+
 
 /* ── settings ──────────────────────────────────────────────────────────
  * Theme, background, veil, font roles, translation scope and reader input
@@ -182,6 +562,17 @@ export const DEFAULT_SETTINGS = {
   themeMode: 'dark',              // both themes are pastel; dark is default
   accent: '#b4b0d6',
   backgroundImage: null,
+  // The theme's gradient (marks, pause and resume, progress): null follows the accent,
+  // else { from, to, stops: [{ color, share }] } -- two to five colours (theme.gradientOf).
+  gradient: null,
+  // Its direction everywhere: 'auto' (each place its own), or an angle in degrees, 0 to 359 (theme.gradientAngle).
+  gradientDir: 'auto',
+  // The app's buttons and edges in the gradient's colours, each solid by its role, or in the gradient itself.
+  colourStyle: 'solid',
+  // Kinds of notice that do not pop up, only kept under the bell (screens.js NOTICE_TOPICS).
+  noticesOff: [],
+  // Fonts of your own, to read in: [{ id, name }] (the files themselves kept apart, see fonts.js).
+  fonts: [],
   veil: 0.62,                     // 62% in dark, 28% in light
   columns: 2,
   // Which folder the shelf is filtered to: null for everything, '' for
@@ -285,7 +676,11 @@ export const DEFAULT_SETTINGS = {
   /* Typography that only matters at a page boundary. */
   keepParagraphs: false,    // never split a paragraph across a page
 
-  readingMode: 'paged',
+  readingMode: 'paged',     // books of text
+  /* Remembered for each kind of book apart (reader.modeFor): a picture book
+     in pages, a book of long strips scrolled, unless chosen otherwise. */
+  pictureMode: 'paged',
+  stripMode: 'scroll',
   endlessScroll: true,
 
   translateTarget: 'EN-US',
@@ -311,7 +706,7 @@ export async function importSettings(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('That file is not a settings file.');
   const patch = {};
   for (const [key, value] of Object.entries(data)) {
-    if (!(key in DEFAULT_SETTINGS) || key === 'lastCrash') continue;
+    if (!(key in DEFAULT_SETTINGS) || key === 'lastCrash' || DEVICE_SETTINGS.includes(key)) continue;
     const wanted = DEFAULT_SETTINGS[key];
     if (key === 'backgroundImage') {
       if (value === null || (typeof value === 'string' && /^data:image\//i.test(value))) patch[key] = value;
@@ -332,10 +727,17 @@ export async function settings() {
   return cache;
 }
 
+/* Each change put onto the settings as they are when it lands, and written in
+ * turn, the newest whole. Two saves at once -- the queue's and the leftovers',
+ * say -- each merged onto the same copy read before either, and whichever
+ * wrote last undid the other. */
+let settingsWrite = Promise.resolve();
 export async function saveSettings(patch) {
-  const current = await settings();
-  cache = Object.assign({}, current, patch);
-  await put('settings', { key: 'app', value: cache });
+  await settings();
+  cache = Object.assign({}, cache, patch);
+  const write = settingsWrite.then(() => put('settings', { key: 'app', value: cache }));
+  settingsWrite = write.catch(() => {});
+  await write;
   return cache;
 }
 
@@ -346,6 +748,7 @@ export const DEFAULT_LAYOUT = {
   para: 12,          // 0–44
   margin: 24,        // 8–64, left and right
   vmargin: 16,       // 0–80, top and bottom
+  edges: null,       // { l, r, t, b } px: the text border drawn on the page, over the two above
   justified: false,
   ink: null,         // null inherits the theme's text colour
 };
@@ -357,7 +760,7 @@ export const DEFAULT_LAYOUT = {
  * a margin set once in one book and changed later in Settings never reached
  * it -- which is how the margin setting came to look as though it did
  * nothing. So these are always the app's, wherever they are changed from. */
-export const SCREEN_KEYS = ['margin', 'vmargin'];
+export const SCREEN_KEYS = ['margin', 'vmargin', 'edges'];
 
 /**
  * What a book has been set to itself.
@@ -459,17 +862,23 @@ export async function flushPosition() {
 }
 
 async function positionOnBook(row) {
-  const book = await get('books', row.bookId);
-  if (book) {
-    /* Opened, not read. Saving a position happens the moment a book is
-       displayed, so setting lastReadAt here marked everything you glanced at
-       as Reading. Progress is recorded by markRead, which the reader calls
-       only when a page has actually been turned. */
+  /* Opened, not read. Saving a position happens the moment a book is
+     displayed, so setting lastReadAt here marked everything you glanced at
+     as Reading. Progress is recorded by markRead, which the reader calls
+     only when a page has actually been turned.
+     Read and written in one transaction, these fields alone changed: read,
+     then written apart, a page turned as a download or an import finished
+     put the book back as it was -- still importing, so cleared as half
+     written on the next start. */
+  await update('books', row.bookId, (book) => {
     book.lastOpenedAt = Date.now();
-    book.percent = row.percent;
-    if (row.percent >= 0.999) book.finishedAt = book.finishedAt || Date.now();
-    await put('books', book);
-  }
+    // Only a real fraction: a NaN here showed on the shelf as no progress at all, and in the bar as nothing.
+    if (Number.isFinite(row.percent)) {
+      book.percent = Math.min(1, Math.max(0, row.percent));
+      if (row.percent >= 0.999) book.finishedAt = book.finishedAt || Date.now();
+    }
+    return book;
+  });
 }
 
 /* ── reading events ────────────────────────────────────────────────────
@@ -488,21 +897,23 @@ export function markRead(bookId) {
 }
 
 async function noteRead(bookId) {
-  const book = await get('books', bookId);
+  /* In one transaction, only what reading changes (see positionOnBook). */
+  const book = await update('books', bookId, (fresh) => {
+    fresh.lastReadAt = Date.now();
+    fresh.lastOpenedAt = fresh.lastReadAt;
+    /* A status set by hand is set once, not pinned for good.
+     *
+     * Marking a book "On hold" says where it stands now. Picking it up again
+     * says otherwise, and having to go back and set it to Automatic before the
+     * shelf would believe it was being read was a chore nobody remembered. So
+     * the status stands until the book is next read, and the reading takes
+     * over from there. */
+    delete fresh.status;
+    delete fresh.heldAt;
+    delete fresh.heldAutomatically;
+    return fresh;
+  });
   if (!book) return;
-  book.lastReadAt = Date.now();
-  book.lastOpenedAt = book.lastReadAt;
-  /* A status set by hand is set once, not pinned for good.
-   *
-   * Marking a book "On hold" says where it stands now. Picking it up again
-   * says otherwise, and having to go back and set it to Automatic before the
-   * shelf would believe it was being read was a chore nobody remembered. So
-   * the status stands until the book is next read, and the reading takes
-   * over from there. */
-  delete book.status;
-  delete book.heldAt;
-  delete book.heldAutomatically;
-  await put('books', book);
   /* Its other editions too: a bundle is one book, so a status set on it --
    * by hand on the bundle, or On hold when it was left -- is over for all of
    * them once any is read, not left on the editions not opened. */
@@ -510,10 +921,12 @@ async function noteRead(bookId) {
     for (const other of await all('books')) {
       if (other.id === book.id || other.bundleId !== book.bundleId) continue;
       if (other.status === undefined && !other.heldAt) continue;
-      delete other.status;
-      delete other.heldAt;
-      delete other.heldAutomatically;
-      await put('books', other);
+      await update('books', other.id, (fresh) => {
+        delete fresh.status;
+        delete fresh.heldAt;
+        delete fresh.heldAutomatically;
+        return fresh;
+      });
     }
   }
 }
@@ -567,7 +980,16 @@ const BOOK_FIELDS = [
    * binned book back on the shelf, uncovered, would undo exactly the two
    * decisions somebody made deliberately. */
   'binnedAt', 'coverBlur',
+  /* Put on hold by the app (not read for days), not by hand: kept apart in a
+   * backup as on the shelf, so a restore does not turn one into the other. */
+  'heldAt', 'heldAutomatically',
 ];
+
+/* A book's reading as it stands: where it is, how far, whether being read.
+ * A restore puts these back only onto a book not read since the backup --
+ * restored over a book read since, it took the book back to then, its place
+ * and its shelf (Reading to On hold) with it. */
+const READING_FIELDS = new Set(['status', 'percent', 'lastReadAt', 'lastOpenedAt', 'finishedAt', 'heldAt', 'heldAutomatically']);
 
 /**
  * A cover picked by hand, small enough to carry in a backup.
@@ -598,6 +1020,20 @@ function dataUrlToBlob(url) {
   return new Blob([bytes], { type });
 }
 
+/**
+ * What a backup leaves alone: this phone's downloads and folders, not your
+ * settings. The queue, Build's leftovers and where each website stopped name
+ * books by their number in this phone's storage -- numbers that mean other
+ * books once storage is wiped and the books imported again, so a restored
+ * queue carried on and binned the wrong books. The automatic backup's and
+ * export's state names folders this phone was given, and the files written
+ * there. Never written into a backup; one from before that has them, they
+ * are passed over and this phone's own kept.
+ */
+// exportRun too: the books an export cut off had saved, by this phone's numbers for them.
+export const DEVICE_SETTINGS = ['webQueue', 'queueRunning', 'webLeftovers', 'webStops', 'autoExport', 'autoBackup', 'exportRun', 'translateJobs', 'restoredAt', 'tidiedAt'];
+const withoutDevice = (value) => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !DEVICE_SETTINGS.includes(key)));
+
 export async function exportBackup() {
   const books = await all('books');
   const byId = new Map(books.map((b) => [b.id, b]));
@@ -606,18 +1042,26 @@ export async function exportBackup() {
     format: 'grimoire-backup',
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
-    settings: await settings(),
+    settings: withoutDevice(await settings()),
     // Kept out of the settings blob as well, so an export is a record of how
     // imports have actually behaved rather than only the most recent one.
     imports: (await settings()).importHistory || [],
     views: await all('views'),
-    events: await all('events'),
+    /* Each session with the book it was of, by what lasts (its fingerprint):
+     * the number it has here means another book on a phone whose storage was
+     * started afresh, and restored by number the log went to the wrong books. */
+    events: (await all('events')).map((e) => ({ ...e, fingerprint: byId.get(e.bookId)?.fingerprint || e.fingerprint || null })),
     layout: await all('layout'),
 
     books: books
       .filter((b) => !b.importing && !b.transient && b.fingerprint)
       .map((book) => {
         const kept = { fingerprint: book.fingerprint };
+        /* What it was imported from, when it was imported from one of this
+         * app's own exports: that is what an export of it carries again, so a
+         * book imported afresh is matched by it exactly -- where its
+         * fingerprint, its file's name and size, is another every time. */
+        if (book.sourceId) kept.sourceId = book.sourceId;
         for (const field of BOOK_FIELDS) {
           if (book[field] !== undefined) kept[field] = book[field];
         }
@@ -698,9 +1142,18 @@ function recordsOf(data) {
  */
 async function restoreInto(book, record, report = null) {
   const { saved } = record;
+  const readSince = !!saved && (book.lastReadAt || 0) > (saved.lastReadAt || 0);
   if (saved) {
     for (const field of BOOK_FIELDS) {
+      if (readSince && READING_FIELDS.has(field)) continue;
       if (saved[field] !== undefined) book[field] = saved[field];
+    }
+    /* Put on hold here by the app, and not so in the backup: as backed up.
+     * (A hold set by hand here stays.) */
+    if (!readSince && book.heldAutomatically && saved.heldAt === undefined) {
+      if (book.status === 'onHold' && saved.status === undefined) delete book.status;
+      delete book.heldAt;
+      delete book.heldAutomatically;
     }
     /* Absent means it was not in the bin, not "leave it as it is".
      *
@@ -745,8 +1198,11 @@ async function restoreInto(book, record, report = null) {
     }
   }
 
+  // A place read on to here since the backup is kept: never taken back to the backup's.
+  const here = await get('positions', book.id).catch(() => null);
   for (const position of record.positions) {
     const { fingerprint, ...row } = position;
+    if (readSince || (here?.updatedAt && row.updatedAt && here.updatedAt > row.updatedAt)) continue;
     await put('positions', { ...row, bookId: book.id });
   }
 
@@ -802,6 +1258,106 @@ export async function pendingRestoreCount() {
   return Object.values(pending.books).filter((record) => record.saved).length;
 }
 
+/* ── matching a backup's books to the books here ───────────────────────
+ *
+ * A backup knows each book by its fingerprint: the file's name and size as
+ * it was imported ("name.epub:65465871"). The same book can come back under
+ * another: imported from inside a zip, its path in the zip goes in front
+ * ("Books/slop/name.epub:65465871"); written out by this app and imported
+ * again, it is a new file that names the old one inside it (sourceId); built
+ * in the app and downloaded again, it is "built:" and a new time. Matched
+ * only on the exact fingerprint, a restore after importing again found none
+ * of them, and said every book was not there. So, in turn: the fingerprint;
+ * the one the file names; the file's own name and size wherever it sat; and,
+ * where there is only one book of that title on each side, the title. */
+export const looseKey = (fingerprint) => {
+  const text = String(fingerprint || '');
+  if (/^(built|merged|part|split|pictures):/.test(text)) return '';
+  const m = /^(.*?):(\d+)(?::.*)?$/.exec(text);
+  return m ? `${m[1].split('/').pop().normalize('NFC').toLowerCase()}:${m[2]}` : '';
+};
+export const titleKey = (title) => String(title || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/** Finds, for a backup's fingerprint and title, the one book here that is it -- or null. */
+function bookMatcher(books) {
+  const live = books.filter((b) => !b.transient && !b.importing);
+  const byPrint = new Map(live.map((b) => [b.fingerprint, b]));
+  const bySource = new Map(live.filter((b) => b.sourceId).map((b) => [b.sourceId, b]));
+  const group = (keyOf) => {
+    const map = new Map();
+    for (const b of live) {
+      const key = keyOf(b);
+      if (!key) continue;
+      map.set(key, map.has(key) ? null : b);   // null: more than one, so none
+    }
+    return map;
+  };
+  const byLoose = group((b) => looseKey(b.fingerprint));
+  const byTitle = group((b) => titleKey(b.title));
+  const match = (fingerprint, title, titleUnique = true, sourceId = null) => byPrint.get(fingerprint)
+    || bySource.get(fingerprint)
+    || (sourceId ? byPrint.get(sourceId) || bySource.get(sourceId) : null)
+    || byLoose.get(looseKey(fingerprint))
+    || (titleUnique ? byTitle.get(titleKey(title)) : null)
+    || null;
+  /** The one book here of this title, or null (none, or more than one). */
+  match.byTitle = (title) => byTitle.get(titleKey(title)) || null;
+  return match;
+}
+
+/* Of several of a backup's records for one book here, the one to put back:
+ * the furthest along -- read last, then read furthest, then given a status,
+ * then added last. A library imported twice over held each book twice (the
+ * book and its copy, the same in all but name), and every such title was
+ * left unmatched rather than guessed at: a restore into the books imported
+ * afresh put back a third of them, and the books being read none at all. */
+/** Records that are copies of one book: added at the same moment -- or,
+ *  where when is not known, kept in the same folder. */
+function sameBook(list) {
+  return new Set(list.map(([, r]) => (Number.isFinite(r.saved?.addedAt) ? `a:${r.saved.addedAt}` : `f:${r.saved?.folder ?? ''}`))).size === 1;
+}
+
+/** How far a record's book was filed: in a bundle, then how deep its folder. */
+function filing(record) {
+  const saved = record.saved || {};
+  return (saved.bundleLeader ? 100 : 0) + String(saved.folder || '').split('/').filter(Boolean).length;
+}
+
+function furthestRecord(records) {
+  const score = (r) => [r.saved?.lastReadAt || 0, r.saved?.percent || 0, r.saved?.status ? 1 : 0, r.positions.length, r.saved?.addedAt || 0];
+  return records.slice().sort((a, b) => {
+    const x = score(a); const y = score(b);
+    for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return y[i] - x[i];
+    return 0;
+  })[0] || null;
+}
+
+/** The waiting record a book just imported is, by the same steps, from its side. */
+function pendingFor(book, pending) {
+  if (pending.books[book.fingerprint]) return book.fingerprint;
+  if (book.sourceId && pending.books[book.sourceId]) return book.sourceId;
+  const keys = Object.keys(pending.books);
+  if (book.sourceId) {
+    const bySource = keys.find((key) => pending.books[key].saved?.sourceId === book.sourceId);
+    if (bySource) return bySource;
+  }
+  const loose = looseKey(book.fingerprint);
+  const title = titleKey(book.title);
+  const one = (list) => (list.length === 1 ? list[0] : null);
+  if (loose) {
+    const found = one(keys.filter((key) => looseKey(key) === loose));
+    if (found) return found;
+  }
+  if (!title) return null;
+  // Of a title held more than once (a book and its copy), the furthest along.
+  const named = keys.filter((key) => titleKey(pending.books[key].saved?.title) === title);
+  if (named.length <= 1) return named[0] || null;
+  // Copies of one book only (added together, into one folder): two books of one title are not guessed between.
+  if (new Set(named.map((key) => `${pending.books[key].saved?.addedAt ?? ''}|${pending.books[key].saved?.folder ?? ''}`)).size > 1) return null;
+  const best = furthestRecord(named.map((key) => pending.books[key]));
+  return named.find((key) => pending.books[key] === best) || null;
+}
+
 /**
  * A book has just been imported: give it whatever a restore was holding for
  * it, and join it to its bundle if that was waiting too.
@@ -814,12 +1370,13 @@ export async function pendingRestoreCount() {
 export async function restorePending(book) {
   if (!book?.fingerprint || book.transient) return false;
   const pending = await pendingRestore();
-  const record = pending.books[book.fingerprint];
-  const members = pending.leaders[book.fingerprint];
+  const key = pendingFor(book, pending);
+  const record = key ? pending.books[key] : null;
+  const members = pending.leaders[book.fingerprint] || (key && key !== book.fingerprint ? pending.leaders[key] : null);
   if (!record && !members) return false;
 
   if (record) {
-    delete pending.books[book.fingerprint];
+    delete pending.books[key];
     await restoreInto(book, record);
     const leaderPrint = record.saved?.bundleLeader;
     if (leaderPrint) {
@@ -838,6 +1395,7 @@ export async function restorePending(book) {
 
   if (members) {
     delete pending.leaders[book.fingerprint];
+    if (key) delete pending.leaders[key];
     for (const fingerprint of members) {
       for (const member of await byIndex('books', 'fingerprint', fingerprint)) {
         if (member.transient) continue;
@@ -872,8 +1430,12 @@ export async function importBackup(data) {
   if (data.settings) {
     // Merged over the defaults, so a backup from an older version does not
     // remove settings it had never heard of.
-    cache = Object.assign({}, DEFAULT_SETTINGS, data.settings);
+    // This phone's queue, leftovers and folders kept as they are (DEVICE_SETTINGS).
+    const here = await settings();
+    const own = Object.fromEntries(DEVICE_SETTINGS.filter((key) => key in here).map((key) => [key, here[key]]));
+    cache = Object.assign({}, DEFAULT_SETTINGS, withoutDevice(data.settings), own);
     await put('settings', { key: 'app', value: cache });
+    report.skipped = DEVICE_SETTINGS.filter((key) => key in data.settings && (Array.isArray(data.settings[key]) ? data.settings[key].length : data.settings[key] != null));
     report.settings = true;
   }
 
@@ -881,9 +1443,82 @@ export async function importBackup(data) {
   for (const row of data.layout || []) await put('layout', row);
 
   const books = await all('books');
-  const byFingerprint = new Map(books.map((b) => [b.fingerprint, b]));
   const pending = await pendingRestore();
   const records = recordsOf(data);
+  // Each of the backup's books to the book here that is it (see bookMatcher).
+  const match = bookMatcher(books);
+  /* Every record that is a book here, gathered before any is put back.
+   *
+   * A book imported again from one of this app's exports is found by what it
+   * came from -- and a book and its copy (the library imported over itself)
+   * came from the same thing, so both their records are this one book. The
+   * first found used to win, and it was mostly the original: the copy, the
+   * one read on and moved and bundled, was set aside -- a book back at Nov
+   * 13's 38% where it had been read to 60% on Nov 20, folders and editions as
+   * they were before. Now all of a book's records are put together: its
+   * reading from the one read last, its folder and its bundle from the one
+   * filed furthest (bundled, then the deeper folder), its marks from them all.
+   * The others are copies of it, and stand for it. */
+  const claims = new Map();   // book id -> [fingerprint, record][]
+  const claimed = new Set();
+  const claim = (book, fingerprint, record) => {
+    if (!claims.has(book.id)) claims.set(book.id, []);
+    claims.get(book.id).push([fingerprint, record]);
+    claimed.add(fingerprint);
+  };
+  // Exactly -- by fingerprint, by what it was imported from, by file.
+  for (const [fingerprint, record] of records) {
+    const book = match(fingerprint, null, false, record.saved?.sourceId || null);
+    if (book) claim(book, fingerprint, record);
+  }
+  /* Then by title: the one book here of that title takes the records of it
+   * that are copies of one book (added at the same moment, or kept in one
+   * folder when that is not known) -- and of the book's own, when it has
+   * records already. Two books of one title that are not are still not
+   * guessed between. */
+  const byTitle = new Map();
+  for (const [fingerprint, record] of records) {
+    if (claimed.has(fingerprint)) continue;
+    const key = titleKey(record.saved?.title);
+    if (!key) continue;
+    if (!byTitle.has(key)) byTitle.set(key, []);
+    byTitle.get(key).push([fingerprint, record]);
+  }
+  for (const [key, group] of byTitle) {
+    const book = match.byTitle(key);
+    if (!book) continue;
+    const all = [...group, ...(claims.get(book.id) || [])];
+    if (all.length > 1 && !sameBook(all)) continue;
+    for (const [fingerprint, record] of group) claim(book, fingerprint, record);
+  }
+  const matched = new Map();
+  const copies = new Set();
+  const copyOf = new Map();
+  const merged = new Map();   // fingerprint -> the record put back, made of all the book's
+  const booksById = new Map(books.map((b) => [b.id, b]));
+  for (const [bookId, list] of claims) {
+    const book = booksById.get(bookId);
+    const recs = list.map(([, record]) => record);
+    const reading = furthestRecord(recs);
+    const filed = recs.slice().sort((a, b) => filing(b) - filing(a))[0] || reading;
+    const [fingerprint] = list.find(([, record]) => record === reading);
+    const saved = reading.saved || filed.saved ? {
+      ...(filed.saved || {}), ...(reading.saved || {}),
+      folder: filed.saved?.folder ?? reading.saved?.folder,
+      bundleLeader: filed.saved?.bundleLeader ?? reading.saved?.bundleLeader,
+    } : null;
+    if (saved && saved.folder === undefined) delete saved.folder;
+    if (saved && saved.bundleLeader === undefined) delete saved.bundleLeader;
+    merged.set(fingerprint, {
+      saved,
+      cover: reading.cover || recs.find((r) => r.cover)?.cover || null,
+      positions: reading.positions.length ? reading.positions : (recs.find((r) => r.positions.length)?.positions || []),
+      marks: recs.flatMap((r) => r.marks),
+    });
+    matched.set(fingerprint, book);
+    for (const [other] of list) if (other !== fingerprint) { copies.add(other); copyOf.set(other, book); }
+  }
+  const byFingerprint = { get: (fingerprint) => matched.get(fingerprint) || copyOf.get(fingerprint) };
 
   /* A book not on the shelf yet is kept for when it is.
    *
@@ -893,8 +1528,10 @@ export async function importBackup(data) {
    * second -- the natural order after a reinstall -- lost all of it, blurred
    * covers included. What cannot be matched now is held, and handed over as
    * each book is imported. */
-  for (const [fingerprint, record] of records) {
-    const book = byFingerprint.get(fingerprint);
+  for (const [fingerprint, held] of records) {
+    if (copies.has(fingerprint)) { report.copies = (report.copies || 0) + 1; continue; }
+    const book = matched.get(fingerprint);
+    const record = (book && merged.get(fingerprint)) || held;
     if (!book) {
       pending.books[fingerprint] = record;
       if (record.saved) report.missing += 1;
@@ -906,9 +1543,10 @@ export async function importBackup(data) {
 
   // Bundles last: a bundle's leader may not have existed on the first pass,
   // and may not exist until it is imported.
-  for (const [fingerprint, record] of records) {
+  for (const [fingerprint, original] of records) {
+    const record = merged.get(fingerprint) || original;
     const leaderPrint = record.saved?.bundleLeader;
-    const book = byFingerprint.get(fingerprint);
+    const book = matched.get(fingerprint);
     if (!leaderPrint || !book) continue;
     const leader = byFingerprint.get(leaderPrint);
     if (leader) {
@@ -934,22 +1572,32 @@ export async function importBackup(data) {
     report.glossaries = (report.glossaries || 0) + 1;
   }
 
-  // The log is keyed by book too, but a reading history is worth keeping even
-  // for books no longer on the shelf.
-  const eventSeen = new Set((await all('events')).map((e) => `${e.bookId}:${e.at}`));
-
+  /* The log is keyed by book too, but a reading history is worth keeping
+   * even for books no longer on the shelf.
+   *
+   * Its book found by fingerprint, as the places are -- never by the number
+   * it had where the backup was made, which is another book here once
+   * storage has been started afresh. A backup from before sessions carried a
+   * fingerprint keeps them, of no book, rather than give them to the wrong
+   * one. And a session already here is known by when it was and what it
+   * counted, whichever book it is under: known by book as well, restoring the
+   * same backup twice added the whole log again under other books. */
+  const eventSeen = new Set((await all('events')).map(eventSignature));
   for (const event of data.events || []) {
-    const { id, ...row } = event;
-    const book = books.find((b) => b.id === event.bookId);
+    const { id, fingerprint, ...row } = event;
+    const book = fingerprint ? byFingerprint.get(fingerprint) : null;
     const bookId = book ? book.id : null;
-
-    const signature = `${bookId}:${row.at}`;
+    const signature = eventSignature(row);
     if (eventSeen.has(signature)) continue;
     eventSeen.add(signature);
-
-    await add('events', { ...row, bookId });
+    await add('events', { ...row, bookId, ...(fingerprint && !book ? { fingerprint } : {}) });
     report.events += 1;
   }
+  // What came in made right too: a backup from before carries the old counting.
+  report.eventsFixed = await repairEvents().catch(() => null);
+
+  // The shelf as backed up: nothing put on hold for days counted before now (library.goneQuiet).
+  await saveSettings({ restoredAt: Date.now() });
 
   return report;
 }

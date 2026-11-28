@@ -398,7 +398,7 @@ await (async () => {
 
   await t('a picture fills the width of the screen, not the width of the text', () => {
     // The text's side margins framed every picture in empty page.
-    assert.match(css, /\.page-flow \.pic \{[^}]*margin: [^;]*calc\(-1 \* var\(--read-margin\)\)/);
+    assert.match(css, /\.page-flow \.pic \{[^}]*margin: \.5em calc\(-1 \* var\(--read-margin-r\)\) \.5em calc\(-1 \* var\(--read-margin-l\)\);/);
     // And Fit screen is sized from the picture's own shape, so it fills the
     // page whichever way it runs out of room first.
     assert.match(css, /\[data-images="screen"\] \.page-flow img \{[^}]*width: min\(100%, calc\(var\(--page-h, 88vh\) \* var\(--ar/);
@@ -832,6 +832,88 @@ await (async () => {
     // And it is not a multiple of the viewport height, which is what going
     // through a page index would have produced.
     assert.ok(viewport.scrollTop % 800 !== 0);
+  });
+})();
+
+await (async () => {
+  /* A webtoon opens as it was drawn, and leaves no trace on the settings. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const reader = await import(
+    `${new URL('../app/src/main/assets/www/js/reader.js', import.meta.url).href}?strips`);
+  // Node's own Blob: the fake IndexedDB keeps it, where jsdom's comes back empty.
+  const { Blob: NodeBlob } = await import('node:buffer');
+  const gif = (w, h) => new NodeBlob([new Uint8Array([...Buffer.from('GIF89a'), w & 255, w >> 8, h & 255, h >> 8, 0, 0])], { type: 'image/gif' });
+  const make = async (title, shapes) => {
+    const id = await store.add('books', { title, fingerprint: title, addedAt: 1 });
+    await store.put('chapters', { bookId: id, index: 0, title: 'One',
+      html: shapes.map((_, n) => `<figure><img data-img="p${n}"></figure>`).join('') || '<p>x</p>', words: 0 });
+    for (const [n, [w, h]] of shapes.entries()) await store.put('images', { bookId: id, href: `p${n}`, blob: gif(w, h), order: n });
+    return id;
+  };
+
+  await t('a book of long strips is read scrolling at the width, and put back on leaving', async () => {
+    // Each kind as it begins: the tests before this one chose scrolling with picture books open.
+    await store.saveSettings({ readingMode: 'paged', pictureMode: 'paged', stripMode: 'scroll', imageFit: 'screen' });
+    reader.init({ onChange() {} });
+    const strips = await make('Webtoon', [[690, 5000], [690, 6200], [690, 4800]]);
+    const comic = await make('Comic', [[800, 1200], [800, 1200], [690, 5000]]);
+    // Long pictures, but more words than pictures: a novel, left alone.
+    const novel = await make('Novel', [[690, 5000], [690, 6200], [690, 4800]]);
+    await store.put('chapters', { bookId: novel, index: 1, title: 'Two', html: '<p>他慢慢地走回了家，没有说一句话。</p>', words: 0 });
+
+    await reader.open(strips);
+    assert.equal(reader.state.mode, 'scroll');
+    assert.equal(window.document.body.dataset.images, 'width');
+    assert.equal(window.document.body.dataset.mode, 'scroll');
+    // Nothing saved.
+    const settings = await store.settings();
+    assert.equal(settings.readingMode, 'paged');
+    assert.equal(settings.imageFit, 'screen');
+
+    await reader.releaseStrips();
+    assert.equal(reader.state.mode, 'paged');
+    assert.equal(window.document.body.dataset.images, 'screen');
+    assert.equal(window.document.body.dataset.imagesHeld, undefined);
+
+    // One strip among pages: a picture book, in the mode for picture books.
+    await reader.open(comic);
+    assert.equal(reader.state.kind, 'pictures');
+    assert.equal(reader.state.mode, 'paged');
+    assert.equal(window.document.body.dataset.images, 'screen');
+
+    await reader.open(novel);
+    assert.equal(reader.state.kind, 'text');
+    assert.equal(reader.state.mode, 'paged');
+    assert.equal(window.document.body.dataset.images, 'screen');
+
+    // Chosen by hand in a book of strips: kept for strips -- the next one opens in it -- and text left as it was.
+    await reader.open(strips);
+    await reader.setMode('paged');
+    assert.equal((await store.settings()).stripMode, 'paged');
+    assert.equal((await store.settings()).readingMode, 'paged');
+    await reader.releaseStrips();
+    await reader.open(strips);
+    assert.equal(reader.state.mode, 'paged', 'strips did not open in the mode chosen for them');
+    assert.equal(window.document.body.dataset.images, 'width', 'still at the width');
+    await reader.setMode('scroll');
+    assert.equal((await store.settings()).stripMode, 'scroll');
+    assert.equal((await store.settings()).readingMode, 'paged', 'a choice for strips changed the mode for text');
+    // Text and picture books are as they were.
+    await reader.releaseStrips();
+    assert.equal(reader.state.mode, 'paged');
+    await reader.open(novel);
+    assert.equal(reader.state.mode, 'paged');
+    await reader.open(comic);
+    assert.equal(reader.state.mode, 'paged');
+    // Text chosen to scroll: the next book of text scrolls, the strips and pictures do not follow.
+    await reader.open(novel);
+    await reader.setMode('scroll');
+    assert.equal((await store.settings()).readingMode, 'scroll');
+    await reader.open(comic);
+    assert.equal(reader.state.mode, 'paged');
+    await reader.open(novel);
+    assert.equal(reader.state.mode, 'scroll');
+    await store.saveSettings({ readingMode: 'paged', pictureMode: 'paged', stripMode: 'scroll' });
   });
 })();
 

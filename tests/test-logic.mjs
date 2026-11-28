@@ -236,6 +236,50 @@ await t2('the reading and the position, written together, both land', async () =
   await store.deleteBook(id);
 });
 
+await t2('a place saved while the reader could measure nothing: never NaN on the book, nor on the Continue card', async () => {
+  /* Left for the shelf, a turn of the phone laid the hidden reader out again at
+   * no height: 0 screens over 0 was NaN, saved as the book's total and percentage
+   * -- "p. 317 of NaN · NaN%". The chapter and the place in it were right. */
+  const store = await import(new URL('../app/src/main/assets/www/js/store.js', import.meta.url).href);
+  const lib = await import(new URL('../app/src/main/assets/www/js/library.js', import.meta.url).href);
+  const id = await store.add('books', { title: 'Not a number', fingerprint: 'nan:1', addedAt: 1, percent: 0.97 });
+  store.queuePosition({ bookId: id, chapterIndex: 314, page: 0, pageInBook: 317, totalPages: NaN, percent: NaN, updatedAt: Date.now() });
+  await store.flushPosition();
+  assert.equal((await store.get('books', id)).percent, 0.97, 'a NaN overwrote the book\'s progress');
+  // Left out altogether (as the reader now does when it cannot measure): kept too.
+  store.queuePosition({ bookId: id, chapterIndex: 314, page: 0, updatedAt: Date.now() });
+  await store.flushPosition();
+  assert.equal((await store.get('books', id)).percent, 0.97);
+  // A real one still lands, and is held between 0 and 1.
+  store.queuePosition({ bookId: id, chapterIndex: 315, page: 0, pageInBook: 320, totalPages: 330, percent: 1.4, updatedAt: Date.now() });
+  await store.flushPosition();
+  assert.equal((await store.get('books', id)).percent, 1);
+  await store.deleteBook(id);
+
+  // The card: only what is known.
+  assert.equal(lib.continueMeta({ chapterIndex: 314, pageInBook: 317, totalPages: NaN, percent: NaN }, { percent: 0.97 }), 'Ch. 315 · p. 317 · 97%');
+  assert.equal(lib.continueMeta({ chapterIndex: 314, pageInBook: 317 }, {}), 'Ch. 315 · p. 317');
+  assert.equal(lib.continueMeta({ chapterIndex: 314 }, {}), 'Ch. 315');
+  assert.equal(lib.continueMeta({ chapterIndex: 30, pageInBook: 215, totalPages: 280, percent: 0.7679 }, { percent: 0.5 }), 'Ch. 31 · p. 215 of 280 · 77%');
+  // A total smaller than the page is not a total.
+  assert.equal(lib.continueMeta({ chapterIndex: 2, pageInBook: 40, totalPages: 12, percent: 1 }, {}), 'Ch. 3 · p. 40 · 100%');
+  assert.equal(lib.progressOf({ percent: NaN }, { percent: NaN }), 0);
+  assert.equal(lib.progressOf({ percent: NaN }, { percent: 0.4 }), 0.4);
+  assert.ok(!/NaN|undefined/.test(lib.continueMeta({ chapterIndex: 0, pageInBook: NaN, totalPages: undefined, percent: undefined }, { percent: undefined })));
+
+  // The reader: nothing measured at no height, nothing NaN saved.
+  const fs = await import('node:fs');
+  const js = fs.readFileSync(new URL('../app/src/main/assets/www/js/reader.js', import.meta.url), 'utf8');
+  assert.match(js, /if \(!\(height > 0\)\) return Number\.isFinite\(state\.measuredPages\)/);
+  assert.match(js, /if \(Number\.isFinite\(count\)\) state\.pageCount = Math\.max\(1, count\);/);
+  assert.match(js, /if \(!Number\.isFinite\(measured\) \|\| measured < 1\) return;/);
+  const save = js.slice(js.indexOf('function save() {'), js.indexOf('const IDLE_MS'));
+  assert.match(save, /if \(viewport\.clientHeight > 0 && viewport\.clientWidth > 0\) \{/);
+  assert.doesNotMatch(save, /totalPages: state\.totalPages,\n/);
+  // The space above a chapter is its own: past the end of one chapter's text is the next.
+  assert.match(js, /if \(box\.top - top <= 1 \|\| \(above && above\.bottom - top <= 1\)\) current = index;/);
+});
+
 await t2('out of a book, the shelf is drawn once what was read is written', async () => {
   const fs = await import('node:fs');
   const app = fs.readFileSync(new URL('../app/src/main/assets/www/js/app.js', import.meta.url), 'utf8');
@@ -281,7 +325,7 @@ console.log('books left unread');
     assert.deepEqual(titles(lib.goneQuiet(books, { days: 5, now })), ['Inferred', 'Set to Reading']);
   });
 
-  t('opening a book counts as picking it up; the bin and other editions of the last book are spared', () => {
+  t('opening a book is not picking it up -- reading it is; the bin and other editions of the last book are spared', () => {
     const old = now - 30 * DAY;
     const books = [
       { id: 1, title: 'Last', lastReadAt: now - DAY, bundleId: 1 },
@@ -291,7 +335,8 @@ console.log('books left unread');
       { id: 5, title: 'Passing through', lastReadAt: old, transient: true },
       { id: 6, title: 'Quiet', lastReadAt: old },
     ];
-    assert.deepEqual(titles(lib.goneQuiet(books, { days: 5, now })), ['Quiet']);
+    // Opened yesterday by accident, not read in a month: it goes quiet as well.
+    assert.deepEqual(titles(lib.goneQuiet(books, { days: 5, now })), ['Opened yesterday', 'Quiet']);
   });
 
   t('nothing is held when it is turned off', () => {
@@ -441,7 +486,8 @@ console.log('themes');
 t('a theme is the look as a whole, written out and read back', () => {
   const settings = { themeMode: 'dark', accent: '#b4b0d6', heatRamp: 'ink', backgroundImage: null, veil: 0.62, columns: 3 };
   const look = theme.themeOf(settings, '  Night  ');
-  assert.deepEqual(look, { name: 'Night', themeMode: 'dark', accent: '#b4b0d6', heatRamp: 'ink', backgroundImage: null, veil: 0.62 });
+  // The gradient goes with it: null, following the accent, when none of your own is set.
+  assert.deepEqual(look, { name: 'Night', themeMode: 'dark', accent: '#b4b0d6', heatRamp: 'ink', backgroundImage: null, veil: 0.62, gradient: null, gradientDir: null, colourStyle: null });
   const file = theme.themeFile(look);
   assert.equal(file.format, 'quire-theme');
   assert.deepEqual(theme.readThemes(JSON.parse(JSON.stringify(file))), [look]);
@@ -576,5 +622,88 @@ t('a leader released on its own does not appear twice', () => {
   assert.deepEqual(lib.collapseBundles(books).map((b) => b.title),
     ['Was the leader', 'Still points at it']);
 });
+
+/* Editions joined: what is selected, every edition of any set among it, under a
+ * set that was already there. The result applied, then read the way the shelf
+ * reads it (collapseBundles): one tile, every edition in it. */
+{
+  const apply = (selected, books) => {
+    const { leader, books: joining } = lib.editionsJoined(selected, books);
+    const ids = new Set(joining.map((b) => b.id));
+    return { leader, after: books.map((b) => (ids.has(b.id) ? { ...b, bundleId: leader.id } : b)) };
+  };
+  const tiles = (books) => lib.collapseBundles(books).map((b) => (b.bundle ? `${b.title}[${b.bundle.map((e) => e.title).join(',')}]` : b.title)).sort();
+  const shelf = () => [
+    { id: 1, title: 'Lead', bundleId: 1 }, { id: 2, title: 'Raw', bundleId: 1 }, { id: 3, title: 'MTL', bundleId: 1 },
+    { id: 4, title: 'New A' }, { id: 5, title: 'New B' },
+    { id: 6, title: 'Other Lead', bundleId: 6 }, { id: 7, title: 'Other Raw', bundleId: 6 },
+  ];
+  const by = (books, ...ids) => ids.map((id) => books.find((b) => b.id === id));
+
+  t('editions: books added to a set join it, the set whole and still led as it was', () => {
+    const books = shelf();
+    // The set's tile selects its leader alone.
+    const { leader, after } = apply(by(books, 1, 4, 5), books);
+    assert.equal(leader.id, 1);
+    assert.deepEqual(tiles(after), ['Lead[Lead,MTL,New A,New B,Raw]', 'Other Lead[Other Lead,Other Raw]']);
+    // Selected in another order: the set still leads.
+    assert.equal(apply(by(books, 4, 1), books).leader.id, 1);
+  });
+
+  t('editions: an edition of another set added: that set comes whole, none of it left pointing at a book that no longer leads', () => {
+    const books = shelf();
+    const { leader, after } = apply(by(books, 1, 6), books);
+    assert.equal(leader.id, 1, 'the set with more editions leads');
+    assert.deepEqual(tiles(after), ['Lead[Lead,MTL,Other Lead,Other Raw,Raw]', 'New A', 'New B']);
+    // As many editions each: the first selected leads.
+    const even = [...shelf().filter((b) => b.id !== 3), { id: 8, title: 'Other MTL', bundleId: 6 }];
+    assert.equal(apply(by(even, 6, 1), even).leader.id, 6);
+    // Before: the selected books alone were joined -- Other Raw left pointing at Other Lead, now an edition of Lead.
+    const old = books.map((b) => ([1, 6].includes(b.id) ? { ...b, bundleId: 1 } : b));
+    assert.ok(tiles(old).includes('Other Raw'), 'the old way did not break it (the test is wrong)');
+  });
+
+  t('editions: an edition shown on its own (grouping parts a set) added to: its whole set joins', () => {
+    const books = shelf();
+    const { leader, after } = apply(by(books, 2, 4), books);
+    assert.equal(leader.id, 1);
+    assert.deepEqual(tiles(after), ['Lead[Lead,MTL,New A,Raw]', 'New B', 'Other Lead[Other Lead,Other Raw]']);
+  });
+
+  t('editions: no set among them: the first selected leads, as before', () => {
+    const books = shelf();
+    const { leader, after } = apply(by(books, 5, 4), books);
+    assert.equal(leader.id, 5);
+    assert.ok(tiles(after).includes('New B[New B,New A]'));
+  });
+
+  t('editions: a set broken before is mended by joining it again', () => {
+    // Joined the old way: Other Lead made an edition of Lead, Other Raw left pointing at it.
+    const broken = shelf().map((b) => (b.id === 6 ? { ...b, bundleId: 1 } : b));
+    assert.ok(tiles(broken).includes('Other Raw'));
+    const { after } = apply(by(broken, 1, 7), broken);
+    assert.deepEqual(tiles(after), ['Lead[Lead,MTL,Other Lead,Other Raw,Raw]', 'New A', 'New B']);
+  });
+
+  t('editions: a book still marked as of a set whose leader is gone joins as itself, not that old set', () => {
+    // Its leader deleted (or binned, or removed as a double): both left marked as of book 99.
+    const books = [...shelf(), { id: 8, title: 'Left A', bundleId: 99 }, { id: 9, title: 'Left B', bundleId: 99 }];
+    const { leader, after } = apply(by(books, 1, 2, 3, 8), books);
+    assert.equal(leader.id, 1);
+    assert.deepEqual(tiles(after), ['Left B', 'Lead[Lead,Left A,MTL,Raw]', 'New A', 'New B', 'Other Lead[Other Lead,Other Raw]'].sort());
+    // And that is a join, not a set taken apart: before, every book selected being marked meant apart.
+    assert.ok(!lib.oneBundleOnly(by(books, 1, 2, 3, 8)));
+  });
+
+  t('editions: one set selected and nothing else is taken apart; anything more is joined', () => {
+    const books = shelf();
+    assert.ok(lib.oneBundleOnly(by(books, 1)));
+    assert.ok(lib.oneBundleOnly(by(books, 2, 3)), 'two editions of one set');
+    assert.ok(!lib.oneBundleOnly(by(books, 1, 4)), 'a set and a book');
+    assert.ok(!lib.oneBundleOnly(by(books, 1, 6)), 'two sets');
+    assert.ok(!lib.oneBundleOnly(by(books, 4)));
+    assert.ok(!lib.oneBundleOnly([]));
+  });
+}
 
 console.log(`\n${pass} assertions passed`);

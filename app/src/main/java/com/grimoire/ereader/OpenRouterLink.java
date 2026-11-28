@@ -154,7 +154,7 @@ final class OpenRouterLink {
             }
             Map<String, String> query = queryOf(target);
             if (query.containsKey("error") || !query.containsKey("code")) {
-                reply(s, 200, "Signing in to OpenRouter was not finished. You can close this page and try again in Quire.");
+                reply(s, 200, "Signing in to OpenRouter was not finished. You can close this page and try again in Mythos.");
                 throw new IOException("OpenRouter did not give access" + (query.containsKey("error")
                         ? " (" + query.get("error") + ")." : "."));
             }
@@ -164,20 +164,20 @@ final class OpenRouterLink {
                 reply(s, 400, "That answer was not for this sign-in.");
                 return null;
             }
-            reply(s, 200, "Signed in. Go back to Quire — it is finishing the connection.");
+            reply(s, 200, "Signed in. Go back to Mythos — it is finishing the connection.");
             return query.get("code");
         }
     }
 
     private static void reply(Socket socket, int status, String message) throws IOException {
         String html = "<!doctype html><html><head><meta charset=\"utf-8\">"
-                + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Quire</title>"
+                + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Mythos</title>"
                 + "<style>body{font:18px/1.5 system-ui,sans-serif;margin:0;padding:48px 24px;background:#141218;color:#eee}"
                 + "b{display:block;font-size:22px;margin-bottom:8px}"
                 + "a{display:inline-block;margin-top:24px;padding:12px 22px;border-radius:24px;"
-                + "background:#d0bcff;color:#21005d;text-decoration:none;font-weight:600}</style></head><body><b>Quire</b>"
+                + "background:#d0bcff;color:#21005d;text-decoration:none;font-weight:600}</style></head><body><b>Mythos</b>"
                 + message.replace("&", "&amp;").replace("<", "&lt;")
-                + (status == 404 ? "" : "<br><a href=\"quire://back\">Back to Quire</a>") + "</body></html>";
+                + (status == 404 ? "" : "<br><a href=\"quire://back\">Back to Mythos</a>") + "</body></html>";
         byte[] body = html.getBytes(StandardCharsets.UTF_8);
         String head = "HTTP/1.1 " + status + (status == 200 ? " OK" : status == 404 ? " Not Found" : " Bad Request")
                 + "\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + body.length

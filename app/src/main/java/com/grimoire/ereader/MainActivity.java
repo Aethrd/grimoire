@@ -32,10 +32,13 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.splashscreen.SplashScreen;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.webkit.WebSettingsCompat;
 import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewFeature;
+import androidx.webkit.WebViewCompat;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -49,6 +52,8 @@ public class MainActivity extends AppCompatActivity {
 
     /** A file handed over before the page was ready to take it. */
     private GrimoireBridge bridge;
+    /** The downloader's: its shown site is closed by the back gesture first. */
+    private WebBridge webBridge;
     private String pendingUri;
     private final java.util.concurrent.ExecutorService staging =
             java.util.concurrent.Executors.newSingleThreadExecutor();
@@ -131,6 +136,8 @@ public class MainActivity extends AppCompatActivity {
         installBackHandler();
 
         restoreStagedExport(savedInstanceState);
+        clearStaleExports();
+        forgetAutoExportFolder();
 
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState);
@@ -216,14 +223,31 @@ public class MainActivity extends AppCompatActivity {
         }
 
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
+        /* The app scrolls inside its own screens, whose scrollbars the stylesheet
+         * hides; the WebView's own bars only ever flashed on the edge of the page
+         * when the bars of the reader came and went. */
+        webView.setVerticalScrollBarEnabled(false);
+        webView.setHorizontalScrollBarEnabled(false);
         bridge = new GrimoireBridge(this, webView);
         webView.addJavascriptInterface(bridge, "GrimoireNative");
+        /* Files written out carried as bytes, not base64 (GrimoireBridge.pipeMessage):
+         * only for this app's own pages, and only where the WebView can. */
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+                && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_ARRAY_BUFFER)) {
+            try {
+                WebViewCompat.addWebMessageListener(webView, "MythosPipe", java.util.Collections.singleton(ORIGIN),
+                        (view, message, sourceOrigin, isMainFrame, reply) -> bridge.pipeMessage(message, isMainFrame, reply));
+            } catch (Throwable e) {
+                Log.w(TAG, "No export pipe; base64 it is", e);
+            }
+        }
         // Kept in its own object because it is the only thing in the app that
         // touches the network, and it should be obvious where that boundary is.
         webView.addJavascriptInterface(new TranslateBridge(this, webView), "GrimoireTranslate");
         // The downloader's, kept apart for the same reason: it reaches the
         // network, and only for an address the reader was given.
-        webView.addJavascriptInterface(new WebBridge(this, webView), "GrimoireWeb");
+        webBridge = new WebBridge(this, webView);
+        webView.addJavascriptInterface(webBridge, "GrimoireWeb");
         // Reading text out of pictures, on the phone: nothing leaves it.
         webView.addJavascriptInterface(new OcrBridge(this, webView), "GrimoireOcr");
         CookieManager.getInstance().setAcceptCookie(false);
@@ -254,7 +278,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 contentReady = true;
-                pushInsets(lastInsets);
+                pushInsets(lastInsets, keyboardUp());
                 if (pendingNotice != null) {
                     tellReader("window.Grimoire.notice(" + JSONObject.quote(pendingNotice) + ")");
                     pendingNotice = null;
@@ -292,9 +316,22 @@ public class MainActivity extends AppCompatActivity {
 
                 // Said on the way back in, because by then there is something
                 // to say it in.
-                pendingNotice = crashed
+                // A build under way lived in that renderer, and went with it.
+                pendingNotice = GrimoireBridge.building
+                        ? "Android reclaimed the app's memory during a build, which stopped it. "
+                          + "Build again: where a website got to is not kept from a build that was cut off."
+                        : crashed
                         ? "The reader ran out of room and restarted. Nothing was lost."
                         : "Android reclaimed the reader's memory. Nothing was lost.";
+                // What it was in the middle of, if it said (an export's book): said, and not again on the next start.
+                String was = GrimoireBridge.workingNow;
+                if (was != null) {
+                    pendingNotice = (crashed ? "The reader ran out of memory" : "Android reclaimed the reader's memory")
+                            + " while " + was + ". Your library is untouched.";
+                    getSharedPreferences("work", MODE_PRIVATE).edit().remove("now").apply();
+                    GrimoireBridge.workingNow = null;
+                }
+                GrimoireBridge.building = false;
                 rebuildWebView();
                 return true;
             }
@@ -356,30 +393,56 @@ public class MainActivity extends AppCompatActivity {
      * status bar, gesture bar and any display cutout are. We expose them as CSS
      * custom properties; env(safe-area-inset-*) is unreliable in WebView.
      */
+    private WindowInsetsCompat lastWindowInsets;
+
     private void applyInsetsToCss() {
         ViewCompat.setOnApplyWindowInsetsListener(webView, (v, windowInsets) -> {
-            Insets bars = windowInsets.getInsets(
-                    WindowInsetsCompat.Type.systemBars()
-                            | WindowInsetsCompat.Type.displayCutout()
-                            | WindowInsetsCompat.Type.ime());
-            lastInsets = bars;
-            pushInsets(bars);
+            lastWindowInsets = windowInsets;
+            pushFrom(windowInsets);
             return WindowInsetsCompat.CONSUMED;
         });
     }
 
-    private void pushInsets(Insets i) {
+    /* The bars and cutout always; the keyboard only while this window has the
+     * focus -- in split screen the keyboard moved to the app beside it left its
+     * height here, stale, and the tab bar stood a keyboard's height up over an
+     * empty space. A window without the focus has no keyboard of its own. */
+    private void pushFrom(WindowInsetsCompat windowInsets) {
+        Insets bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+        boolean ime = windowInsets.isVisible(WindowInsetsCompat.Type.ime()) && hasWindowFocus();
+        if (ime) bars = Insets.max(bars, windowInsets.getInsets(WindowInsetsCompat.Type.ime()));
+        lastInsets = bars;
+        pushInsets(bars, ime);
+    }
+
+    /** The focus come or gone (split screen, a dialog, the notification shade): the keyboard counted again. */
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (webView == null) return;
+        if (lastWindowInsets != null) pushFrom(lastWindowInsets);
+        ViewCompat.requestApplyInsets(webView);
+        // Back from a dialog, the shade or another app with the bar shown: put away again.
+        if (hasFocus && readingBarsHidden) applyReadingBars();
+    }
+
+    /* With them, whether the keyboard shows -- and the last moment it did
+     * (GrimoireImeAt), for the page to tell a back that slipped past the
+     * keyboard (Samsung's clipboard, as its items are deleted, hides it for a
+     * moment) from one meant for the screen. */
+    private void pushInsets(Insets i, boolean ime) {
         if (webView == null) return;
         float d = getResources().getDisplayMetrics().density;
         String js = String.format(
                 java.util.Locale.US,
                 "(function(){var r=document.documentElement.style;" +
+                        "var ime=%b;if(ime||window.GrimoireIme)window.GrimoireImeAt=Date.now();window.GrimoireIme=ime;" +
                         "r.setProperty('--safe-top','%.1fpx');" +
                         "r.setProperty('--safe-right','%.1fpx');" +
                         "r.setProperty('--safe-bottom','%.1fpx');" +
                         "r.setProperty('--safe-left','%.1fpx');" +
                         "window.dispatchEvent(new CustomEvent('grimoire:insets'));})();",
-                i.top / d, i.right / d, i.bottom / d, i.left / d);
+                ime, i.top / d, i.right / d, i.bottom / d, i.left / d);
         webView.evaluateJavascript(js, null);
     }
 
@@ -391,6 +454,32 @@ public class MainActivity extends AppCompatActivity {
      */
 
     private static final int PICK_EXPORT_TARGET = 4301;
+    /** An export in parts: one folder asked for, every part written into it. */
+    private static final int PICK_EXPORT_FOLDER = 4302;
+    /** Automatic backups: the folder they go into, chosen once and kept. */
+    private static final int PICK_BACKUP_FOLDER = 4303;
+    private static final String BACKUP_TREE = "backupTree";
+    /** Automatic export: the folder every book is written into, chosen once and kept. */
+    private static final String AUTO_EXPORT_TREE = "autoExportTree";
+    /** An export of many zips: its folder asked for first, each zip put in it as soon as it is full. */
+    private static final int PICK_EXPORT_SET_FOLDER = 4305;
+    private static final String EXPORT_SET_TREE = "exportSetTree";
+    /** Only these are an automatic backup's, and only these are ever removed. */
+    /* Automatic backups' names: the app's name now, and the one it had -- both
+     * pruned together, by when they were made, so the newest few are kept
+     * whichever name they carry. */
+    private static final String[] AUTO_BACKUP_PREFIXES = { "mythos-backup-auto-", "quire-backup-auto-" };
+
+    /** An automatic backup's name without its prefix: when it was made, to sort by. */
+    @Nullable
+    private static String autoBackupWhen(String name) {
+        if (name == null || !name.endsWith(".json")) return null;
+        for (String prefix : AUTO_BACKUP_PREFIXES) if (name.startsWith(prefix)) return name.substring(prefix.length());
+        return null;
+    }
+    private static final String STAGED_SET = "stagedSet";
+    private java.util.List<File> stagedSet = new java.util.ArrayList<>();
+    private String stagedSetType;
     private File staged;
     private String stagedType;
 
@@ -413,6 +502,31 @@ public class MainActivity extends AppCompatActivity {
                 .putString(STAGED_PATH, file == null ? null : file.getAbsolutePath())
                 .putString(STAGED_TYPE, type)
                 .apply();
+    }
+
+    /* What an export cut off left behind in the app's own storage: the zip
+     * it was writing, up to a whole zip's size, kept for nothing -- nothing
+     * cleared it, so each crash left one more. Cleared on start, except a
+     * file still waiting for a place to be saved (staged, stagedSet), and
+     * anything from the last few minutes. */
+    private void clearStaleExports() {
+        try {
+            File dir = new File(getCacheDir(), "exports");
+            File[] files = dir.listFiles();
+            if (files == null) return;
+            java.util.Set<String> keep = new java.util.HashSet<>();
+            if (staged != null) keep.add(staged.getAbsolutePath());
+            String set = getSharedPreferences("exports", MODE_PRIVATE).getString(STAGED_SET, null);
+            if (set != null) for (String path : set.split("\n")) if (!path.isEmpty()) keep.add(path);
+            long before = System.currentTimeMillis() - 10 * 60 * 1000L;
+            for (File file : files) {
+                if (keep.contains(file.getAbsolutePath()) || file.lastModified() > before) continue;
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+            }
+        } catch (Throwable e) {
+            Log.w(TAG, "Could not clear old exports", e);
+        }
     }
 
     private void restoreStagedExport(@Nullable Bundle state) {
@@ -461,9 +575,397 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    /** The parts of an export, kept should Android close the app while the folder is being chosen. */
+    private void rememberSet(java.util.List<File> files, @Nullable String type) {
+        stagedSet = new java.util.ArrayList<>(files);
+        stagedSetType = type;
+        StringBuilder paths = new StringBuilder();
+        for (File file : files) paths.append(file.getAbsolutePath()).append('\n');
+        getSharedPreferences("exports", MODE_PRIVATE).edit()
+                .putString(STAGED_SET, files.isEmpty() ? null : paths.toString())
+                .putString(STAGED_SET + "Type", type)
+                .apply();
+    }
+
+    private void restoreSet() {
+        android.content.SharedPreferences prefs = getSharedPreferences("exports", MODE_PRIVATE);
+        String paths = prefs.getString(STAGED_SET, null);
+        stagedSet = new java.util.ArrayList<>();
+        if (paths != null) {
+            for (String path : paths.split("\n")) {
+                if (!path.isEmpty() && new File(path).exists()) stagedSet.add(new File(path));
+            }
+        }
+        stagedSetType = prefs.getString(STAGED_SET + "Type", "application/zip");
+    }
+
+    /** Several files: a folder chosen once, and each written into it under its own name. */
+    void offerExportSet(java.util.List<File> files, String mimeType) {
+        runOnUiThread(() -> {
+            rememberSet(files, mimeType);
+            Intent tree = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            tree.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try {
+                startActivityForResult(tree, PICK_EXPORT_FOLDER);
+            } catch (Exception e) {
+                Log.w(TAG, "No folder picker available", e);
+                tellReader("window.Grimoire.exportFailed("
+                        + JSONObject.quote("This phone has no folder picker to save with") + ")");
+            }
+        });
+    }
+
+    private void savedSetInto(@Nullable Uri tree) {
+        if (stagedSet.isEmpty()) restoreSet();
+        final java.util.List<File> files = new java.util.ArrayList<>(stagedSet);
+        final String type = stagedSetType == null ? "application/zip" : stagedSetType;
+        rememberSet(new java.util.ArrayList<>(), null);
+        if (tree == null) {
+            for (File file : files) //noinspection ResultOfMethodCallIgnored
+                file.delete();
+            tellReader("window.Grimoire.exportFailed(" + JSONObject.quote("Not saved — no folder was chosen") + ")");
+            return;
+        }
+        staging.execute(() -> {
+            int saved = 0;
+            String failed = null;
+            try {
+                Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
+                        android.provider.DocumentsContract.getTreeDocumentId(tree));
+                for (File file : files) {
+                    try {
+                        Uri doc = android.provider.DocumentsContract.createDocument(
+                                getContentResolver(), folder, type, file.getName());
+                        if (doc == null) throw new java.io.IOException("the folder would not take it");
+                        copyInto(doc, file);
+                        long written = writtenSize(doc);
+                        if (written >= 0 && written != file.length()) {
+                            throw new java.io.IOException("wrote " + written + " bytes of " + file.length());
+                        }
+                        saved++;
+                    } catch (Throwable e) {
+                        Log.w(TAG, "Could not write " + file.getName(), e);
+                        if (failed == null) failed = file.getName();
+                    } finally {
+                        //noinspection ResultOfMethodCallIgnored
+                        file.delete();
+                    }
+                }
+            } catch (Throwable e) {
+                Log.w(TAG, "Could not use that folder", e);
+                for (File file : files) //noinspection ResultOfMethodCallIgnored
+                    file.delete();
+                failed = "that folder";
+            }
+            tellReader("window.Grimoire.exportSetSaved(" + saved + "," + files.size() + ","
+                    + JSONObject.quote(failed == null ? "" : failed) + ")");
+        });
+    }
+
+    /* ── an export of many zips, each saved as soon as it is full ─────────
+     *
+     * The folder is asked for before anything is written, and kept (its
+     * permission held across a restart) until the export ends; each zip goes
+     * into it the moment it is closed, and is deleted from the app's own
+     * storage once it is safely there. So a crash at the sixth zip leaves the
+     * first five where they belong, and the phone never holds every zip
+     * twice over. */
+    void chooseExportSetFolder() {
+        runOnUiThread(() -> {
+            Intent tree = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            tree.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            try {
+                startActivityForResult(tree, PICK_EXPORT_SET_FOLDER);
+            } catch (Exception e) {
+                Log.w(TAG, "No folder picker available", e);
+                tellReader("window.Grimoire.exportSetFolderChosen(null)");
+            }
+        });
+    }
+
+    private void exportSetFolderPicked(@Nullable Uri tree) {
+        if (tree == null) {
+            tellReader("window.Grimoire.exportSetFolderChosen(null)");
+            return;
+        }
+        try {
+            getContentResolver().takePersistableUriPermission(tree,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (Exception e) {
+            Log.w(TAG, "That folder's permission could not be kept", e);
+        }
+        getSharedPreferences("exports", MODE_PRIVATE).edit().putString(EXPORT_SET_TREE, tree.toString()).apply();
+        String name = "the folder chosen";
+        Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
+                android.provider.DocumentsContract.getTreeDocumentId(tree));
+        try (android.database.Cursor c = getContentResolver().query(folder,
+                new String[] { android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null)) {
+            if (c != null && c.moveToFirst()) name = c.getString(0);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not name the folder", e);
+        }
+        tellReader("window.Grimoire.exportSetFolderChosen(" + JSONObject.quote(name) + ")");
+    }
+
+    /** One full zip, into the export's folder; answered by window.Grimoire.exportPartSaved(reply, ok, why). */
+    void saveExportPart(File file, String mime, String reply) {
+        staging.execute(() -> {
+            String why = "";
+            boolean ok = false;
+            try {
+                String saved = getSharedPreferences("exports", MODE_PRIVATE).getString(EXPORT_SET_TREE, null);
+                if (saved == null) throw new java.io.IOException("the folder was not kept — export again");
+                Uri tree = Uri.parse(saved);
+                if (!file.exists()) throw new java.io.IOException("the zip was not there to save");
+                String rootId = android.provider.DocumentsContract.getTreeDocumentId(tree);
+                Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, rootId);
+                String name = file.getName();
+                /* Under a name of its own until it is whole, then renamed: a crash
+                 * while it is being copied leaves no half a zip under its real
+                 * name -- and carrying on afterwards writes the same zip again,
+                 * so a leftover of that name is cleared first. */
+                String temp = ".mythos-writing-" + name;
+                String leftover = childOf(tree, rootId, temp);
+                if (leftover != null) android.provider.DocumentsContract.deleteDocument(getContentResolver(),
+                        android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, leftover));
+                Uri doc = android.provider.DocumentsContract.createDocument(getContentResolver(), folder,
+                        mime == null || mime.isEmpty() ? "application/zip" : mime, temp);
+                if (doc == null) throw new java.io.IOException("the folder would not take it");
+                copyInto(doc, file);
+                long written = writtenSize(doc);
+                if (written >= 0 && written != file.length()) {
+                    android.provider.DocumentsContract.deleteDocument(getContentResolver(), doc);
+                    throw new java.io.IOException("wrote " + written + " bytes of " + file.length());
+                }
+                // The same zip saved by an export cut off before it: this one, whole, in its place.
+                String old = childOf(tree, rootId, name);
+                if (old != null) android.provider.DocumentsContract.deleteDocument(getContentResolver(),
+                        android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, old));
+                Uri renamed = null;
+                try {
+                    renamed = android.provider.DocumentsContract.renameDocument(getContentResolver(), doc, name);
+                } catch (Exception e) {
+                    Log.w(TAG, "Could not rename " + temp, e);
+                }
+                if (renamed == null && childOf(tree, rootId, name) == null) {
+                    throw new java.io.IOException("it was written but could not be given its name");
+                }
+                ok = true;
+            } catch (Throwable e) {
+                Log.w(TAG, "Could not save " + file.getName(), e);
+                why = e.getMessage() == null ? "it could not be saved" : e.getMessage();
+            } finally {
+                // In the folder, or failed: either way not kept here as well.
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+            }
+            tellReader("window.Grimoire.exportPartSaved(" + JSONObject.quote(reply) + "," + ok + "," + JSONObject.quote(why) + ")");
+        });
+    }
+
+    /** The folder of an export still under way or cut off: its name, if it can still be written to; else "". */
+    String exportSetFolderName() {
+        String saved = getSharedPreferences("exports", MODE_PRIVATE).getString(EXPORT_SET_TREE, null);
+        if (saved == null) return "";
+        Uri tree = Uri.parse(saved);
+        boolean held = false;
+        for (android.content.UriPermission each : getContentResolver().getPersistedUriPermissions()) {
+            if (each.getUri().equals(tree) && each.isWritePermission()) { held = true; break; }
+        }
+        if (!held) return "";
+        Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
+                android.provider.DocumentsContract.getTreeDocumentId(tree));
+        try (android.database.Cursor c = getContentResolver().query(folder,
+                new String[] { android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null)) {
+            if (c != null && c.moveToFirst()) return c.getString(0);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not reach the export's folder", e);
+            return "";
+        }
+        return "the folder chosen";
+    }
+
+    /** The export over: its folder's permission let go of, unless the automatic backups use it. */
+    void releaseExportSetFolder() {
+        android.content.SharedPreferences prefs = getSharedPreferences("exports", MODE_PRIVATE);
+        String saved = prefs.getString(EXPORT_SET_TREE, null);
+        prefs.edit().remove(EXPORT_SET_TREE).apply();
+        if (saved == null || saved.equals(prefs.getString(BACKUP_TREE, null))) return;
+        try {
+            getContentResolver().releasePersistableUriPermission(Uri.parse(saved),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (Exception ignored) { /* already gone */ }
+    }
+
+    void chooseBackupFolder() {
+        runOnUiThread(() -> {
+            Intent tree = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            tree.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            try {
+                startActivityForResult(tree, PICK_BACKUP_FOLDER);
+            } catch (Exception e) {
+                Log.w(TAG, "No folder picker available", e);
+                tellReader("window.Grimoire.backupFolderChosen(null)");
+            }
+        });
+    }
+
+    private void backupFolderPicked(@Nullable Uri tree) {
+        if (tree == null) {
+            tellReader("window.Grimoire.backupFolderChosen(null)");
+            return;
+        }
+        try {
+            getContentResolver().takePersistableUriPermission(tree,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (Exception e) {
+            Log.w(TAG, "That folder's permission could not be kept", e);
+        }
+        // The folder before it, let go: a folder no longer used holds no permission.
+        String before = getSharedPreferences("exports", MODE_PRIVATE).getString(BACKUP_TREE, null);
+        if (before != null && !before.equals(tree.toString())) {
+            try {
+                getContentResolver().releasePersistableUriPermission(Uri.parse(before),
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            } catch (Exception ignored) { /* already gone */ }
+        }
+        getSharedPreferences("exports", MODE_PRIVATE).edit().putString(BACKUP_TREE, tree.toString()).apply();
+        tellReader("window.Grimoire.backupFolderChosen(" + JSONObject.quote(backupFolderName()) + ")");
+    }
+
+    @Nullable
+    private Uri backupTree() {
+        String saved = getSharedPreferences("exports", MODE_PRIVATE).getString(BACKUP_TREE, null);
+        if (saved == null) return null;
+        Uri tree = Uri.parse(saved);
+        for (android.content.UriPermission held : getContentResolver().getPersistedUriPermissions()) {
+            if (held.getUri().equals(tree) && held.isWritePermission()) return tree;
+        }
+        return null;
+    }
+
+    String backupFolderName() {
+        Uri tree = backupTree();
+        if (tree == null) return "";
+        Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
+                android.provider.DocumentsContract.getTreeDocumentId(tree));
+        try (android.database.Cursor c = getContentResolver().query(folder,
+                new String[] { android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null)) {
+            if (c != null && c.moveToFirst()) return c.getString(0);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not name the backup folder", e);
+        }
+        return "the folder chosen";
+    }
+
+    void writeBackup(File file, int keep) {
+        staging.execute(() -> {
+            Uri tree = backupTree();
+            if (tree == null || !file.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+                tellReader("window.Grimoire.backupWritten(false," + JSONObject.quote(tree == null
+                        ? "the backup folder can no longer be written — choose it again" : "nothing was staged") + ")");
+                return;
+            }
+            try {
+                String rootId = android.provider.DocumentsContract.getTreeDocumentId(tree);
+                Uri folder = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, rootId);
+                Uri doc = android.provider.DocumentsContract.createDocument(getContentResolver(), folder,
+                        "application/json", file.getName());
+                if (doc == null) throw new java.io.IOException("the folder would not take it");
+                copyInto(doc, file);
+                long written = writtenSize(doc);
+                if (written >= 0 && written != file.length()) {
+                    throw new java.io.IOException("wrote " + written + " bytes of " + file.length());
+                }
+                pruneBackups(tree, rootId, Math.max(1, keep));
+                tellReader("window.Grimoire.backupWritten(true," + JSONObject.quote(file.getName()) + ")");
+            } catch (Throwable e) {
+                Log.w(TAG, "Could not write an automatic backup", e);
+                tellReader("window.Grimoire.backupWritten(false," + JSONObject.quote(String.valueOf(e.getMessage())) + ")");
+            } finally {
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+            }
+        });
+    }
+
+    /** The newest `keep` automatic backups stay (their names sort by when they were made); older ones go. */
+    private void pruneBackups(Uri tree, String rootId, int keep) {
+        Uri children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree, rootId);
+        java.util.List<String[]> found = new java.util.ArrayList<>();   // { name, documentId }
+        try (android.database.Cursor c = getContentResolver().query(children, new String[] {
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID }, null, null, null)) {
+            while (c != null && c.moveToNext()) {
+                String name = c.getString(0);
+                String when = autoBackupWhen(name);
+                if (when != null) {
+                    found.add(new String[] { name, c.getString(1), when });
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not list the backup folder", e);
+            return;
+        }
+        found.sort((a, b) -> b[2].compareTo(a[2]));
+        for (int i = keep; i < found.size(); i++) {
+            try {
+                android.provider.DocumentsContract.deleteDocument(getContentResolver(),
+                        android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, found.get(i)[1]));
+            } catch (Exception e) {
+                Log.w(TAG, "Could not remove an old backup " + found.get(i)[0], e);
+            }
+        }
+    }
+
+    /* An automatic export of loose files into a folder was here once; it is
+     * gone (the zips are the export). The folder it was given is let go of,
+     * once -- unless the backups or an export of zips still use it. */
+    private void forgetAutoExportFolder() {
+        android.content.SharedPreferences prefs = getSharedPreferences("exports", MODE_PRIVATE);
+        String saved = prefs.getString(AUTO_EXPORT_TREE, null);
+        if (saved == null) return;
+        prefs.edit().remove(AUTO_EXPORT_TREE).apply();
+        if (saved.equals(prefs.getString(BACKUP_TREE, null)) || saved.equals(prefs.getString(EXPORT_SET_TREE, null))) return;
+        try {
+            getContentResolver().releasePersistableUriPermission(Uri.parse(saved),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (Exception ignored) { /* already gone */ }
+    }
+
+    /** A child of a folder by its name: its document id, or null. */
+    @Nullable
+    private String childOf(Uri tree, String parentId, String name) {
+        Uri children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId);
+        try (android.database.Cursor c = getContentResolver().query(children, new String[] {
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID }, null, null, null)) {
+            while (c != null && c.moveToNext()) {
+                if (name.equals(c.getString(0))) return c.getString(1);
+            }
+        }
+        return null;
+    }
+
     @Override
     protected void onActivityResult(int request, int result, @Nullable Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == PICK_BACKUP_FOLDER) {
+            backupFolderPicked(result == RESULT_OK && data != null ? data.getData() : null);
+            return;
+        }
+        if (request == PICK_EXPORT_FOLDER) {
+            savedSetInto(result == RESULT_OK && data != null ? data.getData() : null);
+            return;
+        }
+        if (request == PICK_EXPORT_SET_FOLDER) {
+            exportSetFolderPicked(result == RESULT_OK && data != null ? data.getData() : null);
+            return;
+        }
         if (request != PICK_EXPORT_TARGET) return;
 
         final Uri target = result == RESULT_OK && data != null ? data.getData() : null;
@@ -647,9 +1149,20 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
-            String safe = (name == null || name.isEmpty() ? "file" : name)
-                    .replaceAll("[^A-Za-z0-9._\\- ]", "_");
+            /* A name of its own, every copy. Kept to the characters a path takes,
+             * a name in Korean or Japanese came out as underscores -- the same
+             * underscores for many a title of the same lengths -- and one copy
+             * written over another, or an earlier copy at the same address
+             * handed back, was a different book under this one's name. */
+            String safe = id + "-" + System.currentTimeMillis() + "-"
+                    + (name == null || name.isEmpty() ? "file" : name).replaceAll("[^A-Za-z0-9._\\- ]", "_");
             java.io.File target = new java.io.File(handoffDir(this), safe);
+            /* Found by its name (and the size Android gives for it): the very
+             * file picked. Said, so the page takes it even when the bytes are
+             * more or fewer than that size -- Android's record of a file saved
+             * over with a new copy keeps the old size, and that is why the
+             * page could not read it in the first place. */
+            final boolean named = name != null && !name.isEmpty() && name.equals(pickedName(found));
 
             try (InputStream in = getContentResolver().openInputStream(found);
                  java.io.OutputStream out = new java.io.FileOutputStream(target)) {
@@ -665,8 +1178,16 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
-            settleStage(id, true, ORIGIN + "/handoff/" + Uri.encode(safe));
+            settleStage(id, true, ORIGIN + "/handoff/" + Uri.encode(safe) + (named ? "#named" : ""));
         });
+    }
+
+    /** The name of a picked file, by its address. */
+    private String pickedName(Uri uri) {
+        java.util.List<Picked> all;
+        synchronized (picked) { all = new java.util.ArrayList<>(picked); }
+        for (Picked p : all) if (p.uri.equals(uri)) return nameOf(p);
+        return null;
     }
 
     private void settleStage(String id, boolean ok, String payload) {
@@ -693,10 +1214,24 @@ public class MainActivity extends AppCompatActivity {
         return dir;
     }
 
+    /** Whether the on-screen keyboard is showing (and with it, whatever panel of it is open). */
+    private boolean keyboardUp() {
+        if (webView == null) return false;
+        WindowInsetsCompat insets = ViewCompat.getRootWindowInsets(webView);
+        return insets != null && insets.isVisible(WindowInsetsCompat.Type.ime()) && hasWindowFocus();
+    }
+
     private void installBackHandler() {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
+                /* The keyboard up: a back that reaches here is not the reader leaving.
+                 * The keyboard takes a back to close itself before it ever comes here;
+                 * one that slips past it -- Samsung's clipboard, as its items are
+                 * deleted -- left the screen being typed in. Not acted on. */
+                if (keyboardUp()) return;
+                // A site shown to pass its check: back is Done.
+                if (webBridge != null && webBridge.closeShownIfOpen()) return;
                 // Give the reader first refusal: it may want to close a menu or
                 // exit a chapter rather than leave the app.
                 webView.evaluateJavascript(
@@ -713,6 +1248,14 @@ public class MainActivity extends AppCompatActivity {
                         });
             }
         });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        // "Notify me" in Build: the answer goes back to the page either way.
+        if (requestCode == GrimoireBridge.ASK_TO_NOTIFY && bridge != null) bridge.answerNotify();
     }
 
     @Override
@@ -735,7 +1278,7 @@ public class MainActivity extends AppCompatActivity {
             Log.w(TAG, "A view intent arrived with no file on it: " + intent.getAction());
             return;
         }
-        // "Back to Quire" from the page shown after signing in to OpenRouter:
+        // "Back to Mythos" from the page shown after signing in to OpenRouter:
         // being brought to the front was all it asked for.
         if ("quire".equals(data.getScheme())) {
             setIntent(new Intent(Intent.ACTION_MAIN));
@@ -849,6 +1392,25 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         webView.onResume();
+        if (readingBarsHidden) applyReadingBars();
+    }
+
+    /* Android's own bar at the foot -- Back, Home, Recents -- put away while a
+     * book is open, and back everywhere else. A swipe up from the edge shows it
+     * for a moment, over the page, and it goes again by itself. Put away, it
+     * takes no room: the page's foot inset is 0 (pushFrom), so the page has it. */
+    private boolean readingBarsHidden = false;
+
+    void setReadingBars(boolean hide) {
+        readingBarsHidden = hide;
+        applyReadingBars();
+    }
+
+    private void applyReadingBars() {
+        WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
+        bars.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        if (readingBarsHidden) bars.hide(WindowInsetsCompat.Type.navigationBars());
+        else bars.show(WindowInsetsCompat.Type.navigationBars());
     }
 
     @Override

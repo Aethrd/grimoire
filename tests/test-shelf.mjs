@@ -100,7 +100,7 @@ t('whatever is done to a bundle is done to every edition in it', () => {
     assert.match(acts, new RegExp(`${name}: \\(\\) => oneSelected\\(`), `${name} picks an edition for you`);
   }
   // Adding books to a bundle keeps its leader.
-  assert.match(acts, /const leader = books\.find\(\(b\) => b\.bundleId === b\.id\) \|\| books\[0\]/);
+  assert.match(acts, /const \{ leader, books: joining \} = library\.editionsJoined\(books, await store\.all\('books'\)\);/);
   assert.match(app, /\$\{count\} selected · \$\{books\} books/);
 });
 
@@ -119,8 +119,8 @@ t('actions are labelled, not a row of bare glyphs', () => {
   const grid = html.slice(html.indexOf('id="select-actions"'), html.indexOf('id="confirm-bar"'));
   const acts = [...grid.matchAll(/data-act="(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(acts,
-    ['open', 'bundle', 'merge', 'build', 'blur', 'trim', 'redact', 'export',
-      'details', 'vault', 'delete']);
+    ['open', 'bundle', 'merge', 'build', 'blur', 'trim', 'redact', 'shrink', 'export',
+      'details', 'translate', 'check', 'vault', 'delete']);
   // Folder and status are in Details, for one book or several -- not two
   // more buttons beside it doing part of the same job.
   assert.match(app, /if \(books\.length === 1\) return openDetails\(books\[0\]\);\s*if \(books\.length > 1\) return openGroupDetails\(books\);/);
@@ -270,7 +270,7 @@ t('the continue card follows the last book opened', () => {
   assert.match(library, /openedAt\(b\) && !\['finished', 'dropped', 'onHold'\]\.includes\(statusOf\(b\)\)/);
   // And opening a book records that it was opened -- on the book as stored,
   // not on the copy the shelf handed over, which may be older.
-  assert.match(app, /current\.lastOpenedAt = Date\.now\(\)/);
+  assert.match(app, /await store\.update\('books', book\.id, \(current\) => \(\{ \.\.\.current, lastOpenedAt: Date\.now\(\) \}\)\);/);
 });
 
 t('translated titles reach the tile and the continue card', () => {
@@ -482,7 +482,8 @@ t('a half-imported book is neither shown nor kept', () => {
   // before its chapters do. A hard kill in the middle used to leave that row
   // on the shelf as a book with nothing in it.
   const library = read('app/src/main/assets/www/js/library.js');
-  assert.match(library, /!b\.importing && !b\.transient/);
+  // Only a novel downloading now shows while it is still being read in (see the tools tests).
+  assert.match(library, /\(!b\.importing \|\| isDownloading\(b\)\) && !carriedOn\.has\(b\.id\)\s+&& !b\.transient/);
   assert.match(library, /export async function sweepUnfinishedImports/);
   assert.match(app, /await library\.sweepUnfinishedImports\(\)/);
   // And a failure during parse cleans up after itself rather than waiting
@@ -581,7 +582,7 @@ t('search resets when opened from the shelf', () => {
   // keeps its book so reading can be resumed, so "has a book ever been
   // opened" is true forever and search never left in-book mode.
   assert.match(screens, /const inBook = fromReader && !!reader\.state\.book/);
-  assert.match(app, /screens\.initFind\(goToMatch, cameFrom === 'reader'\)/);
+  assert.match(app, /screens\.initFind\(goToMatch, cameFrom === 'reader', exportFound\)/);
   assert.match(screens, /if \(!inBook\) \{[\s\S]{0,400}input\.value = ''/);
   // Inside a book the query and the stepper's place are kept, which is the
   // point of being able to dismiss and come back.
@@ -637,6 +638,9 @@ t('bundling is one action that reads both ways', () => {
   // shows as one tile, so selecting it selects the leader alone.
   assert.match(app, /ids\.has\(b\.bundleId\)/);
   assert.ok(html.includes('data-act="bundle"'));
+  // Apart only when one set and nothing else is selected; joined whole, in one write, otherwise.
+  assert.match(app, /if \(library\.oneBundleOnly\(books\)\) \{/);
+  assert.match(app, /library\.editionsJoined\(books, await store\.all\('books'\)\);[\s\S]{0,300}await store\.putAll\('books', changed\);/);
 });
 
 t('building is a tool, not a shelf action', () => {
@@ -809,7 +813,7 @@ t('several books write out as one archive', () => {
   assert.ok(!/act === 'export'/.test(app.slice(app.indexOf('const single ='), app.indexOf('const single =') + 120)),
     'export is still restricted to a single book');
   // Two books of the same name would otherwise replace each other.
-  assert.match(app, /while \(used\.has\(entry\)\)/);
+  assert.match(app, /while \(open\.used\.has\(entry\)\)/);
   // And one that will not write costs that book, not the batch.
   assert.match(app, /failed\.push\(\{ title: library\.displayTitle\(book\)/);
 });
@@ -889,7 +893,7 @@ t('select all means all of what is shown', () => {
   // trap: the next thing pressed happens to books you cannot see.
   // What the shelf drew: the folder it is filtered to, and nothing in a
   // folder hidden from it.
-  assert.match(app, /filter\(\(book\) => library\.shownOnShelf\.has\(book\.id\)\)/);
+  assert.match(app, /filter\(\(book\) => library\.shownOnShelf\.has\(book\.id\) && !library\.isDownloading\(book\)\)/);
   assert.match(library, /shownOnShelf = new Set\(visible\.map/);
 });
 
@@ -918,7 +922,7 @@ t('no footer button sits under the tab bar', () => {
    * where the bar is hidden -- it is not, and search, the workshop and
    * dividing all had their buttons drawn underneath it. */
   const stepper = css.slice(css.indexOf('.stepper {'), css.indexOf('body[data-view="reader"] .stepper'));
-  assert.match(stepper, /margin-bottom: calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\)\)/);
+  assert.match(stepper, /margin-bottom: calc\(var\(--safe-bottom\) \+ var\(--tabbar-h\) \+ var\(--strip-h\)\)/);
   assert.match(css, /--tabbar-h:/);
 
   // The reader hides the bar, so its footer keeps the space instead.
@@ -1032,7 +1036,8 @@ t('the workshop shows the order and lets it be changed', () => {
   assert.match(build, /\[\.\.\.archive\.books\]\.sort\(\(a, b\) => naturalOrder\(/);
   assert.ok(!/found\.sort\(/.test(build), 'everything added is sorted together again');
   // A part that will not open costs that part, not the build.
-  assert.match(build, /failed\.push\(\{ name: part\.name, reason: error\.message, \.\.\.leftOf\(part, error\.rest, error\.failed\?\.\[0\]\?\.reason\) \}\)/);
+  // (Its reason, or "paused" when Pause & keep stopped it before anything came.)
+  assert.match(build, /failed\.push\(\{\s+name: part\.name, reason: paused \? PAUSED_REASON : error\.message, paused,\s+\.\.\.leftOf\(part, error\.rest, error\.failed\?\.\[0\]\?\.reason\),\s+\}\)/);
 });
 
 t('a bundle asks which edition to open', () => {
@@ -1056,16 +1061,19 @@ t('opening records a different thing from reading', () => {
   const reader = read('app/src/main/assets/www/js/reader.js');
   assert.match(reader, /function noteReading/);
   assert.match(reader, /store\.markRead\(state\.book\.id\)/);
-  // Continue still follows what was opened, which is where you were.
+  // Continue follows what was read, not what was opened: a glance does not take the card.
   const library = read('app/src/main/assets/www/js/library.js');
-  assert.match(library, /b\.lastOpenedAt \|\| b\.lastReadAt/);
+  assert.match(library, /const openedAt = \(b\) => b\.lastReadAt \|\| 0;/);
+  // Nothing read, nothing logged: time alone is not reading.
+  assert.match(reader, /if \(session\.pages <= 0 && session\.words <= 0\) return;/);
 });
 
 t('a file opened from elsewhere is read, not collected', () => {
   // Opening something to look at it should not quietly add it to a library.
   const library = read('app/src/main/assets/www/js/library.js');
   assert.match(library, /transient = false/);
-  assert.match(library, /!b\.importing && !b\.transient/);
+  // Only a novel downloading now shows while it is still being read in (see the tools tests).
+  assert.match(library, /\(!b\.importing \|\| isDownloading\(b\)\) && !carriedOn\.has\(b\.id\)\s+&& !b\.transient/);
   assert.match(app, /handleFiles\(\[file\], \{ transient: true \}\)/);
   // Closing the reader forgets it, rather than leaving it until a restart.
   assert.match(app, /async function forgetTransientBook/);
@@ -1145,16 +1153,20 @@ t('a file opened from outside waits for the reader to be ready', () => {
   assert.match(app, /handoffFailed\(reason\)/);
 });
 
-t('the heat map is drawn from words, not pages', () => {
+t('the heat map is drawn from words (or time), not pages, against a real day of reading', () => {
   // A page is a function of type size; the same chapter is thirty pages at
   // one setting and twelve at another, and a chapter read elsewhere is none.
   const panels = read('app/src/main/assets/www/js/panels.js');
-  assert.match(panels, /\.map\(\(d\) => d\.words\)\.filter/);
+  assert.match(panels, /Math\.max\(\(day\?\.words \|\| 0\) \/ FULL_DAY_WORDS, \(day\?\.ms \|\| 0\) \/ FULL_DAY_MS\)/);
+  // Against four hours of reading, or an average reader's words in four hours (260 a minute): not ranked.
+  assert.match(panels, /const FULL_DAY_MS = 4 \* 60 \* 60000;\s+const FULL_DAY_WORDS = 260 \* 4 \* 60;/);
+  assert.ok(!/rankOf|quintile/.test(panels), 'still ranked');
   assert.match(panels, /words\.toLocaleString\(\)\} words/);
   // A continuous shade within each level, so a heavy day is not flattened
   // into the same step as a merely busy one.
   assert.match(panels, /cell\.style\.setProperty\('--fill'/);
-  assert.match(css, /color-mix\(in srgb, var\(--heat-4\)/);
+  // Each day the gradient's own colour at its rank, whole -- not faded toward the empty shade.
+  assert.match(css, /\.heat i\[data-l\]:not\(\[data-l="0"\]\) \{[^}]*background: var\(--heat-c, var\(--accent\)\);/);
 });
 
 t('the averages hold up when reading happens elsewhere', () => {
@@ -1218,7 +1230,21 @@ t('the settings strip is labelled', () => {
   // first was behind an ambiguous grid icon.
   const strip = html.slice(html.indexOf('id="settings-strip"'), html.indexOf('id="settings-body"'));
   const labels = [...strip.matchAll(/<span>(\w+)<\/span>/g)].map((m) => m[1]);
-  assert.deepEqual(labels, ['Text', 'Layout', 'Theme', 'Behaviour', 'Translate', 'Vault']);
+  assert.deepEqual(labels, ['Text', 'Layout', 'Theme', 'Behaviour', 'Translate', 'Vault', 'Backup']);
+});
+
+t('the Vault holds the vault alone; backup, books and settings carried elsewhere are their own tab after it', () => {
+  const src = fs.readFileSync(new URL('../app/src/main/assets/www/js/panels.js', import.meta.url), 'utf8');
+  const vault = src.slice(src.indexOf('export async function openVault('), src.indexOf('export async function openData('));
+  const data = src.slice(src.indexOf('export async function openData('), src.indexOf('function strength('));
+  for (const moved of ['Save a backup', 'Restore from a backup', 'Export every book', 'doublesBlock()', 'tidyBlock()', 'Wait for the phone to cool', 'Export settings only', 'autoBackupBlock()', 'Last import', 'Last crash']) {
+    assert.ok(data.includes(moved), `${moved} not in the Backup tab`);
+    assert.ok(!vault.includes(moved), `${moved} still in the Vault`);
+  }
+  assert.ok(vault.includes('Private vault') && vault.includes('Move books in or out'));
+  // A restore redraws the pane it was made from.
+  assert.match(data, /openData\(onVaultChange, body\);/);
+  assert.match(src, /backup: \{ title: 'Backup & books', render: renderBackupPane \}/);
 });
 
 t('the strip offers no share and no text-to-speech', () => {
@@ -1226,18 +1252,21 @@ t('the strip offers no share and no text-to-speech', () => {
   // button that leads nowhere is worse than a shorter strip.
   const strip = html.slice(html.indexOf('id="settings-strip"'), html.indexOf('id="settings-body"'));
   const panes = [...strip.matchAll(/data-pane="(\w+)"/g)].map((m) => m[1]);
-  assert.deepEqual(panes, ['text', 'layout', 'theme', 'behaviour', 'translation', 'data']);
+  assert.deepEqual(panes, ['text', 'layout', 'theme', 'behaviour', 'translation', 'data', 'backup']);
   assert.ok(!/share|speak|sound|volume|tts/i.test(strip));
 });
 
 
-t('back on the shelf with a build under way, books are picked for it in order', () => {
-  // Arriving from Build with something in it starts picking; leaving ends it.
-  assert.match(app, /if \(name === 'library' && cameFrom === 'workshop' && !build\.isEmpty\(\)\) startPicking\(\);/);
+t('books are picked for a build on the shelf, in order, only when asked for', () => {
+  // Build's "Add books from the shelf…" starts picking; the Shelf tab alone never does.
+  assert.match(app, /if \(name === 'library' && pickNext\) \{ pickNext = false; startPicking\(\); \}/);
+  assert.match(app, /el\('build-from-shelf'\)\.onclick = \(\) => \{ pickNext = true; show\('library'\); \};/);
+  assert.doesNotMatch(app, /cameFrom === 'workshop' && !build\.isEmpty\(\)\) startPicking/);
+  assert.equal((app.match(/startPicking\(\)/g) || []).length, 2);
   assert.match(app, /else if \(name !== 'library'\) endPicking\(\);/);
   // A tap, or a press, picks rather than opens.
-  assert.match(app, /function onTileTap\(book\) \{\n  if \(buildPicks\) \{ pickTile\(book\); return; \}/);
-  assert.match(app, /function onTileHold\(book\) \{\n  \/\/[^\n]*\n  if \(buildPicks\) \{ pickTile\(book\); return; \}/);
+  assert.match(app, /function onTileTap\(book\) \{\n  if \(stillDownloading\(book\)\) return;\n  if \(buildPicks\) \{ pickTile\(book\); return; \}/);
+  assert.match(app, /function onTileHold\(book\) \{\n  if \(stillDownloading\(book\)\) return;\n  \/\/[^\n]*\n  if \(buildPicks\) \{ pickTile\(book\); return; \}/);
   // Each numbered with the place it will have, after what is already in.
   assert.match(app, /order\.set\(id, \{ place: parts\.length \+ at \+ 1, already: false \}\)/);
   // Finish puts them in, in the order picked, and goes to Build.
@@ -1262,10 +1291,10 @@ t('opening another book clears the last one off the reader before it shows', () 
   assert.match(readerSrc, /export function blank\(\) \{[\s\S]{0,200}releaseAllSections\(\);\s*flow\?\.replaceChildren\(\);/);
 });
 
-t('the app is called Quire, and books kept together are editions', () => {
-  assert.match(read('app/src/main/res/values/strings.xml'), /<string name="app_name">Quire<\/string>/);
+t('the app is called Mythos, and books kept together are editions', () => {
+  assert.match(read('app/src/main/res/values/strings.xml'), /<string name="app_name">Mythos<\/string>/);
   const html = read('app/src/main/assets/www/index.html');
-  assert.match(html, /<title>Quire<\/title>/);
+  assert.match(html, /<title>Mythos<\/title>/);
   assert.match(html, /data-act="bundle">[\s\S]{0,200}<span>Editions<\/span>/);
   const seen = [read('app/src/main/assets/www/js/app.js'), read('app/src/main/assets/www/js/library.js'),
     read('app/src/main/assets/www/js/panels.js'), html].join('\n');

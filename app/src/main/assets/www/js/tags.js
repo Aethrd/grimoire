@@ -10,8 +10,12 @@
  * backup, the search and grouping by tag already read.
  */
 
+/** Where a book is in being written: one at a time (see SERIAL), and shown first. */
+export const SERIAL_TAGS = ["Ongoing", "Completed", "Hiatus", "Season Break", "Dropped", "Axed"];
+
 /** The common tags, by kind. Each appears once, under the first kind it fits. */
 export const TAG_GROUPS = [
+  ["Serialisation", SERIAL_TAGS],
   ["Genres", [
     "Fantasy",
     "High Fantasy",
@@ -828,6 +832,15 @@ export function uniqueTags(list) {
 
 export const hasTag = (book, tag) => tagsOf(book).some((t) => tagKey(t) === tagKey(tag));
 
+const SERIAL = new Set(SERIAL_TAGS.map(tagKey));
+/** Whether a tag says where a book is in being written (Ongoing, Completed...). */
+export const isSerialTag = (tag) => SERIAL.has(tagKey(tag));
+
+/** Serialisation first, then the rest as they were: what is seen when only a few are. */
+export function serialFirst(list) {
+  return [...list.filter(isSerialTag), ...list.filter((tag) => !isSerialTag(tag))];
+}
+
 /** Whether two lists hold the same tags, in any order. */
 export function sameTags(a, b) {
   const left = new Set(uniqueTags(a).map(tagKey));
@@ -896,11 +909,17 @@ export function openTagPicker({ chosen = [], used = [], title = 'Tags' } = {}) {
   const toggle = (tag) => {
     const key = tagKey(tag);
     const at = picked.findIndex((t) => tagKey(t) === key);
-    if (at === -1) picked.push(normaliseTag(tag));
-    else picked.splice(at, 1);
+    if (at === -1) {
+      /* A book is one of Ongoing, Completed, Hiatus... at a time: picking one
+       * takes off the one it had. */
+      if (isSerialTag(tag)) {
+        for (let i = picked.length - 1; i >= 0; i -= 1) if (isSerialTag(picked[i])) picked.splice(i, 1);
+      }
+      picked.push(normaliseTag(tag));
+    } else picked.splice(at, 1);
     paintChosen();
     for (const chip of list.querySelectorAll('[data-tag]')) {
-      if (chip.dataset.tag === key) chip.setAttribute('aria-pressed', String(at === -1));
+      chip.setAttribute('aria-pressed', String(isPicked(chip.dataset.tag)));
     }
   };
 
@@ -949,7 +968,7 @@ export function openTagPicker({ chosen = [], used = [], title = 'Tags' } = {}) {
   function paintChosen() {
     row.innerHTML = '';
     row.hidden = !picked.length;
-    for (const tag of picked) {
+    for (const tag of serialFirst(picked)) {
       const chip = document.createElement('button');
       chip.className = 'chip';
       chip.setAttribute('aria-pressed', 'true');
@@ -993,7 +1012,8 @@ export function openTagPicker({ chosen = [], used = [], title = 'Tags' } = {}) {
     const searching = key.length >= 2;
     section('On your shelf', used.map(([tag]) => tag).filter(fits), { counts, cap: searching ? 12 : 24 });
     for (const [label, tags] of TAG_GROUPS) {
-      section(label, tags.filter(fits), { open: searching, cap: searching ? 8 : Infinity });
+      // Serialisation is six tags: open always, where the others are folded.
+      section(label, tags.filter(fits), { open: searching || tags === SERIAL_TAGS, cap: searching ? 8 : Infinity });
     }
     if (!list.children.length) {
       list.innerHTML = '<p class="muted" style="padding:8px 0">Nothing matches.</p>';
