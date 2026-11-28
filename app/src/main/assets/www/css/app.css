@@ -1597,8 +1597,10 @@ body.on-page[data-chrome="copy"] .import-progress:not(.open) { display: none; }
                background: rgba(0, 0, 0, .55); color: #fff;
                font-family: var(--font-heading); font-weight: 700; font-size: 9px; }
 .tile-bundle img { width: 16px; height: 16px; display: block; }
-/* Sits above the progress bar, which runs along the bottom of the cover. */
-.tile.bundled .tile-bar { bottom: 26px; }
+/* The progress bar keeps the bottom edge of the cover, as on any other book;
+   the badge sits clear above it (it once lifted the bar instead, so a
+   bundle's bar floated a third of the way up the cover's foot). */
+.tile.bundled .tile-bundle { bottom: 9px; }
 
 /* The stacked-paper edge, so a bundle reads as more than one book before the
    badge is even noticed. */
